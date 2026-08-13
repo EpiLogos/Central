@@ -3,14 +3,8 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "engines": {
-    "node": ">=22"
-  },
-  "bin": {
-    "ctrl": "./ctrl/bin/ctrl.js"
-  },
-  "scripts": {
-    "ctrl": "node ./ctrl/bin/ctrl.js",
-    "test": "node --test"
-  }
+  "engines": { "node": ">=22" },
+  "bin": { "ctrl": "./ctrl/bin/ctrl.js" },
+  "scripts": { "ctrl": "node ./ctrl/bin/ctrl.js", "test": "node --test" },
+  "exports": { "./sdk": { "types": "./ctrl/sdk/index.d.ts", "import": "./ctrl/sdk/index.js" } }
 }

@@ -1,26 +1,4 @@
-function validateManifest(manifest) {
-  if (!manifest || typeof manifest !== "object") throw new TypeError("Connector manifest must be an object.");
-  for (const field of ["id", "version", "displayName", "ports", "platforms", "mutationScope"]) {
-    if (!(field in manifest)) throw new TypeError(`Connector manifest is missing ${field}.`);
-  }
-  if (typeof manifest.id !== "string" || manifest.id === "") throw new TypeError("Connector id must be a non-empty string.");
-  if (!Array.isArray(manifest.ports) || manifest.ports.length === 0) throw new TypeError("Connector ports must be non-empty.");
-  if (!Array.isArray(manifest.platforms) || manifest.platforms.length === 0) throw new TypeError("Connector platforms must be non-empty.");
-}
-
-function validateConnector(connector) {
-  if (!connector || typeof connector !== "object") throw new TypeError("Connector must be an object.");
-  validateManifest(connector.manifest);
-  if (typeof connector.probe !== "function") throw new TypeError(`Connector ${connector.manifest.id} must provide probe().`);
-  if (!connector.implementations || typeof connector.implementations !== "object") {
-    throw new TypeError(`Connector ${connector.manifest.id} must provide implementations.`);
-  }
-  for (const portId of connector.manifest.ports) {
-    if (!connector.implementations[portId]) {
-      throw new TypeError(`Connector ${connector.manifest.id} declares ${portId} without an implementation.`);
-    }
-  }
-}
+import { validateConnector } from "../sdk/index.js";
 
 function platformMatches(manifest, platform) {
   return manifest.platforms.includes("*") || manifest.platforms.includes(platform);
@@ -38,18 +16,20 @@ export class ConnectorRegistry {
   }
 
   list() {
-    return [...this.#connectors.values()]
-      .map(({ manifest }) => manifest)
-      .sort((a, b) => a.id.localeCompare(b.id));
+    return [...this.#connectors.values()].map(({ manifest }) => manifest).sort((a, b) => a.id.localeCompare(b.id));
   }
 
   async resolve(port, { platform = process.platform } = {}) {
     const eligible = [];
     const ineligible = [];
-
     for (const connector of this.#connectors.values()) {
       const { manifest } = connector;
-      if (!manifest.ports.includes(port.id)) continue;
+      const declaration = manifest.ports.find((candidate) => candidate.id === port.id);
+      if (!declaration) continue;
+      if (declaration.version !== port.version) {
+        ineligible.push({ id: manifest.id, reason: `incompatible ${port.id} contract: ${declaration.version}` });
+        continue;
+      }
       if (!platformMatches(manifest, platform)) {
         ineligible.push({ id: manifest.id, reason: `unsupported platform: ${platform}` });
         continue;
@@ -67,11 +47,9 @@ export class ConnectorRegistry {
       }
       eligible.push(connector);
     }
-
     eligible.sort((a, b) => a.manifest.id.localeCompare(b.manifest.id));
     ineligible.sort((a, b) => a.id.localeCompare(b.id));
     const selected = eligible[0] ?? null;
-
     return {
       port: port.id,
       connector: selected,
