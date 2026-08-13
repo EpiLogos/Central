@@ -39,20 +39,26 @@ test("Work Actions complete ordinary-directory discovery and entry", async () =>
 });
 
 test("Work entry preserves exact, ambiguous, absent, and unambiguous-search semantics", async () => {
-  const root = await fixture(["alpha", "alpha-notes", "project-beta"]);
+  const root = await fixture(["alpha", "alphabet", "project-beta"]);
   const { registry, actionContext } = context(root);
   assert.equal((await registry.execute("work.open", { query: "alpha" }, actionContext)).data.match, "exact");
   assert.equal((await registry.execute("work.open", { query: "beta" }, actionContext)).data.item.name, "project-beta");
-  const ambiguous = await registry.execute("work.open", { query: "alpha-" }, actionContext);
-  assert.equal(ambiguous.ok, true);
+  const ambiguous = await registry.execute("work.open", { query: "alp" }, actionContext);
+  assert.equal(ambiguous.status, ResultStatus.INVALID_INPUT);
+  assert.deepEqual(ambiguous.error.details.matches.map((item) => item.name), ["alpha", "alphabet"]);
   const absent = await registry.execute("work.open", { query: "gamma" }, actionContext);
   assert.equal(absent.status, ResultStatus.INVALID_INPUT);
 });
 
-test("work.open selectable input is sourced from the canonical work.list Action", () => {
+test("work.open records its Port source while the picker route names canonical work.list", () => {
   const descriptor = createCoreActionRegistry().get("work.open");
   assert.deepEqual(descriptor.requiredPorts, ["WorkDiscovery"]);
   assert.deepEqual(descriptor.inputs[0].selectableSource, {
+    port: "WorkDiscovery",
+    operation: "list",
+    valueField: "name",
+  });
+  assert.deepEqual(descriptor.inputs[0].selectionAction, {
     action: "work.list",
     collection: "items",
     valueField: "name",
@@ -67,5 +73,4 @@ test("CLI projection returns the same canonical Work Action results", async () =
   const selected = await runCli(["--json", "--root", root, "open", "alpha"]);
   assert.equal(selected.exitCode, 0);
   assert.equal(JSON.parse(selected.output).action, "work.open");
-}
-);
+});
