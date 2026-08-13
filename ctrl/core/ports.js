@@ -1,4 +1,5 @@
-export { WorkDiscovery } from "../sdk/index.js";
+export { WorkDiscovery, MachineInspection } from "../sdk/index.js";
+export { PackageManager, ConfigurationManager, ServiceManager } from "../sdk/ports/work-discovery.js";
 
 export async function invokePort(resolution, port, operation, input) {
   const contract = port.operations[operation];
