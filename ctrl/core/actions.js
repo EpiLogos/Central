@@ -84,6 +84,51 @@ function descriptor({ id, title, description, mutationClass, output, requiredPor
   };
 }
 
+async function discoverWork(actionId, context) {
+  const resolvedRoot = resolveCentralRoot(context.rootOptions);
+  if (!context.connectors || typeof context.connectors.resolve !== "function") {
+    return failure(
+      actionId,
+      ResultStatus.UNAVAILABLE_CAPABILITY,
+      `Required Port is unavailable: ${WorkDiscovery.id}`,
+      { port: WorkDiscovery.id, diagnostics: { eligible: [], ineligible: [], selectedConnector: null } },
+    );
+  }
+  const resolution = await context.connectors.resolve(WorkDiscovery, context.connectorContext);
+  if (!resolution.connector) {
+    return failure(
+      actionId,
+      ResultStatus.UNAVAILABLE_CAPABILITY,
+      `No eligible Connector implements ${WorkDiscovery.id}.`,
+      { port: WorkDiscovery.id, diagnostics: resolution.diagnostics },
+    );
+  }
+  try {
+    const output = await invokePort(resolution, WorkDiscovery, "list", { workRoot: join(resolvedRoot.path, "Work") });
+    return success(actionId, {
+      ...output,
+      root: resolvedRoot.path,
+      diagnostics: resolution.diagnostics,
+    });
+  } catch (error) {
+    return failure(
+      actionId,
+      ResultStatus.CONNECTOR_FAILURE,
+      `Connector failed while executing ${WorkDiscovery.id}.`,
+      {
+        connector: resolution.connector.manifest.id,
+        message: error instanceof Error ? error.message : String(error),
+        diagnostics: resolution.diagnostics,
+      },
+    );
+  }
+}
+
+function workMatches(items, query) {
+  const needle = query.trim().toLocaleLowerCase();
+  return items.filter((item) => item.name.toLocaleLowerCase().includes(needle));
+}
+
 export function createCoreActionRegistry() {
   const registry = new ActionRegistry();
 
@@ -209,44 +254,72 @@ export function createCoreActionRegistry() {
       output: { type: "work-item-list" },
       requiredPorts: [WorkDiscovery.id],
     }),
-    async (_input, context) => {
-      const resolvedRoot = resolveCentralRoot(context.rootOptions);
-      if (!context.connectors || typeof context.connectors.resolve !== "function") {
-        return failure(
-          "work.list",
-          ResultStatus.UNAVAILABLE_CAPABILITY,
-          `Required Port is unavailable: ${WorkDiscovery.id}`,
-          { port: WorkDiscovery.id, diagnostics: { eligible: [], ineligible: [], selectedConnector: null } },
-        );
+    async (_input, context) => discoverWork("work.list", context),
+  );
+
+  registry.register(
+    descriptor({
+      id: "work.search",
+      title: "Search Work items",
+      description: "Search ordinary Work directory names through WorkDiscovery.",
+      mutationClass: "read-only",
+      inputs: [{ name: "query", type: "string", required: true }],
+      output: { type: "work-item-search" },
+      requiredPorts: [WorkDiscovery.id],
+    }),
+    async (input, context) => {
+      if (typeof input.query !== "string" || input.query.trim() === "") {
+        return failure("work.search", ResultStatus.INVALID_INPUT, "Work search requires a non-empty query.");
       }
-      const resolution = await context.connectors.resolve(WorkDiscovery, context.connectorContext);
-      if (!resolution.connector) {
-        return failure(
-          "work.list",
-          ResultStatus.UNAVAILABLE_CAPABILITY,
-          `No eligible Connector implements ${WorkDiscovery.id}.`,
-          { port: WorkDiscovery.id, diagnostics: resolution.diagnostics },
-        );
+      const discovered = await discoverWork("work.search", context);
+      if (!discovered.ok) return discovered;
+      return success("work.search", {
+        query: input.query.trim(),
+        matches: workMatches(discovered.data.items, input.query),
+        root: discovered.data.root,
+        diagnostics: discovered.data.diagnostics,
+      });
+    },
+  );
+
+  registry.register(
+    descriptor({
+      id: "work.open",
+      title: "Enter Work item",
+      description: "Resolve one ordinary Work directory by exact name or unambiguous search.",
+      mutationClass: "read-only",
+      inputs: [{
+        name: "query",
+        type: "string",
+        required: true,
+        selectableSource: { port: WorkDiscovery.id, operation: "list", valueField: "name" },
+      }],
+      output: { type: "work-item-selection" },
+      requiredPorts: [WorkDiscovery.id],
+    }),
+    async (input, context) => {
+      if (typeof input.query !== "string" || input.query.trim() === "") {
+        return failure("work.open", ResultStatus.INVALID_INPUT, "Work entry requires a non-empty name or search.");
       }
-      try {
-        const output = await invokePort(resolution, WorkDiscovery, "list", { workRoot: join(resolvedRoot.path, "Work") });
-        return success("work.list", {
-          ...output,
-          root: resolvedRoot.path,
-          diagnostics: resolution.diagnostics,
-        });
-      } catch (error) {
-        return failure(
-          "work.list",
-          ResultStatus.CONNECTOR_FAILURE,
-          `Connector failed while executing ${WorkDiscovery.id}.`,
-          {
-            connector: resolution.connector.manifest.id,
-            message: error instanceof Error ? error.message : String(error),
-            diagnostics: resolution.diagnostics,
-          },
-        );
+      const discovered = await discoverWork("work.open", context);
+      if (!discovered.ok) return discovered;
+      const query = input.query.trim();
+      const normalized = query.toLocaleLowerCase();
+      const exact = discovered.data.items.find((item) => item.name.toLocaleLowerCase() === normalized);
+      const matches = exact ? [exact] : workMatches(discovered.data.items, query);
+      if (matches.length === 0) {
+        return failure("work.open", ResultStatus.INVALID_INPUT, `No Work item matches: ${query}`, { query, matches: [] });
       }
+      if (matches.length > 1) {
+        return failure("work.open", ResultStatus.INVALID_INPUT, `Work search is ambiguous: ${query}`, { query, matches });
+      }
+      return success("work.open", {
+        query,
+        match: exact ? "exact" : "search",
+        item: matches[0],
+        root: discovered.data.root,
+        diagnostics: discovered.data.diagnostics,
+      });
     },
   );
 

@@ -11,6 +11,9 @@ const COMMANDS = new Map([
   ["central.init", "central.init"],
   ["central.doctor", "central.doctor"],
   ["work.list", "work.list"],
+  ["work.search", "work.search"],
+  ["work.open", "work.open"],
+  ["open", "work.open"],
   ["control.open", "control.open"],
   ["control.search", "control.search"],
 ]);
@@ -56,6 +59,14 @@ function parseArguments(argv) {
   } else if (positional[0] === "work" && positional[1] === "list") {
     commandKey = "work.list";
     if (positional.length !== 2) return { structured, error: "work list takes no input." };
+  } else if (positional[0] === "work" && positional[1] === "search") {
+    commandKey = "work.search";
+    if (positional.length < 3) return { structured, error: "work search requires a query." };
+    input = { query: positional.slice(2).join(" ") };
+  } else if (positional[0] === "work" && positional[1] === "open") {
+    commandKey = "work.open";
+    if (positional.length < 3) return { structured, error: "work open requires a name or search." };
+    input = { query: positional.slice(2).join(" ") };
   } else if (positional[0] === "control" && positional[1] === "open") {
     commandKey = "control.open";
     if (positional.length !== 3) return { structured, error: "control open requires one Control root." };
@@ -66,7 +77,13 @@ function parseArguments(argv) {
     input = { query: positional.slice(2).join(" ") };
   } else {
     commandKey = positional[0];
-    if (commandKey === "control.open") {
+    if (commandKey === "work.open" || commandKey === "open") {
+      if (positional.length < 2) return { structured, error: `${commandKey} requires a name or search.` };
+      input = { query: positional.slice(1).join(" ") };
+    } else if (commandKey === "work.search") {
+      if (positional.length < 2) return { structured, error: "work.search requires a query." };
+      input = { query: positional.slice(1).join(" ") };
+    } else if (commandKey === "control.open") {
       if (positional.length !== 2) return { structured, error: "control.open requires one Control root." };
       input = { target: positional[1] };
     } else if (commandKey === "control.search") {
@@ -117,6 +134,10 @@ export function renderHuman(result) {
       const items = result.data.items.map((item) => `${item.name}\t${item.path}`);
       return [`Connector: ${connector}`, ...items].join("\n");
     }
+    case "work.search":
+      return result.data.matches.map((item) => `${item.name}\t${item.path}`).join("\n");
+    case "work.open":
+      return `${result.data.item.name}\t${result.data.item.path}`;
     default:
       return JSON.stringify(result.data, null, 2);
   }

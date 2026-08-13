@@ -78,7 +78,6 @@ test("doctor detects an invalid structure and accepts an initialized structure",
   assert.equal(after.data.valid, true);
 });
 
-
 test("init reports an existing non-directory root as invalid Central structure", async () => {
   const base = await temporaryDirectory("central-file-root-");
   const root = join(base, "Central");
@@ -101,6 +100,8 @@ test("Action registry preserves stable canonical IDs and complete descriptors", 
     "control.open",
     "control.search",
     "work.list",
+    "work.open",
+    "work.search",
   ]);
   for (const action of actions) {
     assert.equal(typeof action.title, "string");
