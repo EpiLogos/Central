@@ -1,4 +1,4 @@
-import { createInterface } from "node:readline/promises";
+import { createInterface } from "node:readline";
 import { createDefaultRuntime } from "./runtime.js";
 import { failure, ResultStatus } from "./results.js";
 import { runGuidedActionPicker } from "./picker.js";
@@ -199,8 +199,18 @@ export async function runCli(argv, {
   if (parsed.guided) {
     let interfaceInstance;
     const pickerPrompt = prompt ?? (() => {
-      interfaceInstance = createInterface({ input: stdin, output: stderr });
-      return (message) => interfaceInstance.question(message);
+      interfaceInstance = createInterface({
+        input: stdin,
+        output: stderr,
+        terminal: Boolean(stdin.isTTY && stderr.isTTY),
+        crlfDelay: Infinity,
+      });
+      const lines = interfaceInstance[Symbol.asyncIterator]();
+      return async (message) => {
+        stderr.write(message);
+        const next = await lines.next();
+        return next.done ? "/cancel" : next.value;
+      };
     })();
     const pickerWrite = write ?? ((line) => stderr.write(`${line}\n`));
     try {
