@@ -140,7 +140,33 @@ Useful content can include:
 - preferred capability or method classes;
 - stable rules for when a human decision is important.
 
-### 5.3 Positive form
+### 5.3 Verification and confidence
+
+Durable verification preferences can belong in `Control/agents/` when they describe the human's general expectations for agent-produced engineering work.
+
+Useful statements can describe:
+
+- what kind of evidence should normally support a completion claim;
+- how the user regards deterministic checks, independent review, and human review;
+- whether normal implementation work should preserve or improve existing assurance;
+- when the user expects verification to occur during work rather than only at the end;
+- when a human decision or review remains important.
+
+Control holds the durable ideal or preference. It does not hold the project-specific verification process only because that process implements the preference.
+
+Exact test commands, CI-provider configuration, repository gates, workflow triggers, coverage thresholds, project test seams, release checks, and other concrete verification mechanisms normally remain with the project or the capability that operates them.
+
+For example:
+
+```text
+Control/agents:
+For engineering work, I want completion claims to be backed by appropriate executed evidence. Normal implementation changes should preserve the project's existing assurance rather than weaken it merely to obtain a pass.
+
+Project-local source:
+The exact tests, checks, review procedures, CI workflows, and merge requirements that establish sufficient evidence for this project.
+```
+
+### 5.4 Positive form
 
 State the desired behavior directly when possible.
 
@@ -148,7 +174,7 @@ Use a good example when an example communicates the requirement more clearly tha
 
 Use stable leading terms when those terms already carry precise shared meaning.
 
-### 5.4 Skill boundary
+### 5.5 Skill boundary
 
 `Control/agents/` is not the Skill registry.
 
@@ -233,6 +259,7 @@ Do not put these things in durable global Control by default:
 - completed plans that no longer describe the current system;
 - temporary requirements;
 - project-specific architecture;
+- project-specific CI workflows, test commands, gates, and verification procedures;
 - long reusable procedures;
 - raw current package inventories without authored intent;
 - raw conversation history;
@@ -328,8 +355,17 @@ The Skill should:
 2. identify stale, duplicate, conflicting, or misplaced content;
 3. distinguish authored content from generated material;
 4. identify procedure that should become a Skill or Action;
-5. propose changes with reasons;
-6. request acceptance before durable mutation.
+5. identify important durable preference areas that are absent or unclear when the current dialogue makes them relevant;
+6. propose changes with reasons;
+7. request acceptance before durable mutation.
+
+When the user is configuring or reviewing their agent-governance material for engineering work, verification and confidence should be an available dialogue topic rather than a mandatory schema field.
+
+A useful prompt is:
+
+> When an agent changes software for you, what normally gives you confidence that the work is complete? Do you have durable preferences about tests, CI, review, evidence, or when human review is required?
+
+The Skill should retain only the durable cross-project preference that emerges from this discussion. Project-specific commands, checks, providers, gates, and procedures stay at project scope.
 
 ### 14.2 Durable-preference proposal Skill
 
