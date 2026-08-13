@@ -1,5 +1,6 @@
 export const ResultStatus = Object.freeze({
   SUCCESS: "success",
+  CANCELLED: "cancelled",
   INVALID_INPUT: "invalid_input",
   INVALID_CENTRAL_STRUCTURE: "invalid_central_structure",
   UNAVAILABLE_CAPABILITY: "unavailable_capability",
@@ -22,4 +23,8 @@ export function failure(action, status, message, details = undefined) {
       ...(details === undefined ? {} : { details }),
     },
   };
+}
+
+export function cancelled(action = null, message = "Cancelled.", details = undefined) {
+  return failure(action, ResultStatus.CANCELLED, message, details);
 }

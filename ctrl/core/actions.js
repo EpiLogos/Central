@@ -292,7 +292,7 @@ export function createCoreActionRegistry() {
         name: "query",
         type: "string",
         required: true,
-        selectableSource: { port: WorkDiscovery.id, operation: "list", valueField: "name" },
+        selectableSource: { action: "work.list", collection: "items", valueField: "name" },
       }],
       output: { type: "work-item-selection" },
       requiredPorts: [WorkDiscovery.id],
@@ -322,6 +322,7 @@ export function createCoreActionRegistry() {
       });
     },
   );
+
 
   return registry;
 }

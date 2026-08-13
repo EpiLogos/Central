@@ -1,5 +1,7 @@
+import { createInterface } from "node:readline/promises";
 import { createDefaultRuntime } from "./runtime.js";
 import { failure, ResultStatus } from "./results.js";
+import { runGuidedActionPicker } from "./picker.js";
 
 const COMMANDS = new Map([
   ["root", "central.root"],
@@ -50,6 +52,11 @@ function parseArguments(argv) {
   }
 
   if (positional.length === 0) return { structured, error: "An Action or command is required." };
+
+  if (positional[0] === "pick") {
+    if (positional.length !== 1) return { structured, error: "pick takes no positional input." };
+    return { structured, explicitRoot, guided: true };
+  }
 
   let commandKey;
   let input = {};
@@ -110,6 +117,7 @@ function renderDoctorDetails(details) {
 
 export function renderHuman(result) {
   if (!result.ok) {
+    if (result.status === ResultStatus.CANCELLED) return result.error.message;
     if (result.status === ResultStatus.INVALID_CENTRAL_STRUCTURE && result.error.details) {
       return `${result.error.message}\n${renderDoctorDetails(result.error.details)}`;
     }
@@ -144,13 +152,21 @@ export function renderHuman(result) {
 }
 
 function exitCodeFor(result) {
-  if (result.ok) return 0;
+  if (result.ok || result.status === ResultStatus.CANCELLED) return 0;
   if (result.status === ResultStatus.INVALID_INPUT) return 2;
   if (result.status === ResultStatus.INVALID_CENTRAL_STRUCTURE) return 3;
   return 1;
 }
 
-export async function runCli(argv, { env = process.env, home, cwd = process.cwd() } = {}) {
+export async function runCli(argv, {
+  env = process.env,
+  home,
+  cwd = process.cwd(),
+  stdin = process.stdin,
+  stderr = process.stderr,
+  prompt,
+  write,
+} = {}) {
   const parsed = parseArguments(argv);
   if (parsed.error) {
     const result = failure(null, ResultStatus.INVALID_INPUT, parsed.error);
@@ -158,7 +174,7 @@ export async function runCli(argv, { env = process.env, home, cwd = process.cwd(
   }
 
   const runtime = createDefaultRuntime();
-  const result = await runtime.actions.execute(parsed.actionId, parsed.input ?? {}, {
+  const context = {
     rootOptions: {
       explicitRoot: parsed.explicitRoot,
       env,
@@ -166,7 +182,25 @@ export async function runCli(argv, { env = process.env, home, cwd = process.cwd(
       cwd,
     },
     connectors: runtime.connectors,
-  });
+  };
+
+  let result;
+  if (parsed.guided) {
+    let interfaceInstance;
+    const pickerPrompt = prompt ?? (() => {
+      interfaceInstance = createInterface({ input: stdin, output: stderr });
+      return (message) => interfaceInstance.question(message);
+    })();
+    const pickerWrite = write ?? ((line) => stderr.write(`${line}\n`));
+    try {
+      result = await runGuidedActionPicker({ registry: runtime.actions, context, prompt: pickerPrompt, write: pickerWrite });
+    } finally {
+      interfaceInstance?.close();
+    }
+  } else {
+    result = await runtime.actions.execute(parsed.actionId, parsed.input ?? {}, context);
+  }
+
   return {
     result,
     output: parsed.structured ? JSON.stringify(result) : renderHuman(result),
