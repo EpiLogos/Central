@@ -47,12 +47,12 @@ async function resolveSelectableValues(input, registry, context) {
     return { ok: true, values: input.choices.map((value) => ({ label: String(value), value })) };
   }
 
-  const source = input.selectableSource;
+  const source = input.selectionAction ?? input.selectableSource;
   if (!source) return { ok: true, values: null };
   if (typeof source.action !== "string" || source.action === "") {
     return {
       ok: false,
-      result: failure(null, ResultStatus.INTERNAL_FAILURE, `Selectable source for ${input.name} does not name an Action.`),
+      result: failure(null, ResultStatus.INTERNAL_FAILURE, `Selectable input ${input.name} does not name the canonical Action used to resolve its values.`),
     };
   }
 
