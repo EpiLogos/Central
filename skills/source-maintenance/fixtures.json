@@ -1,0 +1,43 @@
+{
+  "cases": [
+    {
+      "id": "clean-control-tree",
+      "input": {
+        "Control/user/preferences.md": "I prefer direct visual review of working interface candidates.",
+        "Control/agents/engineering.md": "Completion claims should include appropriate executed evidence."
+      },
+      "expected": { "findings": [], "mutationRequiresAcceptance": true }
+    },
+    {
+      "id": "stale-content",
+      "input": { "Control/user/tools.md": "My default editor is Tool A." },
+      "supportingContext": "The user has deliberately adopted Tool B as the durable default.",
+      "expected": { "classification": "stale", "proposalIncludesFinalDiff": true }
+    },
+    {
+      "id": "conflicting-content",
+      "input": {
+        "Control/agents/review-a.md": "Always require human review before any engineering completion.",
+        "Control/agents/review-b.md": "Routine reversible changes do not require human review when verification passes."
+      },
+      "expected": { "classification": "conflict", "requiresHumanResolution": true, "silentMerge": false }
+    },
+    {
+      "id": "misplaced-procedure",
+      "input": { "Control/agents/release.md": "Step 1 run the release command. Step 2 update the changelog. Step 3 publish the package." },
+      "expected": { "classification": "misplaced-procedure", "relocateTo": "Skill or project procedure" }
+    },
+    {
+      "id": "verification-preference-dialogue",
+      "dialogue": {
+        "prompt": "What normally gives you confidence that agent-produced software work is complete?",
+        "answer": "I want claims backed by executed tests and appropriate review. In this repository run npm run verify in GitHub Actions and require the verify check before merge."
+      },
+      "expected": {
+        "Control/agents": "Completion claims should normally be backed by appropriate executed evidence and review.",
+        "projectLocal": "Run npm run verify in GitHub Actions and require the verify check before merge.",
+        "providerMechanicsRemainProjectLocal": true
+      }
+    }
+  ]
+}
