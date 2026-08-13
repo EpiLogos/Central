@@ -1,0 +1,5 @@
+/Work/
+/.central/
+
+# Local platform noise
+.DS_Store
