@@ -2,6 +2,7 @@ import { createInterface } from "node:readline/promises";
 import { createDefaultRuntime } from "./runtime.js";
 import { failure, ResultStatus } from "./results.js";
 import { runGuidedActionPicker } from "./picker.js";
+import { renderMachineDeclaration } from "./machine-declaration.js";
 
 const COMMANDS = new Map([
   ["root", "central.root"],
@@ -18,6 +19,7 @@ const COMMANDS = new Map([
   ["open", "work.open"],
   ["control.open", "control.open"],
   ["control.search", "control.search"],
+  ["machine.declaration", "machine.declaration"],
 ]);
 
 function parseArguments(argv) {
@@ -82,6 +84,10 @@ function parseArguments(argv) {
     commandKey = "control.search";
     if (positional.length < 3) return { structured, error: "control search requires a query." };
     input = { query: positional.slice(2).join(" ") };
+  } else if (positional[0] === "machine" && positional[1] === "declaration") {
+    commandKey = "machine.declaration";
+    if (positional.length !== 3) return { structured, error: "machine declaration requires one role." };
+    input = { role: positional[2] };
   } else {
     commandKey = positional[0];
     if (commandKey === "work.open" || commandKey === "open") {
@@ -96,6 +102,9 @@ function parseArguments(argv) {
     } else if (commandKey === "control.search") {
       if (positional.length < 2) return { structured, error: "control.search requires a query." };
       input = { query: positional.slice(1).join(" ") };
+    } else if (commandKey === "machine.declaration") {
+      if (positional.length !== 2) return { structured, error: "machine.declaration requires one role." };
+      input = { role: positional[1] };
     } else if (positional.length !== 1) {
       return { structured, error: `Unexpected arguments: ${positional.slice(1).join(" ")}` };
     }
@@ -146,6 +155,8 @@ export function renderHuman(result) {
       return result.data.matches.map((item) => `${item.name}\t${item.path}`).join("\n");
     case "work.open":
       return `${result.data.item.name}\t${result.data.item.path}`;
+    case "machine.declaration":
+      return renderMachineDeclaration(result.data);
     default:
       return JSON.stringify(result.data, null, 2);
   }
