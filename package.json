@@ -5,6 +5,10 @@
   "type": "module",
   "engines": { "node": ">=22" },
   "bin": { "ctrl": "./ctrl/bin/ctrl.js" },
-  "scripts": { "ctrl": "node ./ctrl/bin/ctrl.js", "test": "node --test" },
+  "scripts": {
+    "ctrl": "node ./ctrl/bin/ctrl.js",
+    "verify": "node --test",
+    "test": "npm run verify"
+  },
   "exports": { "./sdk": { "types": "./ctrl/sdk/index.d.ts", "import": "./ctrl/sdk/index.js" } }
 }
