@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -107,4 +107,15 @@ test("incompatible Port contract version is ineligible with an explicit diagnost
   const resolution = await new ConnectorRegistry().register(incompatible).resolve(WorkDiscovery);
   assert.equal(resolution.connector, null);
   assert.match(resolution.diagnostics.ineligible[0].reason, /incompatible WorkDiscovery contract/);
+});
+
+test("Connector authoring Skill preserves the public boundary and names the executable reference proof", async () => {
+  const skill = await readFile(new URL("../../skills/connector-authoring/SKILL.md", import.meta.url), "utf8");
+  assert.match(skill, /Port contract as authoritative/);
+  assert.match(skill, /Action → Port → Connector → target/);
+  assert.match(skill, /public SDK/);
+  assert.match(skill, /conformance/);
+  assert.match(skill, /Failure discipline/);
+  assert.match(skill, /createWorkDiscoveryConnectorTemplate/);
+  assert.match(skill, /canonical `work\.list`/);
 });
