@@ -3,6 +3,7 @@ import { failure, ResultStatus, success } from "./results.js";
 import { invokePort, WorkDiscovery } from "./ports.js";
 import { join } from "node:path";
 import { CONTROL_ROOTS, locateControlRoot, searchControl } from "./control-source.js";
+import { readMachineDeclaration } from "./machine-declaration.js";
 
 const REQUIRED_DESCRIPTOR_FIELDS = Object.freeze([
   "id",
@@ -323,6 +324,35 @@ export function createCoreActionRegistry() {
     },
   );
 
+  registry.register(
+    descriptor({
+      id: "machine.declaration",
+      title: "Explain machine declaration",
+      description: "Read one versioned authored machine-role declaration from Control.",
+      mutationClass: "read-only",
+      inputs: [{ name: "role", type: "string", required: true }],
+      output: { type: "machine-declaration" },
+    }),
+    async (input, context) => {
+      if (typeof input.role !== "string" || input.role.trim() === "") {
+        return failure("machine.declaration", ResultStatus.INVALID_INPUT, "Machine declaration requires a role.");
+      }
+      const central = resolveCentralRoot(context.rootOptions);
+      const loaded = await readMachineDeclaration(central.path, input.role.trim());
+      if (!loaded.ok) {
+        return failure(
+          "machine.declaration",
+          ResultStatus.INVALID_INPUT,
+          `Machine declaration for ${input.role.trim()} is unavailable or invalid.`,
+          { role: input.role.trim(), source: loaded.source, diagnostics: loaded.diagnostics },
+        );
+      }
+      return success("machine.declaration", {
+        declaration: loaded.declaration,
+        source: loaded.source,
+      });
+    },
+  );
 
   return registry;
 }
