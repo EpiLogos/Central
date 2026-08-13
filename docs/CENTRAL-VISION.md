@@ -66,7 +66,9 @@ Control/
 
 `user/` describes the person and their durable relation to their working world. It can contain self-description, durable interests, important context objects, tool-use preferences, and stable working preferences.
 
-`agents/` describes the recurring relation that the human wants with software agents. It can contain communication preferences, collaboration style, expected initiative, evidence standards, coding habits, evaluation criteria, and recognized lessons from repeated interaction.
+`agents/` describes the recurring relation that the human wants with software agents. It can contain communication preferences, collaboration style, expected initiative, evidence and verification expectations, coding habits, evaluation criteria, and recognized lessons from repeated interaction.
+
+For engineering work, Control can preserve durable ideals about what should justify confidence in agent-produced work. It does not need to own the concrete project checks, CI pipelines, merge gates, or provider configuration that enact those ideals. Those mechanisms remain at the scope where they are actually defined and executed.
 
 `machines/` describes intended computing environments. It can contain machine roles, desired tools, package declarations, configuration sources, services, bootstrap mechanisms, shell configuration, and automation.
 
