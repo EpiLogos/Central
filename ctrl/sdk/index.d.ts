@@ -13,6 +13,24 @@ export interface WorkDiscoveryListOutput {
   items: WorkItem[];
 }
 
+export interface MachineStateItem {
+  id: string;
+  state: string;
+}
+
+export interface MachineObservation {
+  host: {
+    platform: string;
+    architecture: string;
+  };
+  capabilities: string[];
+  packages: MachineStateItem[];
+  configurations: MachineStateItem[];
+  services: MachineStateItem[];
+}
+
+export interface MachineInspectionInput {}
+
 export interface CapabilityProbeResult {
   available: boolean;
   reason?: string;
@@ -40,11 +58,16 @@ export interface WorkDiscoveryImplementation {
   list(input: WorkDiscoveryListInput): Promise<WorkDiscoveryListOutput>;
 }
 
+export interface MachineInspectionImplementation {
+  inspect(input: MachineInspectionInput): Promise<MachineObservation>;
+}
+
 export interface Connector {
   manifest: ConnectorManifest;
   probe(context: { port: string; platform: string }): Promise<CapabilityProbeResult>;
   implementations: Record<string, unknown> & {
     WorkDiscovery?: WorkDiscoveryImplementation;
+    MachineInspection?: MachineInspectionImplementation;
   };
 }
 
@@ -65,6 +88,7 @@ export interface PortContract<I, O> {
 
 export const CONNECTOR_API_VERSION: "central.connector/v1";
 export const WorkDiscovery: PortContract<WorkDiscoveryListInput, WorkDiscoveryListOutput>;
+export const MachineInspection: PortContract<MachineInspectionInput, MachineObservation>;
 export function defineConnector<T extends Connector>(connector: T): T;
 export function validateConnector(connector: unknown): Connector;
 export function validateConnectorManifest(manifest: unknown): ConnectorManifest;
