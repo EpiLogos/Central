@@ -6,6 +6,10 @@ function assertObject(value, label) {
   }
 }
 
+function assertText(value, label) {
+  if (typeof value !== "string" || value.trim() === "") throw new TypeError(`${label} must be a non-empty string.`);
+}
+
 function validateInput(input) {
   assertObject(input, "WorkDiscovery.list input");
   if (typeof input.workRoot !== "string" || input.workRoot.trim() === "") {
@@ -45,3 +49,61 @@ export const WorkDiscovery = Object.freeze({
     }),
   }),
 });
+
+const PACKAGE_STATES = new Set(["present", "absent"]);
+const CONFIGURATION_STATES = new Set(["present", "absent"]);
+const SERVICE_STATES = new Set(["running", "stopped", "enabled", "disabled"]);
+
+function validateStateItems(items, label, states) {
+  if (!Array.isArray(items)) throw new TypeError(`${label} must be an array.`);
+  const ids = new Set();
+  for (const item of items) {
+    assertObject(item, `${label} item`);
+    assertText(item.id, `${label} item.id`);
+    if (ids.has(item.id)) throw new TypeError(`${label} contains duplicate id ${item.id}.`);
+    ids.add(item.id);
+    if (!states.has(item.state)) throw new TypeError(`${label} item.state is invalid for ${item.id}.`);
+  }
+}
+
+function validateMachineInspectionInput(input) {
+  assertObject(input, "MachineInspection.inspect input");
+}
+
+function validateMachineInspectionOutput(output) {
+  assertObject(output, "MachineInspection.inspect output");
+  assertObject(output.host, "MachineInspection.inspect output.host");
+  assertText(output.host.platform, "MachineInspection.inspect output.host.platform");
+  assertText(output.host.architecture, "MachineInspection.inspect output.host.architecture");
+  if (!Array.isArray(output.capabilities) || output.capabilities.some((item) => typeof item !== "string" || item.trim() === "")) {
+    throw new TypeError("MachineInspection.inspect output.capabilities must be an array of non-empty strings.");
+  }
+  validateStateItems(output.packages, "MachineInspection.inspect output.packages", PACKAGE_STATES);
+  validateStateItems(output.configurations, "MachineInspection.inspect output.configurations", CONFIGURATION_STATES);
+  validateStateItems(output.services, "MachineInspection.inspect output.services", SERVICE_STATES);
+}
+
+export const MachineInspection = Object.freeze({
+  id: "MachineInspection",
+  version: CONTRACT_VERSION,
+  purpose: "Return a structured observation of the current execution host while keeping observation separate from authored intent.",
+  mutationClass: "read-only",
+  operations: Object.freeze({
+    inspect: Object.freeze({
+      inputType: "MachineInspectionInput",
+      outputType: "MachineObservation",
+      validateInput: validateMachineInspectionInput,
+      validateOutput: validateMachineInspectionOutput,
+      deterministic: false,
+      idempotent: true,
+    }),
+  }),
+});
+
+function planningPort(id, purpose) {
+  return Object.freeze({ id, version: CONTRACT_VERSION, purpose, mutationClass: "locally-mutating", operations: Object.freeze({}) });
+}
+
+export const PackageManager = planningPort("PackageManager", "Satisfy package-state differences through a replaceable provider.");
+export const ConfigurationManager = planningPort("ConfigurationManager", "Satisfy configuration-state differences through a replaceable provider.");
+export const ServiceManager = planningPort("ServiceManager", "Satisfy service-state differences through a replaceable provider.");
