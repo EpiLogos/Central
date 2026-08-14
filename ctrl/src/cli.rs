@@ -34,8 +34,9 @@ pub struct CommandOutput {
 impl CommandOutput {
     pub fn render(&self) -> String {
         if self.json {
-            serde_json::to_string_pretty(&self.result)
-                .unwrap_or_else(|error| format!("{{\"status\":\"internal_failure\",\"error\":\"{error}\"}}"))
+            serde_json::to_string_pretty(&self.result).unwrap_or_else(|error| {
+                format!("{{\"status\":\"internal_failure\",\"error\":\"{error}\"}}")
+            })
         } else {
             self.human.clone()
         }
@@ -52,7 +53,9 @@ struct ParsedArgs {
 pub fn run(args: Vec<String>, context: ProcessContext) -> CommandOutput {
     let parsed = match parse_args(&args) {
         Ok(parsed) => parsed,
-        Err(message) => return invalid_input("ctrl", message, args.iter().any(|arg| arg == "--json")),
+        Err(message) => {
+            return invalid_input("ctrl", message, args.iter().any(|arg| arg == "--json"));
+        }
     };
 
     let registry = ActionRegistry::core();
@@ -60,29 +63,58 @@ pub fn run(args: Vec<String>, context: ProcessContext) -> CommandOutput {
         [command] if command == "central.root" || command == "root" => {
             with_root("central.root", &parsed, &context, |root| {
                 let display = root.display().to_string();
-                success("central.root", json!({ "root": display }), display, parsed.json)
+                success(
+                    "central.root",
+                    json!({ "root": display }),
+                    display,
+                    parsed.json,
+                )
             })
         }
-        [command] if command == "central.init" || command == "init" => {
-            with_root("central.init", &parsed, &context, |root| match root::initialize(&root) {
+        [command] if command == "central.init" || command == "init" => with_root(
+            "central.init",
+            &parsed,
+            &context,
+            |root| match root::initialize(&root) {
                 Ok(report) => {
                     let human = format!("Central initialized at {}", report.root);
-                    success("central.init", serde_json::to_value(report).expect("InitReport serializes"), human, parsed.json)
+                    success(
+                        "central.init",
+                        serde_json::to_value(report).expect("InitReport serializes"),
+                        human,
+                        parsed.json,
+                    )
                 }
                 Err(error) => internal_failure("central.init", error.to_string(), parsed.json),
-            })
-        }
-        [command] if command == "central.doctor" || command == "doctor" => {
-            with_root("central.doctor", &parsed, &context, |root| match root::doctor(&root) {
+            },
+        ),
+        [command] if command == "central.doctor" || command == "doctor" => with_root(
+            "central.doctor",
+            &parsed,
+            &context,
+            |root| match root::doctor(&root) {
                 Ok(report) if report.valid => {
                     let human = format!("Central structure is valid at {}", report.root);
-                    success("central.doctor", serde_json::to_value(report).expect("DoctorReport serializes"), human, parsed.json)
+                    success(
+                        "central.doctor",
+                        serde_json::to_value(report).expect("DoctorReport serializes"),
+                        human,
+                        parsed.json,
+                    )
                 }
                 Ok(report) => {
                     let mut problems = Vec::new();
-                    if !report.missing.is_empty() { problems.push(format!("missing: {}", report.missing.join(", "))); }
-                    if !report.invalid.is_empty() { problems.push(format!("not directories: {}", report.invalid.join(", "))); }
-                    let human = format!("Central structure is invalid at {} ({})", report.root, problems.join("; "));
+                    if !report.missing.is_empty() {
+                        problems.push(format!("missing: {}", report.missing.join(", ")));
+                    }
+                    if !report.invalid.is_empty() {
+                        problems.push(format!("not directories: {}", report.invalid.join(", ")));
+                    }
+                    let human = format!(
+                        "Central structure is invalid at {} ({})",
+                        report.root,
+                        problems.join("; ")
+                    );
                     failure_with_data(
                         "central.doctor",
                         ResultStatus::InvalidCentralStructure,
@@ -94,10 +126,12 @@ pub fn run(args: Vec<String>, context: ProcessContext) -> CommandOutput {
                     )
                 }
                 Err(error) => internal_failure("central.doctor", error.to_string(), parsed.json),
-            })
-        }
+            },
+        ),
         [command] if command == "action.list" => action_list(&registry, parsed.json),
-        [domain, command] if domain == "action" && command == "list" => action_list(&registry, parsed.json),
+        [domain, command] if domain == "action" && command == "list" => {
+            action_list(&registry, parsed.json)
+        }
         _ => invalid_input(
             "ctrl",
             "unknown command; use root, init, doctor, or action list",
@@ -153,9 +187,13 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
             "--json" => json = true,
             "--root" => {
                 index += 1;
-                let value = args.get(index).ok_or_else(|| "--root requires a path".to_string())?;
-                if value.is_empty() { return Err("--root requires a non-empty path".into()); }
-                explicit_root = Some(PathBuf::from(value));
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--root requires a path".to_string())?;
+                if value.is_empty() {
+                    return Err("--root requires a non-empty path".into());
+                }
+                explicit_root = Some(PathBuf::from(value.as_str()));
             }
             option if option.starts_with("--") => return Err(format!("unknown option: {option}")),
             value => command.push(value.to_string()),
@@ -163,17 +201,36 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
         index += 1;
     }
 
-    Ok(ParsedArgs { json, explicit_root, command })
+    Ok(ParsedArgs {
+        json,
+        explicit_root,
+        command,
+    })
 }
 
-fn success(action: &str, data: serde_json::Value, human: String, json_output: bool) -> CommandOutput {
-    CommandOutput { result: ActionResult::success(action, data), human, json: json_output, exit_code: 0 }
+fn success(
+    action: &str,
+    data: serde_json::Value,
+    human: String,
+    json_output: bool,
+) -> CommandOutput {
+    CommandOutput {
+        result: ActionResult::success(action, data),
+        human,
+        json: json_output,
+        exit_code: 0,
+    }
 }
 
 fn invalid_input(action: &str, message: impl Into<String>, json_output: bool) -> CommandOutput {
     let message = message.into();
     CommandOutput {
-        result: ActionResult::failure(action, ResultStatus::InvalidInput, FailureCode::InvalidInput, message.clone()),
+        result: ActionResult::failure(
+            action,
+            ResultStatus::InvalidInput,
+            FailureCode::InvalidInput,
+            message.clone(),
+        ),
         human: format!("Invalid input: {message}"),
         json: json_output,
         exit_code: 2,
@@ -183,7 +240,12 @@ fn invalid_input(action: &str, message: impl Into<String>, json_output: bool) ->
 fn internal_failure(action: &str, message: impl Into<String>, json_output: bool) -> CommandOutput {
     let message = message.into();
     CommandOutput {
-        result: ActionResult::failure(action, ResultStatus::InternalFailure, FailureCode::InternalFailure, message.clone()),
+        result: ActionResult::failure(
+            action,
+            ResultStatus::InternalFailure,
+            FailureCode::InternalFailure,
+            message.clone(),
+        ),
         human: format!("Internal failure: {message}"),
         json: json_output,
         exit_code: 1,
