@@ -10,6 +10,8 @@ pub enum ResultStatus {
     InvalidCentralStructure,
     UnavailableCapability,
     ConnectorFailure,
+    PartialCompletion,
+    VerificationFailure,
     InternalFailure,
 }
 
@@ -22,6 +24,8 @@ impl ResultStatus {
             Self::InvalidCentralStructure => "invalid_central_structure",
             Self::UnavailableCapability => "unavailable_capability",
             Self::ConnectorFailure => "connector_failure",
+            Self::PartialCompletion => "partial_completion",
+            Self::VerificationFailure => "verification_failure",
             Self::InternalFailure => "internal_failure",
         }
     }
