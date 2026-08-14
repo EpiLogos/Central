@@ -1,13 +1,22 @@
-use std::{fs, path::PathBuf};
-use central_ctrl::{action::ActionRegistry, result::ResultStatus, root::{self, RootContext, REQUIRED_DIRS}, run, ProcessContext};
+use central_ctrl::action::ActionRegistry;
+use central_ctrl::result::ResultStatus;
+use central_ctrl::root::{self, REQUIRED_DIRS, RootContext};
+use central_ctrl::{ProcessContext, run};
+use std::fs;
 use tempfile::tempdir;
 
-fn args(values: &[&str]) -> Vec<String> { values.iter().map(|value| (*value).to_string()).collect() }
+fn args(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).to_string()).collect()
+}
 
 #[test]
 fn root_discovery_defaults_to_home_central() {
     let home = tempdir().unwrap();
-    let root = root::resolve_root(&RootContext { home: Some(home.path().to_path_buf()), ..RootContext::default() }).unwrap();
+    let root = root::resolve_root(&RootContext {
+        home: Some(home.path().to_path_buf()),
+        ..RootContext::default()
+    })
+    .unwrap();
     assert_eq!(root, home.path().join("Central"));
 }
 
@@ -15,7 +24,12 @@ fn root_discovery_defaults_to_home_central() {
 fn configured_root_overrides_default_home_location() {
     let home = tempdir().unwrap();
     let configured = tempdir().unwrap();
-    let root = root::resolve_root(&RootContext { configured_root: Some(configured.path().to_path_buf()), home: Some(home.path().to_path_buf()), ..RootContext::default() }).unwrap();
+    let root = root::resolve_root(&RootContext {
+        configured_root: Some(configured.path().to_path_buf()),
+        home: Some(home.path().to_path_buf()),
+        ..RootContext::default()
+    })
+    .unwrap();
     assert_eq!(root, configured.path());
 }
 
@@ -24,9 +38,23 @@ fn explicit_root_overrides_configured_root() {
     let home = tempdir().unwrap();
     let configured = tempdir().unwrap();
     let explicit = tempdir().unwrap();
-    let output = run(args(&["--root", explicit.path().to_str().unwrap(), "root", "--json"]), ProcessContext { configured_root: Some(configured.path().to_path_buf()), home: Some(home.path().to_path_buf()) });
+    let output = run(
+        args(&[
+            "--root",
+            explicit.path().to_str().unwrap(),
+            "root",
+            "--json",
+        ]),
+        ProcessContext {
+            configured_root: Some(configured.path().to_path_buf()),
+            home: Some(home.path().to_path_buf()),
+        },
+    );
     assert_eq!(output.result.status, ResultStatus::Success);
-    assert_eq!(output.result.data.unwrap()["root"], explicit.path().display().to_string());
+    assert_eq!(
+        output.result.data.unwrap()["root"],
+        explicit.path().display().to_string()
+    );
 }
 
 #[test]
@@ -36,7 +64,9 @@ fn initialization_is_idempotent() {
     let first = root::initialize(&root).unwrap();
     let second = root::initialize(&root).unwrap();
     assert_eq!(first, second);
-    for relative in REQUIRED_DIRS { assert!(root.join(relative).is_dir()); }
+    for relative in REQUIRED_DIRS {
+        assert!(root.join(relative).is_dir());
+    }
     assert!(!root.join("Control/user/profile.json").exists());
 }
 
@@ -44,7 +74,10 @@ fn initialization_is_idempotent() {
 fn doctor_reports_invalid_then_valid_structure() {
     let temp = tempdir().unwrap();
     let root = temp.path().join("Central");
-    let context = ProcessContext { configured_root: Some(root.clone()), home: None };
+    let context = ProcessContext {
+        configured_root: Some(root.clone()),
+        home: None,
+    };
     let invalid = run(args(&["doctor", "--json"]), context.clone());
     assert_eq!(invalid.result.status, ResultStatus::InvalidCentralStructure);
     assert_eq!(invalid.exit_code, 3);
@@ -57,9 +90,24 @@ fn doctor_reports_invalid_then_valid_structure() {
 #[test]
 fn action_registry_has_stable_canonical_ids() {
     let actions = ActionRegistry::core().descriptors();
-    let ids = actions.iter().map(|action| action.id.as_str()).collect::<Vec<_>>();
-    assert_eq!(ids, vec!["action.list", "central.doctor", "central.init", "central.root"]);
-    for action in actions { assert!(!action.title.is_empty()); assert!(!action.description.is_empty()); assert!(!action.output_definition.description.is_empty()); }
+    let ids = actions
+        .iter()
+        .map(|action| action.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ids,
+        vec![
+            "action.list",
+            "central.doctor",
+            "central.init",
+            "central.root"
+        ]
+    );
+    for action in actions {
+        assert!(!action.title.is_empty());
+        assert!(!action.description.is_empty());
+        assert!(!action.output_definition.description.is_empty());
+    }
 }
 
 #[test]
@@ -87,7 +135,13 @@ fn filesystem_error_is_reported_as_internal_failure() {
     let temp = tempdir().unwrap();
     let root = temp.path().join("Central");
     fs::write(&root, "file").unwrap();
-    let output = run(args(&["init", "--json"]), ProcessContext { configured_root: Some(PathBuf::from(root)), home: None });
+    let output = run(
+        args(&["init", "--json"]),
+        ProcessContext {
+            configured_root: Some(root),
+            home: None,
+        },
+    );
     assert_eq!(output.result.status, ResultStatus::InternalFailure);
     assert_eq!(output.exit_code, 1);
 }
