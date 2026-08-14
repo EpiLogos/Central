@@ -4,6 +4,7 @@ members = [
     "connectors/git-sync",
     "connectors/reference",
     "connectors/template",
+    "connectors/ubuntu",
     "ctrl",
 ]
 resolver = "2"
