@@ -1,9 +1,12 @@
 use central_ctrl::{
     create_core_action_registry, initialize_central, run_cli, ActionExecutionContext, CapabilityProbe,
-    CliEnvironment, Connector, ConnectorContext, ConnectorManifest, ConnectorPortDeclaration,
-    ConnectorRegistry, MachineInspectionOutput, ObservedConfiguration, ObservedPackage, ObservedService,
-    PortContract, ResultStatus, RootOptions, StaticMachineInspectorConnector, CONFIGURATION_MANAGER_PORT,
-    CONNECTOR_API_VERSION, MACHINE_INSPECTOR_PORT, PACKAGE_MANAGER_PORT, SERVICE_MANAGER_PORT,
+    CliEnvironment, ConfigurationManager, ConfigurationStateRequest, Connector, ConnectorContext,
+    ConnectorManifest, ConnectorPortDeclaration, ConnectorRegistry, MachineInspectionOutput,
+    ObservedConfiguration, ObservedPackage, ObservedService, PackageManager, PackageStateRequest,
+    PortContract, PortError, ResultStatus, RootOptions, ServiceManager, ServiceStateRequest,
+    StateChangePreview, StateChangeResult, StaticMachineInspectorConnector,
+    CONFIGURATION_MANAGER_PORT, CONNECTOR_API_VERSION, MACHINE_INSPECTOR_PORT,
+    PACKAGE_MANAGER_PORT, SERVICE_MANAGER_PORT,
 };
 use serde_json::json;
 use std::fs;
@@ -80,6 +83,40 @@ impl PlanningConnector {
             },
         }
     }
+
+    fn declares(&self, port: &PortContract) -> bool {
+        self.manifest.ports.iter().any(|candidate| candidate.id == port.id)
+    }
+}
+
+impl PackageManager for PlanningConnector {
+    fn preview(&self, input: &PackageStateRequest) -> Result<StateChangePreview, PortError> {
+        Ok(StateChangePreview { changed: true, summary: format!("package {} preview", input.id) })
+    }
+
+    fn apply(&self, input: &PackageStateRequest) -> Result<StateChangeResult, PortError> {
+        Ok(StateChangeResult { changed: true, summary: format!("package {} applied", input.id) })
+    }
+}
+
+impl ConfigurationManager for PlanningConnector {
+    fn preview(&self, input: &ConfigurationStateRequest) -> Result<StateChangePreview, PortError> {
+        Ok(StateChangePreview { changed: true, summary: format!("configuration {} preview", input.id) })
+    }
+
+    fn apply(&self, input: &ConfigurationStateRequest) -> Result<StateChangeResult, PortError> {
+        Ok(StateChangeResult { changed: true, summary: format!("configuration {} applied", input.id) })
+    }
+}
+
+impl ServiceManager for PlanningConnector {
+    fn preview(&self, input: &ServiceStateRequest) -> Result<StateChangePreview, PortError> {
+        Ok(StateChangePreview { changed: true, summary: format!("service {} preview", input.id) })
+    }
+
+    fn apply(&self, input: &ServiceStateRequest) -> Result<StateChangeResult, PortError> {
+        Ok(StateChangeResult { changed: true, summary: format!("service {} applied", input.id) })
+    }
 }
 
 impl Connector for PlanningConnector {
@@ -89,6 +126,18 @@ impl Connector for PlanningConnector {
 
     fn probe(&self, _port: &PortContract, _context: &ConnectorContext) -> CapabilityProbe {
         CapabilityProbe::available()
+    }
+
+    fn package_manager(&self) -> Option<&dyn PackageManager> {
+        self.declares(&PACKAGE_MANAGER_PORT).then_some(self)
+    }
+
+    fn configuration_manager(&self) -> Option<&dyn ConfigurationManager> {
+        self.declares(&CONFIGURATION_MANAGER_PORT).then_some(self)
+    }
+
+    fn service_manager(&self) -> Option<&dyn ServiceManager> {
+        self.declares(&SERVICE_MANAGER_PORT).then_some(self)
     }
 }
 
@@ -163,6 +212,8 @@ fn several_differences_are_changeable_only_when_their_abstract_ports_resolve() {
         assert_eq!(entry["status"], "changeable");
         assert_eq!(entry["port"], port);
         assert_eq!(entry["connector"]["id"], "test.machine-reconciler");
+        assert_eq!(entry["preview"]["changed"], true);
+        assert!(!entry["preview"]["summary"].as_str().unwrap().is_empty());
     }
 }
 
