@@ -10,7 +10,7 @@ pub use action::{
     create_core_action_registry, ActionDescriptor, ActionExecutionContext, ActionInputDefinition,
     ActionInputSelection, ActionRegistry, MutationClass,
 };
-pub use cli::{run_cli, run_cli_with_surface, CliEnvironment, CliExecution};
+pub use cli::{run_cli, run_cli_with_runtime, run_cli_with_surface, CliEnvironment, CliExecution};
 pub use control::{
     locate_control_root, search_control, ControlSearchMatch, ControlSearchResult, ControlSourceRoot,
     SourceClass, CONTROL_ROOTS,
