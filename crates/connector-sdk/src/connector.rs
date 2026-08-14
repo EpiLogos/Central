@@ -1,6 +1,6 @@
 use crate::port::{
-    ConfigurationManager, MachineInspector, NativeOpen, NativeReveal, PackageManager, PortContract,
-    ServiceManager, TagStore, WorkDiscovery,
+    Automation, ConfigurationManager, MachineInspector, NativeOpen, NativeReveal, PackageManager,
+    PortContract, ServiceManager, TagStore, WorkDiscovery,
 };
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -113,6 +113,9 @@ pub trait Connector: Send + Sync {
     fn manifest(&self) -> &ConnectorManifest;
     fn probe(&self, port: &PortContract, context: &ConnectorContext) -> CapabilityProbe;
     fn work_discovery(&self) -> Option<&dyn WorkDiscovery> {
+        None
+    }
+    fn automation(&self) -> Option<&dyn Automation> {
         None
     }
     fn native_open(&self) -> Option<&dyn NativeOpen> {
