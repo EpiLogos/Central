@@ -1,10 +1,7 @@
-use crate::{
-    action::MutationClass,
-    connector::{ConnectorMetadata, PortCompatibility},
-    port::{
-        CapabilityProbe, WORK_DISCOVERY_CONTRACT_ID, WORK_DISCOVERY_PORT_ID, WorkDiscovery,
-        WorkDiscoveryError, WorkDiscoveryErrorKind, WorkItem,
-    },
+use crate::sdk::{
+    CapabilityProbe, ConnectorMetadata, MutationClass, PortCompatibility, WorkDiscovery,
+    WorkDiscoveryError, WorkDiscoveryErrorKind, WorkItem, WORK_DISCOVERY_CONTRACT_ID,
+    WORK_DISCOVERY_PORT_ID,
 };
 use std::{fs, path::Path};
 
