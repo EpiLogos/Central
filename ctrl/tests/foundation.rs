@@ -103,6 +103,8 @@ fn registry_has_stable_ids_and_complete_descriptors() {
         "control.open",
         "control.search",
         "work.list",
+        "work.open",
+        "work.search",
     ]);
     for id in ids {
         let action = registry.get(&id).unwrap();
@@ -136,13 +138,13 @@ fn action_list_has_human_and_structured_cli_renderings() {
     assert_eq!(human.exit_code, 0);
     assert!(human.output.contains("action.list\tList Actions"));
     assert!(human.output.contains("control.search\tSearch Control source"));
-    assert!(human.output.contains("work.list\tList Work items"));
+    assert!(human.output.contains("work.open\tEnter Work item"));
 
     let structured = central_ctrl::run_cli(&["--json".to_owned(), "action.list".to_owned()], &environment);
     assert_eq!(structured.exit_code, 0);
     let value: serde_json::Value = serde_json::from_str(&structured.output).unwrap();
     assert_eq!(value["status"], "success");
-    assert_eq!(value["data"]["actions"].as_array().unwrap().len(), 7);
+    assert_eq!(value["data"]["actions"].as_array().unwrap().len(), 9);
 }
 
 #[test]

@@ -1,12 +1,16 @@
 use crate::control::{locate_control_root, search_control};
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::{inspect_central, initialize_central, resolve_central_root, RootOptions};
-use central_connector_sdk::{ConnectorContext, ConnectorRegistry, WorkDiscoveryInput, WORK_DISCOVERY_PORT};
+use central_connector_sdk::{
+    ConnectorContext, ConnectorDiagnostics, ConnectorRegistry, WorkDiscoveryInput, WorkItem,
+    WORK_DISCOVERY_PORT,
+};
 use serde::Serialize;
 use serde_json::{json, to_value, Value};
 use std::collections::BTreeMap;
 use std::io;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum MutationClass {
@@ -105,6 +109,13 @@ impl ActionRegistry {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct DiscoveredWork {
+    items: Vec<WorkItem>,
+    root: PathBuf,
+    diagnostics: ConnectorDiagnostics,
+}
+
 fn descriptor(id: &str, title: &str, description: &str, mutation_class: MutationClass, output_type: &str) -> ActionDescriptor {
     ActionDescriptor {
         id: id.to_owned(),
@@ -117,6 +128,10 @@ fn descriptor(id: &str, title: &str, description: &str, mutation_class: Mutation
         required_ports: Vec::new(),
         availability: ActionAvailability { available: true, reason: None },
     }
+}
+
+fn string_input(name: &str) -> ActionInputDefinition {
+    ActionInputDefinition { name: name.to_owned(), input_type: "string".to_owned(), required: true }
 }
 
 fn required_text(input: &Value, field: &str, action: &str) -> Result<String, ActionResult> {
@@ -237,37 +252,32 @@ fn control_search_action(_registry: &ActionRegistry, input: &Value, context: &Ac
     }
 }
 
-fn work_list_action(_registry: &ActionRegistry, _input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
-    let root = match resolve_central_root(context.root_options) {
-        Ok(root) => root,
-        Err(message) => return ActionResult::failure(Some("work.list"), ResultStatus::InvalidInput, message, None),
-    };
+fn discover_work(action_id: &str, context: &ActionExecutionContext<'_>) -> Result<DiscoveredWork, ActionResult> {
+    let root = resolve_central_root(context.root_options)
+        .map_err(|message| ActionResult::failure(Some(action_id), ResultStatus::InvalidInput, message, None))?;
     let resolution = context.connectors.resolve(&WORK_DISCOVERY_PORT, context.connector_context);
     let diagnostics = resolution.diagnostics.clone();
     let Some(connector) = resolution.connector else {
-        return ActionResult::failure(
-            Some("work.list"),
+        return Err(ActionResult::failure(
+            Some(action_id),
             ResultStatus::UnavailableCapability,
             format!("No eligible Connector implements {}.", WORK_DISCOVERY_PORT.id),
             Some(json!({ "port": WORK_DISCOVERY_PORT.id, "diagnostics": diagnostics })),
-        );
+        ));
     };
     let Some(implementation) = connector.work_discovery() else {
-        return ActionResult::failure(
-            Some("work.list"),
+        return Err(ActionResult::failure(
+            Some(action_id),
             ResultStatus::ConnectorFailure,
             format!("Selected Connector does not expose {} implementation.", WORK_DISCOVERY_PORT.id),
             Some(json!({ "port": WORK_DISCOVERY_PORT.id, "connector": connector.manifest().id, "diagnostics": diagnostics })),
-        );
+        ));
     };
     let input = WorkDiscoveryInput { work_root: root.path.join("Work") };
     match implementation.list(&input) {
-        Ok(output) => ActionResult::success(
-            "work.list",
-            json!({ "items": output.items, "root": root.path, "diagnostics": diagnostics }),
-        ),
-        Err(error) => ActionResult::failure(
-            Some("work.list"),
+        Ok(output) => Ok(DiscoveredWork { items: output.items, root: root.path, diagnostics }),
+        Err(error) => Err(ActionResult::failure(
+            Some(action_id),
             ResultStatus::ConnectorFailure,
             format!("Connector failed while executing {}.", WORK_DISCOVERY_PORT.id),
             Some(json!({
@@ -276,8 +286,81 @@ fn work_list_action(_registry: &ActionRegistry, _input: &Value, context: &Action
                 "provider_error": error,
                 "diagnostics": diagnostics,
             })),
-        ),
+        )),
     }
+}
+
+fn work_matches<'a>(items: &'a [WorkItem], query: &str) -> Vec<&'a WorkItem> {
+    let needle = query.to_lowercase();
+    items.iter().filter(|item| item.name.to_lowercase().contains(&needle)).collect()
+}
+
+fn work_list_action(_registry: &ActionRegistry, _input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+    match discover_work("work.list", context) {
+        Ok(discovered) => ActionResult::success("work.list", to_value(discovered).expect("Work discovery serializes")),
+        Err(result) => result,
+    }
+}
+
+fn work_search_action(_registry: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+    let query = match required_text(input, "query", "work.search") {
+        Ok(query) => query,
+        Err(result) => return result,
+    };
+    let discovered = match discover_work("work.search", context) {
+        Ok(discovered) => discovered,
+        Err(result) => return result,
+    };
+    let matches = work_matches(&discovered.items, &query);
+    ActionResult::success(
+        "work.search",
+        json!({
+            "query": query,
+            "matches": matches,
+            "root": discovered.root,
+            "diagnostics": discovered.diagnostics,
+        }),
+    )
+}
+
+fn work_open_action(_registry: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+    let query = match required_text(input, "query", "work.open") {
+        Ok(query) => query,
+        Err(result) => return result,
+    };
+    let discovered = match discover_work("work.open", context) {
+        Ok(discovered) => discovered,
+        Err(result) => return result,
+    };
+    let normalized = query.to_lowercase();
+    let exact = discovered.items.iter().find(|item| item.name.to_lowercase() == normalized);
+    let matches = if let Some(item) = exact { vec![item] } else { work_matches(&discovered.items, &query) };
+    if matches.is_empty() {
+        return ActionResult::failure(
+            Some("work.open"),
+            ResultStatus::InvalidInput,
+            format!("No Work item matches: {query}"),
+            Some(json!({ "query": query, "matches": [] })),
+        );
+    }
+    if matches.len() > 1 {
+        return ActionResult::failure(
+            Some("work.open"),
+            ResultStatus::InvalidInput,
+            format!("Work search is ambiguous: {query}"),
+            Some(json!({ "query": query, "matches": matches })),
+        );
+    }
+    ActionResult::success(
+        "work.open",
+        json!({
+            "query": query,
+            "match": if exact.is_some() { "exact" } else { "search" },
+            "item": matches[0],
+            "root": discovered.root,
+            "diagnostics": discovered.diagnostics,
+        }),
+    )
 }
 
 pub fn create_core_action_registry() -> ActionRegistry {
@@ -306,7 +389,7 @@ pub fn create_core_action_registry() -> ActionRegistry {
         MutationClass::ReadOnly,
         "control-source-root",
     );
-    control_open.inputs = vec![ActionInputDefinition { name: "target".to_owned(), input_type: "string".to_owned(), required: true }];
+    control_open.inputs = vec![string_input("target")];
     registry.register(control_open, control_open_action).expect("core Action ids are valid");
 
     let mut control_search = descriptor(
@@ -316,7 +399,7 @@ pub fn create_core_action_registry() -> ActionRegistry {
         MutationClass::ReadOnly,
         "control-source-search",
     );
-    control_search.inputs = vec![ActionInputDefinition { name: "query".to_owned(), input_type: "string".to_owned(), required: true }];
+    control_search.inputs = vec![string_input("query")];
     registry.register(control_search, control_search_action).expect("core Action ids are valid");
 
     let mut work_list = descriptor(
@@ -328,5 +411,27 @@ pub fn create_core_action_registry() -> ActionRegistry {
     );
     work_list.required_ports = vec![WORK_DISCOVERY_PORT.id.to_owned()];
     registry.register(work_list, work_list_action).expect("core Action ids are valid");
+
+    let mut work_search = descriptor(
+        "work.search",
+        "Search Work items",
+        "Search names returned by WorkDiscovery without imposing project metadata.",
+        MutationClass::ReadOnly,
+        "work-item-search",
+    );
+    work_search.inputs = vec![string_input("query")];
+    work_search.required_ports = vec![WORK_DISCOVERY_PORT.id.to_owned()];
+    registry.register(work_search, work_search_action).expect("core Action ids are valid");
+
+    let mut work_open = descriptor(
+        "work.open",
+        "Enter Work item",
+        "Resolve one ordinary Work directory by exact name or unambiguous search.",
+        MutationClass::ReadOnly,
+        "work-item-selection",
+    );
+    work_open.inputs = vec![string_input("query")];
+    work_open.required_ports = vec![WORK_DISCOVERY_PORT.id.to_owned()];
+    registry.register(work_open, work_open_action).expect("core Action ids are valid");
     registry
 }

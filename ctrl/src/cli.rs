@@ -81,6 +81,19 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         [command] if command == "actions" => ("action.list", json!({})),
         [domain, verb] if domain == "action" && verb == "list" => ("action.list", json!({})),
         [domain, verb] if domain == "work" && verb == "list" => ("work.list", json!({})),
+        [domain, verb, rest @ ..] if domain == "work" && verb == "search" && !rest.is_empty() => {
+            ("work.search", json!({ "query": rest.join(" ") }))
+        }
+        [domain, verb, rest @ ..] if domain == "work" && verb == "open" && !rest.is_empty() => {
+            ("work.open", json!({ "query": rest.join(" ") }))
+        }
+        [command, rest @ ..] if command == "open" && !rest.is_empty() => {
+            ("work.open", json!({ "query": rest.join(" ") }))
+        }
+        [domain, verb] if domain == "work" && matches!(verb.as_str(), "search" | "open") => {
+            return Err((structured, format!("work {verb} requires a query.")));
+        }
+        [command] if command == "open" => return Err((structured, "open requires a Work name or search.".to_owned())),
         [domain, verb, target] if domain == "control" && verb == "open" => ("control.open", json!({ "target": target })),
         [domain, verb, rest @ ..] if domain == "control" && verb == "search" && !rest.is_empty() => {
             ("control.search", json!({ "query": rest.join(" ") }))
@@ -90,6 +103,15 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         }
         [domain, verb] if domain == "control" && verb == "search" => {
             return Err((structured, "control search requires a query.".to_owned()));
+        }
+        [canonical, rest @ ..] if canonical == "work.search" && !rest.is_empty() => {
+            ("work.search", json!({ "query": rest.join(" ") }))
+        }
+        [canonical, rest @ ..] if canonical == "work.open" && !rest.is_empty() => {
+            ("work.open", json!({ "query": rest.join(" ") }))
+        }
+        [canonical] if matches!(canonical.as_str(), "work.search" | "work.open") => {
+            return Err((structured, format!("{canonical} requires a query.")));
         }
         [canonical, target] if canonical == "control.open" => ("control.open", json!({ "target": target })),
         [canonical, rest @ ..] if canonical == "control.search" && !rest.is_empty() => {
@@ -183,6 +205,20 @@ fn human_output(result: &ActionResult) -> String {
                 }
             }
             lines.join("\n")
+        }
+        Some("work.search") => data
+            .get("matches")
+            .and_then(Value::as_array)
+            .map(|matches| matches.iter().map(|item| {
+                let name = item.get("name").and_then(Value::as_str).unwrap_or_default();
+                let path = item.get("path").and_then(Value::as_str).unwrap_or_default();
+                format!("{name}\t{path}")
+            }).collect::<Vec<_>>().join("\n"))
+            .unwrap_or_default(),
+        Some("work.open") => {
+            let name = data.get("item").and_then(|item| item.get("name")).and_then(Value::as_str).unwrap_or_default();
+            let path = data.get("item").and_then(|item| item.get("path")).and_then(Value::as_str).unwrap_or_default();
+            format!("{name}\t{path}")
         }
         _ => data.to_string(),
     }
