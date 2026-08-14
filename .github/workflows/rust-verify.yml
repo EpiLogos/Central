@@ -4,7 +4,7 @@ on:
   pull_request:
   push:
     branches:
-      - build/central-wayfinder-rust
+      - build/central-rust-wayfinder
 
 jobs:
   verify:
