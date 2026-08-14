@@ -10,6 +10,14 @@ The product uses a simple dependency rule:
 
 Central does not require a specific operating system, launcher, package manager, configuration manager, editor, agent harness, or automation product. The core defines stable Actions and extension contracts. Connectors bind those contracts to the technology that exists on a given machine.
 
+## Implementation language
+
+Central is implemented in **Rust**.
+
+Executable product code, the public SDK, Connectors, and executable product/conformance test harnesses must use Rust. Markdown, JSON, YAML, shell, and platform metadata can be used where they are the natural representation for documentation, authored source, fixtures, configuration, packaging, or integration, but they must not become an alternative implementation of Central semantics.
+
+This is a repository-level implementation constraint. New product behavior must extend the Rust implementation rather than introduce a second application language.
+
 ## Repository shape
 
 ```text
