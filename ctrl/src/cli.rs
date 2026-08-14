@@ -2,7 +2,7 @@ use crate::action::{create_core_action_registry, ActionExecutionContext};
 use crate::picker::{run_guided_action_picker, NullTerminalSurface, TerminalSurface};
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::RootOptions;
-use central_connector_sdk::ConnectorContext;
+use central_connector_sdk::{ConnectorContext, ConnectorRegistry};
 use central_reference_connectors::create_default_connector_registry;
 use serde_json::{json, Value};
 use std::env;
@@ -98,13 +98,20 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         [domain, verb, rest @ ..] if domain == "work" && verb == "open" && !rest.is_empty() => {
             ("work.open", json!({ "query": rest.join(" ") }))
         }
+        [domain, verb, rest @ ..] if domain == "work" && verb == "reveal" && !rest.is_empty() => {
+            ("work.reveal", json!({ "query": rest.join(" ") }))
+        }
         [command, rest @ ..] if command == "open" && !rest.is_empty() => {
             ("work.open", json!({ "query": rest.join(" ") }))
         }
-        [domain, verb] if domain == "work" && matches!(verb.as_str(), "search" | "open") => {
+        [command, rest @ ..] if command == "reveal" && !rest.is_empty() => {
+            ("work.reveal", json!({ "query": rest.join(" ") }))
+        }
+        [domain, verb] if domain == "work" && matches!(verb.as_str(), "search" | "open" | "reveal") => {
             return Err((structured, format!("work {verb} requires a query.")));
         }
         [command] if command == "open" => return Err((structured, "open requires a Work name or search.".to_owned())),
+        [command] if command == "reveal" => return Err((structured, "reveal requires a Work name or search.".to_owned())),
         [domain, verb, target] if domain == "control" && verb == "open" => ("control.open", json!({ "target": target })),
         [domain, verb, rest @ ..] if domain == "control" && verb == "search" && !rest.is_empty() => {
             ("control.search", json!({ "query": rest.join(" ") }))
@@ -139,7 +146,10 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         [canonical, rest @ ..] if canonical == "work.open" && !rest.is_empty() => {
             ("work.open", json!({ "query": rest.join(" ") }))
         }
-        [canonical] if matches!(canonical.as_str(), "work.search" | "work.open") => {
+        [canonical, rest @ ..] if canonical == "work.reveal" && !rest.is_empty() => {
+            ("work.reveal", json!({ "query": rest.join(" ") }))
+        }
+        [canonical] if matches!(canonical.as_str(), "work.search" | "work.open" | "work.reveal") => {
             return Err((structured, format!("{canonical} requires a query.")));
         }
         [canonical, target] if canonical == "control.open" => ("control.open", json!({ "target": target })),
@@ -278,7 +288,7 @@ fn human_output(result: &ActionResult) -> String {
                 format!("{name}\t{path}")
             }).collect::<Vec<_>>().join("\n"))
             .unwrap_or_default(),
-        Some("work.open") => {
+        Some("work.open") | Some("work.reveal") => {
             let name = data.get("item").and_then(|item| item.get("name")).and_then(Value::as_str).unwrap_or_default();
             let path = data.get("item").and_then(|item| item.get("path")).and_then(Value::as_str).unwrap_or_default();
             format!("{name}\t{path}")
@@ -300,10 +310,12 @@ fn exit_code(result: &ActionResult) -> i32 {
     }
 }
 
-pub fn run_cli_with_surface(
+pub fn run_cli_with_runtime(
     args: &[String],
     environment: &CliEnvironment,
     surface: &mut dyn TerminalSurface,
+    connectors: &ConnectorRegistry,
+    connector_context: &ConnectorContext,
 ) -> CliExecution {
     let parsed = match parse_args(args) {
         Ok(parsed) => parsed,
@@ -319,12 +331,10 @@ pub fn run_cli_with_surface(
         configured_root: environment.configured_root.clone(),
         home: environment.home.clone(),
     };
-    let connectors = create_default_connector_registry();
-    let connector_context = ConnectorContext::current();
     let context = ActionExecutionContext {
         root_options: &root_options,
-        connectors: &connectors,
-        connector_context: &connector_context,
+        connectors,
+        connector_context,
     };
     let registry = create_core_action_registry();
     let result = match parsed.target {
@@ -337,6 +347,16 @@ pub fn run_cli_with_surface(
         human_output(&result)
     };
     CliExecution { exit_code: exit_code(&result), result, output }
+}
+
+pub fn run_cli_with_surface(
+    args: &[String],
+    environment: &CliEnvironment,
+    surface: &mut dyn TerminalSurface,
+) -> CliExecution {
+    let connectors = create_default_connector_registry();
+    let connector_context = ConnectorContext::current();
+    run_cli_with_runtime(args, environment, surface, &connectors, &connector_context)
 }
 
 pub fn run_cli(args: &[String], environment: &CliEnvironment) -> CliExecution {
