@@ -1,3 +1,4 @@
+use crate::port::WORK_DISCOVERY_PORT_ID;
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -6,6 +7,7 @@ use std::collections::BTreeMap;
 pub enum MutationClass {
     ReadOnly,
     LocallyMutating,
+    ExternallyMutating,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -56,6 +58,7 @@ impl ActionRegistry {
                 "Resolve the active Central root.",
                 "The resolved Central root path.",
                 MutationClass::ReadOnly,
+                &[],
             ),
             descriptor(
                 "central.init",
@@ -63,6 +66,7 @@ impl ActionRegistry {
                 "Ensure the required Central root structure exists.",
                 "The root and protocol directories that were ensured.",
                 MutationClass::LocallyMutating,
+                &[],
             ),
             descriptor(
                 "central.doctor",
@@ -70,6 +74,7 @@ impl ActionRegistry {
                 "Check whether the basic Central structure is valid.",
                 "A structured Central root health report.",
                 MutationClass::ReadOnly,
+                &[],
             ),
             descriptor(
                 "action.list",
@@ -77,6 +82,15 @@ impl ActionRegistry {
                 "List canonical Actions and their descriptors.",
                 "Canonical Action descriptors in stable identifier order.",
                 MutationClass::ReadOnly,
+                &[],
+            ),
+            descriptor(
+                "work.list",
+                "List Work",
+                "List ordinary Work directories through the WorkDiscovery Port.",
+                "Work items and Connector selection diagnostics.",
+                MutationClass::ReadOnly,
+                &[WORK_DISCOVERY_PORT_ID],
             ),
         ] {
             registry.register(descriptor);
@@ -103,6 +117,7 @@ fn descriptor(
     description: &str,
     output: &str,
     mutation_class: MutationClass,
+    required_ports: &[&str],
 ) -> ActionDescriptor {
     ActionDescriptor {
         id: id.into(),
@@ -114,7 +129,7 @@ fn descriptor(
         },
         mutation_class,
         preview_support: false,
-        required_ports: vec![],
+        required_ports: required_ports.iter().map(|port| (*port).into()).collect(),
         availability_status: AvailabilityStatus::Available,
     }
 }

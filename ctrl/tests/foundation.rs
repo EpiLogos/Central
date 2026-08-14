@@ -88,22 +88,15 @@ fn doctor_reports_invalid_then_valid_structure() {
 }
 
 #[test]
-fn action_registry_has_stable_canonical_ids() {
-    let actions = ActionRegistry::core().descriptors();
-    let ids = actions
-        .iter()
-        .map(|action| action.id.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        ids,
-        vec![
-            "action.list",
-            "central.doctor",
-            "central.init",
-            "central.root"
-        ]
-    );
-    for action in actions {
+fn foundation_action_ids_remain_stable() {
+    let registry = ActionRegistry::core();
+    for id in [
+        "action.list",
+        "central.doctor",
+        "central.init",
+        "central.root",
+    ] {
+        let action = registry.get(id).unwrap_or_else(|| panic!("missing Action {id}"));
         assert!(!action.title.is_empty());
         assert!(!action.description.is_empty());
         assert!(!action.output_definition.description.is_empty());
@@ -118,7 +111,20 @@ fn action_list_has_human_and_structured_renderings() {
     let rendered: serde_json::Value = serde_json::from_str(&structured.render()).unwrap();
     assert_eq!(rendered["action"], "action.list");
     assert_eq!(rendered["status"], "success");
-    assert_eq!(rendered["data"]["actions"].as_array().unwrap().len(), 4);
+    let ids = rendered["data"]["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|action| action["id"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    for id in [
+        "action.list",
+        "central.doctor",
+        "central.init",
+        "central.root",
+    ] {
+        assert!(ids.contains(&id));
+    }
 }
 
 #[test]
