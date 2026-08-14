@@ -6,8 +6,10 @@ use crate::control::SourceClass;
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
 use central_connector_sdk::{
-    ConnectorDiagnostics, ConnectorSummary, MachineInspectionInput, MachineInspectionOutput,
-    PortContract, CONFIGURATION_MANAGER_PORT, MACHINE_INSPECTOR_PORT, PACKAGE_MANAGER_PORT,
+    ConfigurationStateRequest, ConnectorDiagnostics, ConnectorSummary, MachineInspectionInput,
+    MachineInspectionOutput, PackageStateRequest, PortContract, PortError,
+    ReconciliationSourceReference, ServiceStateRequest, StateChangePreview, StateChangeResult,
+    CONFIGURATION_MANAGER_PORT, MACHINE_INSPECTOR_PORT, PACKAGE_MANAGER_PORT,
     SERVICE_MANAGER_PORT,
 };
 use serde::{Deserialize, Serialize};
@@ -152,6 +154,8 @@ pub struct MachinePlanEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connector: Option<ConnectorSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<StateChangePreview>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diagnostics: Option<ConnectorDiagnostics>,
@@ -172,6 +176,39 @@ pub struct MachinePlan {
     pub observed: ObservedMachine,
     pub entries: Vec<MachinePlanEntry>,
     pub summary: MachinePlanSummary,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MachineApplyOutcome {
+    Complete,
+    Partial,
+    Unavailable,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MachineApplyOperation {
+    pub kind: String,
+    pub id: String,
+    pub port: String,
+    pub connector: ConnectorSummary,
+    pub result: StateChangeResult,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MachineVerification {
+    pub satisfied: bool,
+    pub plan: MachinePlan,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MachineApplyReport {
+    pub outcome: MachineApplyOutcome,
+    pub initial_plan: MachinePlan,
+    pub operations: Vec<MachineApplyOperation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification: Option<MachineVerification>,
 }
 
 fn validate_role_name(role: &str) -> Result<&str, MachineDeclarationError> {
@@ -449,7 +486,10 @@ fn declaration_action(
     }
 }
 
-fn inspect_current_machine(context: &ActionExecutionContext<'_>, action: &str) -> Result<ObservedMachine, ActionResult> {
+fn inspect_current_machine(
+    context: &ActionExecutionContext<'_>,
+    action: &str,
+) -> Result<ObservedMachine, ActionResult> {
     let resolution = context.connectors.resolve(&MACHINE_INSPECTOR_PORT, context.connector_context);
     let diagnostics = resolution.diagnostics.clone();
     let Some(connector) = resolution.connector else {
@@ -509,6 +549,13 @@ fn inspect_action(
     }
 }
 
+fn source_ref(source: Option<&MachineSourceReference>) -> Option<ReconciliationSourceReference> {
+    source.map(|source| ReconciliationSourceReference {
+        kind: source.kind.clone(),
+        reference: source.reference.clone(),
+    })
+}
+
 fn satisfied_entry(kind: &str, id: &str, desired: Value, observed: Value) -> MachinePlanEntry {
     MachinePlanEntry {
         kind: kind.to_owned(),
@@ -518,12 +565,19 @@ fn satisfied_entry(kind: &str, id: &str, desired: Value, observed: Value) -> Mac
         observed,
         port: None,
         connector: None,
+        preview: None,
         reason: None,
         diagnostics: None,
     }
 }
 
-fn unsupported_entry(kind: &str, id: &str, desired: Value, observed: Value, reason: String) -> MachinePlanEntry {
+fn unsupported_entry(
+    kind: &str,
+    id: &str,
+    desired: Value,
+    observed: Value,
+    reason: String,
+) -> MachinePlanEntry {
     MachinePlanEntry {
         kind: kind.to_owned(),
         id: id.to_owned(),
@@ -532,52 +586,214 @@ fn unsupported_entry(kind: &str, id: &str, desired: Value, observed: Value, reas
         observed,
         port: None,
         connector: None,
+        preview: None,
         reason: Some(reason),
         diagnostics: None,
     }
 }
 
-fn difference_entry(
+fn unavailable_difference(
     kind: &str,
     id: &str,
     desired: Value,
     observed: Value,
     port: &PortContract,
-    context: &ActionExecutionContext<'_>,
+    diagnostics: ConnectorDiagnostics,
 ) -> MachinePlanEntry {
-    let resolution = context.connectors.resolve(port, context.connector_context);
-    let connector = resolution.diagnostics.selected_connector.clone();
-    let status = if connector.is_some() {
-        MachinePlanStatus::Changeable
-    } else {
-        MachinePlanStatus::Missing
-    };
-    let reason = if connector.is_none() {
-        Some(format!(
-            "{kind} requirement '{id}' differs from observed state, but no eligible {} Connector is available.",
-            port.id
-        ))
-    } else {
-        None
-    };
     MachinePlanEntry {
         kind: kind.to_owned(),
         id: id.to_owned(),
-        status,
+        status: MachinePlanStatus::Missing,
         desired,
         observed,
         port: Some(port.id.to_owned()),
-        connector,
-        reason,
-        diagnostics: Some(resolution.diagnostics),
+        connector: None,
+        preview: None,
+        reason: Some(format!(
+            "{kind} requirement '{id}' differs from observed state, but no eligible {} Connector is available.",
+            port.id
+        )),
+        diagnostics: Some(diagnostics),
     }
+}
+
+fn preview_failure(
+    action: &str,
+    port: &PortContract,
+    connector: &ConnectorSummary,
+    diagnostics: ConnectorDiagnostics,
+    error: PortError,
+) -> ActionResult {
+    ActionResult::failure(
+        Some(action),
+        ResultStatus::ConnectorFailure,
+        format!("Connector failed while previewing {}.", port.id),
+        Some(json!({
+            "port": port.id,
+            "connector": connector,
+            "provider_error": error,
+            "diagnostics": diagnostics,
+        })),
+    )
+}
+
+fn package_difference(
+    requirement: &PackageRequirement,
+    desired: Value,
+    observed: Value,
+    context: &ActionExecutionContext<'_>,
+    action: &str,
+) -> Result<MachinePlanEntry, ActionResult> {
+    let resolution = context.connectors.resolve(&PACKAGE_MANAGER_PORT, context.connector_context);
+    let diagnostics = resolution.diagnostics.clone();
+    let Some(connector) = resolution.connector else {
+        return Ok(unavailable_difference(
+            "package",
+            &requirement.id,
+            desired,
+            observed,
+            &PACKAGE_MANAGER_PORT,
+            diagnostics,
+        ));
+    };
+    let summary = ConnectorSummary::from_connector(connector);
+    let Some(manager) = connector.package_manager() else {
+        return Err(ActionResult::failure(
+            Some(action),
+            ResultStatus::ConnectorFailure,
+            format!("Selected Connector does not expose {} implementation.", PACKAGE_MANAGER_PORT.id),
+            Some(json!({ "port": PACKAGE_MANAGER_PORT.id, "connector": summary, "diagnostics": diagnostics })),
+        ));
+    };
+    let request = PackageStateRequest {
+        id: requirement.id.clone(),
+        present: requirement.state == PresenceState::Present,
+        source: source_ref(requirement.source.as_ref()),
+    };
+    let preview = manager.preview(&request).map_err(|error| {
+        preview_failure(action, &PACKAGE_MANAGER_PORT, &summary, diagnostics.clone(), error)
+    })?;
+    Ok(MachinePlanEntry {
+        kind: "package".to_owned(),
+        id: requirement.id.clone(),
+        status: MachinePlanStatus::Changeable,
+        desired,
+        observed,
+        port: Some(PACKAGE_MANAGER_PORT.id.to_owned()),
+        connector: Some(summary),
+        preview: Some(preview),
+        reason: None,
+        diagnostics: Some(diagnostics),
+    })
+}
+
+fn configuration_difference(
+    requirement: &ConfigurationRequirement,
+    desired: Value,
+    observed: Value,
+    context: &ActionExecutionContext<'_>,
+    action: &str,
+) -> Result<MachinePlanEntry, ActionResult> {
+    let resolution = context.connectors.resolve(&CONFIGURATION_MANAGER_PORT, context.connector_context);
+    let diagnostics = resolution.diagnostics.clone();
+    let Some(connector) = resolution.connector else {
+        return Ok(unavailable_difference(
+            "configuration",
+            &requirement.id,
+            desired,
+            observed,
+            &CONFIGURATION_MANAGER_PORT,
+            diagnostics,
+        ));
+    };
+    let summary = ConnectorSummary::from_connector(connector);
+    let Some(manager) = connector.configuration_manager() else {
+        return Err(ActionResult::failure(
+            Some(action),
+            ResultStatus::ConnectorFailure,
+            format!("Selected Connector does not expose {} implementation.", CONFIGURATION_MANAGER_PORT.id),
+            Some(json!({ "port": CONFIGURATION_MANAGER_PORT.id, "connector": summary, "diagnostics": diagnostics })),
+        ));
+    };
+    let request = ConfigurationStateRequest {
+        id: requirement.id.clone(),
+        present: requirement.state == PresenceState::Present,
+        source: source_ref(requirement.source.as_ref()),
+    };
+    let preview = manager.preview(&request).map_err(|error| {
+        preview_failure(action, &CONFIGURATION_MANAGER_PORT, &summary, diagnostics.clone(), error)
+    })?;
+    Ok(MachinePlanEntry {
+        kind: "configuration".to_owned(),
+        id: requirement.id.clone(),
+        status: MachinePlanStatus::Changeable,
+        desired,
+        observed,
+        port: Some(CONFIGURATION_MANAGER_PORT.id.to_owned()),
+        connector: Some(summary),
+        preview: Some(preview),
+        reason: None,
+        diagnostics: Some(diagnostics),
+    })
+}
+
+fn service_difference(
+    requirement: &ServiceRequirement,
+    desired: Value,
+    observed: Value,
+    context: &ActionExecutionContext<'_>,
+    action: &str,
+) -> Result<MachinePlanEntry, ActionResult> {
+    let resolution = context.connectors.resolve(&SERVICE_MANAGER_PORT, context.connector_context);
+    let diagnostics = resolution.diagnostics.clone();
+    let Some(connector) = resolution.connector else {
+        return Ok(unavailable_difference(
+            "service",
+            &requirement.id,
+            desired,
+            observed,
+            &SERVICE_MANAGER_PORT,
+            diagnostics,
+        ));
+    };
+    let summary = ConnectorSummary::from_connector(connector);
+    let Some(manager) = connector.service_manager() else {
+        return Err(ActionResult::failure(
+            Some(action),
+            ResultStatus::ConnectorFailure,
+            format!("Selected Connector does not expose {} implementation.", SERVICE_MANAGER_PORT.id),
+            Some(json!({ "port": SERVICE_MANAGER_PORT.id, "connector": summary, "diagnostics": diagnostics })),
+        ));
+    };
+    let request = ServiceStateRequest {
+        id: requirement.id.clone(),
+        running: requirement.running,
+        enabled: requirement.enabled,
+        source: source_ref(requirement.source.as_ref()),
+    };
+    let preview = manager.preview(&request).map_err(|error| {
+        preview_failure(action, &SERVICE_MANAGER_PORT, &summary, diagnostics.clone(), error)
+    })?;
+    Ok(MachinePlanEntry {
+        kind: "service".to_owned(),
+        id: requirement.id.clone(),
+        status: MachinePlanStatus::Changeable,
+        desired,
+        observed,
+        port: Some(SERVICE_MANAGER_PORT.id.to_owned()),
+        connector: Some(summary),
+        preview: Some(preview),
+        reason: None,
+        diagnostics: Some(diagnostics),
+    })
 }
 
 fn compare_machine(
     authored: AuthoredMachineDeclaration,
     observed: ObservedMachine,
     context: &ActionExecutionContext<'_>,
-) -> MachinePlan {
+    action: &str,
+) -> Result<MachinePlan, ActionResult> {
     let declaration = &authored.declaration;
     let observation = &observed.observation;
     let mut entries = Vec::new();
@@ -623,14 +839,7 @@ fn compare_machine(
         if item.present == desired_present {
             entries.push(satisfied_entry("package", &requirement.id, desired, actual));
         } else {
-            entries.push(difference_entry(
-                "package",
-                &requirement.id,
-                desired,
-                actual,
-                &PACKAGE_MANAGER_PORT,
-                context,
-            ));
+            entries.push(package_difference(requirement, desired, actual, context, action)?);
         }
     }
 
@@ -654,14 +863,7 @@ fn compare_machine(
         if item.present == desired_present {
             entries.push(satisfied_entry("configuration", &requirement.id, desired, actual));
         } else {
-            entries.push(difference_entry(
-                "configuration",
-                &requirement.id,
-                desired,
-                actual,
-                &CONFIGURATION_MANAGER_PORT,
-                context,
-            ));
+            entries.push(configuration_difference(requirement, desired, actual, context, action)?);
         }
     }
 
@@ -690,14 +892,7 @@ fn compare_machine(
         if matches_running && matches_enabled {
             entries.push(satisfied_entry("service", &requirement.id, desired, actual));
         } else {
-            entries.push(difference_entry(
-                "service",
-                &requirement.id,
-                desired,
-                actual,
-                &SERVICE_MANAGER_PORT,
-                context,
-            ));
+            entries.push(service_difference(requirement, desired, actual, context, action)?);
         }
     }
 
@@ -711,13 +906,27 @@ fn compare_machine(
         }
     }
 
-    MachinePlan {
+    Ok(MachinePlan {
         role: declaration.role.clone(),
         authored,
         observed,
         entries,
         summary,
-    }
+    })
+}
+
+fn load_plan(
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+    action: &str,
+) -> Result<MachinePlan, ActionResult> {
+    let role = required_role(input, action)?;
+    let root = resolve_central_root(context.root_options)
+        .map_err(|message| ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None))?;
+    let authored = read_machine_declaration(&root.path, &role)
+        .map_err(|error| declaration_failure(action, error))?;
+    let observed = inspect_current_machine(context, action)?;
+    compare_machine(authored, observed, context, action)
 }
 
 fn plan_action(
@@ -725,33 +934,321 @@ fn plan_action(
     input: &Value,
     context: &ActionExecutionContext<'_>,
 ) -> ActionResult {
-    let role = match required_role(input, "machine.plan") {
-        Ok(role) => role,
+    match load_plan(input, context, "machine.plan") {
+        Ok(plan) => ActionResult::success(
+            "machine.plan",
+            to_value(plan).expect("machine plan serializes"),
+        ),
+        Err(result) => result,
+    }
+}
+
+fn plan_satisfied(plan: &MachinePlan) -> bool {
+    plan.summary.changeable == 0 && plan.summary.missing == 0 && plan.summary.unsupported == 0
+}
+
+fn verify_plan(
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+    action: &str,
+) -> Result<MachineVerification, ActionResult> {
+    let plan = load_plan(input, context, action)?;
+    Ok(MachineVerification {
+        satisfied: plan_satisfied(&plan),
+        plan,
+    })
+}
+
+fn verify_action(
+    _registry: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    match verify_plan(input, context, "machine.verify") {
+        Ok(verification) if verification.satisfied => ActionResult::success(
+            "machine.verify",
+            to_value(verification).expect("machine verification serializes"),
+        ),
+        Ok(verification) => ActionResult::failure(
+            Some("machine.verify"),
+            ResultStatus::VerificationFailure,
+            "Observed machine state does not satisfy the authored declaration.",
+            Some(to_value(verification).expect("machine verification serializes")),
+        ),
+        Err(result) => result,
+    }
+}
+
+fn selected_connector_for_plan<'a>(
+    entry: &MachinePlanEntry,
+    port: &PortContract,
+    context: &'a ActionExecutionContext<'_>,
+) -> Result<&'a dyn central_connector_sdk::Connector, ActionResult> {
+    let resolution = context.connectors.resolve(port, context.connector_context);
+    let Some(connector) = resolution.connector else {
+        return Err(ActionResult::failure(
+            Some("machine.apply"),
+            ResultStatus::UnavailableCapability,
+            format!("Planned {} Connector is no longer eligible.", port.id),
+            Some(json!({ "entry": entry, "diagnostics": resolution.diagnostics })),
+        ));
+    };
+    if entry.connector.as_ref().map(|value| value.id.as_str()) != Some(connector.manifest().id.as_str()) {
+        return Err(ActionResult::failure(
+            Some("machine.apply"),
+            ResultStatus::ConnectorFailure,
+            format!("The selected {} Connector changed after planning.", port.id),
+            Some(json!({
+                "entry": entry,
+                "selected_connector": ConnectorSummary::from_connector(connector),
+                "diagnostics": resolution.diagnostics,
+            })),
+        ));
+    }
+    Ok(connector)
+}
+
+fn package_request(entry: &MachinePlanEntry) -> Result<PackageStateRequest, ActionResult> {
+    let requirement: PackageRequirement = serde_json::from_value(entry.desired.clone()).map_err(|error| {
+        ActionResult::failure(
+            Some("machine.apply"),
+            ResultStatus::InternalFailure,
+            format!("Planned package request is invalid: {error}"),
+            Some(json!({ "entry": entry })),
+        )
+    })?;
+    Ok(PackageStateRequest {
+        id: requirement.id,
+        present: requirement.state == PresenceState::Present,
+        source: source_ref(requirement.source.as_ref()),
+    })
+}
+
+fn configuration_request(entry: &MachinePlanEntry) -> Result<ConfigurationStateRequest, ActionResult> {
+    let requirement: ConfigurationRequirement = serde_json::from_value(entry.desired.clone()).map_err(|error| {
+        ActionResult::failure(
+            Some("machine.apply"),
+            ResultStatus::InternalFailure,
+            format!("Planned configuration request is invalid: {error}"),
+            Some(json!({ "entry": entry })),
+        )
+    })?;
+    Ok(ConfigurationStateRequest {
+        id: requirement.id,
+        present: requirement.state == PresenceState::Present,
+        source: source_ref(requirement.source.as_ref()),
+    })
+}
+
+fn service_request(entry: &MachinePlanEntry) -> Result<ServiceStateRequest, ActionResult> {
+    let requirement: ServiceRequirement = serde_json::from_value(entry.desired.clone()).map_err(|error| {
+        ActionResult::failure(
+            Some("machine.apply"),
+            ResultStatus::InternalFailure,
+            format!("Planned service request is invalid: {error}"),
+            Some(json!({ "entry": entry })),
+        )
+    })?;
+    Ok(ServiceStateRequest {
+        id: requirement.id,
+        running: requirement.running,
+        enabled: requirement.enabled,
+        source: source_ref(requirement.source.as_ref()),
+    })
+}
+
+fn execute_planned_entry(
+    entry: &MachinePlanEntry,
+    context: &ActionExecutionContext<'_>,
+) -> Result<MachineApplyOperation, ActionResult> {
+    let port = entry.port.as_deref().ok_or_else(|| {
+        ActionResult::failure(
+            Some("machine.apply"),
+            ResultStatus::InternalFailure,
+            "Changeable machine plan entry has no Port.",
+            Some(json!({ "entry": entry })),
+        )
+    })?;
+
+    let (connector, result) = if port == PACKAGE_MANAGER_PORT.id {
+        let connector = selected_connector_for_plan(entry, &PACKAGE_MANAGER_PORT, context)?;
+        let manager = connector.package_manager().ok_or_else(|| {
+            ActionResult::failure(
+                Some("machine.apply"),
+                ResultStatus::ConnectorFailure,
+                format!("Selected Connector does not expose {} implementation.", PACKAGE_MANAGER_PORT.id),
+                Some(json!({ "entry": entry })),
+            )
+        })?;
+        let request = package_request(entry)?;
+        let result = manager.apply(&request).map_err(|error| apply_port_failure(entry, error))?;
+        (connector, result)
+    } else if port == CONFIGURATION_MANAGER_PORT.id {
+        let connector = selected_connector_for_plan(entry, &CONFIGURATION_MANAGER_PORT, context)?;
+        let manager = connector.configuration_manager().ok_or_else(|| {
+            ActionResult::failure(
+                Some("machine.apply"),
+                ResultStatus::ConnectorFailure,
+                format!("Selected Connector does not expose {} implementation.", CONFIGURATION_MANAGER_PORT.id),
+                Some(json!({ "entry": entry })),
+            )
+        })?;
+        let request = configuration_request(entry)?;
+        let result = manager.apply(&request).map_err(|error| apply_port_failure(entry, error))?;
+        (connector, result)
+    } else if port == SERVICE_MANAGER_PORT.id {
+        let connector = selected_connector_for_plan(entry, &SERVICE_MANAGER_PORT, context)?;
+        let manager = connector.service_manager().ok_or_else(|| {
+            ActionResult::failure(
+                Some("machine.apply"),
+                ResultStatus::ConnectorFailure,
+                format!("Selected Connector does not expose {} implementation.", SERVICE_MANAGER_PORT.id),
+                Some(json!({ "entry": entry })),
+            )
+        })?;
+        let request = service_request(entry)?;
+        let result = manager.apply(&request).map_err(|error| apply_port_failure(entry, error))?;
+        (connector, result)
+    } else {
+        return Err(ActionResult::failure(
+            Some("machine.apply"),
+            ResultStatus::InternalFailure,
+            format!("Unknown reconciliation Port in machine plan: {port}"),
+            Some(json!({ "entry": entry })),
+        ));
+    };
+
+    Ok(MachineApplyOperation {
+        kind: entry.kind.clone(),
+        id: entry.id.clone(),
+        port: port.to_owned(),
+        connector: ConnectorSummary::from_connector(connector),
+        result,
+    })
+}
+
+fn apply_port_failure(entry: &MachinePlanEntry, error: PortError) -> ActionResult {
+    ActionResult::failure(
+        Some("machine.apply"),
+        ResultStatus::ConnectorFailure,
+        format!("Connector failed while applying planned {} '{}'.", entry.kind, entry.id),
+        Some(json!({ "entry": entry, "provider_error": error })),
+    )
+}
+
+fn apply_action(
+    _registry: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    let initial_plan = match load_plan(input, context, "machine.apply") {
+        Ok(plan) => plan,
         Err(result) => return result,
     };
-    let root = match resolve_central_root(context.root_options) {
-        Ok(root) => root,
-        Err(message) => {
+
+    if plan_satisfied(&initial_plan) {
+        let verification = MachineVerification { satisfied: true, plan: initial_plan.clone() };
+        return ActionResult::success(
+            "machine.apply",
+            to_value(MachineApplyReport {
+                outcome: MachineApplyOutcome::Complete,
+                initial_plan,
+                operations: Vec::new(),
+                verification: Some(verification),
+            }).expect("machine apply report serializes"),
+        );
+    }
+
+    if initial_plan.summary.changeable == 0 {
+        let report = MachineApplyReport {
+            outcome: MachineApplyOutcome::Unavailable,
+            initial_plan,
+            operations: Vec::new(),
+            verification: None,
+        };
+        return ActionResult::failure(
+            Some("machine.apply"),
+            ResultStatus::UnavailableCapability,
+            "The machine plan contains no supported change that can be applied.",
+            Some(to_value(report).expect("machine apply report serializes")),
+        );
+    }
+
+    let has_unavailable = initial_plan.summary.missing > 0 || initial_plan.summary.unsupported > 0;
+    let mut operations = Vec::new();
+    for entry in initial_plan.entries.iter().filter(|entry| entry.status == MachinePlanStatus::Changeable) {
+        match execute_planned_entry(entry, context) {
+            Ok(operation) => operations.push(operation),
+            Err(failure) if operations.is_empty() => return failure,
+            Err(failure) => {
+                let report = MachineApplyReport {
+                    outcome: MachineApplyOutcome::Partial,
+                    initial_plan,
+                    operations,
+                    verification: None,
+                };
+                return ActionResult::failure(
+                    Some("machine.apply"),
+                    ResultStatus::PartialCompletion,
+                    failure.error.map(|error| error.message).unwrap_or_else(|| "Machine reconciliation failed after partial application.".to_owned()),
+                    Some(json!({
+                        "report": report,
+                        "failure": failure.error,
+                    })),
+                );
+            }
+        }
+    }
+
+    let verification = match verify_plan(input, context, "machine.apply") {
+        Ok(verification) => verification,
+        Err(failure) => {
+            let report = MachineApplyReport {
+                outcome: MachineApplyOutcome::Partial,
+                initial_plan,
+                operations,
+                verification: None,
+            };
             return ActionResult::failure(
-                Some("machine.plan"),
-                ResultStatus::InvalidInput,
-                message,
-                None,
+                Some("machine.apply"),
+                ResultStatus::VerificationFailure,
+                "Machine changes were applied but post-apply verification could not complete.",
+                Some(json!({ "report": report, "verification_failure": failure.error })),
             );
         }
     };
-    let authored = match read_machine_declaration(&root.path, &role) {
-        Ok(declaration) => declaration,
-        Err(error) => return declaration_failure("machine.plan", error),
+
+    let report = MachineApplyReport {
+        outcome: if verification.satisfied && !has_unavailable {
+            MachineApplyOutcome::Complete
+        } else {
+            MachineApplyOutcome::Partial
+        },
+        initial_plan,
+        operations,
+        verification: Some(verification.clone()),
     };
-    let observed = match inspect_current_machine(context, "machine.plan") {
-        Ok(observed) => observed,
-        Err(result) => return result,
-    };
-    ActionResult::success(
-        "machine.plan",
-        to_value(compare_machine(authored, observed, context)).expect("machine plan serializes"),
-    )
+
+    if verification.satisfied && !has_unavailable {
+        ActionResult::success(
+            "machine.apply",
+            to_value(report).expect("machine apply report serializes"),
+        )
+    } else if has_unavailable {
+        ActionResult::failure(
+            Some("machine.apply"),
+            ResultStatus::PartialCompletion,
+            "Supported machine changes were applied, but the authored declaration remains only partially satisfiable.",
+            Some(to_value(report).expect("machine apply report serializes")),
+        )
+    } else {
+        ActionResult::failure(
+            Some("machine.apply"),
+            ResultStatus::VerificationFailure,
+            "Machine changes were applied, but verification does not satisfy the authored declaration.",
+            Some(to_value(report).expect("machine apply report serializes")),
+        )
+    }
 }
 
 fn role_input() -> ActionInputDefinition {
@@ -799,15 +1296,45 @@ pub(crate) fn register_machine_actions(registry: &mut ActionRegistry) {
         ActionDescriptor {
             id: "machine.plan".to_owned(),
             title: "Plan machine changes".to_owned(),
-            description: "Compare authored machine intent with observed host state and produce a non-mutating structured change plan.".to_owned(),
+            description: "Compare authored machine intent with observed host state and produce a non-mutating structured change plan with Connector previews.".to_owned(),
             inputs: vec![role_input()],
             output: ActionOutputDefinition { output_type: "machine-change-plan".to_owned() },
+            mutation_class: MutationClass::ReadOnly,
+            preview_supported: true,
+            required_ports: vec![MACHINE_INSPECTOR_PORT.id.to_owned()],
+            availability: ActionAvailability { available: true, reason: None },
+        },
+        plan_action,
+    ).expect("machine Action id is valid");
+
+    registry.register(
+        ActionDescriptor {
+            id: "machine.apply".to_owned(),
+            title: "Apply machine plan".to_owned(),
+            description: "Apply the currently planned supported machine changes through the Ports and Connectors named by the plan, then verify the authored declaration.".to_owned(),
+            inputs: vec![role_input()],
+            output: ActionOutputDefinition { output_type: "machine-apply-report".to_owned() },
+            mutation_class: MutationClass::LocallyMutating,
+            preview_supported: true,
+            required_ports: vec![MACHINE_INSPECTOR_PORT.id.to_owned()],
+            availability: ActionAvailability { available: true, reason: None },
+        },
+        apply_action,
+    ).expect("machine Action id is valid");
+
+    registry.register(
+        ActionDescriptor {
+            id: "machine.verify".to_owned(),
+            title: "Verify machine declaration".to_owned(),
+            description: "Observe the current machine and verify it against the authored machine-role declaration.".to_owned(),
+            inputs: vec![role_input()],
+            output: ActionOutputDefinition { output_type: "machine-verification".to_owned() },
             mutation_class: MutationClass::ReadOnly,
             preview_supported: false,
             required_ports: vec![MACHINE_INSPECTOR_PORT.id.to_owned()],
             availability: ActionAvailability { available: true, reason: None },
         },
-        plan_action,
+        verify_action,
     ).expect("machine Action id is valid");
 }
 
@@ -940,10 +1467,38 @@ pub fn explain_machine_plan(data: &Value) -> String {
                 .map(|value| format!(" -> {value}"))
                 .unwrap_or_default();
             lines.push(format!("[{status}] {kind} {id}{port}{connector}"));
+            if let Some(preview) = entry.get("preview") {
+                if let Some(summary) = preview.get("summary").and_then(Value::as_str) {
+                    lines.push(format!("  preview: {summary}"));
+                }
+            }
             if let Some(reason) = entry.get("reason").and_then(Value::as_str) {
                 lines.push(format!("  {reason}"));
             }
         }
     }
     lines.join("\n")
+}
+
+pub fn explain_machine_verification(data: &Value) -> String {
+    let satisfied = data.get("satisfied").and_then(Value::as_bool).unwrap_or(false);
+    let plan = data.get("plan").unwrap_or(&Value::Null);
+    format!(
+        "Machine verification: {}\n{}",
+        if satisfied { "satisfied" } else { "mismatch" },
+        explain_machine_plan(plan),
+    )
+}
+
+pub fn explain_machine_apply(data: &Value) -> String {
+    let outcome = data.get("outcome").and_then(Value::as_str).unwrap_or("unknown");
+    let operations = data.get("operations").and_then(Value::as_array).map_or(0, Vec::len);
+    let verification = data
+        .get("verification")
+        .and_then(|value| value.get("satisfied"))
+        .and_then(Value::as_bool);
+    format!(
+        "Machine apply: {outcome}\nOperations: {operations}\nVerified: {}",
+        verification.map(|value| if value { "yes" } else { "no" }).unwrap_or("not-run"),
+    )
 }
