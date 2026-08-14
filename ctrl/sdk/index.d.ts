@@ -29,7 +29,7 @@ export interface MachineObservation {
   services: MachineStateItem[];
 }
 
-export interface MachineInspectionInput {}
+export interface MachineInspectorInput {}
 
 export interface CapabilityProbeResult {
   available: boolean;
@@ -58,8 +58,8 @@ export interface WorkDiscoveryImplementation {
   list(input: WorkDiscoveryListInput): Promise<WorkDiscoveryListOutput>;
 }
 
-export interface MachineInspectionImplementation {
-  inspect(input: MachineInspectionInput): Promise<MachineObservation>;
+export interface MachineInspectorImplementation {
+  inspect(input: MachineInspectorInput): Promise<MachineObservation>;
 }
 
 export interface Connector {
@@ -67,7 +67,7 @@ export interface Connector {
   probe(context: { port: string; platform: string }): Promise<CapabilityProbeResult>;
   implementations: Record<string, unknown> & {
     WorkDiscovery?: WorkDiscoveryImplementation;
-    MachineInspection?: MachineInspectionImplementation;
+    MachineInspector?: MachineInspectorImplementation;
   };
 }
 
@@ -88,7 +88,10 @@ export interface PortContract<I, O> {
 
 export const CONNECTOR_API_VERSION: "central.connector/v1";
 export const WorkDiscovery: PortContract<WorkDiscoveryListInput, WorkDiscoveryListOutput>;
-export const MachineInspection: PortContract<MachineInspectionInput, MachineObservation>;
+export const MachineInspector: PortContract<MachineInspectorInput, MachineObservation>;
+export const PackageManager: PortContract<unknown, unknown>;
+export const ConfigurationManager: PortContract<unknown, unknown>;
+export const ServiceManager: PortContract<unknown, unknown>;
 export function defineConnector<T extends Connector>(connector: T): T;
 export function validateConnector(connector: unknown): Connector;
 export function validateConnectorManifest(manifest: unknown): ConnectorManifest;

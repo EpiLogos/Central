@@ -67,30 +67,30 @@ function validateStateItems(items, label, states) {
 }
 
 function validateMachineInspectionInput(input) {
-  assertObject(input, "MachineInspection.inspect input");
+  assertObject(input, "MachineInspector.inspect input");
 }
 
 function validateMachineInspectionOutput(output) {
-  assertObject(output, "MachineInspection.inspect output");
-  assertObject(output.host, "MachineInspection.inspect output.host");
-  assertText(output.host.platform, "MachineInspection.inspect output.host.platform");
-  assertText(output.host.architecture, "MachineInspection.inspect output.host.architecture");
+  assertObject(output, "MachineInspector.inspect output");
+  assertObject(output.host, "MachineInspector.inspect output.host");
+  assertText(output.host.platform, "MachineInspector.inspect output.host.platform");
+  assertText(output.host.architecture, "MachineInspector.inspect output.host.architecture");
   if (!Array.isArray(output.capabilities) || output.capabilities.some((item) => typeof item !== "string" || item.trim() === "")) {
-    throw new TypeError("MachineInspection.inspect output.capabilities must be an array of non-empty strings.");
+    throw new TypeError("MachineInspector.inspect output.capabilities must be an array of non-empty strings.");
   }
-  validateStateItems(output.packages, "MachineInspection.inspect output.packages", PACKAGE_STATES);
-  validateStateItems(output.configurations, "MachineInspection.inspect output.configurations", CONFIGURATION_STATES);
-  validateStateItems(output.services, "MachineInspection.inspect output.services", SERVICE_STATES);
+  validateStateItems(output.packages, "MachineInspector.inspect output.packages", PACKAGE_STATES);
+  validateStateItems(output.configurations, "MachineInspector.inspect output.configurations", CONFIGURATION_STATES);
+  validateStateItems(output.services, "MachineInspector.inspect output.services", SERVICE_STATES);
 }
 
-export const MachineInspection = Object.freeze({
-  id: "MachineInspection",
+export const MachineInspector = Object.freeze({
+  id: "MachineInspector",
   version: CONTRACT_VERSION,
-  purpose: "Return a structured observation of the current execution host while keeping observation separate from authored intent.",
+  purpose: "Return a structured observation of the current host while keeping observation separate from authored intent.",
   mutationClass: "read-only",
   operations: Object.freeze({
     inspect: Object.freeze({
-      inputType: "MachineInspectionInput",
+      inputType: "MachineInspectorInput",
       outputType: "MachineObservation",
       validateInput: validateMachineInspectionInput,
       validateOutput: validateMachineInspectionOutput,

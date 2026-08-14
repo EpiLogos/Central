@@ -3,6 +3,7 @@ import { createDefaultRuntime } from "./runtime.js";
 import { failure, ResultStatus } from "./results.js";
 import { runGuidedActionPicker } from "./picker.js";
 import { renderMachineDeclaration } from "./machine-declaration.js";
+import { renderMachineInspection, renderMachinePlan } from "./machine-plan.js";
 
 const COMMANDS = new Map([
   ["root", "central.root"],
@@ -20,6 +21,8 @@ const COMMANDS = new Map([
   ["control.open", "control.open"],
   ["control.search", "control.search"],
   ["machine.declaration", "machine.declaration"],
+  ["machine.inspect", "machine.inspect"],
+  ["machine.plan", "machine.plan"],
 ]);
 
 function parseArguments(argv) {
@@ -88,6 +91,13 @@ function parseArguments(argv) {
     commandKey = "machine.declaration";
     if (positional.length !== 3) return { structured, error: "machine declaration requires one role." };
     input = { role: positional[2] };
+  } else if (positional[0] === "machine" && positional[1] === "inspect") {
+    commandKey = "machine.inspect";
+    if (positional.length !== 2) return { structured, error: "machine inspect takes no input." };
+  } else if (positional[0] === "machine" && positional[1] === "plan") {
+    commandKey = "machine.plan";
+    if (positional.length !== 3) return { structured, error: "machine plan requires one role." };
+    input = { role: positional[2] };
   } else {
     commandKey = positional[0];
     if (commandKey === "work.open" || commandKey === "open") {
@@ -104,6 +114,11 @@ function parseArguments(argv) {
       input = { query: positional.slice(1).join(" ") };
     } else if (commandKey === "machine.declaration") {
       if (positional.length !== 2) return { structured, error: "machine.declaration requires one role." };
+      input = { role: positional[1] };
+    } else if (commandKey === "machine.inspect") {
+      if (positional.length !== 1) return { structured, error: "machine.inspect takes no input." };
+    } else if (commandKey === "machine.plan") {
+      if (positional.length !== 2) return { structured, error: "machine.plan requires one role." };
       input = { role: positional[1] };
     } else if (positional.length !== 1) {
       return { structured, error: `Unexpected arguments: ${positional.slice(1).join(" ")}` };
@@ -157,6 +172,10 @@ export function renderHuman(result) {
       return `${result.data.item.name}\t${result.data.item.path}`;
     case "machine.declaration":
       return renderMachineDeclaration(result.data);
+    case "machine.inspect":
+      return renderMachineInspection(result.data);
+    case "machine.plan":
+      return renderMachinePlan(result.data);
     default:
       return JSON.stringify(result.data, null, 2);
   }

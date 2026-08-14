@@ -4,6 +4,7 @@ import { invokePort, WorkDiscovery } from "./ports.js";
 import { join } from "node:path";
 import { CONTROL_ROOTS, locateControlRoot, searchControl } from "./control-source.js";
 import { readMachineDeclaration } from "./machine-declaration.js";
+import { registerMachineActions } from "./machine-plan.js";
 
 const REQUIRED_DESCRIPTOR_FIELDS = Object.freeze([
   "id",
@@ -355,5 +356,5 @@ export function createCoreActionRegistry() {
     },
   );
 
-  return registry;
+  return registerMachineActions(registry);
 }
