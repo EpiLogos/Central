@@ -310,7 +310,7 @@ impl PackageManager for UbuntuServerConnector {
     }
 
     fn apply(&self, input: &PackageStateRequest) -> Result<StateChangeResult, PortError> {
-        let changed = self.preview(input)?.changed;
+        let changed = <Self as PackageManager>::preview(self, input)?.changed;
         if changed {
             Self::run_apt(input)?;
             let observed = Self::package_present(&input.id)?;
