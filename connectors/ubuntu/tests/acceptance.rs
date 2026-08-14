@@ -158,7 +158,7 @@ fn headless_ubuntu_can_root_control_plan_reconcile_verify_and_repeat() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn Ubuntu_connector_changes_provider_resolution_not_core_action_identity() {
+fn ubuntu_connector_changes_provider_resolution_not_core_action_identity() {
     let fixture = temporary_directory("action-identity");
     let root = fixture.join("Central");
     initialize_central(&root).unwrap();
