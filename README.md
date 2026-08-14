@@ -18,6 +18,19 @@ Executable product code, the public SDK, Connectors, and executable product/conf
 
 This is a repository-level implementation constraint. New product behavior must extend the Rust implementation rather than introduce a second application language.
 
+## Development
+
+The stable development entrypoint is the Rust `ctrl` binary. For example:
+
+```bash
+cargo run --bin ctrl -- root
+cargo run --bin ctrl -- init
+cargo run --bin ctrl -- doctor
+cargo run --bin ctrl -- action list --json
+```
+
+Use `--root <path>` for an explicit Central root. Otherwise `ctrl` uses `CENTRAL_ROOT` when configured and then defaults to `$HOME/Central`.
+
 ## Repository shape
 
 ```text
