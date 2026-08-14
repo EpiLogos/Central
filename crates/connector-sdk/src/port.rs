@@ -146,7 +146,14 @@ pub struct WorkDiscoveryOutput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct MachineInspectionInput {}
+pub struct MachineInspectionInput {
+    #[serde(default)]
+    pub package_ids: Vec<String>,
+    #[serde(default)]
+    pub configuration_ids: Vec<String>,
+    #[serde(default)]
+    pub service_ids: Vec<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObservedPackage {
