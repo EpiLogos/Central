@@ -1,9 +1,10 @@
 use crate::connector::{validate_connector_manifest, Connector, ConnectorContext, ConnectorSummary};
 use crate::port::{
-    ConfigurationStateRequest, MachineInspectionInput, MachineInspectionOutput, PackageStateRequest,
-    ServiceStateRequest, StateChangePreview, StateChangeResult, WorkDiscoveryInput,
-    CONFIGURATION_MANAGER_PORT, MACHINE_INSPECTOR_PORT, PACKAGE_MANAGER_PORT,
-    SERVICE_MANAGER_PORT, WORK_DISCOVERY_PORT,
+    ConfigurationStateRequest, MachineInspectionInput, MachineInspectionOutput, NativeOpenInput,
+    NativeRevealInput, PackageStateRequest, ServiceStateRequest, StateChangePreview,
+    StateChangeResult, TagReadInput, TagReplaceInput, WorkDiscoveryInput,
+    CONFIGURATION_MANAGER_PORT, MACHINE_INSPECTOR_PORT, NATIVE_OPEN_PORT, NATIVE_REVEAL_PORT,
+    PACKAGE_MANAGER_PORT, SERVICE_MANAGER_PORT, TAG_STORE_PORT, WORK_DISCOVERY_PORT,
 };
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -14,6 +15,18 @@ pub struct WorkDiscoveryConformanceFixture {
     pub work_root: PathBuf,
     pub platform: String,
     pub expected_names: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeTargetConformanceFixture {
+    pub target: PathBuf,
+    pub platform: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagStoreConformanceFixture {
+    pub target: PathBuf,
+    pub platform: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -153,6 +166,130 @@ pub fn run_work_discovery_conformance(
             "typed-operation".to_owned(),
             "repeat-stability".to_owned(),
             "expected-items".to_owned(),
+        ],
+    })
+}
+
+pub fn run_native_open_conformance(
+    connector: &dyn Connector,
+    fixture: &NativeTargetConformanceFixture,
+) -> Result<ConformanceReport, ConformanceFailure> {
+    prepare_connector(connector, &NATIVE_OPEN_PORT, &fixture.platform)?;
+    if !fixture.target.exists() {
+        return Err(ConformanceFailure::new("fixture", "NativeOpen conformance target must exist."));
+    }
+    let implementation = connector
+        .native_open()
+        .ok_or_else(|| ConformanceFailure::new("implementation", "Connector does not expose NativeOpen implementation."))?;
+    let output = implementation
+        .open(&NativeOpenInput { target: fixture.target.clone() })
+        .map_err(|error| ConformanceFailure::new("typed-operation", format!("{:?}: {}", error.code, error.message)))?;
+    if output.target != fixture.target {
+        return Err(ConformanceFailure::new(
+            "typed-operation",
+            "NativeOpen must return the target it was asked to open.",
+        ));
+    }
+    Ok(ConformanceReport {
+        port_id: NATIVE_OPEN_PORT.id.to_owned(),
+        port_version: NATIVE_OPEN_PORT.version.to_owned(),
+        connector: ConnectorSummary::from_connector(connector),
+        checks: vec![
+            "manifest".to_owned(),
+            "port-compatibility".to_owned(),
+            "probe".to_owned(),
+            "typed-operation".to_owned(),
+        ],
+    })
+}
+
+pub fn run_native_reveal_conformance(
+    connector: &dyn Connector,
+    fixture: &NativeTargetConformanceFixture,
+) -> Result<ConformanceReport, ConformanceFailure> {
+    prepare_connector(connector, &NATIVE_REVEAL_PORT, &fixture.platform)?;
+    if !fixture.target.exists() {
+        return Err(ConformanceFailure::new("fixture", "NativeReveal conformance target must exist."));
+    }
+    let implementation = connector
+        .native_reveal()
+        .ok_or_else(|| ConformanceFailure::new("implementation", "Connector does not expose NativeReveal implementation."))?;
+    let output = implementation
+        .reveal(&NativeRevealInput { target: fixture.target.clone() })
+        .map_err(|error| ConformanceFailure::new("typed-operation", format!("{:?}: {}", error.code, error.message)))?;
+    if output.target != fixture.target {
+        return Err(ConformanceFailure::new(
+            "typed-operation",
+            "NativeReveal must return the target it was asked to reveal.",
+        ));
+    }
+    Ok(ConformanceReport {
+        port_id: NATIVE_REVEAL_PORT.id.to_owned(),
+        port_version: NATIVE_REVEAL_PORT.version.to_owned(),
+        connector: ConnectorSummary::from_connector(connector),
+        checks: vec![
+            "manifest".to_owned(),
+            "port-compatibility".to_owned(),
+            "probe".to_owned(),
+            "typed-operation".to_owned(),
+        ],
+    })
+}
+
+pub fn run_tag_store_conformance(
+    connector: &dyn Connector,
+    fixture: &TagStoreConformanceFixture,
+) -> Result<ConformanceReport, ConformanceFailure> {
+    prepare_connector(connector, &TAG_STORE_PORT, &fixture.platform)?;
+    if !fixture.target.exists() {
+        return Err(ConformanceFailure::new("fixture", "TagStore conformance target must exist."));
+    }
+    let implementation = connector
+        .tag_store()
+        .ok_or_else(|| ConformanceFailure::new("implementation", "Connector does not expose TagStore implementation."))?;
+
+    let first_tags = vec!["central-conformance".to_owned(), "work".to_owned()];
+    let first_replace = implementation
+        .replace(&TagReplaceInput { target: fixture.target.clone(), tags: first_tags.clone() })
+        .map_err(|error| ConformanceFailure::new("replace", format!("{:?}: {}", error.code, error.message)))?;
+    if first_replace.tags != first_tags {
+        return Err(ConformanceFailure::new("replace", "TagStore.replace must report the normalized stored tags."));
+    }
+    let first_read = implementation
+        .read(&TagReadInput { target: fixture.target.clone() })
+        .map_err(|error| ConformanceFailure::new("read", format!("{:?}: {}", error.code, error.message)))?;
+    if first_read.tags != first_tags {
+        return Err(ConformanceFailure::new(
+            "read-after-replace",
+            format!("TagStore read {:?}; expected {:?}.", first_read.tags, first_tags),
+        ));
+    }
+
+    let second_tags = vec!["central-conformance".to_owned()];
+    implementation
+        .replace(&TagReplaceInput { target: fixture.target.clone(), tags: second_tags.clone() })
+        .map_err(|error| ConformanceFailure::new("repeat-replace", format!("{:?}: {}", error.code, error.message)))?;
+    let second_read = implementation
+        .read(&TagReadInput { target: fixture.target.clone() })
+        .map_err(|error| ConformanceFailure::new("repeat-read", format!("{:?}: {}", error.code, error.message)))?;
+    if second_read.tags != second_tags {
+        return Err(ConformanceFailure::new(
+            "repeat-stability",
+            format!("TagStore replacement was not stable: {:?}; expected {:?}.", second_read.tags, second_tags),
+        ));
+    }
+
+    Ok(ConformanceReport {
+        port_id: TAG_STORE_PORT.id.to_owned(),
+        port_version: TAG_STORE_PORT.version.to_owned(),
+        connector: ConnectorSummary::from_connector(connector),
+        checks: vec![
+            "manifest".to_owned(),
+            "port-compatibility".to_owned(),
+            "probe".to_owned(),
+            "replace".to_owned(),
+            "read-after-replace".to_owned(),
+            "repeat-stability".to_owned(),
         ],
     })
 }
