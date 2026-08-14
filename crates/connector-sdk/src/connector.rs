@@ -1,6 +1,6 @@
 use crate::port::{
     ConfigurationManager, MachineInspector, PackageManager, PortContract, ServiceManager,
-    WorkDiscovery,
+    Synchronizer, WorkDiscovery,
 };
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -125,6 +125,9 @@ pub trait Connector: Send + Sync {
         None
     }
     fn service_manager(&self) -> Option<&dyn ServiceManager> {
+        None
+    }
+    fn synchronizer(&self) -> Option<&dyn Synchronizer> {
         None
     }
 }
