@@ -1,4 +1,4 @@
-use crate::control::{locate_control_root, search_control};
+use crate::control::{locate_control_root, search_control, CONTROL_ROOTS};
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::{inspect_central, initialize_central, resolve_central_root, RootOptions};
 use central_connector_sdk::{
@@ -22,12 +22,33 @@ pub enum MutationClass {
     ExternallyMutating,
 }
 
+impl MutationClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read-only",
+            Self::LocallyMutating => "locally-mutating",
+            Self::ExternallyMutating => "externally-mutating",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ActionInputSelection {
+    pub action: String,
+    pub collection: String,
+    pub value_field: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ActionInputDefinition {
     pub name: String,
     #[serde(rename = "type")]
     pub input_type: String,
     pub required: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub choices: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection: Option<ActionInputSelection>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -131,7 +152,13 @@ fn descriptor(id: &str, title: &str, description: &str, mutation_class: Mutation
 }
 
 fn string_input(name: &str) -> ActionInputDefinition {
-    ActionInputDefinition { name: name.to_owned(), input_type: "string".to_owned(), required: true }
+    ActionInputDefinition {
+        name: name.to_owned(),
+        input_type: "string".to_owned(),
+        required: true,
+        choices: None,
+        selection: None,
+    }
 }
 
 fn required_text(input: &Value, field: &str, action: &str) -> Result<String, ActionResult> {
@@ -389,7 +416,9 @@ pub fn create_core_action_registry() -> ActionRegistry {
         MutationClass::ReadOnly,
         "control-source-root",
     );
-    control_open.inputs = vec![string_input("target")];
+    let mut target = string_input("target");
+    target.choices = Some(CONTROL_ROOTS.iter().map(|value| (*value).to_owned()).collect());
+    control_open.inputs = vec![target];
     registry.register(control_open, control_open_action).expect("core Action ids are valid");
 
     let mut control_search = descriptor(
@@ -430,7 +459,13 @@ pub fn create_core_action_registry() -> ActionRegistry {
         MutationClass::ReadOnly,
         "work-item-selection",
     );
-    work_open.inputs = vec![string_input("query")];
+    let mut query = string_input("query");
+    query.selection = Some(ActionInputSelection {
+        action: "work.list".to_owned(),
+        collection: "items".to_owned(),
+        value_field: "name".to_owned(),
+    });
+    work_open.inputs = vec![query];
     work_open.required_ports = vec![WORK_DISCOVERY_PORT.id.to_owned()];
     registry.register(work_open, work_open_action).expect("core Action ids are valid");
     registry

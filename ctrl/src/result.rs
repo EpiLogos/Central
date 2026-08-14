@@ -5,6 +5,7 @@ use serde_json::Value;
 #[serde(rename_all = "snake_case")]
 pub enum ResultStatus {
     Success,
+    Cancelled,
     InvalidInput,
     InvalidCentralStructure,
     UnavailableCapability,
@@ -16,6 +17,7 @@ impl ResultStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Success => "success",
+            Self::Cancelled => "cancelled",
             Self::InvalidInput => "invalid_input",
             Self::InvalidCentralStructure => "invalid_central_structure",
             Self::UnavailableCapability => "unavailable_capability",
@@ -54,6 +56,10 @@ impl ActionResult {
             data: Some(data),
             error: None,
         }
+    }
+
+    pub fn cancelled(action: Option<&str>, message: impl Into<String>) -> Self {
+        Self::failure(action, ResultStatus::Cancelled, message, None)
     }
 
     pub fn failure(

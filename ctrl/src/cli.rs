@@ -1,4 +1,5 @@
 use crate::action::{create_core_action_registry, ActionExecutionContext};
+use crate::picker::{run_guided_action_picker, NullTerminalSurface, TerminalSurface};
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::RootOptions;
 use central_connector_sdk::ConnectorContext;
@@ -31,11 +32,15 @@ pub struct CliExecution {
     pub exit_code: i32,
 }
 
+enum CommandTarget {
+    Direct { action_id: String, input: Value },
+    Guided,
+}
+
 struct ParsedCommand {
     structured: bool,
     explicit_root: Option<PathBuf>,
-    action_id: String,
-    input: Value,
+    target: CommandTarget,
 }
 
 fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
@@ -72,6 +77,12 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
 
     if positional.is_empty() {
         return Err((structured, "An Action or command is required.".to_owned()));
+    }
+    if positional.as_slice() == ["pick"] {
+        return Ok(ParsedCommand { structured, explicit_root, target: CommandTarget::Guided });
+    }
+    if positional.first().map(String::as_str) == Some("pick") {
+        return Err((structured, "pick takes no positional input.".to_owned()));
     }
 
     let (action_id, input): (&str, Value) = match positional.as_slice() {
@@ -130,13 +141,21 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         _ => return Err((structured, format!("Unexpected arguments: {}", positional[1..].join(" ")))),
     };
 
-    Ok(ParsedCommand { structured, explicit_root, action_id: action_id.to_owned(), input })
+    Ok(ParsedCommand {
+        structured,
+        explicit_root,
+        target: CommandTarget::Direct { action_id: action_id.to_owned(), input },
+    })
 }
 
 fn human_output(result: &ActionResult) -> String {
     if !result.ok {
         let error = result.error.as_ref().expect("failure has an error");
-        return format!("{}: {}", error.code, error.message);
+        return if result.status == ResultStatus::Cancelled {
+            error.message.clone()
+        } else {
+            format!("{}: {}", error.code, error.message)
+        };
     }
 
     let Some(data) = result.data.as_ref() else {
@@ -226,7 +245,7 @@ fn human_output(result: &ActionResult) -> String {
 
 fn exit_code(result: &ActionResult) -> i32 {
     match result.status {
-        ResultStatus::Success => 0,
+        ResultStatus::Success | ResultStatus::Cancelled => 0,
         ResultStatus::InvalidInput => 2,
         ResultStatus::InvalidCentralStructure => 3,
         ResultStatus::UnavailableCapability => 4,
@@ -235,7 +254,11 @@ fn exit_code(result: &ActionResult) -> i32 {
     }
 }
 
-pub fn run_cli(args: &[String], environment: &CliEnvironment) -> CliExecution {
+pub fn run_cli_with_surface(
+    args: &[String],
+    environment: &CliEnvironment,
+    surface: &mut dyn TerminalSurface,
+) -> CliExecution {
     let parsed = match parse_args(args) {
         Ok(parsed) => parsed,
         Err((structured, message)) => {
@@ -258,11 +281,19 @@ pub fn run_cli(args: &[String], environment: &CliEnvironment) -> CliExecution {
         connector_context: &connector_context,
     };
     let registry = create_core_action_registry();
-    let result = registry.execute(&parsed.action_id, &parsed.input, &context);
+    let result = match parsed.target {
+        CommandTarget::Direct { action_id, input } => registry.execute(&action_id, &input, &context),
+        CommandTarget::Guided => run_guided_action_picker(&registry, &context, surface),
+    };
     let output = if parsed.structured {
         serde_json::to_string(&result).expect("ActionResult serializes")
     } else {
         human_output(&result)
     };
     CliExecution { exit_code: exit_code(&result), result, output }
+}
+
+pub fn run_cli(args: &[String], environment: &CliEnvironment) -> CliExecution {
+    let mut surface = NullTerminalSurface;
+    run_cli_with_surface(args, environment, &mut surface)
 }
