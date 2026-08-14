@@ -3,6 +3,7 @@ members = [
     "crates/connector-sdk",
     "connectors/reference",
     "connectors/template",
+    "connectors/ubuntu",
     "ctrl",
 ]
 resolver = "2"
