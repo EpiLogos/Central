@@ -1,6 +1,7 @@
 use crate::{
     action::ActionRegistry,
     connector::ConnectorRegistry,
+    control_registry,
     reference_connectors::{FilesystemWorkDiscovery, filesystem_work_discovery_metadata},
 };
 
@@ -12,8 +13,10 @@ pub struct Runtime {
 
 impl Runtime {
     pub fn new(connectors: ConnectorRegistry, environment: impl Into<String>) -> Self {
+        let mut actions = ActionRegistry::core();
+        control_registry::register(&mut actions);
         Self {
-            actions: ActionRegistry::core(),
+            actions,
             connectors,
             environment: environment.into(),
         }
