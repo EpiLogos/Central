@@ -1,7 +1,7 @@
 use crate::sdk::{
-    CapabilityProbe, ConnectorMetadata, MutationClass, PortCompatibility, WorkDiscovery,
-    WorkDiscoveryError, WorkDiscoveryErrorKind, WorkItem, WORK_DISCOVERY_CONTRACT_ID,
-    WORK_DISCOVERY_PORT_ID,
+    CapabilityProbe, ConnectorMetadata, MutationClass, PortCompatibility,
+    WORK_DISCOVERY_CONTRACT_ID, WORK_DISCOVERY_PORT_ID, WorkDiscovery, WorkDiscoveryError,
+    WorkDiscoveryErrorKind, WorkItem,
 };
 use std::{fs, path::Path};
 
