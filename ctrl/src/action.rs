@@ -1,9 +1,11 @@
-use central_connector_sdk::{ConnectorContext, ConnectorRegistry, WorkDiscoveryInput, WORK_DISCOVERY_PORT};
+use crate::control::{locate_control_root, search_control};
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::{inspect_central, initialize_central, resolve_central_root, RootOptions};
+use central_connector_sdk::{ConnectorContext, ConnectorRegistry, WorkDiscoveryInput, WORK_DISCOVERY_PORT};
 use serde::Serialize;
 use serde_json::{json, to_value, Value};
 use std::collections::BTreeMap;
+use std::io;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -117,6 +119,18 @@ fn descriptor(id: &str, title: &str, description: &str, mutation_class: Mutation
     }
 }
 
+fn required_text(input: &Value, field: &str, action: &str) -> Result<String, ActionResult> {
+    let Some(value) = input.get(field).and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty()) else {
+        return Err(ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            format!("{action} requires {field}."),
+            None,
+        ));
+    };
+    Ok(value.to_owned())
+}
+
 fn root_action(_registry: &ActionRegistry, _input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
     match resolve_central_root(context.root_options) {
         Ok(resolved) => ActionResult::success("central.root", to_value(resolved).expect("resolved root serializes")),
@@ -170,6 +184,57 @@ fn doctor_action(_registry: &ActionRegistry, _input: &Value, context: &ActionExe
 
 fn list_actions(registry: &ActionRegistry, _input: &Value, _context: &ActionExecutionContext<'_>) -> ActionResult {
     ActionResult::success("action.list", json!({ "actions": registry.list() }))
+}
+
+fn control_open_action(_registry: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+    let target = match required_text(input, "target", "control.open") {
+        Ok(target) => target,
+        Err(result) => return result,
+    };
+    let root = match resolve_central_root(context.root_options) {
+        Ok(root) => root,
+        Err(message) => return ActionResult::failure(Some("control.open"), ResultStatus::InvalidInput, message, None),
+    };
+    let source = match locate_control_root(&root.path, &target) {
+        Ok(source) => source,
+        Err(message) => return ActionResult::failure(Some("control.open"), ResultStatus::InvalidInput, message, None),
+    };
+    if !source.exists {
+        return ActionResult::failure(
+            Some("control.open"),
+            ResultStatus::InvalidCentralStructure,
+            format!("Control/{target} is missing."),
+            Some(to_value(source).expect("Control source root serializes")),
+        );
+    }
+    ActionResult::success("control.open", to_value(source).expect("Control source root serializes"))
+}
+
+fn control_search_action(_registry: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+    let query = match required_text(input, "query", "control.search") {
+        Ok(query) => query,
+        Err(result) => return result,
+    };
+    let root = match resolve_central_root(context.root_options) {
+        Ok(root) => root,
+        Err(message) => return ActionResult::failure(Some("control.search"), ResultStatus::InvalidInput, message, None),
+    };
+    match search_control(&root.path, &query) {
+        Ok(result) => ActionResult::success("control.search", to_value(result).expect("Control search serializes")),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => ActionResult::failure(
+            Some("control.search"),
+            ResultStatus::InvalidCentralStructure,
+            error.to_string(),
+            None,
+        ),
+        Err(error) if error.kind() == io::ErrorKind::InvalidInput => ActionResult::failure(
+            Some("control.search"),
+            ResultStatus::InvalidInput,
+            error.to_string(),
+            None,
+        ),
+        Err(error) => ActionResult::failure(Some("control.search"), ResultStatus::InternalFailure, error.to_string(), None),
+    }
 }
 
 fn work_list_action(_registry: &ActionRegistry, _input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
@@ -233,6 +298,27 @@ pub fn create_core_action_registry() -> ActionRegistry {
         descriptor("action.list", "List Actions", "List canonical Action descriptors.", MutationClass::ReadOnly, "action-descriptor-list"),
         list_actions,
     ).expect("core Action ids are valid");
+
+    let mut control_open = descriptor(
+        "control.open",
+        "Locate Control source root",
+        "Resolve one stable authored Control source root without imposing a schema below it.",
+        MutationClass::ReadOnly,
+        "control-source-root",
+    );
+    control_open.inputs = vec![ActionInputDefinition { name: "target".to_owned(), input_type: "string".to_owned(), required: true }];
+    registry.register(control_open, control_open_action).expect("core Action ids are valid");
+
+    let mut control_search = descriptor(
+        "control.search",
+        "Search Control source",
+        "Search readable authored content below the three stable Control roots without creating an index.",
+        MutationClass::ReadOnly,
+        "control-source-search",
+    );
+    control_search.inputs = vec![ActionInputDefinition { name: "query".to_owned(), input_type: "string".to_owned(), required: true }];
+    registry.register(control_search, control_search_action).expect("core Action ids are valid");
+
     let mut work_list = descriptor(
         "work.list",
         "List Work items",

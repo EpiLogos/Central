@@ -35,6 +35,7 @@ struct ParsedCommand {
     structured: bool,
     explicit_root: Option<PathBuf>,
     action_id: String,
+    input: Value,
 }
 
 fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
@@ -73,19 +74,41 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         return Err((structured, "An Action or command is required.".to_owned()));
     }
 
-    let action_id: &str = match positional.as_slice() {
-        [command] if command == "root" => "central.root",
-        [command] if command == "init" => "central.init",
-        [command] if command == "doctor" => "central.doctor",
-        [command] if command == "actions" => "action.list",
-        [domain, verb] if domain == "action" && verb == "list" => "action.list",
-        [domain, verb] if domain == "work" && verb == "list" => "work.list",
-        [canonical] if matches!(canonical.as_str(), "central.root" | "central.init" | "central.doctor" | "action.list" | "work.list") => canonical.as_str(),
+    let (action_id, input): (&str, Value) = match positional.as_slice() {
+        [command] if command == "root" => ("central.root", json!({})),
+        [command] if command == "init" => ("central.init", json!({})),
+        [command] if command == "doctor" => ("central.doctor", json!({})),
+        [command] if command == "actions" => ("action.list", json!({})),
+        [domain, verb] if domain == "action" && verb == "list" => ("action.list", json!({})),
+        [domain, verb] if domain == "work" && verb == "list" => ("work.list", json!({})),
+        [domain, verb, target] if domain == "control" && verb == "open" => ("control.open", json!({ "target": target })),
+        [domain, verb, rest @ ..] if domain == "control" && verb == "search" && !rest.is_empty() => {
+            ("control.search", json!({ "query": rest.join(" ") }))
+        }
+        [domain, verb] if domain == "control" && verb == "open" => {
+            return Err((structured, "control open requires one Control root.".to_owned()));
+        }
+        [domain, verb] if domain == "control" && verb == "search" => {
+            return Err((structured, "control search requires a query.".to_owned()));
+        }
+        [canonical, target] if canonical == "control.open" => ("control.open", json!({ "target": target })),
+        [canonical, rest @ ..] if canonical == "control.search" && !rest.is_empty() => {
+            ("control.search", json!({ "query": rest.join(" ") }))
+        }
+        [canonical] if canonical == "control.open" => {
+            return Err((structured, "control.open requires one Control root.".to_owned()));
+        }
+        [canonical] if canonical == "control.search" => {
+            return Err((structured, "control.search requires a query.".to_owned()));
+        }
+        [canonical] if matches!(canonical.as_str(), "central.root" | "central.init" | "central.doctor" | "action.list" | "work.list") => {
+            (canonical.as_str(), json!({}))
+        }
         [unknown] => return Err((structured, format!("Unknown command: {unknown}"))),
         _ => return Err((structured, format!("Unexpected arguments: {}", positional[1..].join(" ")))),
     };
 
-    Ok(ParsedCommand { structured, explicit_root, action_id: action_id.to_owned() })
+    Ok(ParsedCommand { structured, explicit_root, action_id: action_id.to_owned(), input })
 }
 
 fn human_output(result: &ActionResult) -> String {
@@ -127,6 +150,21 @@ fn human_output(result: &ActionResult) -> String {
                 let id = action.get("id").and_then(Value::as_str).unwrap_or_default();
                 let title = action.get("title").and_then(Value::as_str).unwrap_or_default();
                 format!("{id}\t{title}")
+            }).collect::<Vec<_>>().join("\n"))
+            .unwrap_or_default(),
+        Some("control.open") => {
+            let target = data.get("target").and_then(Value::as_str).unwrap_or_default();
+            let path = data.get("path").and_then(Value::as_str).unwrap_or_default();
+            format!("{target}\t{path}")
+        }
+        Some("control.search") => data
+            .get("matches")
+            .and_then(Value::as_array)
+            .map(|matches| matches.iter().map(|item| {
+                let path = item.get("source_path").and_then(Value::as_str).unwrap_or_default();
+                let line = item.get("line").and_then(Value::as_u64).unwrap_or_default();
+                let text = item.get("text").and_then(Value::as_str).unwrap_or_default();
+                format!("{path}:{line}\t{text}")
             }).collect::<Vec<_>>().join("\n"))
             .unwrap_or_default(),
         Some("work.list") => {
@@ -184,7 +222,7 @@ pub fn run_cli(args: &[String], environment: &CliEnvironment) -> CliExecution {
         connector_context: &connector_context,
     };
     let registry = create_core_action_registry();
-    let result = registry.execute(&parsed.action_id, &json!({}), &context);
+    let result = registry.execute(&parsed.action_id, &parsed.input, &context);
     let output = if parsed.structured {
         serde_json::to_string(&result).expect("ActionResult serializes")
     } else {

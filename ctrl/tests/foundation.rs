@@ -95,7 +95,15 @@ fn doctor_reports_missing_invalid_and_valid_structure() {
 fn registry_has_stable_ids_and_complete_descriptors() {
     let registry = create_core_action_registry();
     let ids = registry.list().into_iter().map(|action| action.id).collect::<Vec<_>>();
-    assert_eq!(ids, vec!["action.list", "central.doctor", "central.init", "central.root", "work.list"]);
+    assert_eq!(ids, vec![
+        "action.list",
+        "central.doctor",
+        "central.init",
+        "central.root",
+        "control.open",
+        "control.search",
+        "work.list",
+    ]);
     for id in ids {
         let action = registry.get(&id).unwrap();
         assert!(!action.title.is_empty());
@@ -127,13 +135,14 @@ fn action_list_has_human_and_structured_cli_renderings() {
     let human = central_ctrl::run_cli(&["actions".to_owned()], &environment);
     assert_eq!(human.exit_code, 0);
     assert!(human.output.contains("action.list\tList Actions"));
+    assert!(human.output.contains("control.search\tSearch Control source"));
     assert!(human.output.contains("work.list\tList Work items"));
 
     let structured = central_ctrl::run_cli(&["--json".to_owned(), "action.list".to_owned()], &environment);
     assert_eq!(structured.exit_code, 0);
     let value: serde_json::Value = serde_json::from_str(&structured.output).unwrap();
     assert_eq!(value["status"], "success");
-    assert_eq!(value["data"]["actions"].as_array().unwrap().len(), 5);
+    assert_eq!(value["data"]["actions"].as_array().unwrap().len(), 7);
 }
 
 #[test]
