@@ -29,10 +29,19 @@ pub struct ControlSearchMatch {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ControlSkippedSource {
+    pub target: String,
+    pub source_path: PathBuf,
+    pub source_class: SourceClass,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ControlSearchResult {
     pub query: String,
     pub roots: Vec<ControlSourceRoot>,
     pub files_scanned: usize,
+    pub skipped_sources: Vec<ControlSkippedSource>,
     pub matches: Vec<ControlSearchMatch>,
 }
 
@@ -86,18 +95,27 @@ pub fn search_control(central_root: &Path, query: &str) -> io::Result<ControlSea
     let needle = query.to_lowercase();
     let mut matches = Vec::new();
     let mut files_scanned = 0;
+    let mut skipped_sources = Vec::new();
 
     for root in &roots {
         let mut files = Vec::new();
         readable_files(&root.path, &mut files)?;
         for path in files {
-            let text = match fs::read_to_string(&path) {
+            let source_path = path.strip_prefix(central_root).unwrap_or(&path).to_path_buf();
+            let bytes = fs::read(&path)?;
+            let text = match String::from_utf8(bytes) {
                 Ok(text) => text,
-                Err(error) if error.kind() == io::ErrorKind::InvalidData => continue,
-                Err(error) => return Err(error),
+                Err(_) => {
+                    skipped_sources.push(ControlSkippedSource {
+                        target: root.target.clone(),
+                        source_path,
+                        source_class: SourceClass::Authored,
+                        reason: "unsupported_non_text_source".to_owned(),
+                    });
+                    continue;
+                }
             };
             files_scanned += 1;
-            let source_path = path.strip_prefix(central_root).unwrap_or(&path).to_path_buf();
             for (index, line) in text.lines().enumerate() {
                 if line.to_lowercase().contains(&needle) {
                     matches.push(ControlSearchMatch {
@@ -116,6 +134,7 @@ pub fn search_control(central_root: &Path, query: &str) -> io::Result<ControlSea
         query: query.to_owned(),
         roots,
         files_scanned,
+        skipped_sources,
         matches,
     })
 }

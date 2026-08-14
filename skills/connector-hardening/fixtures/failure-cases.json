@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "controlled-work-discovery-provider-failure",
+      "failure": {
+        "action": "work.list",
+        "port": "WorkDiscovery",
+        "connector": "fixture.work-broken",
+        "expected": "Return a stable structured list of ordinary Work items.",
+        "observed": "The eligible Connector returns a typed provider_operation_failed error from WorkDiscovery.list.",
+        "reproduction": "Register the broken fixture Connector as the only WorkDiscovery implementation and execute canonical work.list against a Central root containing Work/project-alpha."
+      },
+      "classification": {
+        "owner": "Connector implementation",
+        "reason": "The canonical Action and public WorkDiscovery contract are sufficient, and the reusable conformance suite rejects the fixture specifically at typed-operation."
+      },
+      "regression": {
+        "owner": "Connector implementation",
+        "test": "ctrl/tests/connector_hardening_skill.rs",
+        "shared_conformance": "run_work_discovery_conformance"
+      },
+      "fix": {
+        "layer": "Connector implementation",
+        "description": "Replace the failing provider translation with a conforming WorkDiscovery implementation; do not add a work.list provider exception."
+      },
+      "verification": [
+        "broken Connector is rejected by shared WorkDiscovery conformance at typed-operation",
+        "canonical work.list returns connector_failure with structured selected-Connector evidence",
+        "corrected Connector passes the same shared WorkDiscovery conformance",
+        "unchanged canonical work.list succeeds through the corrected Connector"
+      ],
+      "core_exception_allowed": false
+    }
+  ]
+}

@@ -432,6 +432,7 @@ pub fn create_core_action_registry() -> ActionRegistry {
     registry.register(control_search, control_search_action).expect("core Action ids are valid");
 
     crate::machine::register_machine_actions(&mut registry);
+    crate::recovery::register_recovery_actions(&mut registry);
 
     let mut work_list = descriptor(
         "work.list",

@@ -53,10 +53,32 @@ fn control_search_reads_multiple_human_readable_formats_without_schema() {
     let matches = data["matches"].as_array().unwrap();
     assert_eq!(matches.len(), 3);
     assert_eq!(data["files_scanned"], 3);
+    assert!(data["skipped_sources"].as_array().unwrap().is_empty());
     assert!(matches.iter().all(|item| item["source_class"] == "authored"));
     assert!(matches.iter().any(|item| item["source_path"] == "Control/user/about.md"));
     assert!(matches.iter().any(|item| item["source_path"] == "Control/machines/tools.json"));
     assert!(matches.iter().any(|item| item["source_path"] == "Control/agents/nested/voice.notes"));
+}
+
+#[test]
+fn control_search_reports_unsupported_non_text_sources_explicitly() {
+    let root = temporary_directory("unsupported").join("Central");
+    initialize_central(&root).unwrap();
+    fs::write(root.join("Control/user/about.md"), "A searchable durable preference.\n").unwrap();
+    fs::write(root.join("Control/agents/archive.bin"), [0xff, 0xfe, 0x00, 0x80]).unwrap();
+
+    let result = execute(&root, "control.search", json!({ "query": "durable" }));
+    assert_eq!(result.status, ResultStatus::Success);
+    let data = result.data.unwrap();
+    assert_eq!(data["files_scanned"], 1);
+    assert_eq!(data["matches"].as_array().unwrap().len(), 1);
+
+    let skipped = data["skipped_sources"].as_array().unwrap();
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(skipped[0]["target"], "agents");
+    assert_eq!(skipped[0]["source_path"], "Control/agents/archive.bin");
+    assert_eq!(skipped[0]["source_class"], "authored");
+    assert_eq!(skipped[0]["reason"], "unsupported_non_text_source");
 }
 
 #[test]

@@ -133,6 +133,18 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         {
             return Err((structured, format!("machine {verb} requires a role.")));
         }
+        [domain, verb, role] if domain == "recovery" && verb == "plan" => {
+            ("central.recovery.plan", json!({ "role": role }))
+        }
+        [domain, verb] if domain == "recovery" && verb == "plan" => {
+            return Err((structured, "recovery plan requires a role.".to_owned()));
+        }
+        [command, role] if command == "recover" => {
+            ("central.recover", json!({ "role": role }))
+        }
+        [command] if command == "recover" => {
+            return Err((structured, "recover requires a role.".to_owned()));
+        }
         [canonical, rest @ ..] if canonical == "work.search" && !rest.is_empty() => {
             ("work.search", json!({ "query": rest.join(" ") }))
         }
@@ -155,7 +167,7 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         [canonical, role]
             if matches!(
                 canonical.as_str(),
-                "machine.declaration" | "machine.plan" | "machine.apply" | "machine.verify"
+                "machine.declaration" | "machine.plan" | "machine.apply" | "machine.verify" | "central.recovery.plan" | "central.recover"
             ) =>
         {
             (canonical.as_str(), json!({ "role": role }))
@@ -163,7 +175,7 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         [canonical]
             if matches!(
                 canonical.as_str(),
-                "machine.declaration" | "machine.plan" | "machine.apply" | "machine.verify"
+                "machine.declaration" | "machine.plan" | "machine.apply" | "machine.verify" | "central.recovery.plan" | "central.recover"
             ) =>
         {
             return Err((structured, format!("{canonical} requires a role.")));
@@ -223,6 +235,8 @@ fn human_output(result: &ActionResult) -> String {
             }
             lines.join("\n")
         }
+        Some("central.recovery.plan") => crate::recovery::explain_recovery_plan(data),
+        Some("central.recover") => crate::recovery::explain_recovery(data),
         Some("action.list") => data
             .get("actions")
             .and_then(Value::as_array)

@@ -1,0 +1,121 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "clean-control-tree",
+      "description": "A compact authored tree whose durable content is current, correctly scoped, and directly useful.",
+      "sources": [
+        {
+          "path": "Control/user/working-style.md",
+          "content": "# Working style\nI prefer direct visual review when interface work produces an experienceable candidate.\n"
+        },
+        {
+          "path": "Control/agents/evidence.md",
+          "content": "# Evidence\nFor engineering work, completion claims should be backed by appropriate executed evidence.\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "classification": "clean",
+          "target": "Control/user/working-style.md"
+        },
+        {
+          "classification": "clean",
+          "target": "Control/agents/evidence.md"
+        }
+      ],
+      "mutation_expected_without_acceptance": false
+    },
+    {
+      "id": "stale-content",
+      "description": "A live authored statement describes a tool preference the user has explicitly superseded.",
+      "sources": [
+        {
+          "path": "Control/user/tools.md",
+          "content": "# Tools\nI always use Launcher A as my command surface.\n"
+        }
+      ],
+      "supporting_context": "The user explicitly states that Launcher A was retired and the durable preference is now tool-neutral: use a fast searchable command surface.",
+      "expected_findings": [
+        {
+          "classification": "stale",
+          "target": "Control/user/tools.md",
+          "recommended_disposition": "replace only after explicit acceptance"
+        }
+      ],
+      "mutation_expected_without_acceptance": false
+    },
+    {
+      "id": "conflicting-content",
+      "description": "Two authored sources give incompatible durable instructions at the same practical scope.",
+      "sources": [
+        {
+          "path": "Control/agents/review.md",
+          "content": "# Review\nAlways ask me before making any repository change.\n"
+        },
+        {
+          "path": "Control/agents/initiative.md",
+          "content": "# Initiative\nFor ordinary reversible implementation work, proceed without interrupting me for confirmation.\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "classification": "conflicting",
+          "target": "Control/agents/review.md + Control/agents/initiative.md",
+          "recommended_disposition": "surface both live sources and request human resolution"
+        }
+      ],
+      "mutation_expected_without_acceptance": false
+    },
+    {
+      "id": "misplaced-procedure",
+      "description": "A reusable repository-debugging recipe is stored as persistent agent context instead of as procedure.",
+      "sources": [
+        {
+          "path": "Control/agents/debugging.md",
+          "content": "# Debugging\n1. Run the repository test command.\n2. Fetch the failing CI logs.\n3. Reproduce locally.\n4. Patch the owning layer.\n5. Re-run the exact checks.\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "classification": "procedure-candidate",
+          "target": "Control/agents/debugging.md",
+          "destination": "Skill",
+          "recommended_disposition": "move reusable steps to a Skill; retain only any endorsed durable preference"
+        }
+      ],
+      "mutation_expected_without_acceptance": false
+    },
+    {
+      "id": "verification-preference-dialogue",
+      "description": "Engineering governance is relevant, so verification/confidence is offered as an optional durable-preference topic without importing project mechanics into Control.",
+      "sources": [
+        {
+          "path": "Control/agents/collaboration.md",
+          "content": "# Collaboration\nTake initiative on routine engineering work and surface consequential authorial decisions.\n"
+        }
+      ],
+      "dialogue": {
+        "question": "When an agent changes software for you, what normally gives you confidence that the work is complete? Do you have durable preferences about tests, CI, review, evidence, or when human review is required?",
+        "answer": "I want completion claims backed by appropriate executed evidence and existing assurance preserved. In this repository that currently means cargo test --workspace, the verify GitHub Action, and a required PR check. I want human review for consequential product decisions, not every routine implementation edit."
+      },
+      "expected_findings": [
+        {
+          "classification": "missing-durable-area",
+          "target": "Control/agents",
+          "topic": "verification and confidence"
+        }
+      ],
+      "expected_control_proposal": {
+        "target": "Control/agents/verification.md",
+        "content": "For engineering work, I want completion claims backed by appropriate executed evidence and routine implementation to preserve the project's existing assurance. Human review should be reserved for consequential product or authorial decisions rather than every routine implementation edit."
+      },
+      "project_scope_exclusions": [
+        "cargo test --workspace",
+        "verify GitHub Action",
+        "required PR check"
+      ],
+      "mutation_expected_without_acceptance": false
+    }
+  ]
+}
