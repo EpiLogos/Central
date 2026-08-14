@@ -1187,10 +1187,15 @@ fn apply_action(
                     operations,
                     verification: None,
                 };
+                let message = failure
+                    .error
+                    .as_ref()
+                    .map(|error| error.message.clone())
+                    .unwrap_or_else(|| "Machine reconciliation failed after partial application.".to_owned());
                 return ActionResult::failure(
                     Some("machine.apply"),
                     ResultStatus::PartialCompletion,
-                    failure.error.map(|error| error.message).unwrap_or_else(|| "Machine reconciliation failed after partial application.".to_owned()),
+                    message,
                     Some(json!({
                         "report": report,
                         "failure": failure.error,
