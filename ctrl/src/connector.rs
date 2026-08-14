@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     action::MutationClass,
-    port::{WorkDiscovery, WORK_DISCOVERY_CONTRACT_ID, WORK_DISCOVERY_PORT_ID},
+    port::{WORK_DISCOVERY_CONTRACT_ID, WORK_DISCOVERY_PORT_ID, WorkDiscovery},
 };
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

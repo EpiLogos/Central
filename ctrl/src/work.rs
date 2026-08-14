@@ -1,11 +1,10 @@
-use std::path::Path;
-
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 use crate::{
     connector::{ConnectorDiagnostics, ConnectorRegistry},
-    result::{ActionResult, FailureCode, ResultStatus},
     port::{WorkDiscoveryError, WorkItem},
+    result::{ActionResult, FailureCode, ResultStatus},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
