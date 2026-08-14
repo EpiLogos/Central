@@ -115,11 +115,15 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         [domain, verb] if domain == "control" && verb == "search" => {
             return Err((structured, "control search requires a query.".to_owned()));
         }
+        [domain, verb] if domain == "machine" && verb == "inspect" => ("machine.inspect", json!({})),
         [domain, verb, role] if domain == "machine" && verb == "declaration" => {
             ("machine.declaration", json!({ "role": role }))
         }
-        [domain, verb] if domain == "machine" && verb == "declaration" => {
-            return Err((structured, "machine declaration requires a role.".to_owned()));
+        [domain, verb, role] if domain == "machine" && verb == "plan" => {
+            ("machine.plan", json!({ "role": role }))
+        }
+        [domain, verb] if domain == "machine" && matches!(verb.as_str(), "declaration" | "plan") => {
+            return Err((structured, format!("machine {verb} requires a role.")));
         }
         [canonical, rest @ ..] if canonical == "work.search" && !rest.is_empty() => {
             ("work.search", json!({ "query": rest.join(" ") }))
@@ -143,10 +147,13 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         [canonical, role] if canonical == "machine.declaration" => {
             ("machine.declaration", json!({ "role": role }))
         }
-        [canonical] if canonical == "machine.declaration" => {
-            return Err((structured, "machine.declaration requires a role.".to_owned()));
+        [canonical, role] if canonical == "machine.plan" => {
+            ("machine.plan", json!({ "role": role }))
         }
-        [canonical] if matches!(canonical.as_str(), "central.root" | "central.init" | "central.doctor" | "action.list" | "work.list") => {
+        [canonical] if matches!(canonical.as_str(), "machine.declaration" | "machine.plan") => {
+            return Err((structured, format!("{canonical} requires a role.")));
+        }
+        [canonical] if matches!(canonical.as_str(), "central.root" | "central.init" | "central.doctor" | "action.list" | "machine.inspect" | "work.list") => {
             (canonical.as_str(), json!({}))
         }
         [unknown] => return Err((structured, format!("Unknown command: {unknown}"))),
@@ -221,6 +228,8 @@ fn human_output(result: &ActionResult) -> String {
             }).collect::<Vec<_>>().join("\n"))
             .unwrap_or_default(),
         Some("machine.declaration") => crate::machine::explain_machine_declaration(data),
+        Some("machine.inspect") => crate::machine::explain_machine_inspection(data),
+        Some("machine.plan") => crate::machine::explain_machine_plan(data),
         Some("work.list") => {
             let selected = data
                 .get("diagnostics")

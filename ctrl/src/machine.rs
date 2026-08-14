@@ -5,8 +5,13 @@ use crate::action::{
 use crate::control::SourceClass;
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
+use central_connector_sdk::{
+    ConnectorDiagnostics, ConnectorSummary, MachineInspectionInput, MachineInspectionOutput,
+    PortContract, CONFIGURATION_MANAGER_PORT, MACHINE_INSPECTOR_PORT, PACKAGE_MANAGER_PORT,
+    SERVICE_MANAGER_PORT,
+};
 use serde::{Deserialize, Serialize};
-use serde_json::{to_value, Value};
+use serde_json::{json, to_value, Value};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -111,6 +116,62 @@ impl MachineDeclarationError {
             field: field.map(str::to_owned),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MachineObservationSource {
+    pub source_class: String,
+    pub connector: ConnectorSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ObservedMachine {
+    pub observation: MachineInspectionOutput,
+    pub source: MachineObservationSource,
+    pub diagnostics: ConnectorDiagnostics,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MachinePlanStatus {
+    Satisfied,
+    Missing,
+    Changeable,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MachinePlanEntry {
+    pub kind: String,
+    pub id: String,
+    pub status: MachinePlanStatus,
+    pub desired: Value,
+    pub observed: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connector: Option<ConnectorSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostics: Option<ConnectorDiagnostics>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct MachinePlanSummary {
+    pub satisfied: usize,
+    pub missing: usize,
+    pub changeable: usize,
+    pub unsupported: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MachinePlan {
+    pub role: String,
+    pub authored: AuthoredMachineDeclaration,
+    pub observed: ObservedMachine,
+    pub entries: Vec<MachinePlanEntry>,
+    pub summary: MachinePlanSummary,
 }
 
 fn validate_role_name(role: &str) -> Result<&str, MachineDeclarationError> {
@@ -333,7 +394,7 @@ pub fn read_machine_declaration(
     })
 }
 
-fn required_role(input: &Value) -> Result<String, ActionResult> {
+fn required_role(input: &Value, action: &str) -> Result<String, ActionResult> {
     let Some(role) = input
         .get("role")
         .and_then(Value::as_str)
@@ -341,13 +402,22 @@ fn required_role(input: &Value) -> Result<String, ActionResult> {
         .filter(|value| !value.is_empty())
     else {
         return Err(ActionResult::failure(
-            Some("machine.declaration"),
+            Some(action),
             ResultStatus::InvalidInput,
-            "machine.declaration requires role.",
+            format!("{action} requires role."),
             None,
         ));
     };
     Ok(role.to_owned())
+}
+
+fn declaration_failure(action: &str, error: MachineDeclarationError) -> ActionResult {
+    ActionResult::failure(
+        Some(action),
+        ResultStatus::InvalidInput,
+        error.message.clone(),
+        Some(to_value(error).expect("machine declaration error serializes")),
+    )
 }
 
 fn declaration_action(
@@ -355,7 +425,7 @@ fn declaration_action(
     input: &Value,
     context: &ActionExecutionContext<'_>,
 ) -> ActionResult {
-    let role = match required_role(input) {
+    let role = match required_role(input, "machine.declaration") {
         Ok(role) => role,
         Err(result) => return result,
     };
@@ -375,34 +445,370 @@ fn declaration_action(
             "machine.declaration",
             to_value(declaration).expect("machine declaration serializes"),
         ),
-        Err(error) => ActionResult::failure(
-            Some("machine.declaration"),
-            ResultStatus::InvalidInput,
-            error.message.clone(),
-            Some(to_value(error).expect("machine declaration error serializes")),
+        Err(error) => declaration_failure("machine.declaration", error),
+    }
+}
+
+fn inspect_current_machine(context: &ActionExecutionContext<'_>, action: &str) -> Result<ObservedMachine, ActionResult> {
+    let resolution = context.connectors.resolve(&MACHINE_INSPECTOR_PORT, context.connector_context);
+    let diagnostics = resolution.diagnostics.clone();
+    let Some(connector) = resolution.connector else {
+        return Err(ActionResult::failure(
+            Some(action),
+            ResultStatus::UnavailableCapability,
+            format!("No eligible Connector implements {}.", MACHINE_INSPECTOR_PORT.id),
+            Some(json!({ "port": MACHINE_INSPECTOR_PORT.id, "diagnostics": diagnostics })),
+        ));
+    };
+    let Some(implementation) = connector.machine_inspector() else {
+        return Err(ActionResult::failure(
+            Some(action),
+            ResultStatus::ConnectorFailure,
+            format!("Selected Connector does not expose {} implementation.", MACHINE_INSPECTOR_PORT.id),
+            Some(json!({
+                "port": MACHINE_INSPECTOR_PORT.id,
+                "connector": connector.manifest().id,
+                "diagnostics": diagnostics,
+            })),
+        ));
+    };
+    match implementation.inspect(&MachineInspectionInput::default()) {
+        Ok(observation) => Ok(ObservedMachine {
+            observation,
+            source: MachineObservationSource {
+                source_class: "observed".to_owned(),
+                connector: ConnectorSummary::from_connector(connector),
+            },
+            diagnostics,
+        }),
+        Err(error) => Err(ActionResult::failure(
+            Some(action),
+            ResultStatus::ConnectorFailure,
+            format!("Connector failed while executing {}.", MACHINE_INSPECTOR_PORT.id),
+            Some(json!({
+                "port": MACHINE_INSPECTOR_PORT.id,
+                "connector": connector.manifest().id,
+                "provider_error": error,
+                "diagnostics": diagnostics,
+            })),
+        )),
+    }
+}
+
+fn inspect_action(
+    _registry: &ActionRegistry,
+    _input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    match inspect_current_machine(context, "machine.inspect") {
+        Ok(observed) => ActionResult::success(
+            "machine.inspect",
+            to_value(observed).expect("machine observation serializes"),
         ),
+        Err(result) => result,
+    }
+}
+
+fn satisfied_entry(kind: &str, id: &str, desired: Value, observed: Value) -> MachinePlanEntry {
+    MachinePlanEntry {
+        kind: kind.to_owned(),
+        id: id.to_owned(),
+        status: MachinePlanStatus::Satisfied,
+        desired,
+        observed,
+        port: None,
+        connector: None,
+        reason: None,
+        diagnostics: None,
+    }
+}
+
+fn unsupported_entry(kind: &str, id: &str, desired: Value, observed: Value, reason: String) -> MachinePlanEntry {
+    MachinePlanEntry {
+        kind: kind.to_owned(),
+        id: id.to_owned(),
+        status: MachinePlanStatus::Unsupported,
+        desired,
+        observed,
+        port: None,
+        connector: None,
+        reason: Some(reason),
+        diagnostics: None,
+    }
+}
+
+fn difference_entry(
+    kind: &str,
+    id: &str,
+    desired: Value,
+    observed: Value,
+    port: &PortContract,
+    context: &ActionExecutionContext<'_>,
+) -> MachinePlanEntry {
+    let resolution = context.connectors.resolve(port, context.connector_context);
+    let connector = resolution.diagnostics.selected_connector.clone();
+    let status = if connector.is_some() {
+        MachinePlanStatus::Changeable
+    } else {
+        MachinePlanStatus::Missing
+    };
+    let reason = if connector.is_none() {
+        Some(format!(
+            "{kind} requirement '{id}' differs from observed state, but no eligible {} Connector is available.",
+            port.id
+        ))
+    } else {
+        None
+    };
+    MachinePlanEntry {
+        kind: kind.to_owned(),
+        id: id.to_owned(),
+        status,
+        desired,
+        observed,
+        port: Some(port.id.to_owned()),
+        connector,
+        reason,
+        diagnostics: Some(resolution.diagnostics),
+    }
+}
+
+fn compare_machine(
+    authored: AuthoredMachineDeclaration,
+    observed: ObservedMachine,
+    context: &ActionExecutionContext<'_>,
+) -> MachinePlan {
+    let declaration = &authored.declaration;
+    let observation = &observed.observation;
+    let mut entries = Vec::new();
+
+    for capability in &declaration.capabilities {
+        if observation.capabilities.iter().any(|value| value == capability) {
+            entries.push(satisfied_entry(
+                "capability",
+                capability,
+                json!({ "available": true }),
+                json!({ "available": true }),
+            ));
+        } else {
+            entries.push(unsupported_entry(
+                "capability",
+                capability,
+                json!({ "available": true }),
+                json!({ "available": false }),
+                format!(
+                    "Required capability '{capability}' is not observed and no general reconciliation Port is defined for this capability intent."
+                ),
+            ));
+        }
+    }
+
+    for requirement in &declaration.requirements.packages {
+        let desired_present = requirement.state == PresenceState::Present;
+        let desired = to_value(requirement).expect("package requirement serializes");
+        let Some(item) = observation.packages.iter().find(|item| item.id == requirement.id) else {
+            entries.push(unsupported_entry(
+                "package",
+                &requirement.id,
+                desired,
+                Value::Null,
+                format!(
+                    "MachineInspector did not report package state for '{}'; current state cannot be compared.",
+                    requirement.id
+                ),
+            ));
+            continue;
+        };
+        let actual = json!({ "present": item.present });
+        if item.present == desired_present {
+            entries.push(satisfied_entry("package", &requirement.id, desired, actual));
+        } else {
+            entries.push(difference_entry(
+                "package",
+                &requirement.id,
+                desired,
+                actual,
+                &PACKAGE_MANAGER_PORT,
+                context,
+            ));
+        }
+    }
+
+    for requirement in &declaration.requirements.configurations {
+        let desired_present = requirement.state == PresenceState::Present;
+        let desired = to_value(requirement).expect("configuration requirement serializes");
+        let Some(item) = observation.configurations.iter().find(|item| item.id == requirement.id) else {
+            entries.push(unsupported_entry(
+                "configuration",
+                &requirement.id,
+                desired,
+                Value::Null,
+                format!(
+                    "MachineInspector did not report configuration state for '{}'; current state cannot be compared.",
+                    requirement.id
+                ),
+            ));
+            continue;
+        };
+        let actual = json!({ "present": item.present });
+        if item.present == desired_present {
+            entries.push(satisfied_entry("configuration", &requirement.id, desired, actual));
+        } else {
+            entries.push(difference_entry(
+                "configuration",
+                &requirement.id,
+                desired,
+                actual,
+                &CONFIGURATION_MANAGER_PORT,
+                context,
+            ));
+        }
+    }
+
+    for requirement in &declaration.requirements.services {
+        let desired = to_value(requirement).expect("service requirement serializes");
+        let Some(item) = observation.services.iter().find(|item| item.id == requirement.id) else {
+            entries.push(unsupported_entry(
+                "service",
+                &requirement.id,
+                desired,
+                Value::Null,
+                format!(
+                    "MachineInspector did not report service state for '{}'; current state cannot be compared.",
+                    requirement.id
+                ),
+            ));
+            continue;
+        };
+        let actual = json!({
+            "present": item.present,
+            "running": item.running,
+            "enabled": item.enabled,
+        });
+        let matches_running = requirement.running.map_or(true, |desired| desired == item.running);
+        let matches_enabled = requirement.enabled.map_or(true, |desired| desired == item.enabled);
+        if matches_running && matches_enabled {
+            entries.push(satisfied_entry("service", &requirement.id, desired, actual));
+        } else {
+            entries.push(difference_entry(
+                "service",
+                &requirement.id,
+                desired,
+                actual,
+                &SERVICE_MANAGER_PORT,
+                context,
+            ));
+        }
+    }
+
+    let mut summary = MachinePlanSummary::default();
+    for entry in &entries {
+        match entry.status {
+            MachinePlanStatus::Satisfied => summary.satisfied += 1,
+            MachinePlanStatus::Missing => summary.missing += 1,
+            MachinePlanStatus::Changeable => summary.changeable += 1,
+            MachinePlanStatus::Unsupported => summary.unsupported += 1,
+        }
+    }
+
+    MachinePlan {
+        role: declaration.role.clone(),
+        authored,
+        observed,
+        entries,
+        summary,
+    }
+}
+
+fn plan_action(
+    _registry: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    let role = match required_role(input, "machine.plan") {
+        Ok(role) => role,
+        Err(result) => return result,
+    };
+    let root = match resolve_central_root(context.root_options) {
+        Ok(root) => root,
+        Err(message) => {
+            return ActionResult::failure(
+                Some("machine.plan"),
+                ResultStatus::InvalidInput,
+                message,
+                None,
+            );
+        }
+    };
+    let authored = match read_machine_declaration(&root.path, &role) {
+        Ok(declaration) => declaration,
+        Err(error) => return declaration_failure("machine.plan", error),
+    };
+    let observed = match inspect_current_machine(context, "machine.plan") {
+        Ok(observed) => observed,
+        Err(result) => return result,
+    };
+    ActionResult::success(
+        "machine.plan",
+        to_value(compare_machine(authored, observed, context)).expect("machine plan serializes"),
+    )
+}
+
+fn role_input() -> ActionInputDefinition {
+    ActionInputDefinition {
+        name: "role".to_owned(),
+        input_type: "string".to_owned(),
+        required: true,
+        choices: None,
+        selection: None,
     }
 }
 
 pub(crate) fn register_machine_actions(registry: &mut ActionRegistry) {
-    let descriptor = ActionDescriptor {
-        id: "machine.declaration".to_owned(),
-        title: "Read machine declaration".to_owned(),
-        description: "Read and validate one versioned authored machine-role declaration from Control/machines.".to_owned(),
-        inputs: vec![ActionInputDefinition {
-            name: "role".to_owned(),
-            input_type: "string".to_owned(),
-            required: true,
-            choices: None,
-            selection: None,
-        }],
-        output: ActionOutputDefinition { output_type: "authored-machine-declaration".to_owned() },
-        mutation_class: MutationClass::ReadOnly,
-        preview_supported: false,
-        required_ports: Vec::new(),
-        availability: ActionAvailability { available: true, reason: None },
-    };
-    registry.register(descriptor, declaration_action).expect("machine Action id is valid");
+    registry.register(
+        ActionDescriptor {
+            id: "machine.declaration".to_owned(),
+            title: "Read machine declaration".to_owned(),
+            description: "Read and validate one versioned authored machine-role declaration from Control/machines.".to_owned(),
+            inputs: vec![role_input()],
+            output: ActionOutputDefinition { output_type: "authored-machine-declaration".to_owned() },
+            mutation_class: MutationClass::ReadOnly,
+            preview_supported: false,
+            required_ports: Vec::new(),
+            availability: ActionAvailability { available: true, reason: None },
+        },
+        declaration_action,
+    ).expect("machine Action id is valid");
+
+    registry.register(
+        ActionDescriptor {
+            id: "machine.inspect".to_owned(),
+            title: "Inspect current machine".to_owned(),
+            description: "Collect structured observed host state through the public MachineInspector Port.".to_owned(),
+            inputs: Vec::new(),
+            output: ActionOutputDefinition { output_type: "observed-machine-state".to_owned() },
+            mutation_class: MutationClass::ReadOnly,
+            preview_supported: false,
+            required_ports: vec![MACHINE_INSPECTOR_PORT.id.to_owned()],
+            availability: ActionAvailability { available: true, reason: None },
+        },
+        inspect_action,
+    ).expect("machine Action id is valid");
+
+    registry.register(
+        ActionDescriptor {
+            id: "machine.plan".to_owned(),
+            title: "Plan machine changes".to_owned(),
+            description: "Compare authored machine intent with observed host state and produce a non-mutating structured change plan.".to_owned(),
+            inputs: vec![role_input()],
+            output: ActionOutputDefinition { output_type: "machine-change-plan".to_owned() },
+            mutation_class: MutationClass::ReadOnly,
+            preview_supported: false,
+            required_ports: vec![MACHINE_INSPECTOR_PORT.id.to_owned()],
+            availability: ActionAvailability { available: true, reason: None },
+        },
+        plan_action,
+    ).expect("machine Action id is valid");
 }
 
 fn render_reference(source: Option<&Value>) -> String {
@@ -484,6 +890,59 @@ pub fn explain_machine_declaration(data: &Value) -> String {
                 states.join(", "),
                 render_reference(service.get("source"))
             ));
+        }
+    }
+    lines.join("\n")
+}
+
+pub fn explain_machine_inspection(data: &Value) -> String {
+    let observation = data.get("observation").unwrap_or(&Value::Null);
+    let platform = observation.get("platform").and_then(Value::as_str).unwrap_or_default();
+    let architecture = observation.get("architecture").and_then(Value::as_str).unwrap_or_default();
+    let connector = data
+        .get("source")
+        .and_then(|value| value.get("connector"))
+        .and_then(|value| value.get("id"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    format!(
+        "Observed host: {platform}/{architecture}\nSource: {connector} [observed]\nCapabilities: {}\nPackages reported: {}\nConfigurations reported: {}\nServices reported: {}",
+        observation.get("capabilities").and_then(Value::as_array).map_or(0, Vec::len),
+        observation.get("packages").and_then(Value::as_array).map_or(0, Vec::len),
+        observation.get("configurations").and_then(Value::as_array).map_or(0, Vec::len),
+        observation.get("services").and_then(Value::as_array).map_or(0, Vec::len),
+    )
+}
+
+pub fn explain_machine_plan(data: &Value) -> String {
+    let role = data.get("role").and_then(Value::as_str).unwrap_or_default();
+    let summary = data.get("summary").unwrap_or(&Value::Null);
+    let mut lines = vec![
+        format!("Machine plan: {role}"),
+        format!(
+            "Satisfied: {} | Changeable: {} | Missing: {} | Unsupported: {}",
+            summary.get("satisfied").and_then(Value::as_u64).unwrap_or_default(),
+            summary.get("changeable").and_then(Value::as_u64).unwrap_or_default(),
+            summary.get("missing").and_then(Value::as_u64).unwrap_or_default(),
+            summary.get("unsupported").and_then(Value::as_u64).unwrap_or_default(),
+        ),
+    ];
+    if let Some(entries) = data.get("entries").and_then(Value::as_array) {
+        for entry in entries {
+            let status = entry.get("status").and_then(Value::as_str).unwrap_or_default();
+            let kind = entry.get("kind").and_then(Value::as_str).unwrap_or_default();
+            let id = entry.get("id").and_then(Value::as_str).unwrap_or_default();
+            let port = entry.get("port").and_then(Value::as_str).map(|value| format!(" via {value}")).unwrap_or_default();
+            let connector = entry
+                .get("connector")
+                .and_then(|value| value.get("id"))
+                .and_then(Value::as_str)
+                .map(|value| format!(" -> {value}"))
+                .unwrap_or_default();
+            lines.push(format!("[{status}] {kind} {id}{port}{connector}"));
+            if let Some(reason) = entry.get("reason").and_then(Value::as_str) {
+                lines.push(format!("  {reason}"));
+            }
         }
     }
     lines.join("\n")

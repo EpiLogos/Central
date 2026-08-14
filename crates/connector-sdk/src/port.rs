@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -35,6 +35,100 @@ pub const WORK_DISCOVERY_PORT: PortContract = PortContract {
     operations: &WORK_DISCOVERY_OPERATIONS,
 };
 
+pub const MACHINE_INSPECTOR_OPERATIONS: [PortOperationContract; 1] = [PortOperationContract {
+    name: "inspect",
+    input_type: "MachineInspectionInput",
+    output_type: "MachineInspectionOutput",
+    mutation_class: "read-only",
+    preview_required: false,
+    idempotent: true,
+}];
+
+pub const MACHINE_INSPECTOR_PORT: PortContract = PortContract {
+    id: "MachineInspector",
+    version: "1.0.0",
+    purpose: "Collect structured current-state observations required by machine planning and Connector eligibility.",
+    operations: &MACHINE_INSPECTOR_OPERATIONS,
+};
+
+pub const PACKAGE_MANAGER_OPERATIONS: [PortOperationContract; 2] = [
+    PortOperationContract {
+        name: "preview",
+        input_type: "PackageStateRequest",
+        output_type: "StateChangePreview",
+        mutation_class: "read-only",
+        preview_required: false,
+        idempotent: true,
+    },
+    PortOperationContract {
+        name: "apply",
+        input_type: "PackageStateRequest",
+        output_type: "StateChangeResult",
+        mutation_class: "locally-mutating",
+        preview_required: true,
+        idempotent: true,
+    },
+];
+
+pub const PACKAGE_MANAGER_PORT: PortContract = PortContract {
+    id: "PackageManager",
+    version: "1.0.0",
+    purpose: "Inspect and reconcile package presence without prescribing one package provider.",
+    operations: &PACKAGE_MANAGER_OPERATIONS,
+};
+
+pub const CONFIGURATION_MANAGER_OPERATIONS: [PortOperationContract; 2] = [
+    PortOperationContract {
+        name: "preview",
+        input_type: "ConfigurationStateRequest",
+        output_type: "StateChangePreview",
+        mutation_class: "read-only",
+        preview_required: false,
+        idempotent: true,
+    },
+    PortOperationContract {
+        name: "apply",
+        input_type: "ConfigurationStateRequest",
+        output_type: "StateChangeResult",
+        mutation_class: "locally-mutating",
+        preview_required: true,
+        idempotent: true,
+    },
+];
+
+pub const CONFIGURATION_MANAGER_PORT: PortContract = PortContract {
+    id: "ConfigurationManager",
+    version: "1.0.0",
+    purpose: "Inspect and reconcile portable configuration through a replaceable configuration mechanism.",
+    operations: &CONFIGURATION_MANAGER_OPERATIONS,
+};
+
+pub const SERVICE_MANAGER_OPERATIONS: [PortOperationContract; 2] = [
+    PortOperationContract {
+        name: "preview",
+        input_type: "ServiceStateRequest",
+        output_type: "StateChangePreview",
+        mutation_class: "read-only",
+        preview_required: false,
+        idempotent: true,
+    },
+    PortOperationContract {
+        name: "apply",
+        input_type: "ServiceStateRequest",
+        output_type: "StateChangeResult",
+        mutation_class: "locally-mutating",
+        preview_required: true,
+        idempotent: true,
+    },
+];
+
+pub const SERVICE_MANAGER_PORT: PortContract = PortContract {
+    id: "ServiceManager",
+    version: "1.0.0",
+    purpose: "Inspect and reconcile service running and enablement state without prescribing one service provider.",
+    operations: &SERVICE_MANAGER_OPERATIONS,
+};
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WorkDiscoveryInput {
     pub work_root: PathBuf,
@@ -49,6 +143,83 @@ pub struct WorkItem {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WorkDiscoveryOutput {
     pub items: Vec<WorkItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct MachineInspectionInput {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObservedPackage {
+    pub id: String,
+    pub present: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObservedConfiguration {
+    pub id: String,
+    pub present: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObservedService {
+    pub id: String,
+    pub present: bool,
+    pub running: bool,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MachineInspectionOutput {
+    pub platform: String,
+    pub architecture: String,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub packages: Vec<ObservedPackage>,
+    #[serde(default)]
+    pub configurations: Vec<ObservedConfiguration>,
+    #[serde(default)]
+    pub services: Vec<ObservedService>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReconciliationSourceReference {
+    pub kind: String,
+    pub reference: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PackageStateRequest {
+    pub id: String,
+    pub present: bool,
+    pub source: Option<ReconciliationSourceReference>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConfigurationStateRequest {
+    pub id: String,
+    pub present: bool,
+    pub source: Option<ReconciliationSourceReference>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServiceStateRequest {
+    pub id: String,
+    pub running: Option<bool>,
+    pub enabled: Option<bool>,
+    pub source: Option<ReconciliationSourceReference>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StateChangePreview {
+    pub changed: bool,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StateChangeResult {
+    pub changed: bool,
+    pub summary: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -84,4 +255,8 @@ impl PortError {
 
 pub trait WorkDiscovery: Send + Sync {
     fn list(&self, input: &WorkDiscoveryInput) -> Result<WorkDiscoveryOutput, PortError>;
+}
+
+pub trait MachineInspector: Send + Sync {
+    fn inspect(&self, input: &MachineInspectionInput) -> Result<MachineInspectionOutput, PortError>;
 }

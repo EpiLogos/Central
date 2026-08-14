@@ -1,4 +1,4 @@
-use crate::port::{PortContract, WorkDiscovery};
+use crate::port::{MachineInspector, PortContract, WorkDiscovery};
 use serde::Serialize;
 use std::collections::BTreeSet;
 
@@ -110,6 +110,9 @@ pub trait Connector: Send + Sync {
     fn manifest(&self) -> &ConnectorManifest;
     fn probe(&self, port: &PortContract, context: &ConnectorContext) -> CapabilityProbe;
     fn work_discovery(&self) -> Option<&dyn WorkDiscovery> {
+        None
+    }
+    fn machine_inspector(&self) -> Option<&dyn MachineInspector> {
         None
     }
 }

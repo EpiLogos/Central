@@ -1,7 +1,10 @@
 use central_connector_sdk::{
-    run_work_discovery_conformance, WorkDiscoveryConformanceFixture, WorkItem,
+    run_machine_inspector_conformance, run_work_discovery_conformance, MachineInspectionOutput,
+    MachineInspectorConformanceFixture, ObservedPackage, WorkDiscoveryConformanceFixture, WorkItem,
 };
-use central_reference_connectors::{FilesystemWorkConnector, StaticWorkConnector};
+use central_reference_connectors::{
+    FilesystemWorkConnector, StaticMachineInspectorConnector, StaticWorkConnector,
+};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -46,4 +49,26 @@ fn static_reference_passes_the_same_public_conformance_suite() {
         },
     ).unwrap();
     assert_eq!(report.connector.id, "reference.work-static");
+}
+
+#[test]
+fn static_machine_inspector_passes_public_conformance_suite() {
+    let observation = MachineInspectionOutput {
+        platform: "test-os".to_owned(),
+        architecture: "test-arch".to_owned(),
+        capabilities: vec!["remote-shell".to_owned()],
+        packages: vec![ObservedPackage { id: "git".to_owned(), present: true }],
+        configurations: Vec::new(),
+        services: Vec::new(),
+    };
+    let connector = StaticMachineInspectorConnector::new(observation.clone());
+    let report = run_machine_inspector_conformance(
+        &connector,
+        &MachineInspectorConformanceFixture {
+            platform: "test-os".to_owned(),
+            expected: Some(observation),
+        },
+    ).unwrap();
+    assert_eq!(report.port_id, "MachineInspector");
+    assert_eq!(report.connector.id, "reference.machine-static");
 }
