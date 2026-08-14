@@ -100,11 +100,12 @@ fn ubuntu_configuration_manager_passes_shared_conformance_with_a_real_file_fixtu
 fn machine_inspection_reports_explicit_absence_for_requested_resources() {
     let root = temporary_directory("requested-observation");
     let missing = root.join("not-present.conf");
+    let missing_id = missing.to_string_lossy().into_owned();
     let connector = UbuntuServerConnector::new();
     let observation = connector
         .inspect(&MachineInspectionInput {
             package_ids: vec!["bash".to_owned()],
-            configuration_ids: vec![missing.to_string_lossy().into_owned()],
+            configuration_ids: vec![missing_id.clone()],
             service_ids: Vec::new(),
         })
         .unwrap();
@@ -113,7 +114,7 @@ fn machine_inspection_reports_explicit_absence_for_requested_resources() {
     assert_eq!(observation.packages[0].id, "bash");
     assert!(observation.packages[0].present);
     assert_eq!(observation.configurations.len(), 1);
-    assert_eq!(observation.configurations[0].id, missing.to_string_lossy());
+    assert_eq!(observation.configurations[0].id, missing_id);
     assert!(!observation.configurations[0].present);
     fs::remove_dir_all(root).unwrap();
 }
