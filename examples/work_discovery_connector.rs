@@ -1,7 +1,7 @@
 use central_ctrl::sdk::{
     CapabilityProbe, ConnectorMetadata, MutationClass, PortCompatibility,
-    WORK_DISCOVERY_CONTRACT_ID, WORK_DISCOVERY_PORT_ID, WorkDiscovery, WorkDiscoveryError, WorkItem,
-    conformance,
+    WORK_DISCOVERY_CONTRACT_ID, WORK_DISCOVERY_PORT_ID, WorkDiscovery, WorkDiscoveryError,
+    WorkItem, conformance,
 };
 use std::path::Path;
 
