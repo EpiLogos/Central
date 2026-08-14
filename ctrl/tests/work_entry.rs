@@ -1,12 +1,89 @@
+use central_connector_sdk::{
+    CapabilityProbe, Connector, ConnectorManifest, ConnectorPortDeclaration, NativeOpen,
+    NativeOpenInput, NativeOpenOutput, NativeReveal, NativeRevealInput, NativeRevealOutput,
+    PortContract, PortError, CONNECTOR_API_VERSION, NATIVE_OPEN_PORT, NATIVE_REVEAL_PORT,
+};
 use central_ctrl::{
-    create_core_action_registry, initialize_central, run_cli, ActionExecutionContext, CliEnvironment,
-    ConnectorContext, ConnectorRegistry, FilesystemWorkConnector, ResultStatus, RootOptions,
-    WORK_DISCOVERY_PORT,
+    create_core_action_registry, initialize_central, run_cli_with_runtime, ActionExecutionContext,
+    CliEnvironment, ConnectorContext, ConnectorRegistry, FilesystemWorkConnector,
+    NullTerminalSurface, ResultStatus, RootOptions, WORK_DISCOVERY_PORT,
 };
 use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+struct TestNativeConnector {
+    manifest: ConnectorManifest,
+}
+
+impl TestNativeConnector {
+    fn new() -> Self {
+        Self {
+            manifest: ConnectorManifest {
+                api_version: CONNECTOR_API_VERSION.to_owned(),
+                id: "test.native".to_owned(),
+                version: "0.1.0".to_owned(),
+                display_name: "Test native host".to_owned(),
+                ports: [NATIVE_OPEN_PORT, NATIVE_REVEAL_PORT]
+                    .iter()
+                    .map(|port| ConnectorPortDeclaration {
+                        id: port.id.to_owned(),
+                        version: port.version.to_owned(),
+                    })
+                    .collect(),
+                platforms: vec!["test".to_owned()],
+                entrypoint: "test:TestNativeConnector".to_owned(),
+                runtime_requirements: Vec::new(),
+                dependency_probes: Vec::new(),
+                configuration_requirements: Vec::new(),
+                mutation_scope: "externally-mutating".to_owned(),
+            },
+        }
+    }
+}
+
+impl NativeOpen for TestNativeConnector {
+    fn open(&self, input: &NativeOpenInput) -> Result<NativeOpenOutput, PortError> {
+        Ok(NativeOpenOutput { target: input.target.clone() })
+    }
+}
+
+impl NativeReveal for TestNativeConnector {
+    fn reveal(&self, input: &NativeRevealInput) -> Result<NativeRevealOutput, PortError> {
+        Ok(NativeRevealOutput { target: input.target.clone() })
+    }
+}
+
+impl Connector for TestNativeConnector {
+    fn manifest(&self) -> &ConnectorManifest {
+        &self.manifest
+    }
+
+    fn probe(&self, port: &PortContract, context: &ConnectorContext) -> CapabilityProbe {
+        if context.platform != "test" {
+            return CapabilityProbe::unavailable("test Connector only supports the test platform");
+        }
+        if self
+            .manifest
+            .ports
+            .iter()
+            .any(|declaration| declaration.id == port.id && declaration.version == port.version)
+        {
+            CapabilityProbe::available()
+        } else {
+            CapabilityProbe::unavailable("unsupported Port")
+        }
+    }
+
+    fn native_open(&self) -> Option<&dyn NativeOpen> {
+        Some(self)
+    }
+
+    fn native_reveal(&self) -> Option<&dyn NativeReveal> {
+        Some(self)
+    }
+}
 
 fn temporary_directory(label: &str) -> PathBuf {
     let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
@@ -15,26 +92,39 @@ fn temporary_directory(label: &str) -> PathBuf {
     path
 }
 
-fn execute(root: &PathBuf, action: &str, input: serde_json::Value) -> central_ctrl::ActionResult {
-    let registry = create_core_action_registry();
+fn test_connectors() -> ConnectorRegistry {
     let mut connectors = ConnectorRegistry::default();
     connectors.register(FilesystemWorkConnector::new()).unwrap();
-    let connector_context = ConnectorContext { platform: "linux".to_owned() };
+    connectors.register(TestNativeConnector::new()).unwrap();
+    connectors
+}
+
+fn execute(root: &PathBuf, action: &str, input: serde_json::Value) -> central_ctrl::ActionResult {
+    let registry = create_core_action_registry();
+    let connectors = test_connectors();
+    let connector_context = ConnectorContext { platform: "test".to_owned() };
     let root_options = RootOptions { explicit_root: Some(root.clone()), ..RootOptions::default() };
     let context = ActionExecutionContext { root_options: &root_options, connectors: &connectors, connector_context: &connector_context };
     registry.execute(action, &input, &context)
 }
 
 #[test]
-fn all_work_entry_actions_depend_on_the_same_public_discovery_port() {
+fn work_entry_actions_declare_the_public_ports_they_actually_use() {
     let registry = create_core_action_registry();
-    for id in ["work.list", "work.search", "work.open"] {
-        assert_eq!(registry.get(id).unwrap().required_ports, vec![WORK_DISCOVERY_PORT.id]);
-    }
+    assert_eq!(registry.get("work.list").unwrap().required_ports, vec![WORK_DISCOVERY_PORT.id]);
+    assert_eq!(registry.get("work.search").unwrap().required_ports, vec![WORK_DISCOVERY_PORT.id]);
+    assert_eq!(
+        registry.get("work.open").unwrap().required_ports,
+        vec![WORK_DISCOVERY_PORT.id, NATIVE_OPEN_PORT.id]
+    );
+    assert_eq!(
+        registry.get("work.reveal").unwrap().required_ports,
+        vec![WORK_DISCOVERY_PORT.id, NATIVE_REVEAL_PORT.id]
+    );
 }
 
 #[test]
-fn search_and_open_operate_on_ordinary_directories_without_project_metadata() {
+fn search_open_and_reveal_operate_on_ordinary_directories_without_project_metadata() {
     let root = temporary_directory("ordinary").join("Central");
     initialize_central(&root).unwrap();
     fs::create_dir(root.join("Work").join("alpha-notes")).unwrap();
@@ -48,6 +138,17 @@ fn search_and_open_operate_on_ordinary_directories_without_project_metadata() {
     assert_eq!(open.status, ResultStatus::Success);
     assert_eq!(open.data.as_ref().unwrap()["item"]["name"], "alpha-notes");
     assert_eq!(open.data.as_ref().unwrap()["match"], "search");
+    assert_eq!(open.data.as_ref().unwrap()["native"]["port"], NATIVE_OPEN_PORT.id);
+    assert_eq!(
+        open.data.as_ref().unwrap()["native"]["diagnostics"]["selected_connector"]["id"],
+        "test.native"
+    );
+
+    let reveal = execute(&root, "work.reveal", json!({ "query": "alpha-notes" }));
+    assert_eq!(reveal.status, ResultStatus::Success);
+    assert_eq!(reveal.data.as_ref().unwrap()["item"]["name"], "alpha-notes");
+    assert_eq!(reveal.data.as_ref().unwrap()["native"]["port"], NATIVE_REVEAL_PORT.id);
+
     assert_eq!(fs::read_dir(root.join(".central")).unwrap().count(), 0);
     assert_eq!(fs::read_dir(root.join("Work").join("alpha-notes")).unwrap().count(), 0);
 }
@@ -65,13 +166,13 @@ fn exact_name_wins_and_new_directories_are_visible_immediately() {
     assert_eq!(exact.data.as_ref().unwrap()["match"], "exact");
 
     fs::create_dir(root.join("Work").join("gamma")).unwrap();
-    let later = execute(&root, "work.open", json!({ "query": "gamma" }));
+    let later = execute(&root, "work.reveal", json!({ "query": "gamma" }));
     assert_eq!(later.status, ResultStatus::Success);
     assert_eq!(later.data.as_ref().unwrap()["item"]["name"], "gamma");
 }
 
 #[test]
-fn ambiguous_and_missing_work_selection_return_structured_invalid_input() {
+fn ambiguous_and_missing_work_selection_return_structured_invalid_input_before_native_invocation() {
     let root = temporary_directory("failure").join("Central");
     initialize_central(&root).unwrap();
     fs::create_dir(root.join("Work").join("alpha-one")).unwrap();
@@ -81,26 +182,29 @@ fn ambiguous_and_missing_work_selection_return_structured_invalid_input() {
     assert_eq!(ambiguous.status, ResultStatus::InvalidInput);
     assert_eq!(ambiguous.error.unwrap().details.unwrap()["matches"].as_array().unwrap().len(), 2);
 
-    let missing = execute(&root, "work.open", json!({ "query": "omega" }));
+    let missing = execute(&root, "work.reveal", json!({ "query": "omega" }));
     assert_eq!(missing.status, ResultStatus::InvalidInput);
     assert_eq!(missing.error.unwrap().details.unwrap()["matches"].as_array().unwrap().len(), 0);
 }
 
 #[test]
-fn explicit_cli_aliases_project_the_same_canonical_work_action() {
+fn explicit_cli_aliases_project_the_same_canonical_native_work_actions() {
     let root = temporary_directory("cli").join("Central");
     initialize_central(&root).unwrap();
     fs::create_dir(root.join("Work").join("project-a")).unwrap();
     let environment = CliEnvironment { configured_root: None, home: None };
+    let connectors = test_connectors();
+    let connector_context = ConnectorContext { platform: "test".to_owned() };
 
-    let canonical = run_cli(&[
+    let mut surface = NullTerminalSurface;
+    let canonical = run_cli_with_runtime(&[
         "--json".to_owned(), "--root".to_owned(), root.display().to_string(),
         "work.open".to_owned(), "project-a".to_owned(),
-    ], &environment);
-    let alias = run_cli(&[
+    ], &environment, &mut surface, &connectors, &connector_context);
+    let alias = run_cli_with_runtime(&[
         "--json".to_owned(), "--root".to_owned(), root.display().to_string(),
         "open".to_owned(), "project-a".to_owned(),
-    ], &environment);
+    ], &environment, &mut surface, &connectors, &connector_context);
     assert_eq!(canonical.exit_code, 0);
     assert_eq!(alias.exit_code, 0);
     let canonical_value: serde_json::Value = serde_json::from_str(&canonical.output).unwrap();
@@ -108,4 +212,13 @@ fn explicit_cli_aliases_project_the_same_canonical_work_action() {
     assert_eq!(canonical_value["action"], "work.open");
     assert_eq!(alias_value["action"], "work.open");
     assert_eq!(canonical_value["data"]["item"], alias_value["data"]["item"]);
+
+    let mut surface = NullTerminalSurface;
+    let reveal = run_cli_with_runtime(&[
+        "--json".to_owned(), "--root".to_owned(), root.display().to_string(),
+        "reveal".to_owned(), "project-a".to_owned(),
+    ], &environment, &mut surface, &connectors, &connector_context);
+    assert_eq!(reveal.exit_code, 0);
+    let reveal_value: serde_json::Value = serde_json::from_str(&reveal.output).unwrap();
+    assert_eq!(reveal_value["action"], "work.reveal");
 }
