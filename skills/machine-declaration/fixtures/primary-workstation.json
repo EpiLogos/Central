@@ -1,0 +1,33 @@
+{
+  "role": "primary-workstation",
+  "declaration": {
+    "schema": "central.machine",
+    "version": 1,
+    "role": "primary-workstation",
+    "capabilities": [],
+    "requirements": {
+      "packages": [
+        { "id": "git", "state": "present" }
+      ],
+      "configurations": [],
+      "services": []
+    }
+  },
+  "observation": {
+    "platform": "fixture-os",
+    "architecture": "fixture-arch",
+    "capabilities": [],
+    "packages": [
+      { "id": "git", "present": false }
+    ],
+    "configurations": [],
+    "services": []
+  },
+  "expected": {
+    "kind": "package",
+    "id": "git",
+    "status": "changeable",
+    "port": "PackageManager",
+    "selected_connector": "reference.machine-reconciler"
+  }
+}

@@ -28,11 +28,7 @@ fn write_role(root: &PathBuf, capabilities: &[&str]) {
         "capabilities": capabilities,
         "requirements": {
             "packages": [{ "id": "git", "state": "present" }],
-            "configurations": [{
-                "id": "remote-access-policy",
-                "state": "present",
-                "source": { "kind": "control", "reference": "Control/machines/configuration/remote-access" }
-            }],
+            "configurations": [{ "id": "remote-access-policy", "state": "present" }],
             "services": [{ "id": "ssh", "running": true, "enabled": true }]
         }
     });
