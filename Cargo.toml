@@ -12,6 +12,10 @@ path = "ctrl/src/lib.rs"
 name = "ctrl"
 path = "ctrl/src/main.rs"
 
+[[test]]
+name = "foundation"
+path = "ctrl/tests/foundation.rs"
+
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
