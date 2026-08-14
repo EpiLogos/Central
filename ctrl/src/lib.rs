@@ -35,8 +35,8 @@ pub use central_connector_sdk::{
     ObservedConfiguration, ObservedPackage, ObservedService, PackageStateRequest, PortContract,
     PortError, PortErrorCode, ReconciliationSourceReference, ServiceStateRequest, StateChangePreview,
     StateChangeResult, WorkDiscovery, WorkDiscoveryInput, WorkDiscoveryOutput, WorkItem,
-    CONFIGURATION_MANAGER_PORT, MACHINE_INSPECTOR_PORT, PACKAGE_MANAGER_PORT, SERVICE_MANAGER_PORT,
-    WORK_DISCOVERY_PORT,
+    CONFIGURATION_MANAGER_PORT, CONNECTOR_API_VERSION, MACHINE_INSPECTOR_PORT, PACKAGE_MANAGER_PORT,
+    SERVICE_MANAGER_PORT, WORK_DISCOVERY_PORT,
 };
 pub use central_reference_connectors::{
     create_default_connector_registry, FilesystemWorkConnector, StaticMachineInspectorConnector,
