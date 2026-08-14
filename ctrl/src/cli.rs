@@ -6,6 +6,8 @@ use crate::{
     action::ActionRegistry,
     result::{ActionResult, FailureCode, ResultStatus},
     root::{self, RootContext, RootError},
+    runtime::Runtime,
+    work,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -58,7 +60,7 @@ pub fn run(args: Vec<String>, context: ProcessContext) -> CommandOutput {
         }
     };
 
-    let registry = ActionRegistry::core();
+    let runtime = Runtime::default();
     match parsed.command.as_slice() {
         [command] if command == "central.root" || command == "root" => {
             with_root("central.root", &parsed, &context, |root| {
@@ -128,13 +130,17 @@ pub fn run(args: Vec<String>, context: ProcessContext) -> CommandOutput {
                 Err(error) => internal_failure("central.doctor", error.to_string(), parsed.json),
             },
         ),
-        [command] if command == "action.list" => action_list(&registry, parsed.json),
+        [command] if command == "action.list" => action_list(&runtime.actions, parsed.json),
         [domain, command] if domain == "action" && command == "list" => {
-            action_list(&registry, parsed.json)
+            action_list(&runtime.actions, parsed.json)
+        }
+        [command] if command == "work.list" => work_list(&parsed, &context, &runtime),
+        [domain, command] if domain == "work" && command == "list" => {
+            work_list(&parsed, &context, &runtime)
         }
         _ => invalid_input(
             "ctrl",
-            "unknown command; use root, init, doctor, or action list",
+            "unknown command; use root, init, doctor, action list, or work list",
             parsed.json,
         ),
     }
@@ -153,6 +159,54 @@ fn action_list(registry: &ActionRegistry, json_output: bool) -> CommandOutput {
         human,
         json_output,
     )
+}
+
+fn work_list(parsed: &ParsedArgs, context: &ProcessContext, runtime: &Runtime) -> CommandOutput {
+    with_root("work.list", parsed, context, |root| {
+        let result = work::list(&runtime.connectors, &runtime.environment, &root);
+        let human = work_list_human(&result);
+        let exit_code = match &result.status {
+            ResultStatus::Success | ResultStatus::Cancelled => 0,
+            ResultStatus::UnavailableCapability => 4,
+            ResultStatus::ConnectorFailure => 5,
+            _ => 1,
+        };
+        CommandOutput {
+            result,
+            human,
+            json: parsed.json,
+            exit_code,
+        }
+    })
+}
+
+fn work_list_human(result: &ActionResult) -> String {
+    if result.status == ResultStatus::Success {
+        if let Some(data) = result.data.as_ref() {
+            let names = data["items"]
+                .as_array()
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| item["name"].as_str())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let selected = data["diagnostics"]["selected_connector"]
+                .as_str()
+                .unwrap_or("none");
+            if names.is_empty() {
+                return format!("No Work items.\nConnector: {selected}");
+            }
+            return format!("{}\nConnector: {selected}", names.join("\n"));
+        }
+    }
+
+    result
+        .error
+        .as_ref()
+        .map(|error| error.message.clone())
+        .unwrap_or_else(|| format!("work.list returned {:?}", result.status))
 }
 
 fn with_root<F>(
