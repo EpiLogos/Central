@@ -16,11 +16,13 @@ pub use control::{
     SourceClass, CONTROL_ROOTS,
 };
 pub use machine::{
-    explain_machine_declaration, explain_machine_inspection, explain_machine_plan,
-    read_machine_declaration, AuthoredMachineDeclaration, ConfigurationRequirement,
-    MachineDeclaration, MachineDeclarationError, MachineDeclarationSource, MachineObservationSource,
-    MachinePlan, MachinePlanEntry, MachinePlanStatus, MachinePlanSummary, MachineRequirements,
-    MachineSourceReference, ObservedMachine, PackageRequirement, PresenceState, ServiceRequirement,
+    explain_machine_apply, explain_machine_declaration, explain_machine_inspection,
+    explain_machine_plan, explain_machine_verification, read_machine_declaration,
+    AuthoredMachineDeclaration, ConfigurationRequirement, MachineApplyOperation,
+    MachineApplyOutcome, MachineApplyReport, MachineDeclaration, MachineDeclarationError,
+    MachineDeclarationSource, MachineObservationSource, MachinePlan, MachinePlanEntry,
+    MachinePlanStatus, MachinePlanSummary, MachineRequirements, MachineSourceReference,
+    MachineVerification, ObservedMachine, PackageRequirement, PresenceState, ServiceRequirement,
     MACHINE_DECLARATION_SCHEMA, MACHINE_DECLARATION_VERSION,
 };
 pub use picker::{
@@ -28,19 +30,23 @@ pub use picker::{
     TerminalSurface,
 };
 pub use central_connector_sdk::{
-    run_machine_inspector_conformance, validate_connector_manifest, CapabilityProbe, Connector,
+    run_configuration_manager_conformance, run_machine_inspector_conformance,
+    run_package_manager_conformance, run_service_manager_conformance,
+    validate_connector_manifest, CapabilityProbe, ConfigurationManager,
+    ConfigurationManagerConformanceFixture, ConfigurationStateRequest, Connector,
     ConnectorContext, ConnectorDiagnostics, ConnectorManifest, ConnectorPortDeclaration,
-    ConnectorRegistry, ConnectorSummary, ConfigurationStateRequest, MachineInspectionInput,
-    MachineInspectionOutput, MachineInspector, MachineInspectorConformanceFixture,
-    ObservedConfiguration, ObservedPackage, ObservedService, PackageStateRequest, PortContract,
-    PortError, PortErrorCode, ReconciliationSourceReference, ServiceStateRequest, StateChangePreview,
-    StateChangeResult, WorkDiscovery, WorkDiscoveryInput, WorkDiscoveryOutput, WorkItem,
-    CONFIGURATION_MANAGER_PORT, CONNECTOR_API_VERSION, MACHINE_INSPECTOR_PORT, PACKAGE_MANAGER_PORT,
-    SERVICE_MANAGER_PORT, WORK_DISCOVERY_PORT,
+    ConnectorRegistry, ConnectorSummary, MachineInspectionInput, MachineInspectionOutput,
+    MachineInspector, MachineInspectorConformanceFixture, ObservedConfiguration, ObservedPackage,
+    ObservedService, PackageManager, PackageManagerConformanceFixture, PackageStateRequest,
+    PortContract, PortError, PortErrorCode, ReconciliationSourceReference, ServiceManager,
+    ServiceManagerConformanceFixture, ServiceStateRequest, StateChangePreview, StateChangeResult,
+    WorkDiscovery, WorkDiscoveryInput, WorkDiscoveryOutput, WorkItem, CONFIGURATION_MANAGER_PORT,
+    CONNECTOR_API_VERSION, MACHINE_INSPECTOR_PORT, PACKAGE_MANAGER_PORT, SERVICE_MANAGER_PORT,
+    WORK_DISCOVERY_PORT,
 };
 pub use central_reference_connectors::{
-    create_default_connector_registry, FilesystemWorkConnector, StaticMachineInspectorConnector,
-    StaticWorkConnector,
+    create_default_connector_registry, FilesystemWorkConnector, InMemoryMachineConnector,
+    SharedMachineState, StaticMachineInspectorConnector, StaticWorkConnector,
 };
 pub use result::{ActionResult, ResultStatus};
 pub use root::{inspect_central, initialize_central, resolve_central_root, ResolvedRoot, RootOptions};

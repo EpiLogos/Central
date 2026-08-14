@@ -116,13 +116,21 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
             return Err((structured, "control search requires a query.".to_owned()));
         }
         [domain, verb] if domain == "machine" && verb == "inspect" => ("machine.inspect", json!({})),
-        [domain, verb, role] if domain == "machine" && verb == "declaration" => {
-            ("machine.declaration", json!({ "role": role }))
+        [domain, verb, role]
+            if domain == "machine" && matches!(verb.as_str(), "declaration" | "plan" | "apply" | "verify") =>
+        {
+            let action = match verb.as_str() {
+                "declaration" => "machine.declaration",
+                "plan" => "machine.plan",
+                "apply" => "machine.apply",
+                "verify" => "machine.verify",
+                _ => unreachable!(),
+            };
+            (action, json!({ "role": role }))
         }
-        [domain, verb, role] if domain == "machine" && verb == "plan" => {
-            ("machine.plan", json!({ "role": role }))
-        }
-        [domain, verb] if domain == "machine" && matches!(verb.as_str(), "declaration" | "plan") => {
+        [domain, verb]
+            if domain == "machine" && matches!(verb.as_str(), "declaration" | "plan" | "apply" | "verify") =>
+        {
             return Err((structured, format!("machine {verb} requires a role.")));
         }
         [canonical, rest @ ..] if canonical == "work.search" && !rest.is_empty() => {
@@ -144,16 +152,28 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         [canonical] if canonical == "control.search" => {
             return Err((structured, "control.search requires a query.".to_owned()));
         }
-        [canonical, role] if canonical == "machine.declaration" => {
-            ("machine.declaration", json!({ "role": role }))
+        [canonical, role]
+            if matches!(
+                canonical.as_str(),
+                "machine.declaration" | "machine.plan" | "machine.apply" | "machine.verify"
+            ) =>
+        {
+            (canonical.as_str(), json!({ "role": role }))
         }
-        [canonical, role] if canonical == "machine.plan" => {
-            ("machine.plan", json!({ "role": role }))
-        }
-        [canonical] if matches!(canonical.as_str(), "machine.declaration" | "machine.plan") => {
+        [canonical]
+            if matches!(
+                canonical.as_str(),
+                "machine.declaration" | "machine.plan" | "machine.apply" | "machine.verify"
+            ) =>
+        {
             return Err((structured, format!("{canonical} requires a role.")));
         }
-        [canonical] if matches!(canonical.as_str(), "central.root" | "central.init" | "central.doctor" | "action.list" | "machine.inspect" | "work.list") => {
+        [canonical]
+            if matches!(
+                canonical.as_str(),
+                "central.root" | "central.init" | "central.doctor" | "action.list" | "machine.inspect" | "work.list"
+            ) =>
+        {
             (canonical.as_str(), json!({}))
         }
         [unknown] => return Err((structured, format!("Unknown command: {unknown}"))),
@@ -230,6 +250,8 @@ fn human_output(result: &ActionResult) -> String {
         Some("machine.declaration") => crate::machine::explain_machine_declaration(data),
         Some("machine.inspect") => crate::machine::explain_machine_inspection(data),
         Some("machine.plan") => crate::machine::explain_machine_plan(data),
+        Some("machine.apply") => crate::machine::explain_machine_apply(data),
+        Some("machine.verify") => crate::machine::explain_machine_verification(data),
         Some("work.list") => {
             let selected = data
                 .get("diagnostics")
@@ -272,6 +294,8 @@ fn exit_code(result: &ActionResult) -> i32 {
         ResultStatus::InvalidCentralStructure => 3,
         ResultStatus::UnavailableCapability => 4,
         ResultStatus::ConnectorFailure => 5,
+        ResultStatus::PartialCompletion => 6,
+        ResultStatus::VerificationFailure => 7,
         ResultStatus::InternalFailure => 1,
     }
 }

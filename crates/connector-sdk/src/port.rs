@@ -260,3 +260,18 @@ pub trait WorkDiscovery: Send + Sync {
 pub trait MachineInspector: Send + Sync {
     fn inspect(&self, input: &MachineInspectionInput) -> Result<MachineInspectionOutput, PortError>;
 }
+
+pub trait PackageManager: Send + Sync {
+    fn preview(&self, input: &PackageStateRequest) -> Result<StateChangePreview, PortError>;
+    fn apply(&self, input: &PackageStateRequest) -> Result<StateChangeResult, PortError>;
+}
+
+pub trait ConfigurationManager: Send + Sync {
+    fn preview(&self, input: &ConfigurationStateRequest) -> Result<StateChangePreview, PortError>;
+    fn apply(&self, input: &ConfigurationStateRequest) -> Result<StateChangeResult, PortError>;
+}
+
+pub trait ServiceManager: Send + Sync {
+    fn preview(&self, input: &ServiceStateRequest) -> Result<StateChangePreview, PortError>;
+    fn apply(&self, input: &ServiceStateRequest) -> Result<StateChangeResult, PortError>;
+}

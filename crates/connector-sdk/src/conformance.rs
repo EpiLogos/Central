@@ -1,5 +1,10 @@
 use crate::connector::{validate_connector_manifest, Connector, ConnectorContext, ConnectorSummary};
-use crate::port::{MachineInspectionInput, MachineInspectionOutput, WorkDiscoveryInput, MACHINE_INSPECTOR_PORT, WORK_DISCOVERY_PORT};
+use crate::port::{
+    ConfigurationStateRequest, MachineInspectionInput, MachineInspectionOutput, PackageStateRequest,
+    ServiceStateRequest, StateChangePreview, StateChangeResult, WorkDiscoveryInput,
+    CONFIGURATION_MANAGER_PORT, MACHINE_INSPECTOR_PORT, PACKAGE_MANAGER_PORT,
+    SERVICE_MANAGER_PORT, WORK_DISCOVERY_PORT,
+};
 use serde::Serialize;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -15,6 +20,24 @@ pub struct WorkDiscoveryConformanceFixture {
 pub struct MachineInspectorConformanceFixture {
     pub platform: String,
     pub expected: Option<MachineInspectionOutput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageManagerConformanceFixture {
+    pub platform: String,
+    pub request: PackageStateRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigurationManagerConformanceFixture {
+    pub platform: String,
+    pub request: ConfigurationStateRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceManagerConformanceFixture {
+    pub platform: String,
+    pub request: ServiceStateRequest,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -53,22 +76,30 @@ fn compatible_port(connector: &dyn Connector, id: &str, version: &str) -> Result
     Ok(())
 }
 
-pub fn run_work_discovery_conformance(
+fn prepare_connector(
     connector: &dyn Connector,
-    fixture: &WorkDiscoveryConformanceFixture,
-) -> Result<ConformanceReport, ConformanceFailure> {
+    port: &crate::port::PortContract,
+    platform: &str,
+) -> Result<(), ConformanceFailure> {
     validate_connector_manifest(connector.manifest())
         .map_err(|error| ConformanceFailure::new("manifest", format!("{}: {}", error.code, error.message)))?;
-    compatible_port(connector, WORK_DISCOVERY_PORT.id, WORK_DISCOVERY_PORT.version)?;
-
-    let context = ConnectorContext { platform: fixture.platform.clone() };
-    let probe = connector.probe(&WORK_DISCOVERY_PORT, &context);
+    compatible_port(connector, port.id, port.version)?;
+    let context = ConnectorContext { platform: platform.to_owned() };
+    let probe = connector.probe(port, &context);
     if !probe.available {
         return Err(ConformanceFailure::new(
             "probe",
             probe.reason.unwrap_or_else(|| "Capability probe reported unavailable.".to_owned()),
         ));
     }
+    Ok(())
+}
+
+pub fn run_work_discovery_conformance(
+    connector: &dyn Connector,
+    fixture: &WorkDiscoveryConformanceFixture,
+) -> Result<ConformanceReport, ConformanceFailure> {
+    prepare_connector(connector, &WORK_DISCOVERY_PORT, &fixture.platform)?;
 
     let implementation = connector
         .work_discovery()
@@ -146,18 +177,8 @@ pub fn run_machine_inspector_conformance(
     connector: &dyn Connector,
     fixture: &MachineInspectorConformanceFixture,
 ) -> Result<ConformanceReport, ConformanceFailure> {
-    validate_connector_manifest(connector.manifest())
-        .map_err(|error| ConformanceFailure::new("manifest", format!("{}: {}", error.code, error.message)))?;
-    compatible_port(connector, MACHINE_INSPECTOR_PORT.id, MACHINE_INSPECTOR_PORT.version)?;
+    prepare_connector(connector, &MACHINE_INSPECTOR_PORT, &fixture.platform)?;
 
-    let context = ConnectorContext { platform: fixture.platform.clone() };
-    let probe = connector.probe(&MACHINE_INSPECTOR_PORT, &context);
-    if !probe.available {
-        return Err(ConformanceFailure::new(
-            "probe",
-            probe.reason.unwrap_or_else(|| "Capability probe reported unavailable.".to_owned()),
-        ));
-    }
     let implementation = connector
         .machine_inspector()
         .ok_or_else(|| ConformanceFailure::new("implementation", "Connector does not expose MachineInspector implementation."))?;
@@ -207,4 +228,201 @@ pub fn run_machine_inspector_conformance(
             "expected-observation".to_owned(),
         ],
     })
+}
+
+fn validate_preview(preview: &StateChangePreview, label: &str) -> Result<(), ConformanceFailure> {
+    if preview.summary.trim().is_empty() {
+        return Err(ConformanceFailure::new(
+            "preview",
+            format!("{label} preview must provide a non-empty summary."),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_apply(result: &StateChangeResult, label: &str) -> Result<(), ConformanceFailure> {
+    if result.summary.trim().is_empty() {
+        return Err(ConformanceFailure::new(
+            "apply",
+            format!("{label} apply must provide a non-empty summary."),
+        ));
+    }
+    Ok(())
+}
+
+fn reconciliation_report(
+    connector: &dyn Connector,
+    port: &crate::port::PortContract,
+) -> ConformanceReport {
+    ConformanceReport {
+        port_id: port.id.to_owned(),
+        port_version: port.version.to_owned(),
+        connector: ConnectorSummary::from_connector(connector),
+        checks: vec![
+            "manifest".to_owned(),
+            "port-compatibility".to_owned(),
+            "probe".to_owned(),
+            "preview".to_owned(),
+            "preview-nonmutating".to_owned(),
+            "apply".to_owned(),
+            "post-apply-preview".to_owned(),
+            "idempotent-apply".to_owned(),
+        ],
+    }
+}
+
+pub fn run_package_manager_conformance(
+    connector: &dyn Connector,
+    fixture: &PackageManagerConformanceFixture,
+) -> Result<ConformanceReport, ConformanceFailure> {
+    prepare_connector(connector, &PACKAGE_MANAGER_PORT, &fixture.platform)?;
+    let implementation = connector
+        .package_manager()
+        .ok_or_else(|| ConformanceFailure::new("implementation", "Connector does not expose PackageManager implementation."))?;
+
+    let preview = implementation.preview(&fixture.request)
+        .map_err(|error| ConformanceFailure::new("preview", format!("{:?}: {}", error.code, error.message)))?;
+    validate_preview(&preview, PACKAGE_MANAGER_PORT.id)?;
+    let repeated_preview = implementation.preview(&fixture.request)
+        .map_err(|error| ConformanceFailure::new("preview-nonmutating", format!("{:?}: {}", error.code, error.message)))?;
+    if repeated_preview != preview {
+        return Err(ConformanceFailure::new(
+            "preview-nonmutating",
+            "PackageManager.preview changed state or returned unstable output before apply.",
+        ));
+    }
+
+    let applied = implementation.apply(&fixture.request)
+        .map_err(|error| ConformanceFailure::new("apply", format!("{:?}: {}", error.code, error.message)))?;
+    validate_apply(&applied, PACKAGE_MANAGER_PORT.id)?;
+    if applied.changed != preview.changed {
+        return Err(ConformanceFailure::new(
+            "apply",
+            "PackageManager apply changed flag does not match its preview.",
+        ));
+    }
+    let after = implementation.preview(&fixture.request)
+        .map_err(|error| ConformanceFailure::new("post-apply-preview", format!("{:?}: {}", error.code, error.message)))?;
+    validate_preview(&after, PACKAGE_MANAGER_PORT.id)?;
+    if after.changed {
+        return Err(ConformanceFailure::new(
+            "post-apply-preview",
+            "PackageManager preview still requests a change after successful apply.",
+        ));
+    }
+    let repeated = implementation.apply(&fixture.request)
+        .map_err(|error| ConformanceFailure::new("idempotent-apply", format!("{:?}: {}", error.code, error.message)))?;
+    validate_apply(&repeated, PACKAGE_MANAGER_PORT.id)?;
+    if repeated.changed {
+        return Err(ConformanceFailure::new(
+            "idempotent-apply",
+            "PackageManager repeated apply was not stable.",
+        ));
+    }
+
+    Ok(reconciliation_report(connector, &PACKAGE_MANAGER_PORT))
+}
+
+pub fn run_configuration_manager_conformance(
+    connector: &dyn Connector,
+    fixture: &ConfigurationManagerConformanceFixture,
+) -> Result<ConformanceReport, ConformanceFailure> {
+    prepare_connector(connector, &CONFIGURATION_MANAGER_PORT, &fixture.platform)?;
+    let implementation = connector
+        .configuration_manager()
+        .ok_or_else(|| ConformanceFailure::new("implementation", "Connector does not expose ConfigurationManager implementation."))?;
+
+    let preview = implementation.preview(&fixture.request)
+        .map_err(|error| ConformanceFailure::new("preview", format!("{:?}: {}", error.code, error.message)))?;
+    validate_preview(&preview, CONFIGURATION_MANAGER_PORT.id)?;
+    let repeated_preview = implementation.preview(&fixture.request)
+        .map_err(|error| ConformanceFailure::new("preview-nonmutating", format!("{:?}: {}", error.code, error.message)))?;
+    if repeated_preview != preview {
+        return Err(ConformanceFailure::new(
+            "preview-nonmutating",
+            "ConfigurationManager.preview changed state or returned unstable output before apply.",
+        ));
+    }
+
+    let applied = implementation.apply(&fixture.request)
+        .map_err(|error| ConformanceFailure::new("apply", format!("{:?}: {}", error.code, error.message)))?;
+    validate_apply(&applied, CONFIGURATION_MANAGER_PORT.id)?;
+    if applied.changed != preview.changed {
+        return Err(ConformanceFailure::new(
+            "apply",
+            "ConfigurationManager apply changed flag does not match its preview.",
+        ));
+    }
+    let after = implementation.preview(&fixture.request)
+        .map_err(|error| ConformanceFailure::new("post-apply-preview", format!("{:?}: {}", error.code, error.message)))?;
+    validate_preview(&after, CONFIGURATION_MANAGER_PORT.id)?;
+    if after.changed {
+        return Err(ConformanceFailure::new(
+            "post-apply-preview",
+            "ConfigurationManager preview still requests a change after successful apply.",
+        ));
+    }
+    let repeated = implementation.apply(&fixture.request)
+        .map_err(|error| ConformanceFailure::new("idempotent-apply", format!("{:?}: {}", error.code, error.message)))?;
+    validate_apply(&repeated, CONFIGURATION_MANAGER_PORT.id)?;
+    if repeated.changed {
+        return Err(ConformanceFailure::new(
+            "idempotent-apply",
+            "ConfigurationManager repeated apply was not stable.",
+        ));
+    }
+
+    Ok(reconciliation_report(connector, &CONFIGURATION_MANAGER_PORT))
+}
+
+pub fn run_service_manager_conformance(
+    connector: &dyn Connector,
+    fixture: &ServiceManagerConformanceFixture,
+) -> Result<ConformanceReport, ConformanceFailure> {
+    prepare_connector(connector, &SERVICE_MANAGER_PORT, &fixture.platform)?;
+    let implementation = connector
+        .service_manager()
+        .ok_or_else(|| ConformanceFailure::new("implementation", "Connector does not expose ServiceManager implementation."))?;
+
+    let preview = implementation.preview(&fixture.request)
+        .map_err(|error| ConformanceFailure::new("preview", format!("{:?}: {}", error.code, error.message)))?;
+    validate_preview(&preview, SERVICE_MANAGER_PORT.id)?;
+    let repeated_preview = implementation.preview(&fixture.request)
+        .map_err(|error| ConformanceFailure::new("preview-nonmutating", format!("{:?}: {}", error.code, error.message)))?;
+    if repeated_preview != preview {
+        return Err(ConformanceFailure::new(
+            "preview-nonmutating",
+            "ServiceManager.preview changed state or returned unstable output before apply.",
+        ));
+    }
+
+    let applied = implementation.apply(&fixture.request)
+        .map_err(|error| ConformanceFailure::new("apply", format!("{:?}: {}", error.code, error.message)))?;
+    validate_apply(&applied, SERVICE_MANAGER_PORT.id)?;
+    if applied.changed != preview.changed {
+        return Err(ConformanceFailure::new(
+            "apply",
+            "ServiceManager apply changed flag does not match its preview.",
+        ));
+    }
+    let after = implementation.preview(&fixture.request)
+        .map_err(|error| ConformanceFailure::new("post-apply-preview", format!("{:?}: {}", error.code, error.message)))?;
+    validate_preview(&after, SERVICE_MANAGER_PORT.id)?;
+    if after.changed {
+        return Err(ConformanceFailure::new(
+            "post-apply-preview",
+            "ServiceManager preview still requests a change after successful apply.",
+        ));
+    }
+    let repeated = implementation.apply(&fixture.request)
+        .map_err(|error| ConformanceFailure::new("idempotent-apply", format!("{:?}: {}", error.code, error.message)))?;
+    validate_apply(&repeated, SERVICE_MANAGER_PORT.id)?;
+    if repeated.changed {
+        return Err(ConformanceFailure::new(
+            "idempotent-apply",
+            "ServiceManager repeated apply was not stable.",
+        ));
+    }
+
+    Ok(reconciliation_report(connector, &SERVICE_MANAGER_PORT))
 }

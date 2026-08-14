@@ -1,9 +1,15 @@
 use central_connector_sdk::{
-    run_machine_inspector_conformance, run_work_discovery_conformance, MachineInspectionOutput,
-    MachineInspectorConformanceFixture, ObservedPackage, WorkDiscoveryConformanceFixture, WorkItem,
+    run_configuration_manager_conformance, run_machine_inspector_conformance,
+    run_package_manager_conformance, run_service_manager_conformance,
+    run_work_discovery_conformance, ConfigurationManagerConformanceFixture,
+    ConfigurationStateRequest, MachineInspectionOutput, MachineInspectorConformanceFixture,
+    ObservedConfiguration, ObservedPackage, ObservedService, PackageManagerConformanceFixture,
+    PackageStateRequest, ServiceManagerConformanceFixture, ServiceStateRequest,
+    WorkDiscoveryConformanceFixture, WorkItem,
 };
 use central_reference_connectors::{
-    FilesystemWorkConnector, StaticMachineInspectorConnector, StaticWorkConnector,
+    FilesystemWorkConnector, InMemoryMachineConnector, StaticMachineInspectorConnector,
+    StaticWorkConnector,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -14,6 +20,25 @@ fn temporary_directory(label: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("central-sdk-{label}-{}-{nonce}", std::process::id()));
     fs::create_dir_all(&path).unwrap();
     path
+}
+
+fn machine_fixture() -> MachineInspectionOutput {
+    MachineInspectionOutput {
+        platform: "test-os".to_owned(),
+        architecture: "test-arch".to_owned(),
+        capabilities: vec!["remote-shell".to_owned()],
+        packages: vec![ObservedPackage { id: "git".to_owned(), present: false }],
+        configurations: vec![ObservedConfiguration {
+            id: "remote-access-policy".to_owned(),
+            present: false,
+        }],
+        services: vec![ObservedService {
+            id: "ssh".to_owned(),
+            present: true,
+            running: false,
+            enabled: false,
+        }],
+    }
 }
 
 #[test]
@@ -71,4 +96,55 @@ fn static_machine_inspector_passes_public_conformance_suite() {
     ).unwrap();
     assert_eq!(report.port_id, "MachineInspector");
     assert_eq!(report.connector.id, "reference.machine-static");
+}
+
+#[test]
+fn package_manager_reference_proves_preview_apply_and_idempotence() {
+    let connector = InMemoryMachineConnector::new(machine_fixture());
+    let report = run_package_manager_conformance(
+        &connector,
+        &PackageManagerConformanceFixture {
+            platform: "test-os".to_owned(),
+            request: PackageStateRequest { id: "git".to_owned(), present: true, source: None },
+        },
+    ).unwrap();
+    assert_eq!(report.port_id, "PackageManager");
+    assert_eq!(report.connector.id, "reference.machine-reconciler");
+}
+
+#[test]
+fn configuration_manager_reference_proves_preview_apply_and_idempotence() {
+    let connector = InMemoryMachineConnector::new(machine_fixture());
+    let report = run_configuration_manager_conformance(
+        &connector,
+        &ConfigurationManagerConformanceFixture {
+            platform: "test-os".to_owned(),
+            request: ConfigurationStateRequest {
+                id: "remote-access-policy".to_owned(),
+                present: true,
+                source: None,
+            },
+        },
+    ).unwrap();
+    assert_eq!(report.port_id, "ConfigurationManager");
+    assert_eq!(report.connector.id, "reference.machine-reconciler");
+}
+
+#[test]
+fn service_manager_reference_proves_preview_apply_and_idempotence() {
+    let connector = InMemoryMachineConnector::new(machine_fixture());
+    let report = run_service_manager_conformance(
+        &connector,
+        &ServiceManagerConformanceFixture {
+            platform: "test-os".to_owned(),
+            request: ServiceStateRequest {
+                id: "ssh".to_owned(),
+                running: Some(true),
+                enabled: Some(true),
+                source: None,
+            },
+        },
+    ).unwrap();
+    assert_eq!(report.port_id, "ServiceManager");
+    assert_eq!(report.connector.id, "reference.machine-reconciler");
 }
