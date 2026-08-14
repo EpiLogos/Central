@@ -617,6 +617,29 @@ fn unavailable_difference(
     }
 }
 
+fn unavailable_source_verification(
+    requirement: &ConfigurationRequirement,
+    desired: Value,
+    observed: Value,
+    diagnostics: ConnectorDiagnostics,
+) -> MachinePlanEntry {
+    MachinePlanEntry {
+        kind: "configuration".to_owned(),
+        id: requirement.id.clone(),
+        status: MachinePlanStatus::Missing,
+        desired,
+        observed,
+        port: Some(CONFIGURATION_MANAGER_PORT.id.to_owned()),
+        connector: None,
+        preview: None,
+        reason: Some(format!(
+            "configuration requirement '{}' cannot be verified against its authored source because no eligible {} Connector is available.",
+            requirement.id, CONFIGURATION_MANAGER_PORT.id
+        )),
+        diagnostics: Some(diagnostics),
+    }
+}
+
 fn preview_failure(
     action: &str,
     port: &PortContract,
@@ -727,6 +750,53 @@ fn configuration_difference(
         kind: "configuration".to_owned(),
         id: requirement.id.clone(),
         status: MachinePlanStatus::Changeable,
+        desired,
+        observed,
+        port: Some(CONFIGURATION_MANAGER_PORT.id.to_owned()),
+        connector: Some(summary),
+        preview: Some(preview),
+        reason: None,
+        diagnostics: Some(diagnostics),
+    })
+}
+
+fn configuration_source_verification(
+    requirement: &ConfigurationRequirement,
+    desired: Value,
+    observed: Value,
+    context: &ActionExecutionContext<'_>,
+    action: &str,
+) -> Result<MachinePlanEntry, ActionResult> {
+    let resolution = context.connectors.resolve(&CONFIGURATION_MANAGER_PORT, context.connector_context);
+    let diagnostics = resolution.diagnostics.clone();
+    let Some(connector) = resolution.connector else {
+        return Ok(unavailable_source_verification(requirement, desired, observed, diagnostics));
+    };
+    let summary = ConnectorSummary::from_connector(connector);
+    let Some(manager) = connector.configuration_manager() else {
+        return Err(ActionResult::failure(
+            Some(action),
+            ResultStatus::ConnectorFailure,
+            format!("Selected Connector does not expose {} implementation.", CONFIGURATION_MANAGER_PORT.id),
+            Some(json!({ "port": CONFIGURATION_MANAGER_PORT.id, "connector": summary, "diagnostics": diagnostics })),
+        ));
+    };
+    let request = ConfigurationStateRequest {
+        id: requirement.id.clone(),
+        present: true,
+        source: source_ref(requirement.source.as_ref()),
+    };
+    let preview = manager.preview(&request).map_err(|error| {
+        preview_failure(action, &CONFIGURATION_MANAGER_PORT, &summary, diagnostics.clone(), error)
+    })?;
+    Ok(MachinePlanEntry {
+        kind: "configuration".to_owned(),
+        id: requirement.id.clone(),
+        status: if preview.changed {
+            MachinePlanStatus::Changeable
+        } else {
+            MachinePlanStatus::Satisfied
+        },
         desired,
         observed,
         port: Some(CONFIGURATION_MANAGER_PORT.id.to_owned()),
@@ -860,10 +930,12 @@ fn compare_machine(
             continue;
         };
         let actual = json!({ "present": item.present });
-        if item.present == desired_present {
-            entries.push(satisfied_entry("configuration", &requirement.id, desired, actual));
-        } else {
+        if item.present != desired_present {
             entries.push(configuration_difference(requirement, desired, actual, context, action)?);
+        } else if desired_present && requirement.source.is_some() {
+            entries.push(configuration_source_verification(requirement, desired, actual, context, action)?);
+        } else {
+            entries.push(satisfied_entry("configuration", &requirement.id, desired, actual));
         }
     }
 
@@ -1331,7 +1403,7 @@ pub(crate) fn register_machine_actions(registry: &mut ActionRegistry) {
         ActionDescriptor {
             id: "machine.verify".to_owned(),
             title: "Verify machine declaration".to_owned(),
-            description: "Observe the current machine and verify it against the authored machine-role declaration.".to_owned(),
+            description: "Observe the current machine and verify it against the authored machine-role declaration, including source-backed configuration state through public ConfigurationManager preview when required.".to_owned(),
             inputs: vec![role_input()],
             output: ActionOutputDefinition { output_type: "machine-verification".to_owned() },
             mutation_class: MutationClass::ReadOnly,
