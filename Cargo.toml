@@ -1,3 +1,8 @@
 [workspace]
-members = ["ctrl"]
+members = [
+    "crates/connector-sdk",
+    "connectors/reference",
+    "connectors/template",
+    "ctrl",
+]
 resolver = "2"

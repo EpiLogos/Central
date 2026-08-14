@@ -2,6 +2,8 @@ use crate::port::{PortContract, WorkDiscovery};
 use serde::Serialize;
 use std::collections::BTreeSet;
 
+pub const CONNECTOR_API_VERSION: &str = "central.connector/v1";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ConnectorPortDeclaration {
     pub id: String,
@@ -10,6 +12,7 @@ pub struct ConnectorPortDeclaration {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ConnectorManifest {
+    pub api_version: String,
     pub id: String,
     pub version: String,
     pub display_name: String,
@@ -20,6 +23,60 @@ pub struct ConnectorManifest {
     pub dependency_probes: Vec<String>,
     pub configuration_requirements: Vec<String>,
     pub mutation_scope: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ManifestError {
+    pub code: String,
+    pub message: String,
+}
+
+impl ManifestError {
+    fn new(code: &str, message: impl Into<String>) -> Self {
+        Self { code: code.to_owned(), message: message.into() }
+    }
+}
+
+pub fn validate_connector_manifest(manifest: &ConnectorManifest) -> Result<(), ManifestError> {
+    if manifest.api_version != CONNECTOR_API_VERSION {
+        return Err(ManifestError::new(
+            "unsupported_api_version",
+            format!("Unsupported Connector API version: {}", manifest.api_version),
+        ));
+    }
+    for (label, value) in [
+        ("id", manifest.id.as_str()),
+        ("version", manifest.version.as_str()),
+        ("display_name", manifest.display_name.as_str()),
+        ("entrypoint", manifest.entrypoint.as_str()),
+        ("mutation_scope", manifest.mutation_scope.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            return Err(ManifestError::new("missing_field", format!("Connector manifest {label} must be non-empty.")));
+        }
+    }
+    if !matches!(manifest.mutation_scope.as_str(), "read-only" | "locally-mutating" | "externally-mutating") {
+        return Err(ManifestError::new("invalid_mutation_scope", "Connector manifest mutation_scope is invalid."));
+    }
+    if manifest.platforms.is_empty() {
+        return Err(ManifestError::new("missing_platform", "Connector manifest must declare a supported platform or environment."));
+    }
+    if manifest.ports.is_empty() {
+        return Err(ManifestError::new("missing_port", "Connector manifest must declare at least one Port."));
+    }
+    let mut declarations = BTreeSet::new();
+    for port in &manifest.ports {
+        if port.id.trim().is_empty() || port.version.trim().is_empty() {
+            return Err(ManifestError::new("invalid_port", "Connector Port declarations require id and version."));
+        }
+        if !declarations.insert((port.id.clone(), port.version.clone())) {
+            return Err(ManifestError::new(
+                "duplicate_port",
+                format!("Duplicate Connector Port declaration: {} {}", port.id, port.version),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,6 +100,10 @@ impl CapabilityProbe {
     pub fn available() -> Self {
         Self { available: true, reason: None }
     }
+
+    pub fn unavailable(reason: impl Into<String>) -> Self {
+        Self { available: false, reason: Some(reason.into()) }
+    }
 }
 
 pub trait Connector: Send + Sync {
@@ -60,7 +121,7 @@ pub struct ConnectorSummary {
 }
 
 impl ConnectorSummary {
-    fn from_connector(connector: &dyn Connector) -> Self {
+    pub fn from_connector(connector: &dyn Connector) -> Self {
         Self {
             id: connector.manifest().id.clone(),
             version: connector.manifest().version.clone(),
@@ -92,10 +153,13 @@ pub struct ConnectorRegistry {
 }
 
 impl ConnectorRegistry {
-    pub fn register<C: Connector + 'static>(&mut self, connector: C) -> Result<&mut Self, String> {
-        validate_manifest(connector.manifest())?;
+    pub fn register<C: Connector + 'static>(&mut self, connector: C) -> Result<&mut Self, ManifestError> {
+        validate_connector_manifest(connector.manifest())?;
         if self.connectors.iter().any(|existing| existing.manifest().id == connector.manifest().id) {
-            return Err(format!("Connector already registered: {}", connector.manifest().id));
+            return Err(ManifestError::new(
+                "duplicate_connector",
+                format!("Connector already registered: {}", connector.manifest().id),
+            ));
         }
         self.connectors.push(Box::new(connector));
         Ok(self)
@@ -150,31 +214,4 @@ impl ConnectorRegistry {
             },
         }
     }
-}
-
-fn validate_manifest(manifest: &ConnectorManifest) -> Result<(), String> {
-    for (label, value) in [
-        ("id", manifest.id.as_str()),
-        ("version", manifest.version.as_str()),
-        ("display_name", manifest.display_name.as_str()),
-        ("entrypoint", manifest.entrypoint.as_str()),
-        ("mutation_scope", manifest.mutation_scope.as_str()),
-    ] {
-        if value.trim().is_empty() {
-            return Err(format!("Connector manifest {label} must be non-empty."));
-        }
-    }
-    if manifest.ports.is_empty() {
-        return Err("Connector manifest must declare at least one Port.".to_owned());
-    }
-    let mut ids = BTreeSet::new();
-    for port in &manifest.ports {
-        if port.id.trim().is_empty() || port.version.trim().is_empty() {
-            return Err("Connector Port declarations require id and version.".to_owned());
-        }
-        if !ids.insert((&port.id, &port.version)) {
-            return Err(format!("Duplicate Connector Port declaration: {} {}", port.id, port.version));
-        }
-    }
-    Ok(())
 }
