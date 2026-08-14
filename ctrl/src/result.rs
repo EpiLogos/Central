@@ -7,6 +7,8 @@ pub enum ResultStatus {
     Success,
     InvalidInput,
     InvalidCentralStructure,
+    UnavailableCapability,
+    ConnectorFailure,
     InternalFailure,
 }
 
@@ -16,6 +18,8 @@ impl ResultStatus {
             Self::Success => "success",
             Self::InvalidInput => "invalid_input",
             Self::InvalidCentralStructure => "invalid_central_structure",
+            Self::UnavailableCapability => "unavailable_capability",
+            Self::ConnectorFailure => "connector_failure",
             Self::InternalFailure => "internal_failure",
         }
     }

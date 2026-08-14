@@ -1,7 +1,8 @@
 use central_ctrl::action::{ActionAvailability, ActionDescriptor, ActionOutputDefinition};
 use central_ctrl::{
-    create_core_action_registry, inspect_central, initialize_central, resolve_central_root, ActionRegistry,
-    CliEnvironment, MutationClass, ResultStatus, RootOptions,
+    create_core_action_registry, inspect_central, initialize_central, resolve_central_root,
+    ActionExecutionContext, ActionRegistry, CliEnvironment, ConnectorContext, ConnectorRegistry,
+    MutationClass, ResultStatus, RootOptions,
 };
 use serde_json::json;
 use std::fs;
@@ -28,6 +29,13 @@ fn descriptor(id: &str) -> ActionDescriptor {
         required_ports: Vec::new(),
         availability: ActionAvailability { available: true, reason: None },
     }
+}
+
+fn execute(registry: &ActionRegistry, id: &str, root_options: &RootOptions) -> central_ctrl::ActionResult {
+    let connectors = ConnectorRegistry::default();
+    let connector_context = ConnectorContext { platform: "test".to_owned() };
+    let context = ActionExecutionContext { root_options, connectors: &connectors, connector_context: &connector_context };
+    registry.execute(id, &json!({}), &context)
 }
 
 #[test]
@@ -71,23 +79,23 @@ fn doctor_reports_missing_invalid_and_valid_structure() {
     let registry = create_core_action_registry();
     let options = RootOptions { explicit_root: Some(root.clone()), ..RootOptions::default() };
 
-    let missing = registry.execute("central.doctor", &json!({}), &options);
+    let missing = execute(&registry, "central.doctor", &options);
     assert_eq!(missing.status, ResultStatus::InvalidCentralStructure);
 
-    registry.execute("central.init", &json!({}), &options);
-    assert_eq!(registry.execute("central.doctor", &json!({}), &options).status, ResultStatus::Success);
+    execute(&registry, "central.init", &options);
+    assert_eq!(execute(&registry, "central.doctor", &options).status, ResultStatus::Success);
 
     let file_root = base.join("Central-file");
     fs::write(&file_root, "not a directory").unwrap();
     let file_options = RootOptions { explicit_root: Some(file_root), ..RootOptions::default() };
-    assert_eq!(registry.execute("central.doctor", &json!({}), &file_options).status, ResultStatus::InvalidCentralStructure);
+    assert_eq!(execute(&registry, "central.doctor", &file_options).status, ResultStatus::InvalidCentralStructure);
 }
 
 #[test]
 fn registry_has_stable_ids_and_complete_descriptors() {
     let registry = create_core_action_registry();
     let ids = registry.list().into_iter().map(|action| action.id).collect::<Vec<_>>();
-    assert_eq!(ids, vec!["action.list", "central.doctor", "central.init", "central.root"]);
+    assert_eq!(ids, vec!["action.list", "central.doctor", "central.init", "central.root", "work.list"]);
     for id in ids {
         let action = registry.get(&id).unwrap();
         assert!(!action.title.is_empty());
@@ -96,7 +104,7 @@ fn registry_has_stable_ids_and_complete_descriptors() {
     }
 }
 
-fn panic_action(_registry: &ActionRegistry, _input: &serde_json::Value, _options: &RootOptions) -> central_ctrl::ActionResult {
+fn panic_action(_registry: &ActionRegistry, _input: &serde_json::Value, _context: &ActionExecutionContext<'_>) -> central_ctrl::ActionResult {
     panic!("boom")
 }
 
@@ -104,7 +112,11 @@ fn panic_action(_registry: &ActionRegistry, _input: &serde_json::Value, _options
 fn registry_converts_unexpected_panics_to_structured_internal_failure() {
     let mut registry = ActionRegistry::default();
     registry.register(descriptor("test.fail"), panic_action).unwrap();
-    let result = registry.execute("test.fail", &json!({}), &RootOptions::default());
+    let root_options = RootOptions::default();
+    let connectors = ConnectorRegistry::default();
+    let connector_context = ConnectorContext { platform: "test".to_owned() };
+    let context = ActionExecutionContext { root_options: &root_options, connectors: &connectors, connector_context: &connector_context };
+    let result = registry.execute("test.fail", &json!({}), &context);
     assert_eq!(result.status, ResultStatus::InternalFailure);
     assert_eq!(result.error.unwrap().code, "internal_failure");
 }
@@ -115,13 +127,13 @@ fn action_list_has_human_and_structured_cli_renderings() {
     let human = central_ctrl::run_cli(&["actions".to_owned()], &environment);
     assert_eq!(human.exit_code, 0);
     assert!(human.output.contains("action.list\tList Actions"));
-    assert!(human.output.contains("central.doctor\tDiagnose Central"));
+    assert!(human.output.contains("work.list\tList Work items"));
 
     let structured = central_ctrl::run_cli(&["--json".to_owned(), "action.list".to_owned()], &environment);
     assert_eq!(structured.exit_code, 0);
     let value: serde_json::Value = serde_json::from_str(&structured.output).unwrap();
     assert_eq!(value["status"], "success");
-    assert!(value["data"]["actions"].as_array().unwrap().len() >= 4);
+    assert_eq!(value["data"]["actions"].as_array().unwrap().len(), 5);
 }
 
 #[test]

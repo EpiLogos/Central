@@ -1,3 +1,5 @@
+use crate::connector::{ConnectorContext, ConnectorRegistry};
+use crate::port::{WorkDiscoveryInput, WORK_DISCOVERY_PORT};
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::{inspect_central, initialize_central, resolve_central_root, RootOptions};
 use serde::Serialize;
@@ -48,7 +50,13 @@ pub struct ActionDescriptor {
     pub availability: ActionAvailability,
 }
 
-pub type ActionHandler = fn(&ActionRegistry, &Value, &RootOptions) -> ActionResult;
+pub struct ActionExecutionContext<'a> {
+    pub root_options: &'a RootOptions,
+    pub connectors: &'a ConnectorRegistry,
+    pub connector_context: &'a ConnectorContext,
+}
+
+pub type ActionHandler = for<'a> fn(&ActionRegistry, &Value, &ActionExecutionContext<'a>) -> ActionResult;
 
 struct RegisteredAction {
     descriptor: ActionDescriptor,
@@ -80,11 +88,11 @@ impl ActionRegistry {
         self.actions.values().map(|entry| entry.descriptor.clone()).collect()
     }
 
-    pub fn execute(&self, id: &str, input: &Value, root_options: &RootOptions) -> ActionResult {
+    pub fn execute(&self, id: &str, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
         let Some(action) = self.actions.get(id) else {
             return ActionResult::failure(Some(id), ResultStatus::InvalidInput, format!("Unknown Action: {id}"), None);
         };
-        match catch_unwind(AssertUnwindSafe(|| (action.handler)(self, input, root_options))) {
+        match catch_unwind(AssertUnwindSafe(|| (action.handler)(self, input, context))) {
             Ok(result) => result,
             Err(_) => ActionResult::failure(
                 Some(id),
@@ -110,15 +118,15 @@ fn descriptor(id: &str, title: &str, description: &str, mutation_class: Mutation
     }
 }
 
-fn root_action(_registry: &ActionRegistry, _input: &Value, options: &RootOptions) -> ActionResult {
-    match resolve_central_root(options) {
+fn root_action(_registry: &ActionRegistry, _input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+    match resolve_central_root(context.root_options) {
         Ok(resolved) => ActionResult::success("central.root", to_value(resolved).expect("resolved root serializes")),
         Err(message) => ActionResult::failure(Some("central.root"), ResultStatus::InvalidInput, message, None),
     }
 }
 
-fn init_action(_registry: &ActionRegistry, _input: &Value, options: &RootOptions) -> ActionResult {
-    let resolved = match resolve_central_root(options) {
+fn init_action(_registry: &ActionRegistry, _input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+    let resolved = match resolve_central_root(context.root_options) {
         Ok(resolved) => resolved,
         Err(message) => return ActionResult::failure(Some("central.init"), ResultStatus::InvalidInput, message, None),
     };
@@ -144,8 +152,8 @@ fn init_action(_registry: &ActionRegistry, _input: &Value, options: &RootOptions
     }
 }
 
-fn doctor_action(_registry: &ActionRegistry, _input: &Value, options: &RootOptions) -> ActionResult {
-    let resolved = match resolve_central_root(options) {
+fn doctor_action(_registry: &ActionRegistry, _input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+    let resolved = match resolve_central_root(context.root_options) {
         Ok(resolved) => resolved,
         Err(message) => return ActionResult::failure(Some("central.doctor"), ResultStatus::InvalidInput, message, None),
     };
@@ -161,8 +169,51 @@ fn doctor_action(_registry: &ActionRegistry, _input: &Value, options: &RootOptio
     }
 }
 
-fn list_actions(registry: &ActionRegistry, _input: &Value, _options: &RootOptions) -> ActionResult {
+fn list_actions(registry: &ActionRegistry, _input: &Value, _context: &ActionExecutionContext<'_>) -> ActionResult {
     ActionResult::success("action.list", json!({ "actions": registry.list() }))
+}
+
+fn work_list_action(_registry: &ActionRegistry, _input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+    let root = match resolve_central_root(context.root_options) {
+        Ok(root) => root,
+        Err(message) => return ActionResult::failure(Some("work.list"), ResultStatus::InvalidInput, message, None),
+    };
+    let resolution = context.connectors.resolve(&WORK_DISCOVERY_PORT, context.connector_context);
+    let diagnostics = resolution.diagnostics.clone();
+    let Some(connector) = resolution.connector else {
+        return ActionResult::failure(
+            Some("work.list"),
+            ResultStatus::UnavailableCapability,
+            format!("No eligible Connector implements {}.", WORK_DISCOVERY_PORT.id),
+            Some(json!({ "port": WORK_DISCOVERY_PORT.id, "diagnostics": diagnostics })),
+        );
+    };
+    let Some(implementation) = connector.work_discovery() else {
+        return ActionResult::failure(
+            Some("work.list"),
+            ResultStatus::ConnectorFailure,
+            format!("Selected Connector does not expose {} implementation.", WORK_DISCOVERY_PORT.id),
+            Some(json!({ "port": WORK_DISCOVERY_PORT.id, "connector": connector.manifest().id, "diagnostics": diagnostics })),
+        );
+    };
+    let input = WorkDiscoveryInput { work_root: root.path.join("Work") };
+    match implementation.list(&input) {
+        Ok(output) => ActionResult::success(
+            "work.list",
+            json!({ "items": output.items, "root": root.path, "diagnostics": diagnostics }),
+        ),
+        Err(error) => ActionResult::failure(
+            Some("work.list"),
+            ResultStatus::ConnectorFailure,
+            format!("Connector failed while executing {}.", WORK_DISCOVERY_PORT.id),
+            Some(json!({
+                "port": WORK_DISCOVERY_PORT.id,
+                "connector": connector.manifest().id,
+                "provider_error": error,
+                "diagnostics": diagnostics,
+            })),
+        ),
+    }
 }
 
 pub fn create_core_action_registry() -> ActionRegistry {
@@ -183,5 +234,14 @@ pub fn create_core_action_registry() -> ActionRegistry {
         descriptor("action.list", "List Actions", "List canonical Action descriptors.", MutationClass::ReadOnly, "action-descriptor-list"),
         list_actions,
     ).expect("core Action ids are valid");
+    let mut work_list = descriptor(
+        "work.list",
+        "List Work items",
+        "Discover ordinary directories in the active Central Work root through WorkDiscovery.",
+        MutationClass::ReadOnly,
+        "work-item-list",
+    );
+    work_list.required_ports = vec![WORK_DISCOVERY_PORT.id.to_owned()];
+    registry.register(work_list, work_list_action).expect("core Action ids are valid");
     registry
 }

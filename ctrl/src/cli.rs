@@ -1,4 +1,6 @@
-use crate::action::create_core_action_registry;
+use crate::action::{create_core_action_registry, ActionExecutionContext};
+use crate::connector::ConnectorContext;
+use crate::reference::create_default_connector_registry;
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::RootOptions;
 use serde_json::{json, Value};
@@ -77,7 +79,8 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         [command] if command == "doctor" => "central.doctor",
         [command] if command == "actions" => "action.list",
         [domain, verb] if domain == "action" && verb == "list" => "action.list",
-        [canonical] if matches!(canonical.as_str(), "central.root" | "central.init" | "central.doctor" | "action.list") => canonical.as_str(),
+        [domain, verb] if domain == "work" && verb == "list" => "work.list",
+        [canonical] if matches!(canonical.as_str(), "central.root" | "central.init" | "central.doctor" | "action.list" | "work.list") => canonical.as_str(),
         [unknown] => return Err((structured, format!("Unknown command: {unknown}"))),
         _ => return Err((structured, format!("Unexpected arguments: {}", positional[1..].join(" ")))),
     };
@@ -120,14 +123,29 @@ fn human_output(result: &ActionResult) -> String {
         Some("action.list") => data
             .get("actions")
             .and_then(Value::as_array)
-            .map(|actions| {
-                actions.iter().map(|action| {
-                    let id = action.get("id").and_then(Value::as_str).unwrap_or_default();
-                    let title = action.get("title").and_then(Value::as_str).unwrap_or_default();
-                    format!("{id}\t{title}")
-                }).collect::<Vec<_>>().join("\n")
-            })
+            .map(|actions| actions.iter().map(|action| {
+                let id = action.get("id").and_then(Value::as_str).unwrap_or_default();
+                let title = action.get("title").and_then(Value::as_str).unwrap_or_default();
+                format!("{id}\t{title}")
+            }).collect::<Vec<_>>().join("\n"))
             .unwrap_or_default(),
+        Some("work.list") => {
+            let selected = data
+                .get("diagnostics")
+                .and_then(|diagnostics| diagnostics.get("selected_connector"))
+                .and_then(|connector| connector.get("id"))
+                .and_then(Value::as_str)
+                .unwrap_or("none");
+            let mut lines = vec![format!("Connector: {selected}")];
+            if let Some(items) = data.get("items").and_then(Value::as_array) {
+                for item in items {
+                    let name = item.get("name").and_then(Value::as_str).unwrap_or_default();
+                    let path = item.get("path").and_then(Value::as_str).unwrap_or_default();
+                    lines.push(format!("{name}\t{path}"));
+                }
+            }
+            lines.join("\n")
+        }
         _ => data.to_string(),
     }
 }
@@ -137,6 +155,8 @@ fn exit_code(result: &ActionResult) -> i32 {
         ResultStatus::Success => 0,
         ResultStatus::InvalidInput => 2,
         ResultStatus::InvalidCentralStructure => 3,
+        ResultStatus::UnavailableCapability => 4,
+        ResultStatus::ConnectorFailure => 5,
         ResultStatus::InternalFailure => 1,
     }
 }
@@ -156,8 +176,15 @@ pub fn run_cli(args: &[String], environment: &CliEnvironment) -> CliExecution {
         configured_root: environment.configured_root.clone(),
         home: environment.home.clone(),
     };
+    let connectors = create_default_connector_registry();
+    let connector_context = ConnectorContext::current();
+    let context = ActionExecutionContext {
+        root_options: &root_options,
+        connectors: &connectors,
+        connector_context: &connector_context,
+    };
     let registry = create_core_action_registry();
-    let result = registry.execute(&parsed.action_id, &json!({}), &root_options);
+    let result = registry.execute(&parsed.action_id, &json!({}), &context);
     let output = if parsed.structured {
         serde_json::to_string(&result).expect("ActionResult serializes")
     } else {
