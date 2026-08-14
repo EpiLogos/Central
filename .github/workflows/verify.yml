@@ -14,3 +14,22 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --workspace
+
+  ubuntu-extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Public Port conformance and Ubuntu acceptance
+        run: cargo test -p central-ubuntu-connectors
+      - name: Headless Ubuntu host compiles
+        run: cargo build -p central-ubuntu-host --bin ctrl-ubuntu
+      - name: Core does not depend on personal platform extensions
+        shell: bash
+        run: |
+          cargo tree -p ctrl --edges normal > "$RUNNER_TEMP/ctrl-tree.txt"
+          cat "$RUNNER_TEMP/ctrl-tree.txt"
+          if grep -E 'central-(ubuntu|macos|shortcuts)|raycast' "$RUNNER_TEMP/ctrl-tree.txt"; then
+            echo "provider-specific personal extension leaked into ctrl core dependencies"
+            exit 1
+          fi
