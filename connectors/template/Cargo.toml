@@ -1,0 +1,12 @@
+[package]
+name = "central-connector-template"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "central_connector_template"
+path = "src/lib.rs"
+
+[dependencies]
+central-connector-sdk = { path = "../../crates/connector-sdk" }

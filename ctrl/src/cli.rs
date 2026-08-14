@@ -1,8 +1,8 @@
 use crate::action::{create_core_action_registry, ActionExecutionContext};
-use crate::connector::ConnectorContext;
-use crate::reference::create_default_connector_registry;
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::RootOptions;
+use central_connector_sdk::ConnectorContext;
+use central_reference_connectors::create_default_connector_registry;
 use serde_json::{json, Value};
 use std::env;
 use std::path::PathBuf;

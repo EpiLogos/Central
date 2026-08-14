@@ -1,5 +1,4 @@
-use crate::connector::{ConnectorContext, ConnectorRegistry};
-use crate::port::{WorkDiscoveryInput, WORK_DISCOVERY_PORT};
+use central_connector_sdk::{ConnectorContext, ConnectorRegistry, WorkDiscoveryInput, WORK_DISCOVERY_PORT};
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::{inspect_central, initialize_central, resolve_central_root, RootOptions};
 use serde::Serialize;

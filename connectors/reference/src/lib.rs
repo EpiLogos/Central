@@ -1,15 +1,13 @@
-use crate::connector::{
+use central_connector_sdk::{
     CapabilityProbe, Connector, ConnectorContext, ConnectorManifest, ConnectorPortDeclaration,
-    ConnectorRegistry,
-};
-use crate::port::{
-    PortContract, PortError, WorkDiscovery, WorkDiscoveryInput, WorkDiscoveryOutput, WorkItem,
-    WORK_DISCOVERY_PORT,
+    ConnectorRegistry, PortContract, PortError, WorkDiscovery, WorkDiscoveryInput,
+    WorkDiscoveryOutput, WorkItem, CONNECTOR_API_VERSION, WORK_DISCOVERY_PORT,
 };
 use std::fs;
 
 fn manifest(id: &str, display_name: &str, entrypoint: &str) -> ConnectorManifest {
     ConnectorManifest {
+        api_version: CONNECTOR_API_VERSION.to_owned(),
         id: id.to_owned(),
         version: "0.1.0".to_owned(),
         display_name: display_name.to_owned(),
@@ -36,7 +34,7 @@ impl FilesystemWorkConnector {
             manifest: manifest(
                 "reference.work-filesystem",
                 "Reference filesystem Work discovery",
-                "builtin:reference.work-filesystem",
+                "rust:central-reference-connectors::FilesystemWorkConnector",
             ),
         }
     }
@@ -98,7 +96,7 @@ impl StaticWorkConnector {
             manifest: manifest(
                 "reference.work-static",
                 "Reference static Work discovery",
-                "builtin:reference.work-static",
+                "rust:central-reference-connectors::StaticWorkConnector",
             ),
             items,
         }
