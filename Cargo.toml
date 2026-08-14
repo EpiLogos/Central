@@ -1,0 +1,3 @@
+[workspace]
+members = ["ctrl"]
+resolver = "2"
