@@ -5,7 +5,7 @@ use central_ctrl::{
 };
 use serde_json::{json, Value};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const SKILL: &str = include_str!("../../skills/machine-declaration/SKILL.md");
