@@ -4,6 +4,7 @@ use serde_json::json;
 
 use crate::{
     action::ActionRegistry,
+    control,
     result::{ActionResult, FailureCode, ResultStatus},
     root::{self, RootContext, RootError},
     runtime::Runtime,
@@ -138,9 +139,21 @@ pub fn run(args: Vec<String>, context: ProcessContext) -> CommandOutput {
         [domain, command] if domain == "work" && command == "list" => {
             work_list(&parsed, &context, &runtime)
         }
+        [command, target] if command == "control.open" => {
+            control_open(&parsed, &context, target)
+        }
+        [domain, command, target] if domain == "control" && command == "open" => {
+            control_open(&parsed, &context, target)
+        }
+        [command, query @ ..] if command == "control.search" => {
+            control_search(&parsed, &context, query)
+        }
+        [domain, command, query @ ..] if domain == "control" && command == "search" => {
+            control_search(&parsed, &context, query)
+        }
         _ => invalid_input(
             "ctrl",
-            "unknown command; use root, init, doctor, action list, or work list",
+            "unknown command; use root, init, doctor, action list, work list, control open, or control search",
             parsed.json,
         ),
     }
@@ -165,18 +178,34 @@ fn work_list(parsed: &ParsedArgs, context: &ProcessContext, runtime: &Runtime) -
     with_root("work.list", parsed, context, |root| {
         let result = work::list(&runtime.connectors, &runtime.environment, &root);
         let human = work_list_human(&result);
-        let exit_code = match &result.status {
-            ResultStatus::Success | ResultStatus::Cancelled => 0,
-            ResultStatus::UnavailableCapability => 4,
-            ResultStatus::ConnectorFailure => 5,
-            _ => 1,
-        };
-        CommandOutput {
-            result,
-            human,
-            json: parsed.json,
-            exit_code,
-        }
+        output_from_result(result, human, parsed.json)
+    })
+}
+
+fn control_open(parsed: &ParsedArgs, context: &ProcessContext, target: &str) -> CommandOutput {
+    with_root("control.open", parsed, context, |root| {
+        let result = control::open(&root, target);
+        let human = result
+            .data
+            .as_ref()
+            .and_then(|data| data["path"].as_str())
+            .map(|path| path.to_string())
+            .or_else(|| result.error.as_ref().map(|error| error.message.clone()))
+            .unwrap_or_else(|| "control.open returned no path".into());
+        output_from_result(result, human, parsed.json)
+    })
+}
+
+fn control_search(
+    parsed: &ParsedArgs,
+    context: &ProcessContext,
+    query_parts: &[String],
+) -> CommandOutput {
+    let query = query_parts.join(" ");
+    with_root("control.search", parsed, context, |root| {
+        let result = control::search(&root, &query);
+        let human = control_search_human(&result);
+        output_from_result(result, human, parsed.json)
     })
 }
 
@@ -207,6 +236,54 @@ fn work_list_human(result: &ActionResult) -> String {
         .as_ref()
         .map(|error| error.message.clone())
         .unwrap_or_else(|| format!("work.list returned {:?}", result.status))
+}
+
+fn control_search_human(result: &ActionResult) -> String {
+    if result.status == ResultStatus::Success {
+        if let Some(data) = result.data.as_ref() {
+            let matches = data["matches"].as_array().cloned().unwrap_or_default();
+            if matches.is_empty() {
+                return "No Control matches.".into();
+            }
+            return matches
+                .iter()
+                .map(|entry| {
+                    format!(
+                        "{}:{} {}",
+                        entry["path"].as_str().unwrap_or("?"),
+                        entry["line"].as_u64().unwrap_or(0),
+                        entry["text"].as_str().unwrap_or("")
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
+    }
+
+    result
+        .error
+        .as_ref()
+        .map(|error| error.message.clone())
+        .unwrap_or_else(|| format!("control.search returned {:?}", result.status))
+}
+
+fn output_from_result(result: ActionResult, human: String, json_output: bool) -> CommandOutput {
+    let exit_code = match &result.status {
+        ResultStatus::Success | ResultStatus::Cancelled => 0,
+        ResultStatus::InternalFailure => 1,
+        ResultStatus::InvalidInput => 2,
+        ResultStatus::InvalidCentralStructure => 3,
+        ResultStatus::UnavailableCapability => 4,
+        ResultStatus::ConnectorFailure => 5,
+        ResultStatus::PolicyRefusal => 6,
+        ResultStatus::Partial => 7,
+    };
+    CommandOutput {
+        result,
+        human,
+        json: json_output,
+        exit_code,
+    }
 }
 
 fn with_root<F>(
@@ -268,42 +345,35 @@ fn success(
     human: String,
     json_output: bool,
 ) -> CommandOutput {
-    CommandOutput {
-        result: ActionResult::success(action, data),
-        human,
-        json: json_output,
-        exit_code: 0,
-    }
+    output_from_result(ActionResult::success(action, data), human, json_output)
 }
 
 fn invalid_input(action: &str, message: impl Into<String>, json_output: bool) -> CommandOutput {
     let message = message.into();
-    CommandOutput {
-        result: ActionResult::failure(
+    output_from_result(
+        ActionResult::failure(
             action,
             ResultStatus::InvalidInput,
             FailureCode::InvalidInput,
             message.clone(),
         ),
-        human: format!("Invalid input: {message}"),
-        json: json_output,
-        exit_code: 2,
-    }
+        format!("Invalid input: {message}"),
+        json_output,
+    )
 }
 
 fn internal_failure(action: &str, message: impl Into<String>, json_output: bool) -> CommandOutput {
     let message = message.into();
-    CommandOutput {
-        result: ActionResult::failure(
+    output_from_result(
+        ActionResult::failure(
             action,
             ResultStatus::InternalFailure,
             FailureCode::InternalFailure,
             message.clone(),
         ),
-        human: format!("Internal failure: {message}"),
-        json: json_output,
-        exit_code: 1,
-    }
+        format!("Internal failure: {message}"),
+        json_output,
+    )
 }
 
 fn failure_with_data(
@@ -315,10 +385,9 @@ fn failure_with_data(
     human: String,
     json_output: bool,
 ) -> CommandOutput {
-    CommandOutput {
-        result: ActionResult::failure_with_data(action, status, code, message, data),
+    output_from_result(
+        ActionResult::failure_with_data(action, status, code, message, data),
         human,
-        json: json_output,
-        exit_code: 3,
-    }
+        json_output,
+    )
 }
