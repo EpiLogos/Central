@@ -1,6 +1,7 @@
 mod conformance;
 mod connector;
 mod port;
+mod synchronization_conformance;
 
 pub use conformance::{
     run_configuration_manager_conformance, run_machine_inspector_conformance,
@@ -19,9 +20,12 @@ pub use port::{
     MachineInspector, ObservedConfiguration, ObservedPackage, ObservedService, PackageManager,
     PackageStateRequest, PortContract, PortError, PortErrorCode, PortOperationContract,
     ReconciliationSourceReference, ServiceManager, ServiceStateRequest, StateChangePreview,
-    StateChangeResult, WorkDiscovery, WorkDiscoveryInput, WorkDiscoveryOutput, WorkItem,
-    CONFIGURATION_MANAGER_OPERATIONS, CONFIGURATION_MANAGER_PORT, MACHINE_INSPECTOR_OPERATIONS,
-    MACHINE_INSPECTOR_PORT, PACKAGE_MANAGER_OPERATIONS, PACKAGE_MANAGER_PORT,
-    SERVICE_MANAGER_OPERATIONS, SERVICE_MANAGER_PORT, WORK_DISCOVERY_OPERATIONS,
-    WORK_DISCOVERY_PORT,
+    StateChangeResult, SynchronizationRequest, Synchronizer, WorkDiscovery, WorkDiscoveryInput,
+    WorkDiscoveryOutput, WorkItem, CONFIGURATION_MANAGER_OPERATIONS, CONFIGURATION_MANAGER_PORT,
+    MACHINE_INSPECTOR_OPERATIONS, MACHINE_INSPECTOR_PORT, PACKAGE_MANAGER_OPERATIONS,
+    PACKAGE_MANAGER_PORT, SERVICE_MANAGER_OPERATIONS, SERVICE_MANAGER_PORT,
+    SYNCHRONIZER_OPERATIONS, SYNCHRONIZER_PORT, WORK_DISCOVERY_OPERATIONS, WORK_DISCOVERY_PORT,
+};
+pub use synchronization_conformance::{
+    run_synchronizer_conformance, SynchronizerConformanceFixture, SynchronizerConformanceReport,
 };
