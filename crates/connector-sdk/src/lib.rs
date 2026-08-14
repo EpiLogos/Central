@@ -1,6 +1,7 @@
 mod conformance;
 mod connector;
 mod port;
+mod scoped_conformance;
 
 pub use conformance::{
     run_configuration_manager_conformance, run_machine_inspector_conformance,
@@ -29,4 +30,8 @@ pub use port::{
     NATIVE_REVEAL_PORT, PACKAGE_MANAGER_OPERATIONS, PACKAGE_MANAGER_PORT,
     SERVICE_MANAGER_OPERATIONS, SERVICE_MANAGER_PORT, TAG_STORE_OPERATIONS, TAG_STORE_PORT,
     WORK_DISCOVERY_OPERATIONS, WORK_DISCOVERY_PORT,
+};
+pub use scoped_conformance::{
+    run_scoped_machine_inspector_conformance, ScopedMachineInspectorConformanceFixture,
+    ScopedMachineInspectorConformanceReport,
 };
