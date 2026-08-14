@@ -96,7 +96,9 @@ fn foundation_action_ids_remain_stable() {
         "central.init",
         "central.root",
     ] {
-        let action = registry.get(id).unwrap_or_else(|| panic!("missing Action {id}"));
+        let action = registry
+            .get(id)
+            .unwrap_or_else(|| panic!("missing Action {id}"));
         assert!(!action.title.is_empty());
         assert!(!action.description.is_empty());
         assert!(!action.output_definition.description.is_empty());
