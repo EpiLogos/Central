@@ -115,6 +115,12 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         [domain, verb] if domain == "control" && verb == "search" => {
             return Err((structured, "control search requires a query.".to_owned()));
         }
+        [domain, verb, role] if domain == "machine" && verb == "declaration" => {
+            ("machine.declaration", json!({ "role": role }))
+        }
+        [domain, verb] if domain == "machine" && verb == "declaration" => {
+            return Err((structured, "machine declaration requires a role.".to_owned()));
+        }
         [canonical, rest @ ..] if canonical == "work.search" && !rest.is_empty() => {
             ("work.search", json!({ "query": rest.join(" ") }))
         }
@@ -133,6 +139,12 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         }
         [canonical] if canonical == "control.search" => {
             return Err((structured, "control.search requires a query.".to_owned()));
+        }
+        [canonical, role] if canonical == "machine.declaration" => {
+            ("machine.declaration", json!({ "role": role }))
+        }
+        [canonical] if canonical == "machine.declaration" => {
+            return Err((structured, "machine.declaration requires a role.".to_owned()));
         }
         [canonical] if matches!(canonical.as_str(), "central.root" | "central.init" | "central.doctor" | "action.list" | "work.list") => {
             (canonical.as_str(), json!({}))
@@ -208,6 +220,7 @@ fn human_output(result: &ActionResult) -> String {
                 format!("{path}:{line}\t{text}")
             }).collect::<Vec<_>>().join("\n"))
             .unwrap_or_default(),
+        Some("machine.declaration") => crate::machine::explain_machine_declaration(data),
         Some("work.list") => {
             let selected = data
                 .get("diagnostics")

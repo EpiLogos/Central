@@ -431,6 +431,8 @@ pub fn create_core_action_registry() -> ActionRegistry {
     control_search.inputs = vec![string_input("query")];
     registry.register(control_search, control_search_action).expect("core Action ids are valid");
 
+    crate::machine::register_machine_actions(&mut registry);
+
     let mut work_list = descriptor(
         "work.list",
         "List Work items",

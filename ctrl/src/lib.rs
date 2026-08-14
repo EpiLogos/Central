@@ -1,6 +1,7 @@
 pub mod action;
 pub mod cli;
 pub mod control;
+pub mod machine;
 pub mod picker;
 pub mod result;
 pub mod root;
@@ -13,6 +14,12 @@ pub use cli::{run_cli, run_cli_with_surface, CliEnvironment, CliExecution};
 pub use control::{
     locate_control_root, search_control, ControlSearchMatch, ControlSearchResult, ControlSourceRoot,
     SourceClass, CONTROL_ROOTS,
+};
+pub use machine::{
+    explain_machine_declaration, read_machine_declaration, AuthoredMachineDeclaration,
+    ConfigurationRequirement, MachineDeclaration, MachineDeclarationError, MachineDeclarationSource,
+    MachineRequirements, MachineSourceReference, PackageRequirement, PresenceState, ServiceRequirement,
+    MACHINE_DECLARATION_SCHEMA, MACHINE_DECLARATION_VERSION,
 };
 pub use picker::{
     run_guided_action_picker, search_action_descriptors, NullTerminalSurface, StdioTerminalSurface,
