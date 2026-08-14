@@ -1,6 +1,7 @@
 pub mod action;
 pub mod cli;
 pub mod connector;
+pub mod control;
 pub mod port;
 #[path = "../../connectors/reference/mod.rs"]
 pub mod reference_connectors;
