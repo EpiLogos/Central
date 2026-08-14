@@ -1,13 +1,11 @@
-use std::{fs, io, path::{Path, PathBuf}};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+};
 
 use serde::Serialize;
 
-pub const REQUIRED_DIRS: [&str; 4] = [
-    "Control/user",
-    "Control/agents",
-    "Control/machines",
-    "Work",
-];
+pub const REQUIRED_DIRS: [&str; 4] = ["Control/user", "Control/agents", "Control/machines", "Work"];
 
 #[derive(Debug, Clone, Default)]
 pub struct RootContext {
@@ -33,7 +31,9 @@ pub enum RootError {
 }
 
 impl From<io::Error> for RootError {
-    fn from(value: io::Error) -> Self { Self::Io(value) }
+    fn from(value: io::Error) -> Self {
+        Self::Io(value)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -67,17 +67,24 @@ pub fn resolve_root(context: &RootContext) -> Result<PathBuf, RootError> {
 
 fn validate_root_value(root: &Path) -> Result<PathBuf, RootError> {
     if root.as_os_str().is_empty() {
-        return Err(RootError::InvalidInput("Central root cannot be empty".into()));
+        return Err(RootError::InvalidInput(
+            "Central root cannot be empty".into(),
+        ));
     }
     Ok(root.to_path_buf())
 }
 
 pub fn initialize(root: &Path) -> Result<InitReport, io::Error> {
     fs::create_dir_all(root)?;
-    for relative in REQUIRED_DIRS { fs::create_dir_all(root.join(relative))?; }
+    for relative in REQUIRED_DIRS {
+        fs::create_dir_all(root.join(relative))?;
+    }
     Ok(InitReport {
         root: root.display().to_string(),
-        ensured: REQUIRED_DIRS.iter().map(|value| (*value).to_string()).collect(),
+        ensured: REQUIRED_DIRS
+            .iter()
+            .map(|value| (*value).to_string())
+            .collect(),
     })
 }
 
@@ -106,7 +113,10 @@ fn inspect_directory(
 ) -> Result<(), io::Error> {
     match fs::metadata(path) {
         Ok(metadata) if metadata.is_dir() => Ok(()),
-        Ok(_) => { invalid.push(label.to_string()); Ok(()) }
+        Ok(_) => {
+            invalid.push(label.to_string());
+            Ok(())
+        }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             missing.push(label.to_string());
             Ok(())
