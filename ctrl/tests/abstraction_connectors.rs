@@ -65,7 +65,8 @@ fn two_valid_connectors_have_stable_selection_independent_of_registration_order(
     }
 
     for reverse in [false, true] {
-        let resolution = registry(reverse).resolve_work_discovery("linux");
+        let registry = registry(reverse);
+        let resolution = registry.resolve_work_discovery("linux");
         assert_eq!(
             resolution.diagnostics.eligible_connectors,
             vec![
