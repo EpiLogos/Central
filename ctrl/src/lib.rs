@@ -8,13 +8,15 @@ pub mod result;
 pub mod root;
 
 pub use action::{
-    create_core_action_registry, ActionDescriptor, ActionExecutionContext, ActionInputDefinition,
-    ActionInputSelection, ActionRegistry, MutationClass,
+    create_core_action_registry, ActionAvailability, ActionDescriptor, ActionExecutionContext,
+    ActionInputDefinition, ActionInputSelection, ActionOutputDefinition, ActionRegistry,
+    MutationClass,
 };
 pub use cli::{run_cli, run_cli_with_surface, CliEnvironment, CliExecution};
 pub use control::{
-    locate_control_root, search_control, ControlSearchMatch, ControlSearchResult, ControlSourceRoot,
-    SourceClass, CONTROL_ROOTS,
+    locate_control_root, search_control, ControlSearchMatch, ControlSearchResult,
+    ControlSkippedSource, ControlSourceRoot, SourceClass, AGENT_RETRIEVAL_DENY_MARKER,
+    CONTROL_ROOTS,
 };
 pub use machine::{
     explain_machine_apply, explain_machine_declaration, explain_machine_inspection,
