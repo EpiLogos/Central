@@ -146,7 +146,7 @@ fn action_list_has_human_and_structured_cli_renderings() {
     assert_eq!(human.exit_code, 0);
     assert!(human.output.contains("action.list\tList Actions"));
     assert!(human.output.contains("central.recovery.plan\tPlan Central recovery"));
-    assert!(human.output.contains("central.recover\tRecover Central environment"));
+    assert!(human.output.contains("central.recover\tRecover Central machine state"));
     assert!(human.output.contains("machine.inspect\tInspect current machine"));
     assert!(human.output.contains("machine.plan\tPlan machine changes"));
     assert!(human.output.contains("machine.apply\tApply machine plan"));
