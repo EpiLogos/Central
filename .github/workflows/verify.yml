@@ -15,6 +15,59 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --workspace
 
+  source-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install base ctrl from a clean checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          PREFIX="$RUNNER_TEMP/central-prefix"
+          ROOT="$RUNNER_TEMP/Central"
+          cargo install --path ctrl --root "$PREFIX"
+          CTRL="$PREFIX/bin/ctrl"
+
+          "$CTRL" --version | tee "$RUNNER_TEMP/version.txt"
+          grep -Eq '^ctrl [0-9]+\.[0-9]+\.[0-9]+' "$RUNNER_TEMP/version.txt"
+
+          "$CTRL" --root "$ROOT" init --json > "$RUNNER_TEMP/init-1.json"
+          "$CTRL" --root "$ROOT" doctor --json > "$RUNNER_TEMP/doctor.json"
+          "$CTRL" --root "$ROOT" action list --json > "$RUNNER_TEMP/actions.json"
+          "$CTRL" --root "$ROOT" init --json > "$RUNNER_TEMP/init-2.json"
+
+          python3 - "$ROOT" "$RUNNER_TEMP/doctor.json" "$RUNNER_TEMP/actions.json" "$RUNNER_TEMP/init-2.json" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          root = pathlib.Path(sys.argv[1])
+          required = [
+              "Control/user",
+              "Control/agents",
+              "Control/machines",
+              ".central",
+              "Work",
+          ]
+          for relative in required:
+              assert (root / relative).is_dir(), relative
+          for relative in ["Control/user", "Control/agents", "Control/machines"]:
+              assert list((root / relative).iterdir()) == [], relative
+
+          doctor = json.load(open(sys.argv[2]))
+          assert doctor["status"] == "success"
+          assert doctor["data"]["valid"] is True
+
+          actions = json.load(open(sys.argv[3]))
+          assert actions["status"] == "success"
+          ids = {item["id"] for item in actions["data"]["actions"]}
+          assert {"central.init", "central.doctor", "action.list"} <= ids
+
+          repeated = json.load(open(sys.argv[4]))
+          assert repeated["status"] == "success"
+          PY
+
   git-sync-extension:
     runs-on: ubuntu-latest
     steps:

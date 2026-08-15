@@ -69,6 +69,24 @@ The separation is intentional. Control content is not Skill procedure. Skills ar
 9. **Extensions are open-ended.** The SDK and conformance tests must let a developer or agent add support for a new environment without changing core Action logic.
 10. **The real installation tests the architecture.** The personal extension set must use the same public SDK and Connector contracts that other users use.
 
+## Source installation
+
+The base `ctrl` command has one native source-install contract:
+
+```sh
+cargo install --path ctrl
+```
+
+After installation, `ctrl --version` exposes the package version. A clean root can be initialized and inspected with:
+
+```sh
+ctrl --root /path/to/Central init
+ctrl --root /path/to/Central doctor --json
+ctrl --root /path/to/Central action list --json
+```
+
+Initialization creates only `Control/user`, `Control/agents`, `Control/machines`, `.central`, and `Work`. The Control roots start empty. See [`docs/INSTALL.md`](docs/INSTALL.md) for the complete interoperability proof and isolated-prefix form.
+
 ## Documentation
 
 Read the package in this order:
@@ -78,5 +96,6 @@ Read the package in this order:
 3. [`docs/CONTROL-CONTENT-PROTOCOL.md`](docs/CONTROL-CONTENT-PROTOCOL.md) — durable information, authorship, disclosure, and Skill boundaries.
 4. [`docs/CONNECTOR-SDK-SPEC.md`](docs/CONNECTOR-SDK-SPEC.md) — Action, Port, Connector, Surface, SDK, and conformance architecture.
 5. [`docs/PERSONAL-EXTENSION-SPEC.md`](docs/PERSONAL-EXTENSION-SPEC.md) — first real extension set used to prove and harden the open architecture.
+6. [`docs/INSTALL.md`](docs/INSTALL.md) — native `ctrl` source installation and clean-root verification.
 
 The issue tracker contains the development map and implementation tickets.
