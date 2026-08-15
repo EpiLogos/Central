@@ -2,6 +2,7 @@ mod conformance;
 mod connector;
 mod port;
 mod scoped_conformance;
+mod synchronization_conformance;
 
 pub use conformance::{
     run_configuration_manager_conformance, run_machine_inspector_conformance,
@@ -23,15 +24,19 @@ pub use port::{
     NativeRevealInput, NativeRevealOutput, ObservedConfiguration, ObservedPackage, ObservedService,
     PackageManager, PackageStateRequest, PortContract, PortError, PortErrorCode,
     PortOperationContract, ReconciliationSourceReference, ServiceManager, ServiceStateRequest,
-    StateChangePreview, StateChangeResult, TagReadInput, TagReadOutput, TagReplaceInput,
-    TagReplaceOutput, TagStore, WorkDiscovery, WorkDiscoveryInput, WorkDiscoveryOutput, WorkItem,
-    CONFIGURATION_MANAGER_OPERATIONS, CONFIGURATION_MANAGER_PORT, MACHINE_INSPECTOR_OPERATIONS,
-    MACHINE_INSPECTOR_PORT, NATIVE_OPEN_OPERATIONS, NATIVE_OPEN_PORT, NATIVE_REVEAL_OPERATIONS,
-    NATIVE_REVEAL_PORT, PACKAGE_MANAGER_OPERATIONS, PACKAGE_MANAGER_PORT,
-    SERVICE_MANAGER_OPERATIONS, SERVICE_MANAGER_PORT, TAG_STORE_OPERATIONS, TAG_STORE_PORT,
+    StateChangePreview, StateChangeResult, SynchronizationRequest, Synchronizer, TagReadInput,
+    TagReadOutput, TagReplaceInput, TagReplaceOutput, TagStore, WorkDiscovery, WorkDiscoveryInput,
+    WorkDiscoveryOutput, WorkItem, CONFIGURATION_MANAGER_OPERATIONS, CONFIGURATION_MANAGER_PORT,
+    MACHINE_INSPECTOR_OPERATIONS, MACHINE_INSPECTOR_PORT, NATIVE_OPEN_OPERATIONS, NATIVE_OPEN_PORT,
+    NATIVE_REVEAL_OPERATIONS, NATIVE_REVEAL_PORT, PACKAGE_MANAGER_OPERATIONS,
+    PACKAGE_MANAGER_PORT, SERVICE_MANAGER_OPERATIONS, SERVICE_MANAGER_PORT,
+    SYNCHRONIZER_OPERATIONS, SYNCHRONIZER_PORT, TAG_STORE_OPERATIONS, TAG_STORE_PORT,
     WORK_DISCOVERY_OPERATIONS, WORK_DISCOVERY_PORT,
 };
 pub use scoped_conformance::{
     run_scoped_machine_inspector_conformance, ScopedMachineInspectorConformanceFixture,
     ScopedMachineInspectorConformanceReport,
+};
+pub use synchronization_conformance::{
+    run_synchronizer_conformance, SynchronizerConformanceFixture, SynchronizerConformanceReport,
 };
