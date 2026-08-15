@@ -1,7 +1,9 @@
 use central_ctrl::{
     create_core_action_registry, initialize_central, run_guided_action_picker, ActionExecutionContext,
-    ConnectorContext, ConnectorRegistry, FilesystemWorkConnector, ResultStatus, RootOptions,
-    TerminalSurface,
+    CapabilityProbe, Connector, ConnectorContext, ConnectorManifest, ConnectorPortDeclaration,
+    ConnectorRegistry, FilesystemWorkConnector, NativeOpen, NativeOpenInput, NativeOpenOutput,
+    PortContract, PortError, ResultStatus, RootOptions, TerminalSurface, CONNECTOR_API_VERSION,
+    NATIVE_OPEN_PORT,
 };
 use serde_json::json;
 use std::collections::VecDeque;
@@ -41,6 +43,57 @@ impl TerminalSurface for ScriptedSurface {
     }
 }
 
+struct PickerNativeConnector {
+    manifest: ConnectorManifest,
+}
+
+impl PickerNativeConnector {
+    fn new() -> Self {
+        Self {
+            manifest: ConnectorManifest {
+                api_version: CONNECTOR_API_VERSION.to_owned(),
+                id: "test.picker-native".to_owned(),
+                version: "0.1.0".to_owned(),
+                display_name: "Picker native open".to_owned(),
+                ports: vec![ConnectorPortDeclaration {
+                    id: NATIVE_OPEN_PORT.id.to_owned(),
+                    version: NATIVE_OPEN_PORT.version.to_owned(),
+                }],
+                platforms: vec!["test".to_owned()],
+                entrypoint: "test:PickerNativeConnector".to_owned(),
+                runtime_requirements: Vec::new(),
+                dependency_probes: Vec::new(),
+                configuration_requirements: Vec::new(),
+                mutation_scope: "externally-mutating".to_owned(),
+            },
+        }
+    }
+}
+
+impl NativeOpen for PickerNativeConnector {
+    fn open(&self, input: &NativeOpenInput) -> Result<NativeOpenOutput, PortError> {
+        Ok(NativeOpenOutput { target: input.target.clone() })
+    }
+}
+
+impl Connector for PickerNativeConnector {
+    fn manifest(&self) -> &ConnectorManifest {
+        &self.manifest
+    }
+
+    fn probe(&self, port: &PortContract, context: &ConnectorContext) -> CapabilityProbe {
+        if context.platform == "test" && port.id == NATIVE_OPEN_PORT.id && port.version == NATIVE_OPEN_PORT.version {
+            CapabilityProbe::available()
+        } else {
+            CapabilityProbe::unavailable("Picker native Connector is not eligible for this request.")
+        }
+    }
+
+    fn native_open(&self) -> Option<&dyn NativeOpen> {
+        Some(self)
+    }
+}
+
 fn context<'a>(
     root: &'a PathBuf,
     connectors: &'a ConnectorRegistry,
@@ -57,6 +110,12 @@ fn filesystem_connectors() -> ConnectorRegistry {
     connectors
 }
 
+fn project_entry_connectors() -> ConnectorRegistry {
+    let mut connectors = filesystem_connectors();
+    connectors.register(PickerNativeConnector::new()).unwrap();
+    connectors
+}
+
 #[test]
 fn descriptors_publish_static_and_action_backed_selectable_inputs() {
     let registry = create_core_action_registry();
@@ -70,22 +129,24 @@ fn descriptors_publish_static_and_action_backed_selectable_inputs() {
 }
 
 #[test]
-fn guided_project_entry_searches_registry_and_executes_the_same_work_open_action() {
+fn guided_project_entry_searches_registry_confirms_mutation_and_executes_the_same_work_open_action() {
     let root = temporary_directory("guided").join("Central");
     initialize_central(&root).unwrap();
     fs::create_dir(root.join("Work").join("project-a")).unwrap();
     let registry = create_core_action_registry();
-    let connectors = filesystem_connectors();
-    let connector_context = ConnectorContext { platform: "linux".to_owned() };
+    let connectors = project_entry_connectors();
+    let connector_context = ConnectorContext { platform: "test".to_owned() };
     let mut options = RootOptions::default();
     let ctx = context(&root, &connectors, &connector_context, &mut options);
 
     let direct = registry.execute("work.open", &json!({ "query": "project-a" }), &ctx);
-    let mut surface = ScriptedSurface::new(&["work.open", "1", "1"]);
+    assert_eq!(direct.status, ResultStatus::Success);
+    let mut surface = ScriptedSurface::new(&["work.open", "1", "1", "yes"]);
     let guided = run_guided_action_picker(&registry, &ctx, &mut surface);
     assert_eq!(guided, direct);
     assert!(surface.output.iter().any(|line| line.contains("Matching Actions")));
     assert!(surface.output.iter().any(|line| line.contains("Choices for query")));
+    assert!(surface.output.iter().any(|line| line.contains("externally-mutating")));
 }
 
 #[test]
@@ -149,7 +210,6 @@ fn mutating_action_requires_confirmation_and_rejection_does_not_mutate() {
 fn real_ctrl_pick_process_uses_stdin_for_guidance_and_stdout_for_structured_result() {
     let root = temporary_directory("process").join("Central");
     initialize_central(&root).unwrap();
-    fs::create_dir(root.join("Work").join("project-a")).unwrap();
     let binary = env!("CARGO_BIN_EXE_ctrl");
     let mut child = Command::new(binary)
         .args(["--json", "--root", root.to_str().unwrap(), "pick"])
@@ -158,13 +218,13 @@ fn real_ctrl_pick_process_uses_stdin_for_guidance_and_stdout_for_structured_resu
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.as_mut().unwrap().write_all(b"work.open\n1\n1\n").unwrap();
+    child.stdin.as_mut().unwrap().write_all(b"control.open\n1\n1\n").unwrap();
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(payload["action"], "work.open");
-    assert_eq!(payload["data"]["item"]["name"], "project-a");
+    assert_eq!(payload["action"], "control.open");
+    assert_eq!(payload["data"]["target"], "user");
     let guidance = String::from_utf8_lossy(&output.stderr);
     assert!(guidance.contains("Search Actions"));
-    assert!(guidance.contains("Choices for query"));
+    assert!(guidance.contains("Choices for target"));
 }
