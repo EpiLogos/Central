@@ -77,10 +77,22 @@ pub fn run_synchronizer_conformance(
         .preview(&fixture.request)
         .map_err(|error| format!("repeat-preview: {:?}: {}", error.code, error.message))?;
     require_stable_preview(&first, &second)?;
+    if !first.changed {
+        return Err(
+            "fixture-precondition: Synchronizer conformance fixture must begin in a changeable state so apply behavior is actually exercised."
+                .to_owned(),
+        );
+    }
 
     let applied = implementation
         .apply(&fixture.request)
         .map_err(|error| format!("typed-apply: {:?}: {}", error.code, error.message))?;
+    if !applied.changed {
+        return Err(
+            "typed-apply: Synchronizer apply must report changed=true when the preceding preview was changeable."
+                .to_owned(),
+        );
+    }
     if applied.summary.trim().is_empty() {
         return Err("typed-apply: Synchronizer apply summary must be non-empty.".to_owned());
     }
@@ -109,6 +121,7 @@ pub fn run_synchronizer_conformance(
             "probe".to_owned(),
             "typed-preview".to_owned(),
             "repeat-preview".to_owned(),
+            "fixture-precondition".to_owned(),
             "typed-apply".to_owned(),
             "post-apply-preview".to_owned(),
             "idempotent-apply".to_owned(),
