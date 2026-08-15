@@ -1,0 +1,12 @@
+[package]
+name = "central-homebrew-connector"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "central_homebrew_connector"
+path = "src/lib.rs"
+
+[dependencies]
+central-connector-sdk = { path = "../../crates/connector-sdk" }

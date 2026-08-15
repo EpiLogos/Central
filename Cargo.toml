@@ -1,6 +1,8 @@
 [workspace]
 members = [
     "crates/connector-sdk",
+    "connectors/chezmoi",
+    "connectors/homebrew",
     "connectors/macos",
     "connectors/reference",
     "connectors/template",

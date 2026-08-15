@@ -1,14 +1,14 @@
 use central_connector_sdk::{
     CapabilityProbe, Connector, ConnectorContext, ConnectorManifest, ConnectorPortDeclaration,
     MachineInspectionInput, MachineInspectionOutput, MachineInspector, NativeOpen, NativeOpenInput,
-    NativeOpenOutput, NativeReveal, NativeRevealInput, NativeRevealOutput, PortContract, PortError,
-    PortErrorCode, TagReadInput, TagReadOutput, TagReplaceInput, TagReplaceOutput, TagStore,
-    CONNECTOR_API_VERSION, MACHINE_INSPECTOR_PORT, NATIVE_OPEN_PORT, NATIVE_REVEAL_PORT,
-    TAG_STORE_PORT,
+    NativeOpenOutput, NativeReveal, NativeRevealInput, NativeRevealOutput, ObservedConfiguration,
+    ObservedPackage, PortContract, PortError, PortErrorCode, TagReadInput, TagReadOutput,
+    TagReplaceInput, TagReplaceOutput, TagStore, CONNECTOR_API_VERSION, MACHINE_INSPECTOR_PORT,
+    NATIVE_OPEN_PORT, NATIVE_REVEAL_PORT, TAG_STORE_PORT,
 };
 use std::collections::BTreeSet;
 use std::io::Cursor;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const CONNECTOR_ID: &str = "personal.macos-native";
@@ -16,10 +16,22 @@ const FINDER_TAGS_XATTR: &str = "com.apple.metadata:_kMDItemUserTags";
 
 pub struct MacOsNativeConnector {
     manifest: ConnectorManifest,
+    brew_executable: PathBuf,
+    home: PathBuf,
 }
 
 impl MacOsNativeConnector {
     pub fn new() -> Self {
+        let brew_executable = std::env::var_os("CENTRAL_BREW_EXECUTABLE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("brew"));
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/"));
+        Self::with_host_tools(brew_executable, home)
+    }
+
+    pub fn with_host_tools(brew_executable: PathBuf, home: PathBuf) -> Self {
         Self {
             manifest: ConnectorManifest {
                 api_version: CONNECTOR_API_VERSION.to_owned(),
@@ -45,6 +57,8 @@ impl MacOsNativeConnector {
                 configuration_requirements: Vec::new(),
                 mutation_scope: "externally-mutating".to_owned(),
             },
+            brew_executable,
+            home,
         }
     }
 
@@ -117,6 +131,23 @@ impl MacOsNativeConnector {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_owned)
+    }
+
+    fn package_present(&self, id: &str) -> bool {
+        Command::new(&self.brew_executable)
+            .args(["list", "--formula", "--versions", id])
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+
+    fn configuration_target(&self, id: &str) -> PathBuf {
+        let target = PathBuf::from(id);
+        if target.is_absolute() {
+            target
+        } else {
+            self.home.join(target)
+        }
     }
 }
 
@@ -196,7 +227,27 @@ impl TagStore for MacOsNativeConnector {
 }
 
 impl MachineInspector for MacOsNativeConnector {
-    fn inspect(&self, _input: &MachineInspectionInput) -> Result<MachineInspectionOutput, PortError> {
+    fn inspect(&self, input: &MachineInspectionInput) -> Result<MachineInspectionOutput, PortError> {
+        let mut packages = input
+            .package_ids
+            .iter()
+            .map(|id| ObservedPackage {
+                id: id.clone(),
+                present: self.package_present(id),
+            })
+            .collect::<Vec<_>>();
+        packages.sort_by(|left, right| left.id.cmp(&right.id));
+
+        let mut configurations = input
+            .configuration_ids
+            .iter()
+            .map(|id| ObservedConfiguration {
+                id: id.clone(),
+                present: self.configuration_target(id).exists(),
+            })
+            .collect::<Vec<_>>();
+        configurations.sort_by(|left, right| left.id.cmp(&right.id));
+
         Ok(MachineInspectionOutput {
             platform: std::env::consts::OS.to_owned(),
             architecture: std::env::consts::ARCH.to_owned(),
@@ -206,8 +257,8 @@ impl MachineInspector for MacOsNativeConnector {
                 NATIVE_REVEAL_PORT.id.to_owned(),
                 TAG_STORE_PORT.id.to_owned(),
             ],
-            packages: Vec::new(),
-            configurations: Vec::new(),
+            packages,
+            configurations,
             services: Vec::new(),
         })
     }
