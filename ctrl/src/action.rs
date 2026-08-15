@@ -2,15 +2,15 @@ use crate::control::{locate_control_root, search_control, CONTROL_ROOTS};
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::{inspect_central, initialize_central, resolve_central_root, RootOptions};
 use central_connector_sdk::{
-    ConnectorContext, ConnectorDiagnostics, ConnectorRegistry, WorkDiscoveryInput, WorkItem,
-    WORK_DISCOVERY_PORT,
+    ConnectorContext, ConnectorDiagnostics, ConnectorRegistry, NativeOpenInput, NativeRevealInput,
+    WorkDiscoveryInput, WorkItem, NATIVE_OPEN_PORT, NATIVE_REVEAL_PORT, WORK_DISCOVERY_PORT,
 };
 use serde::Serialize;
 use serde_json::{json, to_value, Value};
 use std::collections::BTreeMap;
 use std::io;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum MutationClass {
@@ -137,6 +137,15 @@ struct DiscoveredWork {
     diagnostics: ConnectorDiagnostics,
 }
 
+#[derive(Debug, Clone)]
+struct SelectedWork {
+    query: String,
+    match_kind: &'static str,
+    item: WorkItem,
+    root: PathBuf,
+    diagnostics: ConnectorDiagnostics,
+}
+
 fn descriptor(id: &str, title: &str, description: &str, mutation_class: MutationClass, output_type: &str) -> ActionDescriptor {
     ActionDescriptor {
         id: id.to_owned(),
@@ -159,6 +168,16 @@ fn string_input(name: &str) -> ActionInputDefinition {
         choices: None,
         selection: None,
     }
+}
+
+fn work_query_input() -> ActionInputDefinition {
+    let mut query = string_input("query");
+    query.selection = Some(ActionInputSelection {
+        action: "work.list".to_owned(),
+        collection: "items".to_owned(),
+        value_field: "name".to_owned(),
+    });
+    query
 }
 
 fn required_text(input: &Value, field: &str, action: &str) -> Result<String, ActionResult> {
@@ -322,6 +341,118 @@ fn work_matches<'a>(items: &'a [WorkItem], query: &str) -> Vec<&'a WorkItem> {
     items.iter().filter(|item| item.name.to_lowercase().contains(&needle)).collect()
 }
 
+fn select_work(action_id: &str, input: &Value, context: &ActionExecutionContext<'_>) -> Result<SelectedWork, ActionResult> {
+    let query = required_text(input, "query", action_id)?;
+    let discovered = discover_work(action_id, context)?;
+    let normalized = query.to_lowercase();
+    let exact = discovered.items.iter().find(|item| item.name.to_lowercase() == normalized);
+    if let Some(item) = exact {
+        return Ok(SelectedWork {
+            query,
+            match_kind: "exact",
+            item: item.clone(),
+            root: discovered.root,
+            diagnostics: discovered.diagnostics,
+        });
+    }
+
+    let matches = work_matches(&discovered.items, &query);
+    if matches.is_empty() {
+        return Err(ActionResult::failure(
+            Some(action_id),
+            ResultStatus::InvalidInput,
+            format!("No Work item matches: {query}"),
+            Some(json!({ "query": query, "matches": [] })),
+        ));
+    }
+    if matches.len() > 1 {
+        return Err(ActionResult::failure(
+            Some(action_id),
+            ResultStatus::InvalidInput,
+            format!("Work search is ambiguous: {query}"),
+            Some(json!({ "query": query, "matches": matches })),
+        ));
+    }
+
+    Ok(SelectedWork {
+        query,
+        match_kind: "search",
+        item: matches[0].clone(),
+        root: discovered.root,
+        diagnostics: discovered.diagnostics,
+    })
+}
+
+fn invoke_native_open(action_id: &str, target: &Path, context: &ActionExecutionContext<'_>) -> Result<ConnectorDiagnostics, ActionResult> {
+    let resolution = context.connectors.resolve(&NATIVE_OPEN_PORT, context.connector_context);
+    let diagnostics = resolution.diagnostics.clone();
+    let Some(connector) = resolution.connector else {
+        return Err(ActionResult::failure(
+            Some(action_id),
+            ResultStatus::UnavailableCapability,
+            format!("No eligible Connector implements {}.", NATIVE_OPEN_PORT.id),
+            Some(json!({ "port": NATIVE_OPEN_PORT.id, "diagnostics": diagnostics })),
+        ));
+    };
+    let Some(implementation) = connector.native_open() else {
+        return Err(ActionResult::failure(
+            Some(action_id),
+            ResultStatus::ConnectorFailure,
+            format!("Selected Connector does not expose {} implementation.", NATIVE_OPEN_PORT.id),
+            Some(json!({ "port": NATIVE_OPEN_PORT.id, "connector": connector.manifest().id, "diagnostics": diagnostics })),
+        ));
+    };
+    match implementation.open(&NativeOpenInput { target: target.to_path_buf() }) {
+        Ok(_) => Ok(diagnostics),
+        Err(error) => Err(ActionResult::failure(
+            Some(action_id),
+            ResultStatus::ConnectorFailure,
+            format!("Connector failed while executing {}.", NATIVE_OPEN_PORT.id),
+            Some(json!({
+                "port": NATIVE_OPEN_PORT.id,
+                "connector": connector.manifest().id,
+                "provider_error": error,
+                "diagnostics": diagnostics,
+            })),
+        )),
+    }
+}
+
+fn invoke_native_reveal(action_id: &str, target: &Path, context: &ActionExecutionContext<'_>) -> Result<ConnectorDiagnostics, ActionResult> {
+    let resolution = context.connectors.resolve(&NATIVE_REVEAL_PORT, context.connector_context);
+    let diagnostics = resolution.diagnostics.clone();
+    let Some(connector) = resolution.connector else {
+        return Err(ActionResult::failure(
+            Some(action_id),
+            ResultStatus::UnavailableCapability,
+            format!("No eligible Connector implements {}.", NATIVE_REVEAL_PORT.id),
+            Some(json!({ "port": NATIVE_REVEAL_PORT.id, "diagnostics": diagnostics })),
+        ));
+    };
+    let Some(implementation) = connector.native_reveal() else {
+        return Err(ActionResult::failure(
+            Some(action_id),
+            ResultStatus::ConnectorFailure,
+            format!("Selected Connector does not expose {} implementation.", NATIVE_REVEAL_PORT.id),
+            Some(json!({ "port": NATIVE_REVEAL_PORT.id, "connector": connector.manifest().id, "diagnostics": diagnostics })),
+        ));
+    };
+    match implementation.reveal(&NativeRevealInput { target: target.to_path_buf() }) {
+        Ok(_) => Ok(diagnostics),
+        Err(error) => Err(ActionResult::failure(
+            Some(action_id),
+            ResultStatus::ConnectorFailure,
+            format!("Connector failed while executing {}.", NATIVE_REVEAL_PORT.id),
+            Some(json!({
+                "port": NATIVE_REVEAL_PORT.id,
+                "connector": connector.manifest().id,
+                "provider_error": error,
+                "diagnostics": diagnostics,
+            })),
+        )),
+    }
+}
+
 fn work_list_action(_registry: &ActionRegistry, _input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
     match discover_work("work.list", context) {
         Ok(discovered) => ActionResult::success("work.list", to_value(discovered).expect("Work discovery serializes")),
@@ -351,41 +482,45 @@ fn work_search_action(_registry: &ActionRegistry, input: &Value, context: &Actio
 }
 
 fn work_open_action(_registry: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
-    let query = match required_text(input, "query", "work.open") {
-        Ok(query) => query,
+    let selected = match select_work("work.open", input, context) {
+        Ok(selected) => selected,
         Err(result) => return result,
     };
-    let discovered = match discover_work("work.open", context) {
-        Ok(discovered) => discovered,
+    let native_diagnostics = match invoke_native_open("work.open", &selected.item.path, context) {
+        Ok(diagnostics) => diagnostics,
         Err(result) => return result,
     };
-    let normalized = query.to_lowercase();
-    let exact = discovered.items.iter().find(|item| item.name.to_lowercase() == normalized);
-    let matches = if let Some(item) = exact { vec![item] } else { work_matches(&discovered.items, &query) };
-    if matches.is_empty() {
-        return ActionResult::failure(
-            Some("work.open"),
-            ResultStatus::InvalidInput,
-            format!("No Work item matches: {query}"),
-            Some(json!({ "query": query, "matches": [] })),
-        );
-    }
-    if matches.len() > 1 {
-        return ActionResult::failure(
-            Some("work.open"),
-            ResultStatus::InvalidInput,
-            format!("Work search is ambiguous: {query}"),
-            Some(json!({ "query": query, "matches": matches })),
-        );
-    }
     ActionResult::success(
         "work.open",
         json!({
-            "query": query,
-            "match": if exact.is_some() { "exact" } else { "search" },
-            "item": matches[0],
-            "root": discovered.root,
-            "diagnostics": discovered.diagnostics,
+            "query": selected.query,
+            "match": selected.match_kind,
+            "item": selected.item,
+            "root": selected.root,
+            "diagnostics": selected.diagnostics,
+            "native": { "port": NATIVE_OPEN_PORT.id, "diagnostics": native_diagnostics },
+        }),
+    )
+}
+
+fn work_reveal_action(_registry: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+    let selected = match select_work("work.reveal", input, context) {
+        Ok(selected) => selected,
+        Err(result) => return result,
+    };
+    let native_diagnostics = match invoke_native_reveal("work.reveal", &selected.item.path, context) {
+        Ok(diagnostics) => diagnostics,
+        Err(result) => return result,
+    };
+    ActionResult::success(
+        "work.reveal",
+        json!({
+            "query": selected.query,
+            "match": selected.match_kind,
+            "item": selected.item,
+            "root": selected.root,
+            "diagnostics": selected.diagnostics,
+            "native": { "port": NATIVE_REVEAL_PORT.id, "diagnostics": native_diagnostics },
         }),
     )
 }
@@ -457,19 +592,24 @@ pub fn create_core_action_registry() -> ActionRegistry {
 
     let mut work_open = descriptor(
         "work.open",
-        "Enter Work item",
-        "Resolve one ordinary Work directory by exact name or unambiguous search.",
-        MutationClass::ReadOnly,
-        "work-item-selection",
+        "Open Work item",
+        "Resolve one ordinary Work directory, then open it through the provider-neutral NativeOpen Port.",
+        MutationClass::ExternallyMutating,
+        "work-item-open",
     );
-    let mut query = string_input("query");
-    query.selection = Some(ActionInputSelection {
-        action: "work.list".to_owned(),
-        collection: "items".to_owned(),
-        value_field: "name".to_owned(),
-    });
-    work_open.inputs = vec![query];
-    work_open.required_ports = vec![WORK_DISCOVERY_PORT.id.to_owned()];
+    work_open.inputs = vec![work_query_input()];
+    work_open.required_ports = vec![WORK_DISCOVERY_PORT.id.to_owned(), NATIVE_OPEN_PORT.id.to_owned()];
     registry.register(work_open, work_open_action).expect("core Action ids are valid");
+
+    let mut work_reveal = descriptor(
+        "work.reveal",
+        "Reveal Work item",
+        "Resolve one ordinary Work directory, then reveal it through the provider-neutral NativeReveal Port.",
+        MutationClass::ExternallyMutating,
+        "work-item-reveal",
+    );
+    work_reveal.inputs = vec![work_query_input()];
+    work_reveal.required_ports = vec![WORK_DISCOVERY_PORT.id.to_owned(), NATIVE_REVEAL_PORT.id.to_owned()];
+    registry.register(work_reveal, work_reveal_action).expect("core Action ids are valid");
     registry
 }

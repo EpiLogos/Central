@@ -1,0 +1,92 @@
+name: product-acceptance
+
+on:
+  push:
+    branches:
+      - build/central-ticket-19
+  pull_request:
+    branches:
+      - build/central-wayfinder-rust
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core-and-public-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Core, SDK, Skills, fresh Connector proof, and product regressions
+        run: cargo test --workspace
+      - name: Core remains independent of the fresh proving Connector
+        shell: bash
+        run: |
+          cargo tree -p ctrl --edges normal > "$RUNNER_TEMP/ctrl-tree.txt"
+          cat "$RUNNER_TEMP/ctrl-tree.txt"
+          if grep -q 'central-git-sync-connector' "$RUNNER_TEMP/ctrl-tree.txt"; then
+            echo 'personal Git Synchronizer leaked into ctrl core dependencies' >&2
+            exit 1
+          fi
+
+  macos-machine-and-recovery:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: build/central-ticket-16
+      - uses: dtolnay/rust-toolchain@stable
+      - name: macOS native, Homebrew, chezmoi, and canonical recovery
+        run: cargo test --workspace
+      - name: Core remains independent of macOS provider crates
+        shell: bash
+        run: |
+          cargo tree -p ctrl --edges normal > "$RUNNER_TEMP/ctrl-tree.txt"
+          cat "$RUNNER_TEMP/ctrl-tree.txt"
+          if grep -E 'central-(macos|homebrew|chezmoi)-connector' "$RUNNER_TEMP/ctrl-tree.txt"; then
+            echo 'personal macOS provider leaked into ctrl core dependencies' >&2
+            exit 1
+          fi
+
+  macos-surface-and-automation:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: build/central-ticket-15
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Shortcuts public Connector conformance
+        run: cargo test --manifest-path connectors/shortcuts/Cargo.toml
+      - name: Descriptor-driven macOS host Surface
+        run: cargo test --manifest-path surfaces/macos-host/Cargo.toml
+      - name: Raycast contract and build
+        working-directory: surfaces/raycast
+        run: |
+          npm install --ignore-scripts
+          npx tsc --noEmit
+          npm run build
+
+  ubuntu-machine-and-recovery:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: build/central-ticket-17
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Ubuntu public Port conformance and hosted provider acceptance
+        run: cargo test --workspace
+      - name: Headless Ubuntu host compiles
+        run: cargo build -p central-ubuntu-host --bin ctrl-ubuntu
+      - name: Core remains independent of personal platform extensions
+        shell: bash
+        run: |
+          cargo tree -p ctrl --edges normal > "$RUNNER_TEMP/ctrl-tree.txt"
+          cat "$RUNNER_TEMP/ctrl-tree.txt"
+          if grep -E 'central-(ubuntu|macos|shortcuts|homebrew|chezmoi)' "$RUNNER_TEMP/ctrl-tree.txt"; then
+            echo 'personal platform extension leaked into ctrl core dependencies' >&2
+            exit 1
+          fi

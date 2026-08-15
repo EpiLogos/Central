@@ -4,6 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 pub const CONTROL_ROOTS: [&str; 3] = ["user", "agents", "machines"];
+pub const AGENT_RETRIEVAL_DENY_MARKER: &str = ".no-agent-retrieval";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -59,15 +60,36 @@ pub fn locate_control_root(central_root: &Path, target: &str) -> Result<ControlS
     })
 }
 
-fn readable_files(directory: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
+fn readable_files(
+    central_root: &Path,
+    target: &str,
+    directory: &Path,
+    files: &mut Vec<PathBuf>,
+    skipped_sources: &mut Vec<ControlSkippedSource>,
+) -> io::Result<()> {
+    let deny_marker = directory.join(AGENT_RETRIEVAL_DENY_MARKER);
+    if deny_marker.is_file() {
+        skipped_sources.push(ControlSkippedSource {
+            target: target.to_owned(),
+            source_path: directory
+                .strip_prefix(central_root)
+                .unwrap_or(directory)
+                .to_path_buf(),
+            source_class: SourceClass::Authored,
+            reason: "not_agent_readable".to_owned(),
+        });
+        return Ok(());
+    }
+
     let mut entries = fs::read_dir(directory)?.collect::<Result<Vec<_>, _>>()?;
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
+        let path = entry.path();
         let file_type = entry.file_type()?;
         if file_type.is_dir() {
-            readable_files(&entry.path(), files)?;
-        } else if file_type.is_file() {
-            files.push(entry.path());
+            readable_files(central_root, target, &path, files, skipped_sources)?;
+        } else if file_type.is_file() && entry.file_name() != AGENT_RETRIEVAL_DENY_MARKER {
+            files.push(path);
         }
     }
     Ok(())
@@ -99,7 +121,13 @@ pub fn search_control(central_root: &Path, query: &str) -> io::Result<ControlSea
 
     for root in &roots {
         let mut files = Vec::new();
-        readable_files(&root.path, &mut files)?;
+        readable_files(
+            central_root,
+            &root.target,
+            &root.path,
+            &mut files,
+            &mut skipped_sources,
+        )?;
         for path in files {
             let source_path = path.strip_prefix(central_root).unwrap_or(&path).to_path_buf();
             let bytes = fs::read(&path)?;
