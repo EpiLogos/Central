@@ -35,6 +35,22 @@ pub const WORK_DISCOVERY_PORT: PortContract = PortContract {
     operations: &WORK_DISCOVERY_OPERATIONS,
 };
 
+pub const AUTOMATION_OPERATIONS: [PortOperationContract; 1] = [PortOperationContract {
+    name: "run",
+    input_type: "AutomationRunInput",
+    output_type: "AutomationRunOutput",
+    mutation_class: "externally-mutating",
+    preview_required: false,
+    idempotent: false,
+}];
+
+pub const AUTOMATION_PORT: PortContract = PortContract {
+    id: "Automation",
+    version: "1.0.0",
+    purpose: "Invoke a named host automation without coupling the canonical Action to one automation provider.",
+    operations: &AUTOMATION_OPERATIONS,
+};
+
 pub const NATIVE_OPEN_OPERATIONS: [PortOperationContract; 1] = [PortOperationContract {
     name: "open",
     input_type: "NativeOpenInput",
@@ -204,6 +220,16 @@ pub struct WorkDiscoveryOutput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AutomationRunInput {
+    pub automation: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AutomationRunOutput {
+    pub automation: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NativeOpenInput {
     pub target: PathBuf,
 }
@@ -366,6 +392,10 @@ impl PortError {
 
 pub trait WorkDiscovery: Send + Sync {
     fn list(&self, input: &WorkDiscoveryInput) -> Result<WorkDiscoveryOutput, PortError>;
+}
+
+pub trait Automation: Send + Sync {
+    fn run(&self, input: &AutomationRunInput) -> Result<AutomationRunOutput, PortError>;
 }
 
 pub trait NativeOpen: Send + Sync {

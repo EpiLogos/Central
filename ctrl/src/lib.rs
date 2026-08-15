@@ -7,8 +7,9 @@ pub mod result;
 pub mod root;
 
 pub use action::{
-    create_core_action_registry, ActionDescriptor, ActionExecutionContext, ActionInputDefinition,
-    ActionInputSelection, ActionRegistry, MutationClass,
+    create_core_action_registry, ActionAvailability, ActionDescriptor, ActionExecutionContext,
+    ActionInputDefinition, ActionInputSelection, ActionOutputDefinition, ActionRegistry,
+    MutationClass,
 };
 pub use cli::{run_cli, run_cli_with_runtime, run_cli_with_surface, CliEnvironment, CliExecution};
 pub use control::{

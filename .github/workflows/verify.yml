@@ -35,3 +35,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --workspace
+
+  raycast-surface:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Type-check and build Raycast Surface
+        working-directory: surfaces/raycast
+        run: |
+          npm install --ignore-scripts
+          npx tsc --noEmit
+          npm run build

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "central-actions",
+  "title": "Central Actions",
+  "description": "Search and invoke canonical Central Actions through the macOS host Surface.",
+  "icon": "command-icon.png",
+  "author": "epilogos",
+  "categories": ["Developer Tools", "Productivity"],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "central-actions",
+      "title": "Central Actions",
+      "description": "Search canonical Central Actions",
+      "mode": "view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "ctrlPath",
+      "title": "Central macOS command",
+      "description": "Path or executable name for the ctrl-macos host Surface.",
+      "type": "textfield",
+      "required": true,
+      "default": "ctrl-macos"
+    },
+    {
+      "name": "centralRoot",
+      "title": "Central root",
+      "description": "Optional explicit Central root passed as --root.",
+      "type": "textfield",
+      "required": false
+    },
+    {
+      "name": "actionHotkeys",
+      "title": "Action hotkeys",
+      "description": "Optional JSON map from Action id to Raycast shortcut, for example {\"work.open\":\"cmd+shift+o\"}.",
+      "type": "textfield",
+      "required": false
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.100.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "typescript": "^5.8.0"
+  },
+  "scripts": {
+    "dev": "ray develop",
+    "build": "ray build",
+    "lint": "ray lint"
+  }
+}
