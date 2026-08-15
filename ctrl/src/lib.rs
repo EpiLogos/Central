@@ -3,6 +3,7 @@ pub mod cli;
 pub mod control;
 pub mod machine;
 pub mod picker;
+pub mod recovery;
 pub mod result;
 pub mod root;
 
@@ -29,23 +30,32 @@ pub use picker::{
     run_guided_action_picker, search_action_descriptors, NullTerminalSurface, StdioTerminalSurface,
     TerminalSurface,
 };
+pub use recovery::{
+    explain_recovery, explain_recovery_plan, AuthoredRecoveryDeclaration, RecoveryDeclaration,
+    RecoveryDeclarationSource, RecoveryPlan, RecoverySynchronizationPlan,
+    RecoverySynchronizationStatus, SynchronizationDeclaration, RECOVERY_DECLARATION_SCHEMA,
+    RECOVERY_DECLARATION_VERSION,
+};
 pub use central_connector_sdk::{
     run_configuration_manager_conformance, run_machine_inspector_conformance,
     run_native_open_conformance, run_native_reveal_conformance, run_package_manager_conformance,
-    run_service_manager_conformance, run_tag_store_conformance, validate_connector_manifest,
-    CapabilityProbe, ConfigurationManager, ConfigurationManagerConformanceFixture,
-    ConfigurationStateRequest, Connector, ConnectorContext, ConnectorDiagnostics, ConnectorManifest,
-    ConnectorPortDeclaration, ConnectorRegistry, ConnectorSummary, MachineInspectionInput,
-    MachineInspectionOutput, MachineInspector, MachineInspectorConformanceFixture, NativeOpen,
-    NativeOpenInput, NativeOpenOutput, NativeReveal, NativeRevealInput, NativeRevealOutput,
+    run_service_manager_conformance, run_synchronizer_conformance, run_tag_store_conformance,
+    validate_connector_manifest, CapabilityProbe, ConfigurationManager,
+    ConfigurationManagerConformanceFixture, ConfigurationStateRequest, Connector,
+    ConnectorContext, ConnectorDiagnostics, ConnectorManifest, ConnectorPortDeclaration,
+    ConnectorRegistry, ConnectorSummary, MachineInspectionInput, MachineInspectionOutput,
+    MachineInspector, MachineInspectorConformanceFixture, NativeOpen, NativeOpenInput,
+    NativeOpenOutput, NativeReveal, NativeRevealInput, NativeRevealOutput,
     NativeTargetConformanceFixture, ObservedConfiguration, ObservedPackage, ObservedService,
     PackageManager, PackageManagerConformanceFixture, PackageStateRequest, PortContract, PortError,
     PortErrorCode, ReconciliationSourceReference, ServiceManager, ServiceManagerConformanceFixture,
-    ServiceStateRequest, StateChangePreview, StateChangeResult, TagReadInput, TagReadOutput,
-    TagReplaceInput, TagReplaceOutput, TagStore, TagStoreConformanceFixture, WorkDiscovery,
-    WorkDiscoveryInput, WorkDiscoveryOutput, WorkItem, CONFIGURATION_MANAGER_PORT,
+    ServiceStateRequest, StateChangePreview, StateChangeResult, SynchronizationRequest,
+    Synchronizer, SynchronizerConformanceFixture, SynchronizerConformanceReport, TagReadInput,
+    TagReadOutput, TagReplaceInput, TagReplaceOutput, TagStore, TagStoreConformanceFixture,
+    WorkDiscovery, WorkDiscoveryInput, WorkDiscoveryOutput, WorkItem, CONFIGURATION_MANAGER_PORT,
     CONNECTOR_API_VERSION, MACHINE_INSPECTOR_PORT, NATIVE_OPEN_PORT, NATIVE_REVEAL_PORT,
-    PACKAGE_MANAGER_PORT, SERVICE_MANAGER_PORT, TAG_STORE_PORT, WORK_DISCOVERY_PORT,
+    PACKAGE_MANAGER_PORT, SERVICE_MANAGER_PORT, SYNCHRONIZER_PORT, TAG_STORE_PORT,
+    WORK_DISCOVERY_PORT,
 };
 pub use central_reference_connectors::{
     create_default_connector_registry, FilesystemWorkConnector, InMemoryMachineConnector,

@@ -99,6 +99,8 @@ fn registry_has_stable_ids_and_complete_descriptors() {
         "action.list",
         "central.doctor",
         "central.init",
+        "central.recover",
+        "central.recovery.plan",
         "central.root",
         "control.open",
         "control.search",
@@ -143,6 +145,8 @@ fn action_list_has_human_and_structured_cli_renderings() {
     let human = central_ctrl::run_cli(&["actions".to_owned()], &environment);
     assert_eq!(human.exit_code, 0);
     assert!(human.output.contains("action.list\tList Actions"));
+    assert!(human.output.contains("central.recovery.plan\tPlan Central recovery"));
+    assert!(human.output.contains("central.recover\tRecover Central machine state"));
     assert!(human.output.contains("machine.inspect\tInspect current machine"));
     assert!(human.output.contains("machine.plan\tPlan machine changes"));
     assert!(human.output.contains("machine.apply\tApply machine plan"));
@@ -154,7 +158,7 @@ fn action_list_has_human_and_structured_cli_renderings() {
     assert_eq!(structured.exit_code, 0);
     let value: serde_json::Value = serde_json::from_str(&structured.output).unwrap();
     assert_eq!(value["status"], "success");
-    assert_eq!(value["data"]["actions"].as_array().unwrap().len(), 15);
+    assert_eq!(value["data"]["actions"].as_array().unwrap().len(), 17);
 }
 
 #[test]
