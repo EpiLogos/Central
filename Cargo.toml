@@ -3,7 +3,9 @@ members = [
     "crates/connector-sdk",
     "connectors/macos",
     "connectors/reference",
+    "connectors/shortcuts",
     "connectors/template",
     "ctrl",
+    "surfaces/macos-host",
 ]
 resolver = "2"
