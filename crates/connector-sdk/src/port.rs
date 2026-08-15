@@ -187,6 +187,32 @@ pub const SERVICE_MANAGER_PORT: PortContract = PortContract {
     operations: &SERVICE_MANAGER_OPERATIONS,
 };
 
+pub const SYNCHRONIZER_OPERATIONS: [PortOperationContract; 2] = [
+    PortOperationContract {
+        name: "preview",
+        input_type: "SynchronizationRequest",
+        output_type: "StateChangePreview",
+        mutation_class: "read-only",
+        preview_required: false,
+        idempotent: true,
+    },
+    PortOperationContract {
+        name: "apply",
+        input_type: "SynchronizationRequest",
+        output_type: "StateChangeResult",
+        mutation_class: "externally-mutating",
+        preview_required: true,
+        idempotent: true,
+    },
+];
+
+pub const SYNCHRONIZER_PORT: PortContract = PortContract {
+    id: "Synchronizer",
+    version: "1.0.0",
+    purpose: "Preview and apply a configured synchronization relation without coupling recovery Actions to one synchronization provider.",
+    operations: &SYNCHRONIZER_OPERATIONS,
+};
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WorkDiscoveryInput {
     pub work_root: PathBuf,
@@ -317,6 +343,12 @@ pub struct ServiceStateRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SynchronizationRequest {
+    pub id: String,
+    pub source: Option<ReconciliationSourceReference>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StateChangePreview {
     pub changed: bool,
     pub summary: String,
@@ -398,4 +430,9 @@ pub trait ConfigurationManager: Send + Sync {
 pub trait ServiceManager: Send + Sync {
     fn preview(&self, input: &ServiceStateRequest) -> Result<StateChangePreview, PortError>;
     fn apply(&self, input: &ServiceStateRequest) -> Result<StateChangeResult, PortError>;
+}
+
+pub trait Synchronizer: Send + Sync {
+    fn preview(&self, input: &SynchronizationRequest) -> Result<StateChangePreview, PortError>;
+    fn apply(&self, input: &SynchronizationRequest) -> Result<StateChangeResult, PortError>;
 }
