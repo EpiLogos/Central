@@ -1,5 +1,6 @@
 mod conformance;
 mod connector;
+mod notification;
 mod port;
 
 pub use conformance::{
@@ -15,6 +16,11 @@ pub use connector::{
     validate_connector_manifest, CapabilityProbe, Connector, ConnectorContext, ConnectorDiagnostics,
     ConnectorManifest, ConnectorPortDeclaration, ConnectorRegistry, ConnectorResolution,
     ConnectorSummary, IneligibleConnector, ManifestError, CONNECTOR_API_VERSION,
+};
+pub use notification::{
+    NotificationAuthorizationState, NotificationCapabilities, NotificationCapabilityRequest,
+    NotificationDelivery, NotificationDeliveryState, NotificationRequest, UserNotification,
+    USER_NOTIFICATION_OPERATIONS, USER_NOTIFICATION_PORT,
 };
 pub use port::{
     ConfigurationManager, ConfigurationStateRequest, MachineInspectionInput, MachineInspectionOutput,
