@@ -2,13 +2,15 @@ pub mod action;
 pub mod cli;
 pub mod control;
 pub mod machine;
+pub mod personal;
 pub mod picker;
 pub mod result;
 pub mod root;
 
 pub use action::{
-    create_core_action_registry, ActionDescriptor, ActionExecutionContext, ActionInputDefinition,
-    ActionInputSelection, ActionRegistry, MutationClass,
+    create_core_action_registry, ActionAvailability, ActionDescriptor, ActionExecutionContext,
+    ActionInputDefinition, ActionInputSelection, ActionOutputDefinition, ActionRegistry,
+    MutationClass,
 };
 pub use cli::{run_cli, run_cli_with_runtime, run_cli_with_surface, CliEnvironment, CliExecution};
 pub use control::{
@@ -25,6 +27,7 @@ pub use machine::{
     MachineVerification, ObservedMachine, PackageRequirement, PresenceState, ServiceRequirement,
     MACHINE_DECLARATION_SCHEMA, MACHINE_DECLARATION_VERSION,
 };
+pub use personal::{create_personal_action_registry, register_personal_actions};
 pub use picker::{
     run_guided_action_picker, search_action_descriptors, NullTerminalSurface, StdioTerminalSurface,
     TerminalSurface,
@@ -38,14 +41,17 @@ pub use central_connector_sdk::{
     ConnectorPortDeclaration, ConnectorRegistry, ConnectorSummary, MachineInspectionInput,
     MachineInspectionOutput, MachineInspector, MachineInspectorConformanceFixture, NativeOpen,
     NativeOpenInput, NativeOpenOutput, NativeReveal, NativeRevealInput, NativeRevealOutput,
-    NativeTargetConformanceFixture, ObservedConfiguration, ObservedPackage, ObservedService,
-    PackageManager, PackageManagerConformanceFixture, PackageStateRequest, PortContract, PortError,
-    PortErrorCode, ReconciliationSourceReference, ServiceManager, ServiceManagerConformanceFixture,
+    NativeTargetConformanceFixture, NotificationAuthorizationState, NotificationCapabilities,
+    NotificationCapabilityRequest, NotificationDelivery, NotificationDeliveryState,
+    NotificationRequest, ObservedConfiguration, ObservedPackage, ObservedService, PackageManager,
+    PackageManagerConformanceFixture, PackageStateRequest, PortContract, PortError, PortErrorCode,
+    ReconciliationSourceReference, ServiceManager, ServiceManagerConformanceFixture,
     ServiceStateRequest, StateChangePreview, StateChangeResult, TagReadInput, TagReadOutput,
-    TagReplaceInput, TagReplaceOutput, TagStore, TagStoreConformanceFixture, WorkDiscovery,
-    WorkDiscoveryInput, WorkDiscoveryOutput, WorkItem, CONFIGURATION_MANAGER_PORT,
+    TagReplaceInput, TagReplaceOutput, TagStore, TagStoreConformanceFixture, UserNotification,
+    WorkDiscovery, WorkDiscoveryInput, WorkDiscoveryOutput, WorkItem, CONFIGURATION_MANAGER_PORT,
     CONNECTOR_API_VERSION, MACHINE_INSPECTOR_PORT, NATIVE_OPEN_PORT, NATIVE_REVEAL_PORT,
-    PACKAGE_MANAGER_PORT, SERVICE_MANAGER_PORT, TAG_STORE_PORT, WORK_DISCOVERY_PORT,
+    PACKAGE_MANAGER_PORT, SERVICE_MANAGER_PORT, TAG_STORE_PORT, USER_NOTIFICATION_PORT,
+    WORK_DISCOVERY_PORT,
 };
 pub use central_reference_connectors::{
     create_default_connector_registry, FilesystemWorkConnector, InMemoryMachineConnector,
