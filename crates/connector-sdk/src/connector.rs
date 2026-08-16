@@ -1,3 +1,4 @@
+use crate::notification::UserNotification;
 use crate::port::{
     ConfigurationManager, MachineInspector, NativeOpen, NativeReveal, PackageManager, PortContract,
     ServiceManager, TagStore, WorkDiscovery,
@@ -134,6 +135,9 @@ pub trait Connector: Send + Sync {
         None
     }
     fn service_manager(&self) -> Option<&dyn ServiceManager> {
+        None
+    }
+    fn user_notification(&self) -> Option<&dyn UserNotification> {
         None
     }
 }

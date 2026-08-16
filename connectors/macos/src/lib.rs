@@ -1,10 +1,12 @@
+mod notification;
+
 use central_connector_sdk::{
     CapabilityProbe, Connector, ConnectorContext, ConnectorManifest, ConnectorPortDeclaration,
     MachineInspectionInput, MachineInspectionOutput, MachineInspector, NativeOpen, NativeOpenInput,
     NativeOpenOutput, NativeReveal, NativeRevealInput, NativeRevealOutput, PortContract, PortError,
     PortErrorCode, TagReadInput, TagReadOutput, TagReplaceInput, TagReplaceOutput, TagStore,
     CONNECTOR_API_VERSION, MACHINE_INSPECTOR_PORT, NATIVE_OPEN_PORT, NATIVE_REVEAL_PORT,
-    TAG_STORE_PORT,
+    TAG_STORE_PORT, USER_NOTIFICATION_PORT,
 };
 use std::collections::BTreeSet;
 use std::io::Cursor;
@@ -24,13 +26,14 @@ impl MacOsNativeConnector {
             manifest: ConnectorManifest {
                 api_version: CONNECTOR_API_VERSION.to_owned(),
                 id: CONNECTOR_ID.to_owned(),
-                version: "0.1.0".to_owned(),
+                version: "0.2.0".to_owned(),
                 display_name: "macOS native host integration".to_owned(),
                 ports: [
                     NATIVE_OPEN_PORT,
                     NATIVE_REVEAL_PORT,
                     TAG_STORE_PORT,
                     MACHINE_INSPECTOR_PORT,
+                    USER_NOTIFICATION_PORT,
                 ]
                 .iter()
                 .map(|port| ConnectorPortDeclaration {
@@ -41,8 +44,8 @@ impl MacOsNativeConnector {
                 platforms: vec!["macos".to_owned()],
                 entrypoint: "rust:central-macos-connectors::MacOsNativeConnector".to_owned(),
                 runtime_requirements: vec!["macOS".to_owned()],
-                dependency_probes: vec!["/usr/bin/open".to_owned()],
-                configuration_requirements: Vec::new(),
+                dependency_probes: vec!["/usr/bin/open".to_owned(), "/usr/bin/osascript".to_owned()],
+                configuration_requirements: vec!["macOS Notification settings govern notification presentation".to_owned()],
                 mutation_scope: "externally-mutating".to_owned(),
             },
         }
@@ -205,6 +208,7 @@ impl MachineInspector for MacOsNativeConnector {
                 NATIVE_OPEN_PORT.id.to_owned(),
                 NATIVE_REVEAL_PORT.id.to_owned(),
                 TAG_STORE_PORT.id.to_owned(),
+                USER_NOTIFICATION_PORT.id.to_owned(),
             ],
             packages: Vec::new(),
             configurations: Vec::new(),
@@ -239,6 +243,9 @@ impl Connector for MacOsNativeConnector {
         if matches!(port.id, "NativeOpen" | "NativeReveal") && !Path::new("/usr/bin/open").is_file() {
             return CapabilityProbe::unavailable("Required dependency is missing: /usr/bin/open");
         }
+        if port.id == USER_NOTIFICATION_PORT.id && !Path::new("/usr/bin/osascript").is_file() {
+            return CapabilityProbe::unavailable("Required dependency is missing: /usr/bin/osascript");
+        }
         CapabilityProbe::available()
     }
 
@@ -255,6 +262,10 @@ impl Connector for MacOsNativeConnector {
     }
 
     fn machine_inspector(&self) -> Option<&dyn MachineInspector> {
+        Some(self)
+    }
+
+    fn user_notification(&self) -> Option<&dyn central_connector_sdk::UserNotification> {
         Some(self)
     }
 }
