@@ -1,0 +1,16 @@
+[package]
+name = "central-git-sync-connector"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "central_git_sync_connector"
+path = "src/lib.rs"
+
+[dependencies]
+central-connector-sdk = { path = "../../crates/connector-sdk" }
+
+[dev-dependencies]
+central-ctrl = { package = "ctrl", path = "../../ctrl" }
+serde_json = "1"

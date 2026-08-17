@@ -1,0 +1,9 @@
+[workspace]
+members = [
+    "crates/connector-sdk",
+    "connectors/git-sync",
+    "connectors/reference",
+    "connectors/template",
+    "ctrl",
+]
+resolver = "2"

@@ -1,0 +1,41 @@
+{
+  "role": "home-server",
+  "declaration": {
+    "schema": "central.machine",
+    "version": 1,
+    "role": "home-server",
+    "capabilities": [],
+    "requirements": {
+      "packages": [],
+      "configurations": [
+        {
+          "id": "server-shell-config",
+          "state": "present",
+          "source": {
+            "kind": "file",
+            "reference": "Control/machines/sources/server-shell.conf"
+          }
+        }
+      ],
+      "services": []
+    }
+  },
+  "observation": {
+    "platform": "fixture-os",
+    "architecture": "fixture-arch",
+    "capabilities": [],
+    "packages": [],
+    "configurations": [
+      { "id": "server-shell-config", "present": false }
+    ],
+    "services": []
+  },
+  "expected": {
+    "kind": "configuration",
+    "id": "server-shell-config",
+    "status": "missing",
+    "port": "ConfigurationManager",
+    "selected_connector": null,
+    "handoff_skill": "connector-authoring"
+  }
+}

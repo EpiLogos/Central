@@ -10,6 +10,14 @@ The product uses a simple dependency rule:
 
 Central does not require a specific operating system, launcher, package manager, configuration manager, editor, agent harness, or automation product. The core defines stable Actions and extension contracts. Connectors bind those contracts to the technology that exists on a given machine.
 
+## Implementation language
+
+Central is implemented in **Rust**.
+
+Executable product code, the public SDK, Connectors, and executable product/conformance test harnesses must use Rust. Markdown, JSON, YAML, shell, and platform metadata can be used where they are the natural representation for documentation, authored source, fixtures, configuration, packaging, or integration, but they must not become an alternative implementation of Central semantics.
+
+This is a repository-level implementation constraint. New product behavior must extend the Rust implementation rather than introduce a second application language.
+
 ## Repository shape
 
 ```text
@@ -61,6 +69,24 @@ The separation is intentional. Control content is not Skill procedure. Skills ar
 9. **Extensions are open-ended.** The SDK and conformance tests must let a developer or agent add support for a new environment without changing core Action logic.
 10. **The real installation tests the architecture.** The personal extension set must use the same public SDK and Connector contracts that other users use.
 
+## Source installation
+
+The base `ctrl` command has one native source-install contract:
+
+```sh
+cargo install --path ctrl
+```
+
+After installation, `ctrl --version` exposes the package version. A clean root can be initialized and inspected with:
+
+```sh
+ctrl --root /path/to/Central init
+ctrl --root /path/to/Central doctor --json
+ctrl --root /path/to/Central action list --json
+```
+
+Initialization creates only `Control/user`, `Control/agents`, `Control/machines`, `.central`, and `Work`. The Control roots start empty. See [`docs/INSTALL.md`](docs/INSTALL.md) for the complete interoperability proof and isolated-prefix form.
+
 ## Documentation
 
 Read the package in this order:
@@ -70,5 +96,6 @@ Read the package in this order:
 3. [`docs/CONTROL-CONTENT-PROTOCOL.md`](docs/CONTROL-CONTENT-PROTOCOL.md) — durable information, authorship, disclosure, and Skill boundaries.
 4. [`docs/CONNECTOR-SDK-SPEC.md`](docs/CONNECTOR-SDK-SPEC.md) — Action, Port, Connector, Surface, SDK, and conformance architecture.
 5. [`docs/PERSONAL-EXTENSION-SPEC.md`](docs/PERSONAL-EXTENSION-SPEC.md) — first real extension set used to prove and harden the open architecture.
+6. [`docs/INSTALL.md`](docs/INSTALL.md) — native `ctrl` source installation and clean-root verification.
 
 The issue tracker contains the development map and implementation tickets.
