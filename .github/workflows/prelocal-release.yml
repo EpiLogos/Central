@@ -64,7 +64,7 @@ jobs:
           cp "target/${{ matrix.target }}/release/ctrl" "dist/$name/ctrl"
           cp .oi/product.json "dist/$name/product.json"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
-          sha256sum "dist/$name.tar.gz" > "dist/$name.tar.gz.sha256"
+          shasum -a 256 "dist/$name.tar.gz" > "dist/$name.tar.gz.sha256"
       - uses: actions/attest@v4
         with:
           subject-path: dist/*.tar.gz
