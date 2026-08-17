@@ -1,0 +1,38 @@
+name: O:I lifecycle lock
+
+on:
+  push:
+    branches:
+      - converge/oi-017-lifecycle
+    paths:
+      - '.oi/product.json'
+      - 'Cargo.toml'
+      - '**/Cargo.toml'
+      - '.github/workflows/oi-lifecycle-lock.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  lock:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: converge/oi-017-lifecycle
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Generate exact workspace lock
+        run: cargo generate-lockfile
+      - name: Commit lock if newly materialised
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Cargo.lock
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'build: lock Central release dependencies'
+          git push origin HEAD:converge/oi-017-lifecycle
