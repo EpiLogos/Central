@@ -4,9 +4,9 @@
 
 ## 0. Purpose
 
-Control is the durable human-owned source layer inside Central.
+Control is the durable local authorship-and-knowledge layer inside Central.
 
-This document specifies what belongs in Control, how scope works, how durable source differs from current machine state, and how agent Skills help maintain the source.
+It keeps the human's authored world distinct from Agent-maintained knowledge while making their relation obvious and traversable. This document specifies what belongs in Control, how scope works, how durable source differs from current machine state, and how Agent Skills help maintain both human-facing source relations and the Agent Wiki without collapsing their authority.
 
 The protocol defines three stable roots:
 
@@ -14,10 +14,24 @@ The protocol defines three stable roots:
 Control/
 ├── user/
 ├── agents/
+│   ├── governance/
+│   └── wiki/
 └── machines/
 ```
 
-The protocol does not define a fixed schema below these roots.
+The protocol does not define a fixed schema below `user/`, `agents/governance/`, or `machines/`. `agents/wiki/` uses the portable Wiki grammar accepted by the knowledge layer rather than a Central-only schema.
+
+The same human-source ↔ Agent-Wiki relation recurs inside ProjectCentral:
+
+```text
+ProjectCentral/
+├── user/
+└── agents/
+    ├── governance/
+    └── wiki/
+```
+
+This recursive shape is intentional. Skills can understand one filesystem law at personal and Project scope rather than learning unrelated layouts.
 
 ## 1. Persistence rule
 
@@ -33,25 +47,35 @@ Control must stay smaller than the total information that tools can discover abo
 
 ## 2. Source classes
 
-### 2.1 Authored source
+### 2.1 Human-authored source
 
-Authored source is information that the human deliberately states, adopts, or retains.
+Human-authored source is information that the human deliberately states, adopts, or retains.
 
-Authored source is the normal canonical material in Control.
+It is canonical as human source. Normal examples live under `Control/user/`, `Control/agents/governance/`, `Control/machines/`, ProjectCentral `user/`, or ordinary Project source.
 
-### 2.2 Observed state
+### 2.2 Agent-authored / Agent-maintained knowledge
+
+Agent-maintained knowledge is durable semantic knowledge about or across source material.
+
+Its canonical Control location is `Control/agents/wiki/`; at Project scope it is `ProjectCentral/agents/wiki/`.
+
+Agent knowledge does not acquire human-source authority merely because it is durable. Consequential Wiki knowledge should retain source/provenance and distinguish observation, inference, authorship and derived synthesis where the Wiki grammar supports them.
+
+### 2.3 Observed state
 
 Observed state is current information that software measures or discovers.
 
-Examples include an OS release, an installed program, an available service, or a current host identifier.
+Examples include an OS release, an installed program, an available service, a current host identifier, test output, or repository state.
 
-Observed state can support a proposed Control change. It does not become authored source automatically.
+Observed state can support a Wiki update or a proposed human-source change. It does not become human-authored source automatically.
 
-### 2.3 Generated material
+### 2.4 Generated / derived material
 
-Generated material is a projection, summary, index, or target-specific representation made from source material.
+Generated material is a projection, summary, index, cache, or target-specific representation made from source material.
 
-Generated material must keep a link to its source where practical. It must not silently replace the source.
+Generated material must keep a link to its source where practical. Rebuildable operational state such as `.central/derived/**` must not silently become either human source or durable Wiki authority.
+
+A durable Agent Wiki is not classified as disposable generated state merely because Agents maintain it. Its authority comes from its explicit Agent-knowledge role and provenance, not from `.central` indexing.
 
 ## 3. Scope rule
 
@@ -74,17 +98,17 @@ Ephemeral
     useful for a short action only
 ```
 
-A project fact normally stays with its project. A temporary plan stays with the task. A durable cross-context preference can enter Control.
+A project fact normally stays with its project or Project Wiki. A temporary plan stays with the task. A durable cross-context preference can enter Control governance or human source.
 
-Information does not move to Control only because it was useful once.
+Information does not move to global Control only because it was useful once.
 
 ## 4. `Control/user/`
 
 ### 4.1 Function
 
-`Control/user/` describes the human and their durable relation to their working world.
+`Control/user/` is the human's durable personal authorship space.
 
-It is human-authored and primarily agent-facing.
+It is human-authored. It may be Agent-readable subject to retrieval treatment, but Agent readability does not change authorship.
 
 ### 4.2 Useful content
 
@@ -93,10 +117,11 @@ Useful content can include:
 - autobiographical or self-descriptive prose;
 - durable interests and concerns;
 - important context objects;
-- stable cross-project working preferences;
+- stable cross-project working preferences that describe the human rather than Agent governance;
 - durable tool-use descriptions;
 - durable decision criteria;
-- concepts and terms that prevent repeated misunderstanding.
+- concepts and terms that prevent repeated misunderstanding;
+- documents, data, media, notes or other ordinary files that the human wants to retain as durable source.
 
 ### 4.3 Representation
 
@@ -107,6 +132,8 @@ The user must not need to convert self-description into a universal profile sche
 Use structured data when the object has real structure that software must preserve or validate.
 
 A structured format must earn its maintenance cost.
+
+The directory is an authorship space, not a prescribed document template. The human may structure it however they wish.
 
 ### 4.4 Example
 
@@ -122,11 +149,21 @@ These statements describe durable relations. They do not state whether a given p
 
 ### 5.1 Function
 
-`Control/agents/` describes the recurring relation that the human wants with software agents.
+`Control/agents/` is the durable Agent-facing side of the Control relation. It contains two different authorities which must remain explicit:
+
+```text
+Control/agents/
+├── governance/   human-authored recurring Agent relationship/governance
+└── wiki/         Agent-authored / Agent-maintained semantic knowledge
+```
+
+The parent directory is therefore not itself one undifferentiated source class.
+
+### 5.2 `Control/agents/governance/`
+
+`Control/agents/governance/` describes the recurring relation that the human wants with software agents.
 
 It is human-governed source.
-
-### 5.2 Useful content
 
 Useful content can include:
 
@@ -140,53 +177,66 @@ Useful content can include:
 - preferred capability or method classes;
 - stable rules for when a human decision is important.
 
-### 5.3 Verification and confidence
+Durable verification preferences can belong here when they describe the human's general expectations for Agent-produced engineering work.
 
-Durable verification preferences can belong in `Control/agents/` when they describe the human's general expectations for agent-produced engineering work.
-
-Useful statements can describe:
-
-- what kind of evidence should normally support a completion claim;
-- how the user regards deterministic checks, independent review, and human review;
-- whether normal implementation work should preserve or improve existing assurance;
-- when the user expects verification to occur during work rather than only at the end;
-- when a human decision or review remains important.
-
-Control holds the durable ideal or preference. It does not hold the project-specific verification process only because that process implements the preference.
-
-Exact test commands, CI-provider configuration, repository gates, workflow triggers, coverage thresholds, project test seams, release checks, and other concrete verification mechanisms normally remain with the project or the capability that operates them.
+Control holds the durable ideal or preference. Exact test commands, CI-provider configuration, repository gates, workflow triggers, coverage thresholds, project test seams, release checks, and other concrete verification mechanisms normally remain with the Project or capability that operates them.
 
 For example:
 
 ```text
-Control/agents:
-For engineering work, I want completion claims to be backed by appropriate executed evidence. Normal implementation changes should preserve the project's existing assurance rather than weaken it merely to obtain a pass.
+Control/agents/governance:
+For engineering work, completion claims should be backed by appropriate executed evidence. Normal implementation changes should preserve the project's existing assurance rather than weaken it merely to obtain a pass.
 
 Project-local source:
 The exact tests, checks, review procedures, CI workflows, and merge requirements that establish sufficient evidence for this project.
 ```
 
-### 5.4 Positive form
+State desired behavior directly when possible. Use good examples when they communicate the requirement more clearly than long rules.
 
-State the desired behavior directly when possible.
+### 5.3 `Control/agents/wiki/`
 
-Use a good example when an example communicates the requirement more clearly than a long rule.
+`Control/agents/wiki/` is the durable Agent-maintained personal/root Wiki.
 
-Use stable leading terms when those terms already carry precise shared meaning.
+It compiles knowledge from eligible human source, Project descriptors, child Project WikiSpaces, observations and other sources while preserving provenance. Its canonical root source is:
+
+```text
+Control/agents/wiki/wiki.json
+```
+
+The Wiki does not replace `Control/user/`, governance, Project source, or evidence. It is a navigable knowledge layer **about/across** them.
+
+The normal cognitive relation is:
+
+```text
+human source
+    ↓
+Agent Wiki
+    ↓
+bounded traversal
+    ↓
+exact source/evidence when required
+```
+
+### 5.4 Existing pre-split `Control/agents/*`
+
+Material created before the `governance/` + `wiki/` split must retain its known authorship. Existing human-authored files directly under `Control/agents/` remain human-governed source until explicitly reorganised. Central must not infer that an old file became Agent-authored knowledge because the directory contract evolved.
 
 ### 5.5 Skill boundary
 
-`Control/agents/` is not the Skill registry.
+`Control/agents/governance/` is not the Skill registry and `Control/agents/wiki/` is not a giant system prompt.
 
 ```text
-Control/agents
-    durable relationship and preference source
+Agent governance
+    durable human-authored relationship/preference source
+
+Agent Wiki
+    durable semantic knowledge and provenance
 
 Skill
-    reusable agent procedure
+    reusable Agent procedure
 ```
 
-Control can name a preferred Skill or capability. The procedure stays in the Skill.
+A governance source can name a preferred Skill or capability. The procedure stays in the Skill. A Wiki-maintenance Skill can operate the Wiki without embedding the entire Wiki in session context.
 
 ## 6. `Control/machines/`
 
@@ -224,7 +274,7 @@ Observed state:
 A specific launcher is currently installed at a specific version.
 ```
 
-The first can belong in Control. The second normally belongs in local derived state.
+The first can belong in Control human source. The second normally belongs in local observation/derived state unless it is intentionally represented in the Wiki with observation provenance.
 
 ### 6.4 Machine roles
 
@@ -249,23 +299,26 @@ Control should favor material that does at least one of these things:
 3. changes the expected interaction in a useful way;
 4. reduces repeated tool-choice guesswork;
 5. supports machine reproducibility;
-6. provides compact shared language for repeated work.
+6. provides compact shared language for repeated work;
+7. preserves useful semantic knowledge that would otherwise have to be re-derived.
 
 ## 8. Content that normally belongs elsewhere
 
-Do not put these things in durable global Control by default:
+Do not put these things in durable global human Control by default:
 
 - active task plans;
 - completed plans that no longer describe the current system;
 - temporary requirements;
-- project-specific architecture;
+- project-specific architecture that belongs in the Project;
 - project-specific CI workflows, test commands, gates, and verification procedures;
-- long reusable procedures;
+- long reusable procedures that should be Skills;
 - raw current package inventories without authored intent;
 - raw conversation history;
 - repeated instructions that do not change behavior;
 - stale material that now conflicts with current source;
 - secret values in normal prose.
+
+Project-specific semantic knowledge belongs in the ProjectCentral Agent Wiki rather than being promoted globally only because it was learned by an Agent.
 
 ## 9. The deletion test
 
@@ -273,15 +326,15 @@ A Control audit should ask:
 
 > If this item is removed, what useful behavior or understanding changes?
 
-If the answer is unclear, the item is a candidate for removal, relocation, or consolidation.
+If the answer is unclear, the item is a candidate for removal, relocation, consolidation, or Wiki re-derivation.
 
-This is a value test, not a length test. A long document can have durable value.
+This is a value test, not a length test. A long human document or a richly connected Wiki node set can have durable value.
 
-## 10. Durable change proposals
+## 10. Durable change and source-return proposals
 
-A tool or agent can propose a Control change.
+An Agent or tool can propose a change to human-authored Control source.
 
-A proposal must include:
+A human-source proposal must include:
 
 - the target source;
 - the proposed content;
@@ -289,35 +342,37 @@ A proposal must include:
 - relevant supporting context;
 - the final diff before mutation.
 
-The human accepts, changes, or rejects the proposal.
+The human accepts, changes, or rejects the proposal. Human source changes only through an explicit accepted mutation.
 
-The durable source changes only through an explicit accepted mutation.
+An Agent Wiki update is a different operation. It may be maintained by an authorised Wiki-maintenance procedure when its provenance and epistemic status are preserved. Updating Agent knowledge does not confer permission to rewrite human source.
 
 ```mermaid
 flowchart LR
-    E[Supporting context]
-    P[Proposed change]
+    S[Human source + evidence]
+    W[Agent Wiki update]
+    P[Proposed human-source revision]
     H[Human review]
-    C[Authored Control]
-    E --> P --> H --> C
+    C[Human-authored Control]
+    S --> W
+    W --> P --> H --> C
 ```
 
 ## 11. Progressive disclosure
 
-Control is a source domain. It is not one global prompt.
+Control is a source domain and Wiki world. It is not one global prompt.
 
 The system must distinguish:
 
 ```text
 source exists
-source can be indexed
+source is known to exist
 source can be retrieved
 source is relevant
 source is allowed for the current use
 source is loaded now
 ```
 
-A retrieval system can expose a small source map and load detail only when the task requires it.
+A retrieval system can expose a small source/Wiki map and load detail only when the task requires it.
 
 ## 12. Source treatment
 
@@ -331,17 +386,21 @@ not agent-readable
 agent-readable in an eligible context
 ```
 
+The ordinary `.no-agent-retrieval` marker establishes a denied subtree for stock Agent-facing traversal. The marker applies by role, not by a magic directory name: a human can create `user/private/` or any other structure and place the marker there.
+
 The protocol does not require one repository remote to contain every Control object.
 
 Secrets should use a dedicated secret mechanism or external secret reference.
 
 ## 13. Conflict and supersession
 
-A maintenance tool must not silently combine contradictory authored statements.
+A maintenance tool must not silently combine contradictory human-authored statements.
 
-It should show the conflicting sources and their scopes. The human resolves the authored conflict.
+It should show conflicting sources and scopes. The human resolves an authored conflict.
 
-When a statement becomes obsolete, the live Control tree should make the current statement clear. Git history can preserve older source states.
+Agent Wiki knowledge may record that a conflict exists, including source refs and current evidence, without pretending to resolve human authority.
+
+When a human statement becomes obsolete, the live source tree should make the current statement clear. Git/source history can preserve older states.
 
 ## 14. Control-maintenance Skills
 
@@ -352,22 +411,27 @@ Skills provide procedure around Control. They do not become Control content.
 The Skill should:
 
 1. inspect the relevant Control root;
-2. identify stale, duplicate, conflicting, or misplaced content;
-3. distinguish authored content from generated material;
+2. identify stale, duplicate, conflicting, or misplaced human source;
+3. distinguish human-authored source, Agent Wiki knowledge, observations and rebuildable generated material;
 4. identify procedure that should become a Skill or Action;
 5. identify important durable preference areas that are absent or unclear when the current dialogue makes them relevant;
-6. propose changes with reasons;
-7. request acceptance before durable mutation.
+6. propose human-source changes with reasons;
+7. request acceptance before durable human-source mutation.
 
-When the user is configuring or reviewing their agent-governance material for engineering work, verification and confidence should be an available dialogue topic rather than a mandatory schema field.
+### 14.2 Wiki maintenance Skill
 
-A useful prompt is:
+The Wiki-maintenance Skill should:
 
-> When an agent changes software for you, what normally gives you confidence that the work is complete? Do you have durable preferences about tests, CI, review, evidence, or when human review is required?
+1. inspect eligible human source and source revisions;
+2. inspect current Wiki nodes/edges and their provenance;
+3. add or revise Agent knowledge without silently rewriting human source;
+4. mark stale, conflicting, observed and inferred material distinctly;
+5. preserve exact source refs for return;
+6. propose a human-source revision when returned reality warrants one.
 
-The Skill should retain only the durable cross-project preference that emerges from this discussion. Project-specific commands, checks, providers, gates, and procedures stay at project scope.
+The same procedure should work against `Control/user → Control/agents/wiki` and `ProjectCentral/user → ProjectCentral/agents/wiki` because the filesystem relation is recursive.
 
-### 14.2 Durable-preference proposal Skill
+### 14.3 Durable-preference proposal Skill
 
 The Skill should:
 
@@ -377,7 +441,7 @@ The Skill should:
 4. show the supporting material;
 5. request human acceptance.
 
-### 14.3 Machine declaration Skill
+### 14.4 Machine declaration Skill
 
 The Skill should:
 
@@ -390,7 +454,7 @@ The Skill should:
 
 ## 15. Retrieval-oriented authoring
 
-Control authors can write naturally.
+Humans can write naturally and structure their authored space naturally.
 
 Use these practices when they improve discovery:
 
@@ -401,39 +465,40 @@ Use these practices when they improve discovery:
 - links between related local sources;
 - small structured metadata only when it materially improves retrieval or treatment.
 
-The protocol must not require every prose file to become a database-shaped document.
+The protocol must not require every file to become a database-shaped document or every Project to have a prescribed README.
 
 ## 16. Quality criteria
 
 A healthy Control tree has these properties:
 
-1. The human can read it directly.
+1. The human can read and organise their source directly.
 2. Important durable material is easy to find.
 3. Global material is genuinely cross-context.
 4. Project and temporary content has not leaked upward without reason.
 5. Reusable procedure is mainly outside persistent context.
-6. Authored source is distinct from current observations and generated material.
-7. Proposed durable changes are reviewed before source mutation.
-8. Stale active material can be removed while repository history remains available.
+6. Human source, Agent Wiki knowledge, observations and rebuildable derived state are distinguishable.
+7. Proposed human-source changes are reviewed before source mutation.
+8. Agent Wiki knowledge can be maintained without becoming a giant prompt.
 9. Sensitive material has an explicit safe treatment.
 10. The tree can grow without a universal personal schema.
+11. The same human-source ↔ Agent-Wiki relation is recognisable in ProjectCentral.
 
 ## 17. Summary
 
-Control is not a memory dump.
+Control is not a memory dump and the Wiki is not a replacement for authored source.
 
-Control is the durable authored layer that tells future software and future machines what the human has chosen to preserve.
+The durable relation is:
 
 ```text
-experience or intent
+human-authored world
         ↓
-human authorship or accepted proposal
+selective Agent-readable source
         ↓
-correct scope
+Agent-maintained Wiki knowledge
         ↓
-durable Control source
+bounded return to exact source/evidence
         ↓
-selective retrieval or machine use
+Wiki revision or explicit proposal back to human source
 ```
 
-Skills help maintain this source. They do not replace it.
+At Project scope, ProjectCentral repeats the same relation. Skills operate that relation; they do not replace either side of it.
