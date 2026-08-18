@@ -7,181 +7,250 @@
 
 ## 1. Why this contract exists
 
-Central already owns the durable filesystem relation among a person's Control material, ordinary Work projects, resources, and archives. AIKit already owns the operational cognition of knowledge: SemanticWiki, WikiSpace/WikiNode/WikiEdge, ProjectMap, retrieval, routing, framing, explanation, and history.
+Central is the durable filesystem world in which human source and Agent-maintained knowledge can coexist without becoming the same authority.
 
-The missing relation is therefore not another Wiki engine. It is an obvious, durable source relation inside the filesystem:
+The missing relation is deliberately simple:
 
 ```text
-human-authored project ground
+human-authored source
         ↕ provenance / return
-Agent-authored or Agent-maintained Wiki knowledge
+Agent-maintained Wiki knowledge
 ```
 
-Central owns where that relation lives and how its authority is read. It does not redefine the Wiki graph.
+The same relation must be recognisable at the enclosing Central scope and at every Project scope. ProjectCentral is therefore not a special aperture document or a second project format. It is a **fractal of the Control authorship relation** placed inside an otherwise ordinary Project.
 
-## 2. The project-local convention
+Central owns the durable filesystem/source relation. AIKit owns the operational cognition of that relation: traversal, retrieval, framing, SemanticWiki indexing, readings, routes, maintenance and source return.
 
-An ordinary project in `Work/` remains an ordinary native project. ProjectCentral is a visible orientation layer **inside** it; it is not a wrapper around the project and adoption does not imply moving existing files.
+## 2. The recursive filesystem law
 
-```text
-Work/<project>/
-├── ProjectCentral/
-│   ├── README.md
-│   ├── project.json
-│   └── Wiki/
-│       └── wiki.json
-└── <ordinary native project files and directories>
-```
-
-The names above are canonical for the Central-owned relation:
-
-- `ProjectCentral/` — the project-local Central aperture;
-- `ProjectCentral/README.md` — the human-authored aperture and index;
-- `ProjectCentral/project.json` — deterministic binding metadata owned by the Central application contract;
-- `ProjectCentral/Wiki/` — durable Agent Wiki source;
-- `ProjectCentral/Wiki/wiki.json` — portable `okf-wiki/v1` Wiki objects when Central materialises a native Wiki there.
-
-`ProjectCentral/README.md` may point to existing native `README`, `docs/`, design material, ADRs, Obsidian material, or other authored sources. Those files do not become Central-owned merely because they are referenced from the aperture.
-
-## 3. Root Wiki federation
-
-The enclosing Central world gains one additional visible top-level relation:
+At the Central root:
 
 ```text
 Central/
 ├── Control/
-├── Work/
-├── Resources/
-├── Archive/
-└── Wiki/
-    └── wiki.json
+│   ├── user/
+│   │   └── <human-authored material, freely structured>
+│   ├── agents/
+│   │   ├── governance/
+│   │   │   └── <human-authored recurring Agent governance>
+│   │   └── wiki/
+│   │       └── wiki.json
+│   └── machines/
+└── Work/
 ```
 
-`Wiki/wiki.json` is the durable root WikiSpace/federation source. It may declare child Project WikiSpaces and root/personal nodes, but it **must not copy every child Project Wiki into a universal Central database**.
-
-A Project WikiSpace may name the Central root WikiSpace as a parent while remaining independently loadable. Root traversal resolves child Project WikiSpaces from their actual project-local sources.
-
-The filesystem tree and semantic web therefore remain distinct but interoperable:
+At Project scope:
 
 ```text
-filesystem ownership / location       semantic Wiki relations
-Central -----------------------+      root WikiSpace
-  Work/project-a/              |          |
-    ProjectCentral/Wiki/ ------+----------+--> child WikiSpace
-  Work/project-b/              |          |
-    ProjectCentral/Wiki/ ------+----------+--> child WikiSpace
+Work/<project>/
+├── ProjectCentral/
+│   ├── user/
+│   │   └── <human-authored Project material, freely structured>
+│   ├── agents/
+│   │   ├── governance/
+│   │   │   └── <optional human-authored Project-local Agent governance>
+│   │   └── wiki/
+│   │       └── wiki.json
+│   └── project.json
+└── <ordinary native Project files and directories>
 ```
 
-## 4. Authority and authorship
+The important invariant is not a required file inside `user/`. It is the relation:
 
-The filesystem path alone does not make every file equally authoritative. Central preserves four source roles explicitly.
+```text
+user/**  →  agents/wiki/**  →  exact source/evidence as required
+```
 
-| Source role | Canonical location / relation | Authority rule |
-|---|---|---|
-| **human-authored** | `Control/**`, `ProjectCentral/README.md`, and native project sources referenced by it | Humans author intent, purpose, design judgement, governance, and other source material. Agents may propose changes but do not silently rewrite it. |
-| **Agent-authored / Agent-maintained** | `ProjectCentral/Wiki/**`, root `Wiki/**` where an Agent is maintaining knowledge | Durable semantic knowledge ABOUT/ACROSS source material. Every consequential node/edge must retain provenance to source/evidence and its epistemic standing. |
-| **observed** | represented in Wiki objects or evidence references | Claims tied to an observation/evidence source; observation is not silently promoted to authored intent. |
-| **inferred / derived** | represented in Wiki objects with provenance, or `.central/derived/**` for rebuildable operational indexes | Inference remains distinguishable from observation and authorship. `.central/derived/**` is non-authoritative and may be rebuilt. |
+The human authorship space is intentionally unconstrained below `user/`. A person may write prose, maintain design folders, copy research material, keep diagrams, structured data, images, links, notebooks, or any other ordinary files that carry Project meaning. No README, front page, universal schema or document taxonomy is required.
 
-This preserves the existing meaning of `Control/agents`: it remains **human-authored recurring Agent-governance material**. Agent-authored knowledge does not move there.
+The Agent Wiki is knowledge about/across those human sources and the wider native Project. It does not become those sources.
 
-## 5. `project.json`: binding metadata, not a Wiki schema
+## 3. Why `agents/governance` and `agents/wiki` are distinct
 
-`ProjectCentral/project.json` exists so Central can deterministically identify the ProjectCentral relation without parsing prose or inventing semantic-Wiki identity.
+Before this contract, `Control/agents/` meant human-authored recurring governance for software agents. That meaning remains real and valuable.
 
-Version 1 has this minimal shape:
+The new Wiki world also needs a durable Agent-authored/Agent-maintained region. Those two authorities must not be confused merely because both concern Agents.
+
+The canonical split is therefore:
+
+```text
+agents/
+├── governance/   # human-authored: how Agents should relate/behave
+└── wiki/         # Agent-maintained: what is known about the world
+```
+
+This applies recursively at Central and Project scope.
+
+Existing pre-split material directly under `Control/agents/` remains human-governed source by provenance; Central must not silently reinterpret old human-authored files as Agent-authored Wiki knowledge. Migration into `governance/` may be offered explicitly, but is not required to preserve meaning.
+
+## 4. Human authorship is a space, not an aperture file
+
+`ProjectCentral/user/` is the authored Project ground.
+
+Useful material can include, without prescription:
+
+- what the Project is and why it exists;
+- intended experience;
+- vision and conceptual positions;
+- design, interaction and visual direction;
+- important judgements and decisions;
+- research material;
+- source references;
+- data, media or documents in formats meaningful to the human.
+
+A human may structure that space however they wish. AIKit skills should understand the **role of the directory**, not require a particular filename.
+
+Native Project files outside ProjectCentral remain ordinary native sources too. The Project Wiki may point into code, tests, docs, design, evidence, Runs, external research or other WikiSpaces whenever required.
+
+## 5. Privacy and retrieval
+
+Filesystem existence is not the same as Agent readability.
+
+The existing `.no-agent-retrieval` convention remains the portable exclusion marker. It applies recursively to ProjectCentral human source as well as Control source when the consumer is traversing ProjectCentral.
+
+For example:
+
+```text
+ProjectCentral/user/
+├── public-to-agents/
+│   └── vision.md
+└── private/
+    ├── .no-agent-retrieval
+    └── notes.md
+```
+
+`private/` is not a magic name. The marker is what establishes the exclusion. This keeps the human free to choose their own structure while giving AIKit a simple auditable traversal rule.
+
+## 6. `project.json`: identity/binding metadata only
+
+`ProjectCentral/project.json` is not the human front page and not a Wiki schema. It exists only so Central and downstream consumers can identify the Project relation deterministically.
+
+Version 1 has the canonical shape:
 
 ```json
 {
   "schema": "central.project/v1",
   "project_id": "<stable project identity>",
+  "human_source": "ProjectCentral/user",
   "wiki": {
     "profile": "okf-wiki/v1",
-    "source": "ProjectCentral/Wiki/wiki.json"
-  },
-  "human_aperture": "ProjectCentral/README.md"
+    "source": "ProjectCentral/agents/wiki/wiki.json"
+  }
 }
 ```
 
+When a compatible existing Wiki is adopted in place, Central may additionally record its project-relative source under `wiki.adopted_sources`. The canonical Project Wiki source itself remains nested at `ProjectCentral/agents/wiki/wiki.json`; adoption must not erase the recursive filesystem law.
+
 Rules:
 
-1. `project_id` is a stable Project identity, not a repository URL and not a database row id.
-2. Source paths resolve from the **Project root**, are relative, and must not escape the Project. This lets an adopted Wiki remain at `docs/...`, `Wiki/...`, or another native in-project location without file movement.
-3. `wiki.profile` names the accepted interoperable Wiki profile. Central does not define its node/edge schema.
-4. `wiki.source` may bind an adopted in-place Wiki outside `ProjectCentral/Wiki/` only through an explicit adoption result that records the binding and provenance; Central must not guess among multiple candidates.
-5. The manifest does not declare that human source has been migrated into the Agent Wiki.
+1. `project_id` is stable Project identity, not a database row id.
+2. `human_source` is the canonical ProjectCentral human authorship root.
+3. `wiki.source` is the canonical ProjectCentral Agent Wiki root.
+4. adopted source paths remain project-root-relative and may not escape the Project.
+5. the manifest does not make human source Agent-authored, and does not make an adopted/generated Wiki human-authored.
 
-## 6. Native Wiki identity
+## 7. Root/personal Wiki federation
 
-When Central creates a Project Wiki, it writes ordinary portable `okf-wiki/v1` objects. Canonical Wiki identity comes from the Wiki objects (`WikiSpace`, `WikiNode`, `WikiEdge` and their resource refs), not from provider/database identity and not from the filesystem path alone.
+The Central root Wiki belongs inside the same Agent knowledge region:
+
+```text
+Control/agents/wiki/wiki.json
+```
+
+It is the durable root/personal WikiSpace and federation source. It may relate knowledge compiled from `Control/user/**`, Work Project descriptors, and child Project WikiSpaces, while retaining source provenance.
+
+It must not copy every Project Wiki into a universal Central database.
+
+The filesystem tree and semantic web remain distinct but interoperable:
+
+```text
+Central filesystem                              Semantic Wiki
+
+Control/user/** -----------------------------→ root/personal WikiSpace
+Control/agents/wiki/wiki.json ----------------→ root/personal Wiki source
+                                                   |
+Work/project-a/ProjectCentral/agents/wiki/ --------+→ child WikiSpace
+Work/project-b/ProjectCentral/agents/wiki/ --------+→ child WikiSpace
+```
+
+## 8. Authority and provenance
+
+The filesystem relation preserves distinct source roles:
+
+| Source role | Canonical relation | Authority rule |
+|---|---|---|
+| **human-authored** | `Control/user/**`, `*/agents/governance/**`, `ProjectCentral/user/**`, and ordinary native Project source | Human source and judgement. Agents may propose revision but do not silently rewrite it. |
+| **Agent-authored / Agent-maintained** | `Control/agents/wiki/**`, `ProjectCentral/agents/wiki/**` | Durable semantic knowledge ABOUT/ACROSS sources. Consequential knowledge retains provenance and epistemic standing. |
+| **observed** | evidence/source refs represented through Wiki knowledge or native evidence | Observation is not silently promoted to authored intent. |
+| **inferred / derived** | Wiki knowledge with explicit standing, or `.central/derived/**` for rebuildable operational state | Inference remains distinguishable from observation/authorship; rebuildable indexes are non-authoritative. |
+
+`agents/governance/**` is human-authored even though it is stored beneath `agents/`. Directory names do not override provenance.
+
+## 9. Wiki interoperability
+
+Central does not invent a semantic graph format. The Agent Wiki uses the accepted portable `okf-wiki/v1` grammar and stable Wiki concepts such as:
+
+```text
+WikiSpace
+WikiNode
+WikiEdge
+```
 
 Central owns:
 
-- the durable filesystem source location;
-- ProjectCentral/project identity binding;
+- filesystem/source identity;
+- ProjectCentral identity and canonical roots;
 - adoption/migration provenance;
-- root federation source location.
+- root federation source location;
+- privacy/exclusion treatment at the filesystem boundary.
 
 AIKit owns:
 
-- parsing/indexing the accepted Wiki grammar;
-- SemanticWiki / ProjectMap operational views;
-- bounded traversal and retrieval;
-- readings/routes/frames;
-- stale/conflict detection and Agent Wiki maintenance procedure.
+- SemanticWiki parsing/indexing;
+- ContextSource binding;
+- ProjectMap / KnowledgeApplication views;
+- LIST / TREE / GRAPH traversal;
+- bounded search/read/relations/route/frame/sources/explain/history;
+- stale/conflict detection;
+- Agent Wiki maintenance and source-return procedure.
 
-## 7. Human project aperture
+## 10. Adoption is not migration
 
-`ProjectCentral/README.md` is intentionally small and hand-editable. It is the first authored opening an Agent should be able to encounter before traversing accumulated Wiki knowledge or exact source.
-
-It should make it natural to point to or state, where relevant:
-
-- what the Project is;
-- why it exists;
-- intended human experience;
-- vision;
-- design / interaction / visual direction;
-- conceptual positions;
-- important current human judgements;
-- canonical native source locations.
-
-It is an aperture, not a required duplicate of every project document.
-
-## 8. Adoption is not migration
-
-Central #67 must expose materially different outcomes:
+Central #67 must retain distinct outcomes:
 
 ```text
 already conformant
-bind/adopt existing Wiki in place
-create ProjectCentral around native project
-migrate selected material
+adopt/bind compatible existing Wiki source in place
+create ProjectCentral around existing native sources
+migrate selected Wiki/source material into the canonical agents/wiki region
 unresolved / human Decision required
 ```
 
-An existing Markdown/Obsidian/docs/design/Wiki/OKF/generated-Wiki structure is first inspected as source. A unique compatible Wiki may be bound in place. Multiple plausible authoritative candidates are ambiguity, not permission to choose. Moving or rewriting source requires an explicit migration plan and preview.
+Adoption can preserve an existing Wiki file in place while recording it as a participating source of the canonical local Agent Wiki. Migration deliberately moves/copies selected material into `ProjectCentral/agents/wiki/**` with provenance. Neither operation rewrites human-authored source merely because it is useful to the Wiki.
 
-## 9. Source return law
+## 11. Source-return law
 
-The normal Agent entry path is:
+The normal cognitive path is now structurally obvious at either scale:
 
 ```text
-human-authored Project aperture
+human source space
         ↓
-Agent-maintained SemanticWiki
+Agent-maintained Wiki
         ↓
 bounded traversal
         ↓
-exact design / code / evidence / source
+exact source / code / evidence / observation
 ```
 
-Returned knowledge may update the Agent Wiki with provenance. If returned reality challenges human-authored ground, the result is a proposal / Decision pressure against that source; it is **not** permission to silently rewrite human intent.
+Returned knowledge may revise the Agent Wiki with provenance.
 
-## 10. Projection boundary
+If returned reality challenges human-authored source, the output is a proposal or Decision pressure against that source. It is not permission to silently mutate the human side.
+
+## 12. Projection boundary
 
 ProjectCentral makes material locally addressable; it does not make it public.
 
-These states remain distinct:
+These remain distinct:
 
 ```text
 exists locally
@@ -191,4 +260,4 @@ selected for Projection
 public / hosted
 ```
 
-O:I consumes this distinction. Hosted state is never made canonical by this contract.
+O:I consumes this distinction. Hosted state is never canonical merely because it is projected.
