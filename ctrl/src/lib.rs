@@ -4,6 +4,7 @@ pub mod control;
 pub mod machine;
 pub mod picker;
 pub mod projectcentral;
+pub mod projectcentral_ops;
 pub mod recovery;
 pub mod result;
 pub mod root;
@@ -37,6 +38,12 @@ pub use projectcentral::{
     projectcentral_paths, read_project_manifest, ManifestValidation, ProjectCentralManifest,
     ProjectCentralPaths, WikiBinding, HUMAN_APERTURE, PROJECTCENTRAL_DIR, PROJECT_MANIFEST,
     PROJECT_SCHEMA, ROOT_WIKI_SOURCE, WIKI_DIR, WIKI_PROFILE, WIKI_SOURCE,
+};
+pub use projectcentral_ops::{
+    adopt_in_place, doctor_projectcentral, ensure_root_federation, initialize_projectcentral,
+    inspect_projectcentral, migrate_selected, preview_adopt, preview_migrate, DoctorCheck,
+    MutationPlan, ProjectCentralDoctor, ProjectCentralInspection, ProjectCentralMutation,
+    ProjectCentralOutcome, SourceSignal, WikiCandidate, PROJECT_PROVENANCE, ROOT_WIKI_REF,
 };
 pub use recovery::{
     explain_recovery, explain_recovery_plan, AuthoredRecoveryDeclaration, RecoveryDeclaration,
