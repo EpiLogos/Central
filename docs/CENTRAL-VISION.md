@@ -4,58 +4,79 @@
 
 ## Purpose
 
-Central is a human-owned operating root for an agentic computing life.
+Central is a human-owned operating root through which a person's technological world can remain recognisably theirs while the technologies around it change.
 
-Central gives a person one durable place for authored control material, executable control actions, and ordinary work. The user can understand this place with normal filesystem tools. Optional software can index it, operate on it, or present it through another interface without becoming the owner of the source material.
+A model can be replaced. An agent harness can disappear. A launcher, editor, package manager, machine or interface can change. Projects can move. What should not have to be rediscovered from scratch each time is the durable authored relation between the person and that world: what they deliberately want carried forward, how they want agents to meet them, what their machines are for, and which ordinary work remains theirs independently of the software currently presenting it.
 
-Central has three direct purposes:
+Central exists to give that continuity an ordinary, inspectable source.
 
-1. **Preserve durable intent.** Control stores information that the human deliberately chooses to retain.
-2. **Provide one action language.** `ctrl` gives humans and software one stable set of actions over Central.
-3. **Keep work ordinary.** Work remains normal filesystem work and does not require a special project format.
+It has three direct product functions:
 
-## The product in one view
+1. **Preserve authored ground.** Control stores material the human deliberately chooses to carry forward.
+2. **Provide stable operation.** `ctrl` exposes canonical Actions whose identity can survive changes in interface and provider.
+3. **Keep work ordinary.** Work remains normal filesystem work rather than becoming captive to a proprietary personal-world format.
 
-```mermaid
-flowchart TB
-    H[Human]
-    C[Central]
-    CT[Control]
-    CLI[ctrl]
-    W[Work]
-    A[Actions]
-    P[Ports]
-    X[Connectors]
-    T[Operating systems, tools, and services]
-    S[Surfaces]
+Machine configuration is one consequence of this architecture, not its definition. Central is not trying to become a universal settings database. Its subject is **authored continuity across changing technological agency**.
 
-    H --> C
-    C --> CT
-    C --> CLI
-    C --> W
-    CT -->|durable source| CLI
-    CLI --> A
-    S --> A
-    A --> P
-    P --> X
-    X --> T
-    H --> S
+## Why authorship and continuity matter
+
+Software can observe a user and infer useful patterns. Those faculties are valuable, but they answer a different question from authorship.
+
+```text
+Authored
+    I deliberately state, adopt or retain this.
+
+Observed
+    software measured or discovered this.
+
+Inferred
+    software derived this from evidence.
 ```
 
-The architecture separates source, operation, and implementation:
+An observed pattern may be accurate without being something the person wants to define future interactions. An inferred preference may be useful in one context without deserving cross-context persistence. Central therefore allows observation and inference to support a provenance-bearing proposal while reserving the transition into authored ground for explicit human adoption.
+
+The separation prevents convenience from becoming quiet dispossession. A system that learns faster should not thereby acquire the right to rewrite the durable source through which the person is represented to future systems.
+
+## Why ordinary source matters
+
+Control is ordinary source because durable meaning should remain accessible without the application that last edited it.
+
+A person should be able to inspect and change their ground with normal filesystem tools. Source can be versioned, backed up, searched or projected by optional systems. Those systems can improve use without becoming canonical merely because they maintain an index or richer UI.
+
+This gives Central a durable asymmetry:
+
+```text
+human-authored source
+        ↓ authoritative
+indexes / caches / observations / projections
+        ↓ derived
+current interfaces and agent contexts
+```
+
+Derived systems can disappear and be rebuilt. Authored meaning should not disappear with them.
+
+## Non-displacement
+
+Central is designed to meet an existing working life.
+
+It does not require a specific operating system, launcher, editor, package manager, configuration manager, agent harness or automation product. Existing projects remain ordinary directories. Existing tools can remain authoritative for the operations they already own.
+
+Central introduces stable seams around that world:
 
 ```text
 Control      what should persist
 Actions      what can be done
 Ports        what ability an Action requires
-Connectors   how that ability exists on this machine
-Surfaces     where a human or software actor invokes an Action
-Work         the ordinary local field that Actions can operate on
+Connectors   how that ability exists here
+Surfaces     where a human or software actor invokes it
+Work         the ordinary local field in which work continues
 ```
+
+The reason for the separation is continuity. If a Connector changes from one provider to another, the Action need not change identity. If a Surface changes from CLI to launcher to agent tool, the operation need not be redefined. If a project moves on disk, the project does not become a different human purpose merely because placement changed.
 
 ## Control
 
-Control is selective human-owned source. It does not contain every fact that software can collect.
+Control is selective human-owned source, not an exhaustive inventory of everything software knows.
 
 ```text
 Control/
@@ -64,183 +85,99 @@ Control/
 └── machines/
 ```
 
-`user/` describes the person and their durable relation to their working world. It can contain self-description, durable interests, important context objects, tool-use preferences, and stable working preferences.
+`user/` can carry durable self-description, interests, context objects, tool-use intent and stable working preferences that genuinely matter across contexts.
 
-`agents/` describes the recurring relation that the human wants with software agents. It can contain communication preferences, collaboration style, expected initiative, evidence and verification expectations, coding habits, evaluation criteria, and recognized lessons from repeated interaction.
+`agents/` can carry the recurring relation the human wants with software agents: communication preferences, expected initiative, evidence and verification expectations, coding habits, collaboration style and recognised lessons from repeated work.
 
-For engineering work, Control can preserve durable ideals about what should justify confidence in agent-produced work. It does not need to own the concrete project checks, CI pipelines, merge gates, or provider configuration that enact those ideals. Those mechanisms remain at the scope where they are actually defined and executed.
+`machines/` can carry intended computing environments: machine roles, desired tools, package and configuration sources, services, bootstrap mechanisms and other machine intent.
 
-`machines/` describes intended computing environments. It can contain machine roles, desired tools, package declarations, configuration sources, services, bootstrap mechanisms, shell configuration, and automation.
+The authored/observed distinction remains important here. "This is my primary workstation" is authored meaning. The current OS version is an observation. A machine declaration may say what should become true without claiming it is already true.
 
-The system keeps authored intent separate from observed state. A statement such as "this is my primary workstation" is authored meaning. An OS version or installed package list is observed state.
+## Information quality and scope
 
-## Information quality
+Persistence has a cost. Material should enter Control when it has durable value across the contexts where it applies.
 
-Persistent information has a cost. Control therefore keeps information that has durable value in the contexts where it applies.
+Project-specific facts belong with the Project. Temporary task facts belong with the task. Reusable procedure belongs in a Skill, script or other capability. Control can state durable intent or preference about those things without absorbing them.
 
-Typical high-value material includes stable communication preferences, durable decision criteria, useful domain language, strong positive examples, stable workflow constraints, persistent tool-use intent, machine-role intent, and important context objects.
+The design aim is a small, high-signal authored ground rather than a total personal data lake.
 
-Reusable procedure does not belong in general personal context. A skill, script, command, or other capability holds reusable procedure. Control can state a preference for that procedure or capability.
+## Availability is not disclosure
 
-The system keeps information at the narrowest scope where it remains correct. Project-specific facts stay with the project. Temporary task facts stay with the task. Cross-context durable preferences can enter Control.
+A file can exist in Control without entering every agent prompt.
 
-## Authored, observed, and inferred information
-
-Central preserves three information classes:
-
-```text
-Authored   the human deliberately states, adopts, or retains it
-Observed   software measures or discovers it
-Inferred   software derives it from evidence
-```
-
-Only authored material is canonical Control source by default.
-
-An agent can propose a durable Control change from observed or inferred evidence. The human reviews the proposal before the change becomes authored source.
-
-```mermaid
-flowchart LR
-    O[Observation]
-    P[Repeated pattern]
-    R[Proposal with provenance]
-    H[Human review]
-    C[Authored Control change]
-    O --> P --> R --> H --> C
-```
-
-## One action, many surfaces
-
-A repeated operation has one canonical Action identity.
-
-The same `work.open` Action can appear in the CLI, an interactive terminal picker, a launcher, an OS shortcut, a keybinding, an agent tool, or a future UI.
-
-```mermaid
-flowchart LR
-    A[work.open]
-    C[CLI]
-    I[Interactive picker]
-    L[Launcher]
-    O[OS automation]
-    G[Agent]
-    U[Future UI]
-    C --> A
-    I --> A
-    L --> A
-    O --> A
-    G --> A
-    U --> A
-```
-
-A Surface presents or invokes an Action. It does not own the operation.
-
-## Ports and Connectors
-
-Core Actions do not depend on named products.
-
-An Action depends on one or more Ports. A Port states the ability that the Action requires. A Connector implements a Port for a specific platform, tool, or service.
-
-```mermaid
-flowchart LR
-    A[Action]
-    P[Port]
-    C1[Connector A]
-    C2[Connector B]
-    C3[Connector C]
-    A --> P
-    P --> C1
-    P --> C2
-    P --> C3
-```
-
-The user-visible Action stays stable when the implementation changes.
-
-## The SDK
-
-The Connector SDK is part of the product architecture.
-
-The SDK must let a developer or software agent:
-
-1. read a Port contract;
-2. create a Connector manifest;
-3. implement the required operations;
-4. declare platform and dependency requirements;
-5. run conformance tests;
-6. test the Connector against fixtures or a real target;
-7. inspect capability and failure results;
-8. register the Connector without changing core Action logic.
-
-The first real extension set must use the same SDK and public contracts that other extensions use. The project must not add private code paths for its own preferred environment.
-
-## Skills and Control content
-
-Control content and agent skills have different functions.
-
-```text
-Control content   states what matters, what persists, and what relation the human wants
-Agent skill       defines how an agent performs a reusable procedure
-```
-
-Central can include maintenance skills that help an agent audit Control, propose a durable preference, review a proposed change, author a machine declaration, build a Connector, or diagnose a conformance failure. These skills operate on Control. They do not replace Control content.
-
-## Availability and disclosure
-
-A file can exist in Control without entering every agent context.
-
-Central distinguishes these conditions:
+Central distinguishes:
 
 ```text
 exists
 can be indexed
 can be retrieved
 is relevant
-is permitted for the current use
+is permitted for this use
 is loaded now
 ```
 
-The first implementation can use simple filesystem retrieval. The architecture does not assume that all persistent material is always loaded.
+This matters both for context quality and for human control. Making durable ground available to an agentic system does not imply broadcasting all of it into every act. Central owns source; an operative resolution layer such as AIKit can determine what is presently relevant and permitted.
 
-## Work stays ordinary
+## One Action, many Surfaces
 
-`Work/` contains normal directories. Central does not require a manifest before a directory can exist. It does not require Git. It does not force all project identity into one local path.
+A repeated operation has one canonical Action identity.
 
-The first work Actions can discover, list, find, open, reveal, and tag ordinary Work directories.
+The same `work.open` Action can be invoked through the CLI, an interactive picker, a launcher, OS automation, an agent tool or a future UI. A Surface presents an Action; it does not own the operation.
 
-## Native platform functions and extensions
+```text
+                  work.open
+             /       |       \
+          CLI     launcher    agent
+```
 
-Native operating-system functions form the base integration where practical. Optional tools can improve discovery, interaction, automation, package operations, and configuration operations.
+This is not primarily an interface convenience. It protects semantic continuity. The person should not have to learn that "open this work" means a different operation merely because the current actor or interface changed.
 
-The relation stays constant:
+## Ports and Connectors
+
+Core Actions depend on abilities rather than branded products.
+
+A Port states the ability an Action requires. A Connector implements that Port for a specific environment. This makes extension possible without allowing the current provider to define the product ontology.
 
 ```text
 Action
-  ↓
+  ↓ requires
 Port
-  ↓
+  ↓ implemented by
 Connector
-  ↓
-platform, tool, or service
+  ↓ binds to
+platform / tool / service
 ```
 
-No Connector becomes the product architecture.
+The public SDK and conformance tests exist so first-party and third-party environments can use the same extension law. The project's own preferred environment must not receive a private shortcut that other implementations cannot reproduce.
 
-## Personal extension as architecture proof
+## What Central changes for a human
 
-The project's own installation is the first complete consumer of the extension system. It must use public Ports, the public SDK, and the same conformance tests that external extensions use.
+A person can recover or move their technological world without reconstructing themselves from scattered application state.
 
-The personal extension set must prove that:
+They can see the durable source directly, distinguish what they authored from what software merely observed, keep work in ordinary form, and decide when a learned pattern deserves to become part of the future ground.
 
-- core Actions work without personal extensions;
-- launcher integration reads the canonical Action description;
-- native automation can invoke the same Actions;
-- package and configuration functions use replaceable Connectors;
-- another operating-system environment can implement equivalent Ports without changing core Action identity;
-- failures found during real use improve public contracts instead of creating private shortcuts.
+The success condition is not that the person spends more time maintaining Control. It is that they spend **less time repeatedly teaching new technological arrangements what should already have remained theirs**.
+
+## What Central changes for an agent
+
+An agent can enter a world with stable authored ground instead of treating each session as blank or silently constructing its own replacement profile.
+
+It can discover permitted material, use canonical Actions, operate against ordinary Work and return provenance-bearing proposals where durable source might usefully change. It can do so without receiving authorship authority merely because it was able to observe or infer something.
+
+## Relation to neighbouring products
+
+Central is one centre in the wider {O:I} field.
+
+- **O:I** holds the whole field and shared relations between independently owned worlds.
+- **Actuation** constitutes situated Agency, delegation, federation, bounds and Return. Central may be the authored world in which that agency is grounded; it is not the agent-composition runtime.
+- **AIKit** resolves the operative horizon available now. It can make Central material addressable without making all Control material ambient context.
+- **Software Factory** owns Project development, Runs, evidence, candidates and Recognition. Project canon remains project-local unless a genuinely cross-context relation is deliberately promoted into Central.
+- **Workcell** owns materialisation, placement and lifecycle. Central can state intended machine roles without becoming the execution planner.
+- **Quaternal Logic** can refract or study Central subjects when explicitly composed; Central remains fully useful without QL.
 
 ## Product experience
 
-The CLI supports explicit and guided use.
-
-Explicit use supports scripts and software actors:
+The product should support explicit and guided use without changing its semantic core.
 
 ```text
 ctrl open research-canvas
@@ -249,24 +186,26 @@ ctrl machine apply
 ctrl doctor
 ```
 
-Guided use supports search and selection:
+Guided surfaces can search and select the same Actions.
 
-```text
-ctrl
-```
-
-The product uses one interaction model across surfaces:
+The shared interaction law is:
 
 ```text
 find Action
 → supply or select inputs
-→ preview when required
+→ preview where consequence requires it
 → execute
 → receive a structured result
 ```
 
 ## Success condition
 
-Central succeeds when a person can create or recover one human-owned root, understand it without special software, operate it through one clear CLI, reproduce intended parts of a machine, extend it for a new stack through a stable SDK, and let software agents use the same Action and content contracts without giving those agents ownership of the human source.
+Central succeeds when a person can establish or recover one human-owned root, understand it without special software, preserve durable authored meaning without turning every observation into identity, keep ordinary work ordinary, operate through stable Actions across changing Surfaces and providers, and let agents participate without transferring ownership of the human source.
 
-The product must remain coherent when any optional Connector disappears. It must become more useful as extensions increase without making the conceptual core expand at the same rate.
+It should become more useful as extensions increase while the conceptual core remains small.
+
+## Provenance and implementation
+
+This document is product vision. It explains why the distinctions exist; it does not by itself prove a current implementation claim.
+
+[`CENTRAL-SYSTEM-SPEC.md`](CENTRAL-SYSTEM-SPEC.md) is the normative system specification. [`CONTROL-CONTENT-PROTOCOL.md`](CONTROL-CONTENT-PROTOCOL.md) governs durable content and authorship. [`CONNECTOR-SDK-SPEC.md`](CONNECTOR-SDK-SPEC.md) governs the extension architecture. Current `main`, repository tests and accepted evidence determine what is implemented now; open issues and PRs remain development state until accepted.
