@@ -35,6 +35,7 @@ The current core registry exposes:
 | `control.search` | search readable authored Control source | `control search <query>` |
 | `machine.declaration` | read authored machine-role intent | `machine declaration <role>` |
 | `machine.inspect` | inspect current observed machine state | `machine inspect` |
+| `machine.account` | compose the current-machine account (identity, observed state, authored roles, drift) | `machine account` |
 | `machine.plan` | compare authored intent with observed state | `machine plan <role>` |
 | `machine.apply` | apply the planned portable reconciliation | `machine apply <role>` |
 | `machine.verify` | verify authored intent against fresh observation | `machine verify <role>` |
