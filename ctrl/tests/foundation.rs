@@ -58,18 +58,26 @@ fn root_discovery_prefers_explicit_then_configured_then_home_default() {
 }
 
 #[test]
-fn initialization_creates_protocol_roots_and_root_wiki_and_is_repeatable() {
+fn initialization_creates_recursive_control_roots_and_root_wiki_and_is_repeatable() {
     let root = temporary_directory("init").join("Central");
     initialize_central(&root).unwrap();
     initialize_central(&root).unwrap();
 
-    for relative in ["Control/user", "Control/agents", "Control/machines", ".central", "Work", "Wiki"] {
+    for relative in [
+        "Control/user",
+        "Control/agents/governance",
+        "Control/agents/wiki",
+        "Control/machines",
+        ".central",
+        "Work",
+    ] {
         assert!(root.join(relative).is_dir(), "missing {relative}");
     }
-    for control in ["user", "agents", "machines"] {
-        assert_eq!(fs::read_dir(root.join("Control").join(control)).unwrap().count(), 0);
-    }
-    let root_wiki = root.join("Wiki/wiki.json");
+    assert_eq!(fs::read_dir(root.join("Control/user")).unwrap().count(), 0);
+    assert_eq!(fs::read_dir(root.join("Control/agents/governance")).unwrap().count(), 0);
+    assert_eq!(fs::read_dir(root.join("Control/machines")).unwrap().count(), 0);
+
+    let root_wiki = root.join("Control/agents/wiki/wiki.json");
     assert!(root_wiki.is_file());
     let wiki: serde_json::Value = serde_json::from_slice(&fs::read(root_wiki).unwrap()).unwrap();
     assert_eq!(wiki["objects"][0]["profile"], "okf-wiki/v1");
@@ -212,5 +220,6 @@ fn binary_is_the_stable_development_entrypoint() {
     let payload: serde_json::Value = serde_json::from_slice(&init.stdout).unwrap();
     assert_eq!(payload["action"], "central.init");
     assert!(Path::new(root.to_str().unwrap()).join("Control/user").is_dir());
-    assert!(Path::new(root.to_str().unwrap()).join("Wiki/wiki.json").is_file());
+    assert!(Path::new(root.to_str().unwrap()).join("Control/agents/governance").is_dir());
+    assert!(Path::new(root.to_str().unwrap()).join("Control/agents/wiki/wiki.json").is_file());
 }
