@@ -29,7 +29,7 @@ Inferred
     software derives it from evidence
 ```
 
-Observation and inference can propose a change to durable ground. They do not silently become that ground. The difference matters because a pattern detected by an agent may be useful without being something the person wants to define them, their agents, or their machines in the future.
+Observation and inference can propose a change to durable ground. They do not silently become that ground. The difference matters because a pattern detected by an agent may be useful without being something the person wants to define them, their agents, their machines or their Projects in the future.
 
 ## Non-displacement and continuity
 
@@ -55,28 +55,38 @@ The current Connector can disappear and another can take its place without retro
 
 ```text
 Central
-├── Control/      durable human-authored source
-│   ├── user/     what the person deliberately carries forward
-│   ├── agents/   the durable relation they want with software agents
-│   └── machines/ intended machine roles and operating intent
+├── Control/      durable personal source world
+│   ├── user/     human-owned personal authorship ground
+│   ├── agents/
+│   │   ├── governance/  human-authored recurring Agent governance
+│   │   └── wiki/        Agent-maintained root/personal Wiki
+│   └── machines/        intended machine roles and operating intent
 ├── ctrl/         stable executable Actions and public SDK
 ├── connectors/   replaceable bindings from Ports to real technologies
 ├── skills/       reusable agent procedures for working with Central
-├── Work/         ordinary work, not a proprietary project format
+├── Work/         ordinary work, with optional ProjectCentral per Project
+│   └── <project>/ProjectCentral/
+│       ├── user/          human-owned Project authorship aperture
+│       ├── agents/wiki/   Agent-maintained Project Wiki
+│       └── relations/     accepted source/provenance relations when needed
 └── .central/     derived local state subordinate to authored source
 ```
 
 The compact dependency rule is:
 
-> Control says what should persist. `ctrl` says what can be done. Connectors say how it can be done here.
+> Authored source says what should persist. `ctrl` says what can be done. Connectors say how it can be done here. Agent Wikis can maintain knowledge around that source without becoming its author.
 
-The sentence is useful because the responsibilities remain separate. Control carries authored meaning; an Action gives that meaning a stable operation surface; a Connector answers the local implementation question. None of those layers is allowed to impersonate the others.
+The sentence is useful because the responsibilities remain separate. Human source carries authored meaning; an Action gives the world a stable operation surface; a Connector answers the local implementation question; Agent knowledge remains revisable knowledge about/across source. None of those layers is allowed to impersonate the others.
 
 ## What changes for a human
 
-A person can recover a new machine or agent environment without having to reconstruct themselves from application settings and scattered memories. They can inspect the source directly, edit it without a special UI, keep project-specific material with the project, and decide explicitly when an observed pattern is worth carrying forward.
+A person can recover a new machine or agent environment without having to reconstruct themselves from application settings and scattered memories. They can inspect the source directly, edit it without a special UI, keep project-specific material with the Project, and decide explicitly when an observed pattern is worth carrying forward.
 
-The intended result is not more personal configuration work. It is **less repeated re-authoring of the same technological life** as tools change.
+Inside `Work/<project>`, ProjectCentral gives a substantial Project an obvious but optional place to author the few high-altitude things the person most needs to remain responsible for: purpose, intended experience, vision, design judgement, plans, important distinctions or recognised changes of direction. The human can structure that material naturally; Central does not generate a documentation template.
+
+Existing native source does not need to move into ProjectCentral. A source can be explicitly recognised and retained in place.
+
+The intended result is not more personal configuration or documentation work. It is **less repeated re-authoring of the same technological life**, while Agents carry more of the burden of maintaining navigable knowledge around the source.
 
 ## What changes for an agent
 
@@ -84,7 +94,19 @@ An agent can enter a world with a stable, permission-bounded authored ground rat
 
 Availability still does not imply disclosure. A file can exist, be indexable and be retrievable without being loaded into every context. Central supplies the source; systems such as AIKit can decide what is relevant and permitted for the current act.
 
-Agents can also invoke the same canonical Actions humans use. A launcher, shell command, agent tool and future UI do not need separate meanings for the same operation.
+ProjectCentral also gives the agent a stable distinction between:
+
+```text
+recognised human Project source
+Agent-maintained Wiki knowledge
+native design / architecture / code
+observed evidence / current development state
+inference
+```
+
+A role-like filename can help discovery without proving authorship. `ProjectCentral/user` is a human-owned aperture, but machine-readable authorship is not inferred from location alone; an AI-generated suggestion does not become human-authored merely because it landed there.
+
+Agents can invoke the same canonical Actions humans use. A launcher, shell command, agent tool and future UI do not need separate meanings for the same operation.
 
 ## Relation to the wider {O:I} field
 
@@ -92,9 +114,9 @@ Agents can also invoke the same canonical Actions humans use. A launcher, shell 
 
 **Actuation** defines how situated agency, delegation, authority and Return are constituted. Central can be the world in which an Agency is grounded without becoming the agency runtime.
 
-**AIKit** resolves what is available to an actor now — capabilities, sources, models, sessions, Surfaces and other resources. Central supplies authored ground that AIKit can make addressable without collapsing availability into automatic prompt injection.
+**AIKit** resolves what is available to an actor now — capabilities, sources, models, sessions, Surfaces and other resources. Central supplies authored ground and ProjectCentral Wiki/source identities that AIKit can make addressable without collapsing availability into automatic prompt injection.
 
-**Software Factory** develops projects from authored intention through design, implementation, evidence and Recognition. Project-specific canon stays with the Project; cross-context durable personal ground can remain in Central.
+**Software Factory** develops projects from authored intention through design, implementation, evidence and Recognition. Project-specific authored ground and Agent Wiki knowledge can be entered through ProjectCentral while Factory retains ownership of Run/Return state.
 
 **Workcell** materialises computational worlds. Central can state durable machine intent while Workcell owns runtime placement, services, bindings and lifecycle.
 
@@ -102,16 +124,17 @@ Agents can also invoke the same canonical Actions humans use. A launcher, shell 
 
 ## Product principles
 
-1. **Human authorship is explicit.** Observation and inference do not silently become authored Control material.
+1. **Human authorship is explicit.** Observation, inference and generated suggestions do not silently become authored source.
 2. **Authored continuity outranks implementation convenience.** A tool may improve access without becoming source authority.
 3. **Control stays high-signal.** Persistent material belongs at the narrowest scope where it remains correct.
 4. **Availability does not imply disclosure.** Existing or indexed information need not be loaded into every agent context.
 5. **Process and context stay distinct.** Skills contain reusable procedure; Control can state durable preference or intent about procedure.
 6. **Actions have stable identity.** Human and software Surfaces can invoke the same operation.
 7. **Core code depends on abstractions.** Ports state required ability; Connectors bind it to a real environment.
-8. **Derived state stays subordinate.** Caches, indexes, projections and observations do not outrank authored source.
-9. **Extensions are open-ended.** New environments should be supportable through the public SDK and conformance contracts.
-10. **The real installation tests the architecture.** First-party extensions must use the same public seams available to others.
+8. **Derived state stays subordinate.** Caches, indexes, accounts, projections and observations do not outrank authored source.
+9. **Existing Projects remain native.** ProjectCentral can relate useful source in place rather than requiring wholesale migration.
+10. **Extensions are open-ended.** New environments should be supportable through the public SDK and conformance contracts.
+11. **The real installation tests the architecture.** First-party extensions must use the same public seams available to others.
 
 ## Current implementation
 
@@ -131,7 +154,16 @@ ctrl --root /path/to/Central doctor --json
 ctrl --root /path/to/Central action list --json
 ```
 
-Initialization creates only `Control/user`, `Control/agents`, `Control/machines`, `.central`, and `Work`. The authored Control roots begin empty rather than being populated by guessed personal facts.
+Initialization creates the recursive Control roots, root Agent Wiki, `.central`, and `Work`. Human-owned authorship roots begin empty rather than being populated by guessed personal facts.
+
+ProjectCentral lifecycle Actions create the Project-local `user/` + `agents/{governance,wiki}` relation without generating authored prose. Authored-ground inspection is available as:
+
+```sh
+ctrl --root /path/to/Central projectcentral ground inspect <work-project>
+ctrl --root /path/to/Central projectcentral ground plan <work-project>
+```
+
+The structured `projectcentral.ground.apply` Action records an explicitly accepted source/provenance/standing relation without changing source bytes or path.
 
 Current main is the authority for implemented behaviour. Open extension PRs and physical-machine acceptance work remain development state until accepted; they should not be read back into the product vision as completed capability.
 
@@ -142,8 +174,10 @@ Read the package in this order:
 1. [`docs/CENTRAL-VISION.md`](docs/CENTRAL-VISION.md) — why the authored root exists and the experience it should preserve.
 2. [`docs/CENTRAL-SYSTEM-SPEC.md`](docs/CENTRAL-SYSTEM-SPEC.md) — normative product and architecture specification.
 3. [`docs/CONTROL-CONTENT-PROTOCOL.md`](docs/CONTROL-CONTENT-PROTOCOL.md) — authorship, durable information and disclosure boundaries.
-4. [`docs/PRODUCT-GROUND-CONVENTION.md`](docs/PRODUCT-GROUND-CONVENTION.md) — optional human-authored `Control/user/products/<product>/` convention and the returned-reality proposal boundary.
-5. [`docs/PERSONAL-WORLD-PROJECTION.md`](docs/PERSONAL-WORLD-PROJECTION.md) — selected personal/world Projection, public disclosure and explicit return to Central source.
-6. [`docs/CONNECTOR-SDK-SPEC.md`](docs/CONNECTOR-SDK-SPEC.md) — Action, Port, Connector, Surface, SDK and conformance architecture.
-7. [`docs/PERSONAL-EXTENSION-SPEC.md`](docs/PERSONAL-EXTENSION-SPEC.md) — first real extension set used to harden the public architecture.
-8. [`docs/INSTALL.md`](docs/INSTALL.md) — native `ctrl` installation and clean-root verification.
+4. [`docs/PROJECTCENTRAL-CONTRACT.md`](docs/PROJECTCENTRAL-CONTRACT.md) — recursive Project-local human-source / Agent-Wiki filesystem and identity contract.
+5. [`docs/PROJECTCENTRAL-AUTHORED-GROUND.md`](docs/PROJECTCENTRAL-AUTHORED-GROUND.md) — optional authored-ground UX, accepted source relations, account handoff and return law.
+6. [`docs/PRODUCT-GROUND-CONVENTION.md`](docs/PRODUCT-GROUND-CONVENTION.md) — optional human-authored `Control/user/products/<product>/` convention for cross-context product ground.
+7. [`docs/PERSONAL-WORLD-PROJECTION.md`](docs/PERSONAL-WORLD-PROJECTION.md) — selected personal/world Projection, public disclosure and explicit return to Central source.
+8. [`docs/CONNECTOR-SDK-SPEC.md`](docs/CONNECTOR-SDK-SPEC.md) — Action, Port, Connector, Surface, SDK and conformance architecture.
+9. [`docs/PERSONAL-EXTENSION-SPEC.md`](docs/PERSONAL-EXTENSION-SPEC.md) — first real extension set used to harden the public architecture.
+10. [`docs/INSTALL.md`](docs/INSTALL.md) — native `ctrl` installation and clean-root verification.
