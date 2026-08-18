@@ -63,3 +63,32 @@ fn rust_sdk_reference_names_every_published_core_port_and_version() {
     assert!(documentation.contains("ConnectorRegistry"));
     assert!(documentation.contains("run_synchronizer_conformance"));
 }
+
+#[test]
+fn docs_front_door_indexes_every_document() {
+    let docs = repository_root().join("docs");
+    let front_door = fs::read_to_string(docs.join("README.md")).unwrap();
+    let mut documents = fs::read_dir(&docs)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".md") && name != "README.md")
+        .collect::<Vec<_>>();
+    documents.sort();
+    assert!(!documents.is_empty(), "docs corpus must not be empty");
+    for name in documents {
+        assert!(
+            front_door.contains(&name),
+            "docs front door does not index {name}"
+        );
+    }
+}
+
+#[test]
+fn root_readme_points_at_the_docs_front_door() {
+    let readme = fs::read_to_string(repository_root().join("README.md")).unwrap();
+    assert!(
+        readme.contains("docs/README.md"),
+        "root README must route readers to the docs front door"
+    );
+}

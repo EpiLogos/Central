@@ -64,4 +64,7 @@ pub use central_reference_connectors::{
     SharedMachineState, StaticMachineInspectorConnector, StaticWorkConnector,
 };
 pub use result::{ActionResult, ResultStatus};
-pub use root::{inspect_central, initialize_central, resolve_central_root, ResolvedRoot, RootOptions};
+pub use root::{
+    inspect_central, initialize_central, resolve_central_root, MixedRootDiagnostic,
+    MixedRootSignal, ResolvedRoot, RootOptions,
+};

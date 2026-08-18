@@ -536,7 +536,13 @@ pub fn create_core_action_registry() -> ActionRegistry {
         init_action,
     ).expect("core Action ids are valid");
     registry.register(
-        descriptor("central.doctor", "Diagnose Central", "Check the validity of the basic Central filesystem structure.", MutationClass::ReadOnly, "central-health"),
+        descriptor(
+            "central.doctor",
+            "Diagnose Central",
+            "Check the validity of the basic Central filesystem structure and diagnose a personal root that is also the Central product source checkout.",
+            MutationClass::ReadOnly,
+            "central-health",
+        ),
         doctor_action,
     ).expect("core Action ids are valid");
     registry.register(
