@@ -104,6 +104,7 @@ fn registry_has_stable_ids_and_complete_descriptors() {
         "central.root",
         "control.open",
         "control.search",
+        "machine.account",
         "machine.apply",
         "machine.declaration",
         "machine.inspect",
@@ -158,7 +159,7 @@ fn action_list_has_human_and_structured_cli_renderings() {
     assert_eq!(structured.exit_code, 0);
     let value: serde_json::Value = serde_json::from_str(&structured.output).unwrap();
     assert_eq!(value["status"], "success");
-    assert_eq!(value["data"]["actions"].as_array().unwrap().len(), 17);
+    assert_eq!(value["data"]["actions"].as_array().unwrap().len(), 18);
 }
 
 #[test]
