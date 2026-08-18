@@ -5,9 +5,9 @@ use std::path::{Component, Path, PathBuf};
 
 pub const PROJECTCENTRAL_DIR: &str = "ProjectCentral";
 pub const PROJECT_MANIFEST: &str = "project.json";
-pub const HUMAN_APERTURE: &str = "README.md";
-pub const WIKI_DIR: &str = "Wiki";
-pub const WIKI_SOURCE: &str = "Wiki/wiki.json";
+pub const HUMAN_APERTURE: &str = "ProjectCentral/README.md";
+pub const WIKI_DIR: &str = "ProjectCentral/Wiki";
+pub const WIKI_SOURCE: &str = "ProjectCentral/Wiki/wiki.json";
 pub const ROOT_WIKI_SOURCE: &str = "Wiki/wiki.json";
 pub const PROJECT_SCHEMA: &str = "central.project/v1";
 pub const WIKI_PROFILE: &str = "okf-wiki/v1";
@@ -65,8 +65,8 @@ impl ProjectCentralManifest {
         if self.wiki.profile != WIKI_PROFILE {
             errors.push(format!("wiki.profile must be {WIKI_PROFILE}"));
         }
-        validate_relative_member("wiki.source", &self.wiki.source, &mut errors);
-        validate_relative_member("human_aperture", &self.human_aperture, &mut errors);
+        validate_project_member("wiki.source", &self.wiki.source, &mut errors);
+        validate_project_member("human_aperture", &self.human_aperture, &mut errors);
         ManifestValidation { valid: errors.is_empty(), errors }
     }
 }
@@ -76,8 +76,8 @@ pub fn projectcentral_paths(project_root: &Path, manifest: &ProjectCentralManife
     ProjectCentralPaths {
         project_root: project_root.to_path_buf(),
         manifest: projectcentral_root.join(PROJECT_MANIFEST),
-        human_aperture: projectcentral_root.join(&manifest.human_aperture),
-        wiki_source: projectcentral_root.join(&manifest.wiki.source),
+        human_aperture: project_root.join(&manifest.human_aperture),
+        wiki_source: project_root.join(&manifest.wiki.source),
         projectcentral_root,
     }
 }
@@ -90,16 +90,16 @@ pub fn read_project_manifest(project_root: &Path) -> io::Result<ProjectCentralMa
     })
 }
 
-fn validate_relative_member(field: &str, raw: &str, errors: &mut Vec<String>) {
+fn validate_project_member(field: &str, raw: &str, errors: &mut Vec<String>) {
     if raw.trim().is_empty() || raw != raw.trim() {
-        errors.push(format!("{field} must be a non-empty relative path without surrounding whitespace"));
+        errors.push(format!("{field} must be a non-empty project-root-relative path without surrounding whitespace"));
         return;
     }
     let path = Path::new(raw);
     let safe = !path.is_absolute()
         && path.components().all(|component| matches!(component, Component::Normal(_)));
     if !safe {
-        errors.push(format!("{field} must remain inside ProjectCentral and may not contain parent/root components"));
+        errors.push(format!("{field} must remain inside the Project and may not contain parent/root components"));
     }
 }
 
@@ -116,8 +116,11 @@ mod tests {
     }
 
     #[test]
-    fn manifest_rejects_paths_that_escape_projectcentral() {
+    fn manifest_accepts_in_place_project_sources_but_rejects_project_escape() {
         let mut manifest = ProjectCentralManifest::new("epilogos/example");
+        manifest.wiki.source = "docs/wiki.json".to_owned();
+        assert!(manifest.validate().valid);
+
         manifest.wiki.source = "../wiki.json".to_owned();
         manifest.human_aperture = "/tmp/README.md".to_owned();
         let validation = manifest.validate();
