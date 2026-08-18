@@ -5,11 +5,11 @@ use std::path::{Path, PathBuf};
 
 pub const REQUIRED_DIRECTORIES: [&str; 6] = [
     "Control/user",
-    "Control/agents",
+    "Control/agents/governance",
+    "Control/agents/wiki",
     "Control/machines",
     ".central",
     "Work",
-    "Wiki",
 ];
 
 #[derive(Debug, Clone, Default)]
