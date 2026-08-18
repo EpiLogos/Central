@@ -3,9 +3,13 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-pub const REQUIRED_DIRECTORIES: [&str; 5] = [
+// Root initialisation establishes the same human-source / Agent-space relation that
+// ProjectCentral repeats per Project. The root Wiki itself is created separately at
+// Control/agents/wiki/wiki.json by ensure_root_federation; no human document is implied.
+pub const REQUIRED_DIRECTORIES: [&str; 6] = [
     "Control/user",
-    "Control/agents",
+    "Control/agents/governance",
+    "Control/agents/wiki",
     "Control/machines",
     ".central",
     "Work",
@@ -100,6 +104,7 @@ pub fn initialize_central(root: &Path) -> io::Result<CentralInitialization> {
     for relative in REQUIRED_DIRECTORIES {
         fs::create_dir_all(root.join(relative))?;
     }
+    crate::projectcentral_ops::ensure_root_federation(root, None)?;
     Ok(CentralInitialization {
         root: root.to_path_buf(),
         directories: REQUIRED_DIRECTORIES.iter().map(|item| (*item).to_owned()).collect(),

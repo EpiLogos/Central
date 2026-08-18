@@ -45,15 +45,23 @@ jobs:
           root = pathlib.Path(sys.argv[1])
           required = [
               "Control/user",
-              "Control/agents",
+              "Control/agents/governance",
+              "Control/agents/wiki",
               "Control/machines",
               ".central",
               "Work",
           ]
           for relative in required:
               assert (root / relative).is_dir(), relative
-          for relative in ["Control/user", "Control/agents", "Control/machines"]:
+          for relative in ["Control/user", "Control/agents/governance", "Control/machines"]:
               assert list((root / relative).iterdir()) == [], relative
+
+          root_wiki = root / "Control/agents/wiki/wiki.json"
+          assert root_wiki.is_file(), root_wiki
+          wiki = json.load(open(root_wiki))
+          assert wiki["objects"][0]["profile"] == "okf-wiki/v1"
+          assert wiki["objects"][0]["object"] == "space"
+          assert wiki["objects"][0]["ref"] == "central:wiki:root"
 
           doctor = json.load(open(sys.argv[2]))
           assert doctor["status"] == "success"

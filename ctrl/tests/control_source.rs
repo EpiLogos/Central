@@ -24,7 +24,7 @@ fn execute(root: &PathBuf, action: &str, input: serde_json::Value) -> central_ct
 }
 
 #[test]
-fn control_open_locates_all_three_stable_roots_as_authored_source() {
+fn control_open_keeps_agents_explicitly_mixed_after_the_governance_wiki_split() {
     let root = temporary_directory("roots").join("Central");
     initialize_central(&root).unwrap();
     for target in CONTROL_ROOTS {
@@ -32,20 +32,32 @@ fn control_open_locates_all_three_stable_roots_as_authored_source() {
         assert_eq!(result.status, ResultStatus::Success);
         let data = result.data.unwrap();
         assert_eq!(data["target"], target);
-        assert_eq!(data["source_class"], "authored");
+        assert_eq!(
+            data["source_class"],
+            if target == "agents" { "mixed" } else { "authored" }
+        );
         assert_eq!(data["exists"], true);
         assert!(data["path"].as_str().unwrap().ends_with(&format!("Control/{target}")));
     }
 }
 
 #[test]
-fn control_search_reads_multiple_human_readable_formats_without_schema() {
+fn control_search_reads_human_source_but_not_agent_wiki_as_authored_source() {
     let root = temporary_directory("formats").join("Central");
     initialize_central(&root).unwrap();
     fs::write(root.join("Control/user/about.md"), "# About\nI prefer quiet launchers.\n").unwrap();
     fs::write(root.join("Control/machines/tools.json"), "{\"launcher\":\"Raycast launcher\"}\n").unwrap();
-    fs::create_dir_all(root.join("Control/agents/nested")).unwrap();
-    fs::write(root.join("Control/agents/nested/voice.notes"), "launcher guidance can remain plain prose\n").unwrap();
+    fs::create_dir_all(root.join("Control/agents/governance/nested")).unwrap();
+    fs::write(
+        root.join("Control/agents/governance/nested/voice.notes"),
+        "launcher guidance can remain plain prose\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("Control/agents/wiki/should-not-surface.txt"),
+        "launcher is Agent-maintained Wiki knowledge, not human-authored governance\n",
+    )
+    .unwrap();
 
     let result = execute(&root, "control.search", json!({ "query": "launcher" }));
     assert_eq!(result.status, ResultStatus::Success);
@@ -57,7 +69,24 @@ fn control_search_reads_multiple_human_readable_formats_without_schema() {
     assert!(matches.iter().all(|item| item["source_class"] == "authored"));
     assert!(matches.iter().any(|item| item["source_path"] == "Control/user/about.md"));
     assert!(matches.iter().any(|item| item["source_path"] == "Control/machines/tools.json"));
-    assert!(matches.iter().any(|item| item["source_path"] == "Control/agents/nested/voice.notes"));
+    assert!(matches.iter().any(|item| item["source_path"] == "Control/agents/governance/nested/voice.notes"));
+    assert!(!matches.iter().any(|item| item["source_path"].as_str().unwrap().contains("agents/wiki")));
+}
+
+#[test]
+fn pre_split_direct_agent_governance_files_remain_human_authored_by_provenance() {
+    let root = temporary_directory("legacy-agents").join("Central");
+    initialize_central(&root).unwrap();
+    fs::write(
+        root.join("Control/agents/legacy-style.txt"),
+        "Legacy governance prefers compact evidence.\n",
+    )
+    .unwrap();
+    let result = execute(&root, "control.search", json!({ "query": "compact" }));
+    let data = result.data.unwrap();
+    assert_eq!(data["matches"].as_array().unwrap().len(), 1);
+    assert_eq!(data["matches"][0]["source_path"], "Control/agents/legacy-style.txt");
+    assert_eq!(data["matches"][0]["source_class"], "authored");
 }
 
 #[test]
@@ -101,11 +130,11 @@ fn product_ground_is_ordinary_nested_user_source_not_a_fourth_control_root() {
 }
 
 #[test]
-fn control_search_reports_unsupported_non_text_sources_explicitly() {
+fn control_search_reports_unsupported_human_source_explicitly() {
     let root = temporary_directory("unsupported").join("Central");
     initialize_central(&root).unwrap();
     fs::write(root.join("Control/user/about.md"), "A searchable durable preference.\n").unwrap();
-    fs::write(root.join("Control/agents/archive.bin"), [0xff, 0xfe, 0x00, 0x80]).unwrap();
+    fs::write(root.join("Control/agents/governance/archive.bin"), [0xff, 0xfe, 0x00, 0x80]).unwrap();
 
     let result = execute(&root, "control.search", json!({ "query": "durable" }));
     assert_eq!(result.status, ResultStatus::Success);
@@ -116,16 +145,16 @@ fn control_search_reports_unsupported_non_text_sources_explicitly() {
     let skipped = data["skipped_sources"].as_array().unwrap();
     assert_eq!(skipped.len(), 1);
     assert_eq!(skipped[0]["target"], "agents");
-    assert_eq!(skipped[0]["source_path"], "Control/agents/archive.bin");
+    assert_eq!(skipped[0]["source_path"], "Control/agents/governance/archive.bin");
     assert_eq!(skipped[0]["source_class"], "authored");
     assert_eq!(skipped[0]["reason"], "unsupported_non_text_source");
 }
 
 #[test]
-fn direct_filesystem_edits_are_visible_immediately_without_import_or_generated_index() {
+fn direct_governance_filesystem_edits_are_visible_without_import_or_generated_index() {
     let root = temporary_directory("direct-edit").join("Central");
     initialize_central(&root).unwrap();
-    let source = root.join("Control/agents/style");
+    let source = root.join("Control/agents/governance/style");
     fs::write(&source, "Prefer concise technical prose.\n").unwrap();
 
     let first = execute(&root, "control.search", json!({ "query": "concise" }));
@@ -137,6 +166,22 @@ fn direct_filesystem_edits_are_visible_immediately_without_import_or_generated_i
     let changed = execute(&root, "control.search", json!({ "query": "spacious" }));
     assert_eq!(changed.data.unwrap()["matches"].as_array().unwrap().len(), 1);
     assert_eq!(fs::read_dir(root.join(".central")).unwrap().count(), 0);
+}
+
+#[test]
+fn retrieval_deny_marker_excludes_an_arbitrary_human_subtree() {
+    let root = temporary_directory("private").join("Central");
+    initialize_central(&root).unwrap();
+    let private = root.join("Control/user/my-own-name-for-private-material");
+    fs::create_dir_all(&private).unwrap();
+    fs::write(private.join(".no-agent-retrieval"), "").unwrap();
+    fs::write(private.join("note.md"), "This concealed-marker-text must not be retrieved.\n").unwrap();
+
+    let result = execute(&root, "control.search", json!({ "query": "concealed-marker-text" }));
+    let data = result.data.unwrap();
+    assert!(data["matches"].as_array().unwrap().is_empty());
+    assert_eq!(data["skipped_sources"].as_array().unwrap().len(), 1);
+    assert_eq!(data["skipped_sources"][0]["reason"], "not_agent_readable");
 }
 
 #[test]

@@ -10,6 +10,7 @@ pub const AGENT_RETRIEVAL_DENY_MARKER: &str = ".no-agent-retrieval";
 #[serde(rename_all = "snake_case")]
 pub enum SourceClass {
     Authored,
+    Mixed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -55,7 +56,10 @@ pub fn locate_control_root(central_root: &Path, target: &str) -> Result<ControlS
     Ok(ControlSourceRoot {
         target: target.to_owned(),
         path,
-        source_class: SourceClass::Authored,
+        // Control/agents is intentionally a container of two authorities:
+        // human-authored governance (plus preserved pre-split authored files) and
+        // Agent-maintained Wiki knowledge. Human Control search below excludes wiki/.
+        source_class: if target == "agents" { SourceClass::Mixed } else { SourceClass::Authored },
         exists,
     })
 }
@@ -67,6 +71,13 @@ fn readable_files(
     files: &mut Vec<PathBuf>,
     skipped_sources: &mut Vec<ControlSkippedSource>,
 ) -> io::Result<()> {
+    // `control.search` is the human-authored Control-source reader. Agent Wiki
+    // knowledge has its own SemanticWiki path and must not be relabelled authored
+    // merely because it is nested under Control/agents.
+    if target == "agents" && directory == central_root.join("Control/agents/wiki") {
+        return Ok(());
+    }
+
     let deny_marker = directory.join(AGENT_RETRIEVAL_DENY_MARKER);
     if deny_marker.is_file() {
         skipped_sources.push(ControlSkippedSource {
