@@ -3,8 +3,8 @@ use crate::action::{
     ActionOutputDefinition, ActionRegistry, MutationClass,
 };
 use crate::projectcentral::{
-    projectcentral_paths, read_project_manifest, ProjectCentralManifest, WikiBinding,
-    PROJECTCENTRAL_DIR, PROJECT_MANIFEST, WIKI_PROFILE, WIKI_SOURCE,
+    projectcentral_paths, read_project_manifest, ProjectCentralManifest, PROJECTCENTRAL_DIR,
+    PROJECT_MANIFEST, ROOT_WIKI_SOURCE, WIKI_PROFILE, WIKI_SOURCE,
 };
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
@@ -82,8 +82,10 @@ pub struct ProjectCentralMutation {
     pub outcome: ProjectCentralOutcome,
     pub project_root: PathBuf,
     pub project_id: String,
+    pub human_source: String,
     pub wiki_source: String,
     pub wiki_space_ref: String,
+    pub adopted_sources: Vec<String>,
     pub root_wiki: PathBuf,
     pub provenance: PathBuf,
 }
@@ -119,45 +121,79 @@ pub fn inspect_projectcentral(project_root: &Path) -> io::Result<ProjectCentralI
                 reason: "ProjectCentral manifest is present but invalid.".into(),
             });
         }
+
         let paths = projectcentral_paths(project_root, &manifest);
-        return match compatible_wiki(&paths.wiki_source)? {
-            Some(space_ref) => Ok(ProjectCentralInspection {
-                project_root: project_root.to_path_buf(),
-                outcome: ProjectCentralOutcome::AlreadyConformant,
-                wiki_candidates: vec![WikiCandidate {
-                    source: manifest.wiki.source.clone(),
-                    space_ref,
-                }],
-                manifest: Some(manifest),
-                manifest_errors: vec![],
-                source_signals,
-                reason: "ProjectCentral manifest and bound OKF Wiki source are readable.".into(),
-            }),
-            None => Ok(ProjectCentralInspection {
+        let Some(space_ref) = compatible_wiki(&paths.wiki_source)? else {
+            return Ok(ProjectCentralInspection {
                 project_root: project_root.to_path_buf(),
                 outcome: ProjectCentralOutcome::UnresolvedHumanDecisionRequired,
                 manifest: Some(manifest),
                 manifest_errors: vec![],
                 wiki_candidates: vec![],
                 source_signals,
-                reason: "ProjectCentral manifest is valid but its bound Wiki source is missing or incompatible.".into(),
-            }),
+                reason: "ProjectCentral manifest is valid but the canonical Agent Wiki is missing or incompatible.".into(),
+            });
         };
+
+        let mut wiki_candidates = vec![WikiCandidate {
+            source: manifest.wiki.source.clone(),
+            space_ref,
+        }];
+        for source in &manifest.wiki.adopted_sources {
+            match compatible_wiki(&project_root.join(source))? {
+                Some(space_ref) => wiki_candidates.push(WikiCandidate {
+                    source: source.clone(),
+                    space_ref,
+                }),
+                None => {
+                    return Ok(ProjectCentralInspection {
+                        project_root: project_root.to_path_buf(),
+                        outcome: ProjectCentralOutcome::UnresolvedHumanDecisionRequired,
+                        manifest: Some(manifest),
+                        manifest_errors: vec![],
+                        wiki_candidates,
+                        source_signals,
+                        reason: format!("ProjectCentral adopted Wiki source is missing or incompatible: {source}"),
+                    });
+                }
+            }
+        }
+
+        let fractal_dirs_present = paths.human_source.is_dir()
+            && paths.agent_governance.is_dir()
+            && paths.wiki_root.is_dir();
+        return Ok(ProjectCentralInspection {
+            project_root: project_root.to_path_buf(),
+            outcome: if fractal_dirs_present {
+                ProjectCentralOutcome::AlreadyConformant
+            } else {
+                ProjectCentralOutcome::UnresolvedHumanDecisionRequired
+            },
+            manifest: Some(manifest),
+            manifest_errors: vec![],
+            wiki_candidates,
+            source_signals,
+            reason: if fractal_dirs_present {
+                "ProjectCentral human-source and Agent-Wiki fractal is present and readable.".into()
+            } else {
+                "ProjectCentral metadata exists but the canonical user/agents directory relation is incomplete.".into()
+            },
+        });
     }
 
     let wiki_candidates = discover_wiki_candidates(project_root)?;
     let (outcome, reason) = match wiki_candidates.len() {
         0 => (
             ProjectCentralOutcome::CreateProjectCentral,
-            "No compatible OKF Wiki source was found; a ProjectCentral can be created around the native project.",
+            "No compatible OKF Wiki source was found; the canonical human-source/Agent-Wiki fractal can be created around the native Project.",
         ),
         1 => (
             ProjectCentralOutcome::BindExistingWikiInPlace,
-            "One compatible OKF Wiki source was found and can be adopted in place without moving it.",
+            "One compatible OKF Wiki source was found; it can remain in place as a participating source while ProjectCentral receives its canonical Agent Wiki.",
         ),
         _ => (
             ProjectCentralOutcome::UnresolvedHumanDecisionRequired,
-            "Multiple compatible Wiki sources were found; Central will not guess which one is authoritative.",
+            "Multiple compatible Wiki sources were found; Central will not guess which one should participate as the adopted source.",
         ),
     };
     Ok(ProjectCentralInspection {
@@ -203,18 +239,37 @@ pub fn doctor_projectcentral(
     if let Some(manifest) = manifest {
         let paths = projectcentral_paths(project_root, &manifest);
         checks.push(DoctorCheck {
-            name: "human_aperture".into(),
-            valid: paths.human_aperture.is_file(),
-            detail: paths.human_aperture.display().to_string(),
+            name: "human_source".into(),
+            valid: paths.human_source.is_dir(),
+            detail: paths.human_source.display().to_string(),
+        });
+        checks.push(DoctorCheck {
+            name: "agent_governance".into(),
+            valid: paths.agent_governance.is_dir(),
+            detail: paths.agent_governance.display().to_string(),
+        });
+        checks.push(DoctorCheck {
+            name: "agent_wiki_root".into(),
+            valid: paths.wiki_root.is_dir(),
+            detail: paths.wiki_root.display().to_string(),
         });
         let space_ref = compatible_wiki(&paths.wiki_source)?;
         checks.push(DoctorCheck {
-            name: "wiki_source".into(),
+            name: "agent_wiki_source".into(),
             valid: space_ref.is_some(),
             detail: paths.wiki_source.display().to_string(),
         });
+
+        for source in &manifest.wiki.adopted_sources {
+            checks.push(DoctorCheck {
+                name: format!("adopted_wiki:{source}"),
+                valid: compatible_wiki(&project_root.join(source))?.is_some(),
+                detail: project_root.join(source).display().to_string(),
+            });
+        }
+
         if let Some(space_ref) = space_ref {
-            let root_source = central_root.join("Wiki/wiki.json");
+            let root_source = central_root.join(ROOT_WIKI_SOURCE);
             checks.push(DoctorCheck {
                 name: "root_federation".into(),
                 valid: root_contains_child(&root_source, &space_ref)?,
@@ -240,23 +295,22 @@ pub fn initialize_projectcentral(
     let manifest = ProjectCentralManifest::new(project_id);
     validate_manifest(&manifest)?;
     let paths = projectcentral_paths(project_root, &manifest);
-    fs::create_dir_all(paths.wiki_source.parent().expect("Wiki source parent"))?;
+    create_fractal_dirs(&paths)?;
     write_json_new(&paths.manifest, &serde_json::to_value(&manifest).expect("manifest serializes"))?;
-    ensure_human_aperture(&paths.human_aperture, project_id)?;
 
     let space_ref = project_space_ref(project_id);
-    write_json_new(&paths.wiki_source, &project_wiki_value(&space_ref, project_id))?;
+    write_json_new(&paths.wiki_source, &project_wiki_value(&space_ref, project_id, &[]))?;
     ensure_root_federation(central_root, Some(&space_ref))?;
     let provenance = append_provenance(project_root, "initialize", None, Some(&manifest.wiki.source))?;
-    Ok(ProjectCentralMutation {
-        outcome: ProjectCentralOutcome::CreateProjectCentral,
-        project_root: project_root.to_path_buf(),
-        project_id: project_id.into(),
-        wiki_source: manifest.wiki.source,
-        wiki_space_ref: space_ref,
-        root_wiki: central_root.join("Wiki/wiki.json"),
+    Ok(mutation_result(
+        ProjectCentralOutcome::CreateProjectCentral,
+        project_root,
+        project_id,
+        &manifest,
+        space_ref,
+        central_root,
         provenance,
-    })
+    ))
 }
 
 pub fn preview_adopt(project_root: &Path, source: &str) -> io::Result<MutationPlan> {
@@ -271,13 +325,14 @@ pub fn preview_adopt(project_root: &Path, source: &str) -> io::Result<MutationPl
         outcome: ProjectCentralOutcome::BindExistingWikiInPlace,
         project_root: project_root.to_path_buf(),
         operations: vec![
-            "create ProjectCentral binding metadata if absent".into(),
-            "create human aperture if absent".into(),
-            format!("bind Wiki source in place: {source}"),
-            "federate the bound WikiSpace from the Central root".into(),
+            "create ProjectCentral/user and ProjectCentral/agents/{governance,wiki}".into(),
+            "create canonical ProjectCentral Agent Wiki".into(),
+            format!("retain adopted Wiki source in place: {source}"),
+            "record the in-place source as a participating Wiki source".into(),
+            "federate the canonical Project WikiSpace from the Central root".into(),
         ],
         source: Some(source.into()),
-        target: None,
+        target: Some(WIKI_SOURCE.into()),
         preserves_source: true,
     })
 }
@@ -290,29 +345,36 @@ pub fn adopt_in_place(
 ) -> io::Result<ProjectCentralMutation> {
     preview_adopt(project_root, source)?;
     ensure_unbound(project_root)?;
-    let space_ref = compatible_wiki(&project_root.join(source))?
+    let adopted_space_ref = compatible_wiki(&project_root.join(source))?
         .expect("preview established Wiki compatibility");
     let mut manifest = ProjectCentralManifest::new(project_id);
-    manifest.wiki = WikiBinding {
-        profile: WIKI_PROFILE.into(),
-        source: source.into(),
-    };
+    manifest.wiki.adopted_sources.push(source.into());
     validate_manifest(&manifest)?;
     let paths = projectcentral_paths(project_root, &manifest);
-    fs::create_dir_all(&paths.projectcentral_root)?;
+    create_fractal_dirs(&paths)?;
     write_json_new(&paths.manifest, &serde_json::to_value(&manifest).expect("manifest serializes"))?;
-    ensure_human_aperture(&paths.human_aperture, project_id)?;
+
+    let space_ref = project_space_ref(project_id);
+    write_json_new(
+        &paths.wiki_source,
+        &project_wiki_value(&space_ref, project_id, &[adopted_space_ref]),
+    )?;
     ensure_root_federation(central_root, Some(&space_ref))?;
-    let provenance = append_provenance(project_root, "adopt_in_place", Some(source), Some(source))?;
-    Ok(ProjectCentralMutation {
-        outcome: ProjectCentralOutcome::BindExistingWikiInPlace,
-        project_root: project_root.to_path_buf(),
-        project_id: project_id.into(),
-        wiki_source: source.into(),
-        wiki_space_ref: space_ref,
-        root_wiki: central_root.join("Wiki/wiki.json"),
+    let provenance = append_provenance(
+        project_root,
+        "adopt_in_place",
+        Some(source),
+        Some(&manifest.wiki.source),
+    )?;
+    Ok(mutation_result(
+        ProjectCentralOutcome::BindExistingWikiInPlace,
+        project_root,
+        project_id,
+        &manifest,
+        space_ref,
+        central_root,
         provenance,
-    })
+    ))
 }
 
 pub fn preview_migrate(project_root: &Path, source: &str) -> io::Result<MutationPlan> {
@@ -333,10 +395,10 @@ pub fn preview_migrate(project_root: &Path, source: &str) -> io::Result<Mutation
         outcome: ProjectCentralOutcome::MigrateSelectedMaterial,
         project_root: project_root.to_path_buf(),
         operations: vec![
+            "create ProjectCentral/user and ProjectCentral/agents/{governance,wiki}".into(),
             format!("copy selected Wiki source: {source} -> {WIKI_SOURCE}"),
             "preserve the original source in place".into(),
-            "write ProjectCentral binding metadata to the copied Wiki".into(),
-            "create human aperture if absent".into(),
+            "bind ProjectCentral to the copied Agent Wiki".into(),
             "record migration provenance".into(),
             "federate the migrated WikiSpace from the Central root".into(),
         ],
@@ -354,31 +416,30 @@ pub fn migrate_selected(
 ) -> io::Result<ProjectCentralMutation> {
     preview_migrate(project_root, source)?;
     ensure_unbound(project_root)?;
-    let target_path = project_root.join(WIKI_SOURCE);
-    fs::create_dir_all(target_path.parent().expect("Wiki target parent"))?;
-    fs::copy(project_root.join(source), &target_path)?;
-    let space_ref = compatible_wiki(&target_path)?.ok_or_else(|| {
+    let manifest = ProjectCentralManifest::new(project_id);
+    validate_manifest(&manifest)?;
+    let paths = projectcentral_paths(project_root, &manifest);
+    create_fractal_dirs(&paths)?;
+    fs::copy(project_root.join(source), &paths.wiki_source)?;
+    let space_ref = compatible_wiki(&paths.wiki_source)?.ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidData, "copied Wiki failed compatibility verification")
     })?;
-    let manifest = ProjectCentralManifest::new(project_id);
-    let paths = projectcentral_paths(project_root, &manifest);
     write_json_new(&paths.manifest, &serde_json::to_value(&manifest).expect("manifest serializes"))?;
-    ensure_human_aperture(&paths.human_aperture, project_id)?;
     ensure_root_federation(central_root, Some(&space_ref))?;
     let provenance = append_provenance(project_root, "migrate_copy", Some(source), Some(WIKI_SOURCE))?;
-    Ok(ProjectCentralMutation {
-        outcome: ProjectCentralOutcome::MigrateSelectedMaterial,
-        project_root: project_root.to_path_buf(),
-        project_id: project_id.into(),
-        wiki_source: WIKI_SOURCE.into(),
-        wiki_space_ref: space_ref,
-        root_wiki: central_root.join("Wiki/wiki.json"),
+    Ok(mutation_result(
+        ProjectCentralOutcome::MigrateSelectedMaterial,
+        project_root,
+        project_id,
+        &manifest,
+        space_ref,
+        central_root,
         provenance,
-    })
+    ))
 }
 
 pub fn ensure_root_federation(central_root: &Path, child_ref: Option<&str>) -> io::Result<PathBuf> {
-    let path = central_root.join("Wiki/wiki.json");
+    let path = central_root.join(ROOT_WIKI_SOURCE);
     fs::create_dir_all(path.parent().expect("root Wiki parent"))?;
     let mut value = if path.exists() {
         serde_json::from_slice::<Value>(&fs::read(&path)?).map_err(|error| {
@@ -560,7 +621,7 @@ fn project_space_ref(project_id: &str) -> String {
     format!("central:wiki:project:{project_id}")
 }
 
-fn project_wiki_value(space_ref: &str, title: &str) -> Value {
+fn project_wiki_value(space_ref: &str, title: &str, child_space_refs: &[String]) -> Value {
     json!({"objects":[{
         "profile":WIKI_PROFILE,
         "object":"space",
@@ -569,7 +630,7 @@ fn project_wiki_value(space_ref: &str, title: &str) -> Value {
         "provenance":[],
         "title":title,
         "parent_space_refs":[ROOT_WIKI_REF],
-        "child_space_refs":[],
+        "child_space_refs":child_space_refs,
         "node_refs":[]
     }]})
 }
@@ -588,17 +649,33 @@ fn root_space_value() -> Value {
     })
 }
 
-fn ensure_human_aperture(path: &Path, project_id: &str) -> io::Result<()> {
-    if path.exists() {
-        return Ok(());
+fn create_fractal_dirs(paths: &crate::projectcentral::ProjectCentralPaths) -> io::Result<()> {
+    fs::create_dir_all(&paths.human_source)?;
+    fs::create_dir_all(&paths.agent_governance)?;
+    fs::create_dir_all(&paths.wiki_root)?;
+    Ok(())
+}
+
+fn mutation_result(
+    outcome: ProjectCentralOutcome,
+    project_root: &Path,
+    project_id: &str,
+    manifest: &ProjectCentralManifest,
+    wiki_space_ref: String,
+    central_root: &Path,
+    provenance: PathBuf,
+) -> ProjectCentralMutation {
+    ProjectCentralMutation {
+        outcome,
+        project_root: project_root.to_path_buf(),
+        project_id: project_id.into(),
+        human_source: manifest.human_source.clone(),
+        wiki_source: manifest.wiki.source.clone(),
+        wiki_space_ref,
+        adopted_sources: manifest.wiki.adopted_sources.clone(),
+        root_wiki: central_root.join(ROOT_WIKI_SOURCE),
+        provenance,
     }
-    fs::create_dir_all(path.parent().expect("human aperture parent"))?;
-    fs::write(
-        path,
-        format!(
-            "# {project_id}\n\nThis is the human-authored Project aperture. Keep the Project's purpose, intended experience, important judgements, and links to canonical native source here. Agent-maintained knowledge belongs in the bound Project Wiki, not in this file unless a human accepts a proposed source revision.\n"
-        ),
-    )
 }
 
 fn ensure_project_directory(project_root: &Path) -> io::Result<()> {
@@ -889,15 +966,15 @@ fn migrate_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionCo
 pub fn register_projectcentral_actions(registry: &mut ActionRegistry) {
     let actions = [
         (
-            descriptor("projectcentral.inspect", "Inspect ProjectCentral", "Inspect a Work project for ProjectCentral, compatible OKF Wiki sources, and adoption ambiguity without mutation.", MutationClass::ReadOnly, "projectcentral-inspection", &["project"], false),
+            descriptor("projectcentral.inspect", "Inspect ProjectCentral", "Inspect a Work project for the ProjectCentral human-source/Agent-Wiki fractal, compatible OKF Wiki sources, and adoption ambiguity without mutation.", MutationClass::ReadOnly, "projectcentral-inspection", &["project"], false),
             inspect_action as fn(&ActionRegistry, &Value, &ActionExecutionContext<'_>) -> ActionResult,
         ),
-        (descriptor("projectcentral.doctor", "Verify ProjectCentral", "Verify ProjectCentral binding, aperture, Wiki source, and root federation.", MutationClass::ReadOnly, "projectcentral-doctor", &["project"], false), doctor_action),
-        (descriptor("projectcentral.init", "Initialize ProjectCentral", "Create ProjectCentral around an existing native Work project without moving native files.", MutationClass::LocallyMutating, "projectcentral-mutation", &["project", "project_id"], true), init_action),
-        (descriptor("projectcentral.adopt.preview", "Preview Wiki adoption", "Preview binding one selected compatible Wiki in place.", MutationClass::ReadOnly, "projectcentral-mutation-plan", &["project", "source"], false), adopt_preview_action),
-        (descriptor("projectcentral.adopt", "Adopt Wiki in place", "Bind one selected compatible Wiki in place, preserve provenance, and federate its WikiSpace.", MutationClass::LocallyMutating, "projectcentral-mutation", &["project", "project_id", "source"], true), adopt_action),
-        (descriptor("projectcentral.migrate.preview", "Preview Wiki migration", "Preview copying one selected compatible Wiki into ProjectCentral while preserving its source.", MutationClass::ReadOnly, "projectcentral-mutation-plan", &["project", "source"], false), migrate_preview_action),
-        (descriptor("projectcentral.migrate", "Migrate selected Wiki", "Copy one selected compatible Wiki into ProjectCentral, preserve the original, record provenance, and federate it.", MutationClass::LocallyMutating, "projectcentral-mutation", &["project", "project_id", "source"], true), migrate_action),
+        (descriptor("projectcentral.doctor", "Verify ProjectCentral", "Verify ProjectCentral identity, human source root, Agent governance/Wiki roots, Wiki source, adopted sources, and root federation.", MutationClass::ReadOnly, "projectcentral-doctor", &["project"], false), doctor_action),
+        (descriptor("projectcentral.init", "Initialize ProjectCentral", "Create the recursive user/agents ProjectCentral relation around an existing native Work project without moving native files.", MutationClass::LocallyMutating, "projectcentral-mutation", &["project", "project_id"], true), init_action),
+        (descriptor("projectcentral.adopt.preview", "Preview Wiki adoption", "Preview retaining one selected compatible Wiki in place as a participating source of the canonical Project Agent Wiki.", MutationClass::ReadOnly, "projectcentral-mutation-plan", &["project", "source"], false), adopt_preview_action),
+        (descriptor("projectcentral.adopt", "Adopt Wiki in place", "Keep one selected compatible Wiki in place, record it as a participating source, create the canonical Project Agent Wiki, and federate the Project WikiSpace.", MutationClass::LocallyMutating, "projectcentral-mutation", &["project", "project_id", "source"], true), adopt_action),
+        (descriptor("projectcentral.migrate.preview", "Preview Wiki migration", "Preview copying one selected compatible Wiki into ProjectCentral/agents/wiki while preserving its source.", MutationClass::ReadOnly, "projectcentral-mutation-plan", &["project", "source"], false), migrate_preview_action),
+        (descriptor("projectcentral.migrate", "Migrate selected Wiki", "Copy one selected compatible Wiki into ProjectCentral/agents/wiki, preserve the original, record provenance, and federate it.", MutationClass::LocallyMutating, "projectcentral-mutation", &["project", "project_id", "source"], true), migrate_action),
     ];
     for (descriptor, handler) in actions {
         registry.register(descriptor, handler).expect("ProjectCentral Action ids are valid");
@@ -907,6 +984,7 @@ pub fn register_projectcentral_actions(registry: &mut ActionRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::projectcentral::{AGENT_GOVERNANCE_DIR, HUMAN_SOURCE_DIR};
     use tempfile::tempdir;
 
     fn write_existing_wiki(project: &Path, relative: &str, space_ref: &str) {
@@ -946,36 +1024,51 @@ mod tests {
     }
 
     #[test]
-    fn init_creates_project_and_root_wikispaces_without_copying_project_sources() {
+    fn init_creates_the_fractal_without_imposing_a_human_document() {
         let temp = tempdir().unwrap();
         let central = temp.path().join("Central");
         let project = central.join("Work/example");
         fs::create_dir_all(&project).unwrap();
         fs::write(project.join("README.md"), "native source").unwrap();
         let result = initialize_projectcentral(&central, &project, "example/project").unwrap();
+
         assert_eq!(fs::read_to_string(project.join("README.md")).unwrap(), "native source");
+        assert!(project.join(HUMAN_SOURCE_DIR).is_dir());
+        assert!(project.join(AGENT_GOVERNANCE_DIR).is_dir());
         assert!(project.join(WIKI_SOURCE).is_file());
-        assert!(root_contains_child(&central.join("Wiki/wiki.json"), &result.wiki_space_ref).unwrap());
+        assert!(!project.join("ProjectCentral/README.md").exists());
+        assert!(root_contains_child(&central.join(ROOT_WIKI_SOURCE), &result.wiki_space_ref).unwrap());
         assert!(doctor_projectcentral(&central, &project).unwrap().valid);
     }
 
     #[test]
-    fn adoption_binds_in_place_and_migration_preserves_source() {
+    fn adoption_keeps_existing_wiki_in_place_but_still_creates_canonical_agent_wiki() {
         let temp = tempdir().unwrap();
         let central = temp.path().join("Central");
         let adopted = central.join("Work/adopted");
         fs::create_dir_all(&adopted).unwrap();
         write_existing_wiki(&adopted, "docs/wiki.json", "example:space:adopted");
-        let adoption = adopt_in_place(&central, &adopted, "example/adopted", "docs/wiki.json").unwrap();
-        assert_eq!(adoption.wiki_source, "docs/wiki.json");
-        assert!(adopted.join("docs/wiki.json").is_file());
-        assert!(!adopted.join(WIKI_SOURCE).exists());
 
+        let adoption = adopt_in_place(&central, &adopted, "example/adopted", "docs/wiki.json").unwrap();
+        assert_eq!(adoption.wiki_source, WIKI_SOURCE);
+        assert_eq!(adoption.adopted_sources, vec!["docs/wiki.json"]);
+        assert!(adopted.join("docs/wiki.json").is_file());
+        assert!(adopted.join(WIKI_SOURCE).is_file());
+        assert!(doctor_projectcentral(&central, &adopted).unwrap().valid);
+    }
+
+    #[test]
+    fn migration_moves_a_copy_into_agent_wiki_and_preserves_source() {
+        let temp = tempdir().unwrap();
+        let central = temp.path().join("Central");
         let migrated = central.join("Work/migrated");
         fs::create_dir_all(&migrated).unwrap();
         write_existing_wiki(&migrated, "legacy/wiki.json", "example:space:migrated");
+
         migrate_selected(&central, &migrated, "example/migrated", "legacy/wiki.json").unwrap();
         assert!(migrated.join("legacy/wiki.json").is_file());
         assert!(migrated.join(WIKI_SOURCE).is_file());
+        assert!(migrated.join(HUMAN_SOURCE_DIR).is_dir());
+        assert!(doctor_projectcentral(&central, &migrated).unwrap().valid);
     }
 }
