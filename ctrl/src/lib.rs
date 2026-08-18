@@ -4,6 +4,7 @@ pub mod control;
 pub mod machine;
 pub mod picker;
 pub mod projectcentral;
+pub mod projectcentral_ground;
 pub mod projectcentral_ops;
 pub mod recovery;
 pub mod result;
@@ -87,6 +88,14 @@ pub use projectcentral::{
     PROJECTCENTRAL_DIR, PROJECT_MANIFEST, PROJECT_SCHEMA, ROOT_AGENT_DIR,
     ROOT_AGENT_GOVERNANCE_DIR, ROOT_HUMAN_SOURCE_DIR, ROOT_WIKI_DIR, ROOT_WIKI_SOURCE,
     WIKI_DIR, WIKI_PROFILE, WIKI_SOURCE,
+};
+pub use projectcentral_ground::{
+    apply_accepted_ground_relation, inspect_project_ground, plan_project_ground,
+    register_projectcentral_ground_actions, GroundAccountHandoff, GroundApplyResult,
+    GroundCandidate, GroundInspection, GroundPlan, GroundPlanItem, GroundReturnPolicy,
+    GroundSkippedSource, GroundSourceRecord, GroundSourceRelation, GroundStatus,
+    SourceProvenance, SourceStanding, SourceTreatment, GROUND_RELATIONS_DIR,
+    GROUND_RELATIONS_SCHEMA, GROUND_RELATIONS_SOURCE,
 };
 pub use projectcentral_ops::{
     adopt_in_place, doctor_projectcentral, ensure_root_federation, initialize_projectcentral,
