@@ -2,9 +2,7 @@ use crate::action::{
     ActionAvailability, ActionDescriptor, ActionExecutionContext, ActionInputDefinition,
     ActionOutputDefinition, ActionRegistry, MutationClass,
 };
-use crate::projectcentral::{
-    read_project_manifest, AGENT_DIR, HUMAN_SOURCE_DIR, PROJECTCENTRAL_DIR, WIKI_DIR,
-};
+use crate::projectcentral::{read_project_manifest, HUMAN_SOURCE_DIR};
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
 use serde::{Deserialize, Serialize};
@@ -96,7 +94,10 @@ struct PromotionLedger {
 
 impl Default for PromotionLedger {
     fn default() -> Self {
-        Self { schema: PROMOTIONS_SCHEMA.into(), entries: vec![] }
+        Self {
+            schema: PROMOTIONS_SCHEMA.into(),
+            entries: vec![],
+        }
     }
 }
 
@@ -140,6 +141,7 @@ pub struct RolloverReport {
     pub day: String,
     pub next_day: String,
     pub day_record: String,
+    pub day_sources: String,
     pub carried: Vec<String>,
     pub removed: Vec<String>,
     pub protected: Vec<String>,
@@ -181,12 +183,20 @@ fn descriptor(
         id: id.into(),
         title: title.into(),
         description: description.into(),
-        inputs: inputs.iter().map(|(name, required)| input(name, *required)).collect(),
-        output: ActionOutputDefinition { output_type: output_type.into() },
+        inputs: inputs
+            .iter()
+            .map(|(name, required)| input(name, *required))
+            .collect(),
+        output: ActionOutputDefinition {
+            output_type: output_type.into(),
+        },
         mutation_class,
         preview_supported: false,
         required_ports: vec![],
-        availability: ActionAvailability { available: true, reason: None },
+        availability: ActionAvailability {
+            available: true,
+            reason: None,
+        },
     }
 }
 
@@ -220,11 +230,14 @@ fn string_array(input: &Value, field: &str, action: &str) -> Result<Vec<String>,
     let Some(value) = input.get(field) else {
         return Ok(vec![]);
     };
+    if let Some(value) = value.as_str().map(str::trim).filter(|value| !value.is_empty()) {
+        return Ok(vec![value.to_owned()]);
+    }
     let Some(values) = value.as_array() else {
         return Err(ActionResult::failure(
             Some(action),
             ResultStatus::InvalidInput,
-            format!("{action} field {field} must be an array of strings."),
+            format!("{action} field {field} must be a string or array of strings."),
             None,
         ));
     };
@@ -243,13 +256,59 @@ fn string_array(input: &Value, field: &str, action: &str) -> Result<Vec<String>,
     Ok(output)
 }
 
-fn ensure_member(raw: &str) -> io::Result<()> {
+fn relative_member(raw: &str) -> io::Result<PathBuf> {
     if raw.trim().is_empty() || raw != raw.trim() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "path must be non-empty without surrounding whitespace"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "path must be non-empty without surrounding whitespace",
+        ));
     }
     let path = Path::new(raw);
-    if path.is_absolute() || !path.components().all(|component| matches!(component, Component::Normal(_))) {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "path must be project-relative and contain no parent/root components"));
+    if path.is_absolute()
+        || !path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "path must be project-relative and contain no parent/root components",
+        ));
+    }
+    Ok(path.to_path_buf())
+}
+
+fn validate_id(raw: &str) -> io::Result<()> {
+    let path = relative_member(raw)?;
+    if path.components().count() != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "handoff id must be one filesystem-safe path component",
+        ));
+    }
+    Ok(())
+}
+
+fn reject_symlink_components(project_root: &Path, relative: &Path) -> io::Result<()> {
+    let mut current = project_root.to_path_buf();
+    for component in relative.components() {
+        let Component::Normal(component) = component else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "path contains a non-normal component",
+            ));
+        };
+        current.push(component);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("refusing symlink path component: {}", current.display()),
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => break,
+            Err(error) => return Err(error),
+        }
     }
     Ok(())
 }
@@ -260,16 +319,33 @@ fn project_context(
     context: &ActionExecutionContext<'_>,
 ) -> Result<PathBuf, ActionResult> {
     let project = required(input, "project", action)?;
-    ensure_member(&project).map_err(|error| ActionResult::failure(Some(action), ResultStatus::InvalidInput, error.to_string(), None))?;
+    let project = relative_member(&project).map_err(|error| {
+        ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            error.to_string(),
+            None,
+        )
+    })?;
     let root = resolve_central_root(context.root_options)
-        .map_err(|message| ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None))?
+        .map_err(|message| {
+            ActionResult::failure(
+                Some(action),
+                ResultStatus::InvalidInput,
+                message,
+                None,
+            )
+        })?
         .path;
     let project_root = root.join("Work").join(project);
     if !project_root.is_dir() {
         return Err(ActionResult::failure(
             Some(action),
             ResultStatus::InvalidInput,
-            format!("Project root does not exist as a directory: {}", project_root.display()),
+            format!(
+                "Project root does not exist as a directory: {}",
+                project_root.display()
+            ),
             None,
         ));
     }
@@ -294,12 +370,25 @@ fn project_context(
 }
 
 fn unix_seconds() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 fn unique_id(prefix: &str) -> String {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
     format!("{prefix}-{nanos}")
+}
+
+fn relative(project_root: &Path, path: &Path) -> String {
+    path.strip_prefix(project_root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
 }
 
 fn write_json(path: &Path, value: &impl Serialize, overwrite: bool) -> io::Result<()> {
@@ -322,7 +411,10 @@ fn read_policy(path: &Path) -> io::Result<NowPolicy> {
     let policy: NowPolicy = serde_json::from_slice(&fs::read(path)?)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     if policy.schema != POLICY_SCHEMA {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("NOW policy schema must be {POLICY_SCHEMA}")));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("NOW policy schema must be {POLICY_SCHEMA}"),
+        ));
     }
     Ok(policy)
 }
@@ -331,44 +423,45 @@ fn read_handoff(path: &Path) -> io::Result<NowHandoff> {
     let handoff: NowHandoff = serde_json::from_slice(&fs::read(path)?)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     if handoff.schema != HANDOFF_SCHEMA {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("NOW handoff schema must be {HANDOFF_SCHEMA}")));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("NOW handoff schema must be {HANDOFF_SCHEMA}"),
+        ));
     }
-    validate_status(&handoff.status)?;
     validate_kind(&handoff.kind)?;
+    validate_status(&handoff.status)?;
+    validate_id(&handoff.id)?;
     Ok(handoff)
 }
 
 fn write_handoff(project_root: &Path, handoff: &NowHandoff) -> io::Result<PathBuf> {
-    ensure_member(&handoff.id)?;
-    let path = project_root.join(NOW_AGENT_DIR).join(format!("{}.json", handoff.id));
+    validate_id(&handoff.id)?;
+    let path = project_root
+        .join(NOW_AGENT_DIR)
+        .join(format!("{}.json", handoff.id));
     write_json(&path, handoff, true)?;
     Ok(path)
 }
 
-fn validate_status(status: &str) -> io::Result<()> {
-    if matches!(status, "active" | "waiting" | "resolved" | "carried" | "promoted" | "expired") {
-        Ok(())
-    } else {
-        Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "status must be active, waiting, resolved, carried, promoted, or expired",
-        ))
+fn read_promotions(path: &Path) -> io::Result<PromotionLedger> {
+    if !path.exists() {
+        return Ok(PromotionLedger::default());
     }
+    let ledger: PromotionLedger = serde_json::from_slice(&fs::read(path)?)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    if ledger.schema != PROMOTIONS_SCHEMA {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("NOW promotions schema must be {PROMOTIONS_SCHEMA}"),
+        ));
+    }
+    Ok(ledger)
 }
 
-fn validate_kind(kind: &str) -> io::Result<()> {
-    if matches!(kind, "handoff" | "question" | "note" | "learning") {
-        Ok(())
-    } else {
-        Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "kind must be handoff, question, note, or learning",
-        ))
-    }
-}
-
-fn relative(project_root: &Path, path: &Path) -> String {
-    path.strip_prefix(project_root).unwrap_or(path).to_string_lossy().replace('\\', "/")
+fn append_promotion(path: &Path, receipt: PromotionReceipt) -> io::Result<()> {
+    let mut ledger = read_promotions(path)?;
+    ledger.entries.push(receipt);
+    write_json(path, &ledger, true)
 }
 
 fn list_files(root: &Path, project_root: &Path) -> io::Result<Vec<String>> {
@@ -389,21 +482,42 @@ fn list_files(root: &Path, project_root: &Path) -> io::Result<Vec<String>> {
         }
         Ok(())
     }
+
     let mut output = vec![];
     visit(root, project_root, &mut output)?;
     Ok(output)
 }
 
-fn read_promotions(path: &Path) -> io::Result<PromotionLedger> {
-    if !path.exists() {
-        return Ok(PromotionLedger::default());
+fn list_day_records(day_root: &Path, project_root: &Path) -> io::Result<Vec<String>> {
+    if !day_root.exists() {
+        return Ok(vec![]);
     }
-    let ledger: PromotionLedger = serde_json::from_slice(&fs::read(path)?)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    if ledger.schema != PROMOTIONS_SCHEMA {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("NOW promotions schema must be {PROMOTIONS_SCHEMA}")));
-    }
-    Ok(ledger)
+    let mut records = fs::read_dir(day_root)?
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter_map(|entry| {
+            let path = entry.path();
+            match entry.file_type() {
+                Ok(file_type)
+                    if file_type.is_file()
+                        && path.extension().and_then(|value| value.to_str()) == Some("md") =>
+                {
+                    Some(relative(project_root, &path))
+                }
+                _ => None,
+            }
+        })
+        .collect::<Vec<_>>();
+    records.sort();
+    Ok(records)
+}
+
+fn boundaries() -> Vec<String> {
+    vec![
+        "NOW is a moving session-independent working horizon, not a Session, Run, Focus, Wiki, or authored Project canon.".into(),
+        "DAY is a dated aggregation/rollover boundary, not a Project history database or automatic truth promotion mechanism.".into(),
+        "Run, Session, Focus, source, evidence, and other external identities remain refs owned by their native systems.".into(),
+    ]
 }
 
 pub fn inspect_now(project_root: &Path) -> io::Result<NowInspection> {
@@ -431,17 +545,23 @@ pub fn inspect_now(project_root: &Path) -> io::Result<NowInspection> {
     let mut open_questions = vec![];
     let mut inactive_items = vec![];
     let mut invalid_items = vec![];
+
     if paths.agents.exists() {
         let mut entries = fs::read_dir(&paths.agents)?.collect::<Result<Vec<_>, _>>()?;
         entries.sort_by_key(|entry| entry.file_name());
         for entry in entries {
             let path = entry.path();
-            if !entry.file_type()?.is_file() || path.extension().and_then(|value| value.to_str()) != Some("json") {
+            if !entry.file_type()?.is_file()
+                || path.extension().and_then(|value| value.to_str()) != Some("json")
+            {
                 continue;
             }
             match read_handoff(&path) {
                 Ok(handoff) => {
-                    let active = policy.carry_statuses.iter().any(|status| status == &handoff.status);
+                    let active = policy
+                        .carry_statuses
+                        .iter()
+                        .any(|status| status == &handoff.status);
                     if active {
                         if handoff.kind == "question" {
                             open_questions.push(handoff.clone());
@@ -451,16 +571,18 @@ pub fn inspect_now(project_root: &Path) -> io::Result<NowInspection> {
                         inactive_items.push(handoff);
                     }
                 }
-                Err(error) => invalid_items.push(format!("{}: {error}", relative(project_root, &path))),
+                Err(error) => {
+                    invalid_items.push(format!("{}: {error}", relative(project_root, &path)))
+                }
             }
         }
     }
-    let day_records = list_files(&paths.day, project_root)?;
-    let promotions = read_promotions(&paths.promotions)?.entries;
 
     Ok(NowInspection {
         project_root: project_root.to_path_buf(),
         exists: true,
+        day_records: list_day_records(&paths.day, project_root)?,
+        promotions: read_promotions(&paths.promotions)?.entries,
         paths,
         policy: Some(policy),
         human_scratch,
@@ -468,18 +590,8 @@ pub fn inspect_now(project_root: &Path) -> io::Result<NowInspection> {
         open_questions,
         inactive_items,
         invalid_items,
-        day_records,
-        promotions,
         boundaries: boundaries(),
     })
-}
-
-fn boundaries() -> Vec<String> {
-    vec![
-        "NOW is a moving session-independent working horizon, not a Session, Run, Focus, Wiki, or authored Project canon.".into(),
-        "DAY is a dated aggregation/rollover boundary, not a Project history database or automatic truth promotion mechanism.".into(),
-        "Run, Session, Focus, source, evidence, and other external identities remain refs owned by their native systems.".into(),
-    ]
 }
 
 pub fn initialize_now(project_root: &Path) -> io::Result<NowInspection> {
@@ -495,17 +607,66 @@ pub fn initialize_now(project_root: &Path) -> io::Result<NowInspection> {
     inspect_now(project_root)
 }
 
+fn validate_status(status: &str) -> io::Result<()> {
+    if matches!(
+        status,
+        "active" | "waiting" | "resolved" | "carried" | "promoted" | "expired"
+    ) {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "status must be active, waiting, resolved, carried, promoted, or expired",
+        ))
+    }
+}
+
+fn validate_kind(kind: &str) -> io::Result<()> {
+    if matches!(kind, "handoff" | "question" | "note" | "learning") {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "kind must be handoff, question, note, or learning",
+        ))
+    }
+}
+
 fn create_handoff(input: &Value, project_root: &Path, action: &str) -> Result<NowHandoff, ActionResult> {
     let actor = required(input, "actor", action)?;
     let kind = required(input, "kind", action)?;
     let subject = required(input, "subject", action)?;
     let result = required(input, "result", action)?;
     let status = required(input, "status", action)?;
-    validate_kind(&kind).map_err(|error| ActionResult::failure(Some(action), ResultStatus::InvalidInput, error.to_string(), None))?;
-    validate_status(&status).map_err(|error| ActionResult::failure(Some(action), ResultStatus::InvalidInput, error.to_string(), None))?;
+    validate_kind(&kind).map_err(|error| {
+        ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            error.to_string(),
+            None,
+        )
+    })?;
+    validate_status(&status).map_err(|error| {
+        ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            error.to_string(),
+            None,
+        )
+    })?;
+
     let id = optional(input, "id").unwrap_or_else(|| unique_id("handoff"));
-    ensure_member(&id).map_err(|error| ActionResult::failure(Some(action), ResultStatus::InvalidInput, error.to_string(), None))?;
-    let path = project_root.join(NOW_AGENT_DIR).join(format!("{id}.json"));
+    validate_id(&id).map_err(|error| {
+        ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            error.to_string(),
+            None,
+        )
+    })?;
+    let path = project_root
+        .join(NOW_AGENT_DIR)
+        .join(format!("{id}.json"));
     if path.exists() {
         return Err(ActionResult::failure(
             Some(action),
@@ -514,6 +675,7 @@ fn create_handoff(input: &Value, project_root: &Path, action: &str) -> Result<No
             None,
         ));
     }
+
     Ok(NowHandoff {
         schema: HANDOFF_SCHEMA.into(),
         id,
@@ -535,24 +697,125 @@ fn create_handoff(input: &Value, project_root: &Path, action: &str) -> Result<No
     })
 }
 
-fn validate_day(value: &str) -> io::Result<()> {
+fn parse_day(value: &str) -> io::Result<(u32, u32, u32)> {
     let bytes = value.as_bytes();
-    let valid = bytes.len() == 10
+    let shape = bytes.len() == 10
         && bytes[4] == b'-'
         && bytes[7] == b'-'
-        && bytes.iter().enumerate().all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit());
-    if valid {
-        Ok(())
-    } else {
-        Err(io::Error::new(io::ErrorKind::InvalidInput, "day must use YYYY-MM-DD local civil date form"))
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit());
+    if !shape {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "day must use YYYY-MM-DD local civil date form",
+        ));
     }
+    let year = value[0..4].parse::<u32>().map_err(|_| {
+        io::Error::new(io::ErrorKind::InvalidInput, "invalid DAY year")
+    })?;
+    let month = value[5..7].parse::<u32>().map_err(|_| {
+        io::Error::new(io::ErrorKind::InvalidInput, "invalid DAY month")
+    })?;
+    let day = value[8..10].parse::<u32>().map_err(|_| {
+        io::Error::new(io::ErrorKind::InvalidInput, "invalid DAY day")
+    })?;
+    if year == 0 || !(1..=12).contains(&month) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "DAY must be a valid civil date",
+        ));
+    }
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let max_day = match month {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    if day == 0 || day > max_day {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "DAY must be a valid civil date",
+        ));
+    }
+    Ok((year, month, day))
+}
+
+fn path_after_root(source: &str, root: &str) -> io::Result<PathBuf> {
+    Path::new(source)
+        .strip_prefix(root)
+        .map(Path::to_path_buf)
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{source} is not inside {root}"),
+            )
+        })
+}
+
+fn snapshot_day_sources(
+    project_root: &Path,
+    day_root: &Path,
+    day: &str,
+    human_scratch: &[String],
+    handoffs: &[(String, NowHandoff)],
+) -> io::Result<PathBuf> {
+    let snapshot_root = day_root.join(format!("{day}.sources"));
+    if snapshot_root.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("DAY source snapshot already exists: {day}"),
+        ));
+    }
+    fs::create_dir(&snapshot_root)?;
+
+    let copy_result = (|| -> io::Result<()> {
+        for source in human_scratch {
+            let suffix = path_after_root(source, NOW_USER_DIR)?;
+            let source_path = project_root.join(source);
+            let destination = snapshot_root.join("user").join(suffix);
+            if let Some(parent) = destination.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(source_path, destination)?;
+        }
+        for (source, _) in handoffs {
+            let suffix = path_after_root(source, NOW_AGENT_DIR)?;
+            let source_path = project_root.join(source);
+            let destination = snapshot_root.join("agents").join(suffix);
+            if let Some(parent) = destination.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(source_path, destination)?;
+        }
+        Ok(())
+    })();
+
+    if let Err(error) = copy_result {
+        let _ = fs::remove_dir_all(&snapshot_root);
+        return Err(error);
+    }
+    Ok(snapshot_root)
 }
 
 fn indented(text: &str) -> String {
-    text.lines().map(|line| format!("    {line}\n")).collect::<String>()
+    if text.is_empty() {
+        return "    <empty>\n".into();
+    }
+    text.lines()
+        .map(|line| format!("    {line}\n"))
+        .collect::<String>()
+}
+
+fn snapshot_ref(project_root: &Path, snapshot_root: &Path, class: &str, suffix: &Path) -> String {
+    relative(project_root, &snapshot_root.join(class).join(suffix))
 }
 
 fn render_day(
+    project_root: &Path,
+    snapshot_root: &Path,
     day: &str,
     next_day: &str,
     human_scratch: &[String],
@@ -561,25 +824,52 @@ fn render_day(
     removed: &[String],
     protected: &[String],
     promotions: &[PromotionReceipt],
-) -> String {
+) -> io::Result<String> {
     let mut output = format!(
-        "# DAY — {day}\n\nDerived closure record for the ProjectCentral NOW horizon. Authorship remains attached to source records; this file is an aggregation, not Project canon.\n\n- next local civil day: `{next_day}`\n- NOW remains the moving working horizon after this boundary\n\n## Human scratch refs\n\n"
+        "# DAY — {day}\n\nDerived closure reading for the ProjectCentral NOW horizon. Human and Agent authorship remain attached to separately snapshotted source records; this aggregation is not Project canon.\n\n- next local civil day: `{next_day}`\n- DAY source snapshot: `{}`\n- NOW remains the moving working horizon after this boundary\n\n## Human current source at close\n\n",
+        relative(project_root, snapshot_root)
     );
+
     if human_scratch.is_empty() {
         output.push_str("- none\n");
     } else {
         for source in human_scratch {
-            output.push_str(&format!("- `{source}`\n"));
+            let suffix = path_after_root(source, NOW_USER_DIR)?;
+            let snapshot = snapshot_ref(project_root, snapshot_root, "user", &suffix);
+            let bytes = fs::read(project_root.join(&snapshot))?;
+            output.push_str(&format!(
+                "### `{source}`\n\n- provenance: `human-authored-temporal-source`\n- DAY snapshot: `{snapshot}`\n"
+            ));
+            match String::from_utf8(bytes) {
+                Ok(text) => {
+                    output.push_str("\nHuman source at close:\n\n");
+                    output.push_str(&indented(&text));
+                }
+                Err(error) => {
+                    output.push_str(&format!(
+                        "- non-UTF-8 source retained byte-for-byte in DAY snapshot ({} bytes)\n",
+                        error.as_bytes().len()
+                    ));
+                }
+            }
+            output.push('\n');
         }
     }
-    output.push_str("\n## Agent returns\n\n");
+
+    output.push_str("## Agent returns at close\n\n");
     if handoffs.is_empty() {
         output.push_str("- none\n");
     } else {
         for (source, handoff) in handoffs {
+            let suffix = path_after_root(source, NOW_AGENT_DIR)?;
+            let snapshot = snapshot_ref(project_root, snapshot_root, "agents", &suffix);
             output.push_str(&format!(
-                "### {}\n\n- source: `{source}`\n- actor: `{}`\n- provenance: `{}`\n- kind: `{}`\n- status at close: `{}`\n",
-                handoff.subject, handoff.actor, handoff.provenance, handoff.kind, handoff.status
+                "### {}\n\n- source: `{source}`\n- DAY snapshot: `{snapshot}`\n- actor: `{}`\n- provenance: `{}`\n- kind: `{}`\n- status at close: `{}`\n",
+                handoff.subject,
+                handoff.actor,
+                handoff.provenance,
+                handoff.kind,
+                handoff.status
             ));
             if let Some(run_ref) = &handoff.run_ref {
                 output.push_str(&format!("- Run ref: `{run_ref}`\n"));
@@ -587,49 +877,103 @@ fn render_day(
             if let Some(session_ref) = &handoff.session_ref {
                 output.push_str(&format!("- Session ref: `{session_ref}`\n"));
             }
+            if let Some(focus_ref) = &handoff.focus_ref {
+                output.push_str(&format!("- Focus ref: `{focus_ref}`\n"));
+            }
+            if !handoff.source_refs.is_empty() {
+                output.push_str(&format!(
+                    "- source refs: `{}`\n",
+                    handoff.source_refs.join("`, `")
+                ));
+            }
+            if !handoff.evidence_refs.is_empty() {
+                output.push_str(&format!(
+                    "- evidence refs: `{}`\n",
+                    handoff.evidence_refs.join("`, `")
+                ));
+            }
             if !handoff.preserve_refs.is_empty() {
-                output.push_str(&format!("- protected by refs: `{}`\n", handoff.preserve_refs.join("`, `")));
+                output.push_str(&format!(
+                    "- protected by refs: `{}`\n",
+                    handoff.preserve_refs.join("`, `")
+                ));
             }
             output.push_str("\nReturned result:\n\n");
             output.push_str(&indented(&handoff.result));
             output.push('\n');
         }
     }
-    output.push_str("## Carry forward by reference\n\n");
-    if carried.is_empty() { output.push_str("- none\n"); } else { for source in carried { output.push_str(&format!("- `{source}`\n")); } }
-    output.push_str("\n## Resolved / expired / promoted transient records removed from NOW\n\n");
-    if removed.is_empty() { output.push_str("- none\n"); } else { for source in removed { output.push_str(&format!("- `{source}`\n")); } }
-    output.push_str("\n## Protected inactive records retained\n\n");
-    if protected.is_empty() { output.push_str("- none\n"); } else { for source in protected { output.push_str(&format!("- `{source}`\n")); } }
+
+    output.push_str("## Carry forward by stable NOW source ref\n\n");
+    if carried.is_empty() {
+        output.push_str("- none\n");
+    } else {
+        for source in carried {
+            output.push_str(&format!("- `{source}`\n"));
+        }
+    }
+
+    output.push_str("\n## Resolved / expired / promoted transient records removed from moving NOW\n\n");
+    if removed.is_empty() {
+        output.push_str("- none\n");
+    } else {
+        for source in removed {
+            output.push_str(&format!("- `{source}`\n"));
+        }
+    }
+
+    output.push_str("\n## Protected inactive records retained in NOW\n\n");
+    if protected.is_empty() {
+        output.push_str("- none\n");
+    } else {
+        for source in protected {
+            output.push_str(&format!("- `{source}`\n"));
+        }
+    }
+
     output.push_str("\n## Promotion receipts\n\n");
     if promotions.is_empty() {
         output.push_str("- none\n");
     } else {
         for receipt in promotions {
-            output.push_str(&format!("- `{}` → **{}** → `{}` ({})\n", receipt.source, receipt.target, receipt.destination, receipt.acceptance));
+            output.push_str(&format!(
+                "- `{}` → **{}** → `{}` ({})\n",
+                receipt.source, receipt.target, receipt.destination, receipt.acceptance
+            ));
         }
     }
-    output
+
+    Ok(output)
 }
 
 pub fn rollover(project_root: &Path, day: &str, next_day: &str) -> io::Result<RolloverReport> {
-    validate_day(day)?;
-    validate_day(next_day)?;
-    if day == next_day {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "next_day must differ from day"));
+    let day_value = parse_day(day)?;
+    let next_day_value = parse_day(next_day)?;
+    if next_day_value <= day_value {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "next_day must be later than day",
+        ));
     }
+
     let paths = now_paths(project_root);
     if !paths.root.is_dir() {
-        return Err(io::Error::new(io::ErrorKind::NotFound, "NOW has not been initialized for this ProjectCentral"));
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "NOW has not been initialized for this ProjectCentral",
+        ));
     }
     let policy = read_policy(&paths.policy)?;
     let human_scratch = list_files(&paths.user, project_root)?;
+
     let mut handoffs = vec![];
     let mut entries = fs::read_dir(&paths.agents)?.collect::<Result<Vec<_>, _>>()?;
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
         let path = entry.path();
-        if entry.file_type()?.is_file() && path.extension().and_then(|value| value.to_str()) == Some("json") {
+        if entry.file_type()?.is_file()
+            && path.extension().and_then(|value| value.to_str()) == Some("json")
+        {
             handoffs.push((relative(project_root, &path), read_handoff(&path)?));
         }
     }
@@ -639,9 +983,17 @@ pub fn rollover(project_root: &Path, day: &str, next_day: &str) -> io::Result<Ro
     let mut removed = vec![];
     let mut protected = vec![];
     for (source, handoff) in &handoffs {
-        if policy.carry_statuses.iter().any(|status| status == &handoff.status) {
+        if policy
+            .carry_statuses
+            .iter()
+            .any(|status| status == &handoff.status)
+        {
             carried.push(source.clone());
-        } else if policy.remove_statuses.iter().any(|status| status == &handoff.status) {
+        } else if policy
+            .remove_statuses
+            .iter()
+            .any(|status| status == &handoff.status)
+        {
             if policy.protect_when_preserve_refs_exist && !handoff.preserve_refs.is_empty() {
                 protected.push(source.clone());
             } else {
@@ -654,10 +1006,41 @@ pub fn rollover(project_root: &Path, day: &str, next_day: &str) -> io::Result<Ro
 
     let day_path = paths.day.join(format!("{day}.md"));
     if day_path.exists() {
-        return Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("DAY is already closed: {day}")));
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("DAY is already closed: {day}"),
+        ));
     }
-    let day_text = render_day(day, next_day, &human_scratch, &handoffs, &carried, &removed, &protected, &promotions);
-    fs::write(&day_path, day_text)?;
+
+    let snapshot_root = snapshot_day_sources(
+        project_root,
+        &paths.day,
+        day,
+        &human_scratch,
+        &handoffs,
+    )?;
+    let day_text = match render_day(
+        project_root,
+        &snapshot_root,
+        day,
+        next_day,
+        &human_scratch,
+        &handoffs,
+        &carried,
+        &removed,
+        &protected,
+        &promotions,
+    ) {
+        Ok(text) => text,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&snapshot_root);
+            return Err(error);
+        }
+    };
+    if let Err(error) = fs::write(&day_path, day_text) {
+        let _ = fs::remove_dir_all(&snapshot_root);
+        return Err(error);
+    }
 
     let mut cleanup_failures = vec![];
     for (source, mut handoff) in handoffs {
@@ -676,6 +1059,7 @@ pub fn rollover(project_root: &Path, day: &str, next_day: &str) -> io::Result<Ro
             }
         }
     }
+
     if let Err(error) = write_json(&paths.promotions, &PromotionLedger::default(), true) {
         cleanup_failures.push(format!("reset promotion ledger: {error}"));
     }
@@ -684,6 +1068,7 @@ pub fn rollover(project_root: &Path, day: &str, next_day: &str) -> io::Result<Ro
         day: day.into(),
         next_day: next_day.into(),
         day_record: relative(project_root, &day_path),
+        day_sources: relative(project_root, &snapshot_root),
         carried,
         removed,
         protected,
@@ -694,28 +1079,40 @@ pub fn rollover(project_root: &Path, day: &str, next_day: &str) -> io::Result<Ro
 }
 
 fn safe_source(project_root: &Path, raw: &str, expected_root: &str) -> io::Result<PathBuf> {
-    ensure_member(raw)?;
-    let relative_path = Path::new(raw);
-    if !relative_path.starts_with(Path::new(expected_root)) {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("source must be inside {expected_root}")));
+    let relative = relative_member(raw)?;
+    if !relative.starts_with(Path::new(expected_root)) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("source must be inside {expected_root}"),
+        ));
     }
-    let path = project_root.join(relative_path);
+    reject_symlink_components(project_root, &relative)?;
+    let path = project_root.join(&relative);
     let metadata = fs::symlink_metadata(&path)?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "promotion source must be an ordinary file"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "promotion source must be an ordinary file",
+        ));
     }
     Ok(path)
 }
 
 fn safe_destination(project_root: &Path, base: &str, raw: &str) -> io::Result<PathBuf> {
-    ensure_member(raw)?;
-    let path = project_root.join(base).join(raw);
+    let suffix = relative_member(raw)?;
+    let relative = Path::new(base).join(suffix);
+    reject_symlink_components(project_root, &relative)?;
+    let path = project_root.join(&relative);
     if path.exists() {
-        return Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("promotion destination already exists: {}", path.display())));
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("promotion destination already exists: {}", path.display()),
+        ));
     }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
+    reject_symlink_components(project_root, relative.parent().unwrap_or(Path::new(base)))?;
     Ok(path)
 }
 
@@ -728,52 +1125,87 @@ pub fn promote(
 ) -> io::Result<NowPromotion> {
     let paths = now_paths(project_root);
     if !paths.root.is_dir() {
-        return Err(io::Error::new(io::ErrorKind::NotFound, "NOW has not been initialized for this ProjectCentral"));
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "NOW has not been initialized for this ProjectCentral",
+        ));
     }
+
     let (source_path, destination_path, semantic_effect) = match target {
         "human-ground" => {
             if acceptance != "human-accepted" {
-                return Err(io::Error::new(io::ErrorKind::InvalidInput, "human-ground promotion requires acceptance=human-accepted"));
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "human-ground promotion requires acceptance=human-accepted",
+                ));
             }
-            let source_path = safe_source(project_root, source, NOW_USER_DIR)?;
-            let destination_path = safe_destination(project_root, HUMAN_SOURCE_DIR, destination)?;
-            (source_path, destination_path, "copied into the human-owned Project ground by explicit human acceptance".to_owned())
+            (
+                safe_source(project_root, source, NOW_USER_DIR)?,
+                safe_destination(project_root, HUMAN_SOURCE_DIR, destination)?,
+                "copied into the human-owned Project ground by explicit human acceptance"
+                    .to_owned(),
+            )
         }
         "agent-wiki" => {
             if acceptance != "agent-return" {
-                return Err(io::Error::new(io::ErrorKind::InvalidInput, "agent-wiki promotion requires acceptance=agent-return"));
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "agent-wiki promotion requires acceptance=agent-return",
+                ));
             }
-            let source_path = safe_source(project_root, source, NOW_AGENT_DIR)?;
-            let destination_path = safe_destination(project_root, WIKI_RETURN_DIR, destination)?;
-            (source_path, destination_path, "returned into the Agent Wiki owner path as a source for Wiki maintenance; wiki.json is not silently rewritten".to_owned())
+            (
+                safe_source(project_root, source, NOW_AGENT_DIR)?,
+                safe_destination(project_root, WIKI_RETURN_DIR, destination)?,
+                "returned into the Agent Wiki owner path as a source for Wiki maintenance; wiki.json is not silently rewritten".to_owned(),
+            )
         }
-        _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, "target must be human-ground or agent-wiki")),
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "target must be human-ground or agent-wiki",
+            ))
+        }
     };
 
-    fs::copy(&source_path, &destination_path)?;
+    let destination_ref = relative(project_root, &destination_path);
     let receipt = PromotionReceipt {
         source: source.into(),
         target: target.into(),
-        destination: relative(project_root, &destination_path),
+        destination: destination_ref.clone(),
         acceptance: acceptance.into(),
         recorded_at_unix_seconds: unix_seconds(),
         source_preserved: true,
     };
-    let mut ledger = read_promotions(&paths.promotions)?;
-    ledger.entries.push(receipt.clone());
-    write_json(&paths.promotions, &ledger, true)?;
 
-    if target == "agent-wiki" {
-        if let Ok(mut handoff) = read_handoff(&source_path) {
-            handoff.status = "promoted".into();
-            handoff.promoted_to.push(receipt.destination.clone());
-            write_json(&source_path, &handoff, true)?;
+    if target == "human-ground" {
+        fs::copy(&source_path, &destination_path)?;
+        if let Err(error) = append_promotion(&paths.promotions, receipt.clone()) {
+            let _ = fs::remove_file(&destination_path);
+            return Err(error);
+        }
+    } else {
+        let original = read_handoff(&source_path)?;
+        let mut promoted = original.clone();
+        promoted.status = "promoted".into();
+        if !promoted.promoted_to.contains(&destination_ref) {
+            promoted.promoted_to.push(destination_ref.clone());
+        }
+
+        write_json(&source_path, &promoted, true)?;
+        if let Err(error) = write_json(&destination_path, &promoted, false) {
+            let _ = write_json(&source_path, &original, true);
+            return Err(error);
+        }
+        if let Err(error) = append_promotion(&paths.promotions, receipt.clone()) {
+            let _ = fs::remove_file(&destination_path);
+            let _ = write_json(&source_path, &original, true);
+            return Err(error);
         }
     }
 
     Ok(NowPromotion {
         source: source.into(),
-        destination: receipt.destination,
+        destination: destination_ref,
         target: target.into(),
         source_preserved: true,
         semantic_effect,
@@ -782,86 +1214,205 @@ pub fn promote(
 
 fn io_failure(action: &str, error: io::Error) -> ActionResult {
     let status = match error.kind() {
-        io::ErrorKind::InvalidInput | io::ErrorKind::NotFound | io::ErrorKind::AlreadyExists => ResultStatus::InvalidInput,
+        io::ErrorKind::InvalidInput | io::ErrorKind::NotFound | io::ErrorKind::AlreadyExists => {
+            ResultStatus::InvalidInput
+        }
         io::ErrorKind::InvalidData => ResultStatus::VerificationFailure,
         _ => ResultStatus::InternalFailure,
     };
     ActionResult::failure(Some(action), status, error.to_string(), None)
 }
 
-fn inspect_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn inspect_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.now.inspect";
-    let project_root = match project_context(action, input, context) { Ok(value) => value, Err(result) => return result };
+    let project_root = match project_context(action, input, context) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
     inspect_now(&project_root)
-        .map(|value| ActionResult::success(action, serde_json::to_value(value).expect("NOW inspection serializes")))
+        .map(|value| {
+            ActionResult::success(
+                action,
+                serde_json::to_value(value).expect("NOW inspection serializes"),
+            )
+        })
         .unwrap_or_else(|error| io_failure(action, error))
 }
 
-fn init_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn init_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.now.init";
-    let project_root = match project_context(action, input, context) { Ok(value) => value, Err(result) => return result };
+    let project_root = match project_context(action, input, context) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
     initialize_now(&project_root)
-        .map(|value| ActionResult::success(action, serde_json::to_value(value).expect("NOW initialization serializes")))
+        .map(|value| {
+            ActionResult::success(
+                action,
+                serde_json::to_value(value).expect("NOW initialization serializes"),
+            )
+        })
         .unwrap_or_else(|error| io_failure(action, error))
 }
 
-fn return_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn return_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.now.return";
-    let project_root = match project_context(action, input, context) { Ok(value) => value, Err(result) => return result };
+    let project_root = match project_context(action, input, context) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
     let paths = now_paths(&project_root);
     if !paths.root.is_dir() {
-        return io_failure(action, io::Error::new(io::ErrorKind::NotFound, "NOW has not been initialized for this ProjectCentral"));
+        return io_failure(
+            action,
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "NOW has not been initialized for this ProjectCentral",
+            ),
+        );
     }
-    let handoff = match create_handoff(input, &project_root, action) { Ok(value) => value, Err(result) => return result };
-    let path = project_root.join(NOW_AGENT_DIR).join(format!("{}.json", handoff.id));
+    let handoff = match create_handoff(input, &project_root, action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let path = project_root
+        .join(NOW_AGENT_DIR)
+        .join(format!("{}.json", handoff.id));
     match write_json(&path, &handoff, false) {
-        Ok(()) => ActionResult::success(action, json!({"source": relative(&project_root, &path), "handoff": handoff})),
+        Ok(()) => ActionResult::success(
+            action,
+            json!({"source": relative(&project_root, &path), "handoff": handoff}),
+        ),
         Err(error) => io_failure(action, error),
     }
 }
 
-fn update_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn update_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.now.update";
-    let project_root = match project_context(action, input, context) { Ok(value) => value, Err(result) => return result };
-    let id = match required(input, "id", action) { Ok(value) => value, Err(result) => return result };
-    let status = match required(input, "status", action) { Ok(value) => value, Err(result) => return result };
-    if let Err(error) = ensure_member(&id).and_then(|_| validate_status(&status)) { return io_failure(action, error); }
-    let path = project_root.join(NOW_AGENT_DIR).join(format!("{id}.json"));
-    let mut handoff = match read_handoff(&path) { Ok(value) => value, Err(error) => return io_failure(action, error) };
+    let project_root = match project_context(action, input, context) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let id = match required(input, "id", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let status = match required(input, "status", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    if let Err(error) = validate_id(&id).and_then(|_| validate_status(&status)) {
+        return io_failure(action, error);
+    }
+
+    let path = project_root
+        .join(NOW_AGENT_DIR)
+        .join(format!("{id}.json"));
+    let mut handoff = match read_handoff(&path) {
+        Ok(value) => value,
+        Err(error) => return io_failure(action, error),
+    };
     handoff.status = status;
     match string_array(input, "preserve_refs", action) {
         Ok(refs) => {
             for reference in refs {
-                if !handoff.preserve_refs.contains(&reference) { handoff.preserve_refs.push(reference); }
+                if !handoff.preserve_refs.contains(&reference) {
+                    handoff.preserve_refs.push(reference);
+                }
             }
         }
         Err(result) => return result,
     }
     match write_handoff(&project_root, &handoff) {
-        Ok(source) => ActionResult::success(action, json!({"source": relative(&project_root, &source), "handoff": handoff})),
+        Ok(source) => ActionResult::success(
+            action,
+            json!({"source": relative(&project_root, &source), "handoff": handoff}),
+        ),
         Err(error) => io_failure(action, error),
     }
 }
 
-fn promote_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn promote_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.now.promote";
-    let project_root = match project_context(action, input, context) { Ok(value) => value, Err(result) => return result };
-    let source = match required(input, "source", action) { Ok(value) => value, Err(result) => return result };
-    let target = match required(input, "target", action) { Ok(value) => value, Err(result) => return result };
-    let destination = match required(input, "destination", action) { Ok(value) => value, Err(result) => return result };
-    let acceptance = match required(input, "acceptance", action) { Ok(value) => value, Err(result) => return result };
-    promote(&project_root, &source, &target, &destination, &acceptance)
-        .map(|value| ActionResult::success(action, serde_json::to_value(value).expect("NOW promotion serializes")))
-        .unwrap_or_else(|error| io_failure(action, error))
+    let project_root = match project_context(action, input, context) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let source = match required(input, "source", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let target = match required(input, "target", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let destination = match required(input, "destination", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let acceptance = match required(input, "acceptance", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    promote(
+        &project_root,
+        &source,
+        &target,
+        &destination,
+        &acceptance,
+    )
+    .map(|value| {
+        ActionResult::success(
+            action,
+            serde_json::to_value(value).expect("NOW promotion serializes"),
+        )
+    })
+    .unwrap_or_else(|error| io_failure(action, error))
 }
 
-fn rollover_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn rollover_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.now.rollover";
-    let project_root = match project_context(action, input, context) { Ok(value) => value, Err(result) => return result };
-    let day = match required(input, "day", action) { Ok(value) => value, Err(result) => return result };
-    let next_day = match required(input, "next_day", action) { Ok(value) => value, Err(result) => return result };
+    let project_root = match project_context(action, input, context) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let day = match required(input, "day", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let next_day = match required(input, "next_day", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
     match rollover(&project_root, &day, &next_day) {
-        Ok(report) if report.cleanup_failures.is_empty() => ActionResult::success(action, serde_json::to_value(report).expect("rollover serializes")),
+        Ok(report) if report.cleanup_failures.is_empty() => ActionResult::success(
+            action,
+            serde_json::to_value(report).expect("rollover serializes"),
+        ),
         Ok(report) => ActionResult::failure(
             Some(action),
             ResultStatus::PartialCompletion,
@@ -903,7 +1454,21 @@ pub fn register_projectcentral_now_actions(registry: &mut ActionRegistry) {
                 "Write one attributed Agent handoff/question/note/learning into NOW. External Run/Session/Focus/source identities remain refs rather than being duplicated.",
                 MutationClass::LocallyMutating,
                 "projectcentral-now-handoff",
-                &[("project", true), ("actor", true), ("kind", true), ("subject", true), ("result", true), ("status", true), ("id", false), ("run_ref", false), ("session_ref", false), ("focus_ref", false), ("source_refs", false), ("evidence_refs", false), ("preserve_refs", false)],
+                &[
+                    ("project", true),
+                    ("actor", true),
+                    ("kind", true),
+                    ("subject", true),
+                    ("result", true),
+                    ("status", true),
+                    ("id", false),
+                    ("run_ref", false),
+                    ("session_ref", false),
+                    ("focus_ref", false),
+                    ("source_refs", false),
+                    ("evidence_refs", false),
+                    ("preserve_refs", false),
+                ],
             ),
             return_action,
         ),
@@ -914,7 +1479,12 @@ pub fn register_projectcentral_now_actions(registry: &mut ActionRegistry) {
                 "Update the lifecycle status of one bounded Agent return and optionally pin it with durable foreign refs before rollover.",
                 MutationClass::LocallyMutating,
                 "projectcentral-now-handoff",
-                &[("project", true), ("id", true), ("status", true), ("preserve_refs", false)],
+                &[
+                    ("project", true),
+                    ("id", true),
+                    ("status", true),
+                    ("preserve_refs", false),
+                ],
             ),
             update_action,
         ),
@@ -925,7 +1495,13 @@ pub fn register_projectcentral_now_actions(registry: &mut ActionRegistry) {
                 "Explicitly copy human scratch into authored Project ground or return an Agent handoff into the Agent Wiki owner path while preserving source provenance.",
                 MutationClass::LocallyMutating,
                 "projectcentral-now-promotion",
-                &[("project", true), ("source", true), ("target", true), ("destination", true), ("acceptance", true)],
+                &[
+                    ("project", true),
+                    ("source", true),
+                    ("target", true),
+                    ("destination", true),
+                    ("acceptance", true),
+                ],
             ),
             promote_action,
         ),
@@ -933,7 +1509,7 @@ pub fn register_projectcentral_now_actions(registry: &mut ActionRegistry) {
             descriptor(
                 "projectcentral.now.rollover",
                 "Close DAY and roll NOW",
-                "Close one caller-supplied local civil DAY, carry live items by reference, remove unprotected resolved/expired/promoted Agent clutter, preserve protected material, and retain an attributed dated reading.",
+                "Close one caller-supplied local civil DAY, snapshot source state, carry live items by reference, remove unprotected resolved/expired/promoted Agent clutter, and preserve protected material.",
                 MutationClass::LocallyMutating,
                 "projectcentral-now-rollover",
                 &[("project", true), ("day", true), ("next_day", true)],
@@ -942,7 +1518,9 @@ pub fn register_projectcentral_now_actions(registry: &mut ActionRegistry) {
         ),
     ];
     for (descriptor, handler) in actions {
-        registry.register(descriptor, handler).expect("ProjectCentral NOW Action ids are valid");
+        registry
+            .register(descriptor, handler)
+            .expect("ProjectCentral NOW Action ids are valid");
     }
 }
 
@@ -951,6 +1529,28 @@ mod tests {
     use super::*;
     use crate::projectcentral_ops::initialize_projectcentral;
     use tempfile::tempdir;
+
+    fn handoff(id: &str, status: &str) -> NowHandoff {
+        NowHandoff {
+            schema: HANDOFF_SCHEMA.into(),
+            id: id.into(),
+            provenance: "agent-authored-bounded-return".into(),
+            actor: "agent:test".into(),
+            kind: "handoff".into(),
+            recorded_at_unix_seconds: unix_seconds(),
+            subject: "Test return".into(),
+            result: "Returned material".into(),
+            status: status.into(),
+            run_ref: None,
+            session_ref: None,
+            focus_ref: None,
+            source_refs: vec![],
+            evidence_refs: vec![],
+            preserve_refs: vec![],
+            carried_from_days: vec![],
+            promoted_to: vec![],
+        }
+    }
 
     #[test]
     fn now_is_opt_in_and_does_not_change_projectcentral_validity() {
@@ -970,7 +1570,27 @@ mod tests {
         assert!(project.join(NOW_AGENT_DIR).is_dir());
         assert!(project.join(NOW_DAY_DIR).is_dir());
         assert!(project.join(HUMAN_SOURCE_DIR).is_dir());
-        assert!(project.join(format!("{AGENT_DIR}/wiki/wiki.json")).is_file());
+        assert!(project.join("ProjectCentral/agents/wiki/wiki.json").is_file());
+    }
+
+    #[test]
+    fn day_snapshots_human_state_before_the_moving_source_changes() {
+        let temp = tempdir().unwrap();
+        let central = temp.path().join("Central");
+        let project = central.join("Work/example");
+        fs::create_dir_all(&project).unwrap();
+        initialize_projectcentral(&central, &project, "example/project").unwrap();
+        initialize_now(&project).unwrap();
+
+        fs::write(project.join(NOW_USER_DIR).join("current.md"), "state A\n").unwrap();
+        let report = rollover(&project, "2026-08-19", "2026-08-20").unwrap();
+        fs::write(project.join(NOW_USER_DIR).join("current.md"), "state B\n").unwrap();
+
+        let snapshot = project.join(&report.day_sources).join("user/current.md");
+        assert_eq!(fs::read_to_string(snapshot).unwrap(), "state A\n");
+        let day = fs::read_to_string(project.join(&report.day_record)).unwrap();
+        assert!(day.contains("state A"));
+        assert!(!day.contains("state B"));
     }
 
     #[test]
@@ -982,28 +1602,42 @@ mod tests {
         initialize_projectcentral(&central, &project, "example/project").unwrap();
         initialize_now(&project).unwrap();
 
-        let handoff = NowHandoff {
-            schema: HANDOFF_SCHEMA.into(),
-            id: "protected".into(),
-            provenance: "agent-authored-bounded-return".into(),
-            actor: "agent:test".into(),
-            kind: "handoff".into(),
-            recorded_at_unix_seconds: unix_seconds(),
-            subject: "Protected result".into(),
-            result: "A durable Run points here.".into(),
-            status: "resolved".into(),
-            run_ref: Some("factory:run:1".into()),
-            session_ref: None,
-            focus_ref: None,
-            source_refs: vec![],
-            evidence_refs: vec![],
-            preserve_refs: vec!["factory:artifact:1".into()],
-            carried_from_days: vec![],
-            promoted_to: vec![],
-        };
-        write_handoff(&project, &handoff).unwrap();
+        let mut value = handoff("protected", "resolved");
+        value.run_ref = Some("factory:run:1".into());
+        value.preserve_refs = vec!["factory:artifact:1".into()];
+        write_handoff(&project, &value).unwrap();
+
         let report = rollover(&project, "2026-08-19", "2026-08-20").unwrap();
-        assert!(report.protected.iter().any(|source| source.ends_with("protected.json")));
-        assert!(project.join(NOW_AGENT_DIR).join("protected.json").is_file());
+        assert!(report
+            .protected
+            .iter()
+            .any(|source| source.ends_with("protected.json")));
+        assert!(project
+            .join(NOW_AGENT_DIR)
+            .join("protected.json")
+            .is_file());
+    }
+
+    #[test]
+    fn wiki_return_copy_carries_its_promotion_lineage() {
+        let temp = tempdir().unwrap();
+        let central = temp.path().join("Central");
+        let project = central.join("Work/example");
+        fs::create_dir_all(&project).unwrap();
+        initialize_projectcentral(&central, &project, "example/project").unwrap();
+        initialize_now(&project).unwrap();
+
+        write_handoff(&project, &handoff("learning", "active")).unwrap();
+        let promotion = promote(
+            &project,
+            "ProjectCentral/now/agents/learning.json",
+            "agent-wiki",
+            "now-day/learning.json",
+            "agent-return",
+        )
+        .unwrap();
+        let returned = read_handoff(&project.join(&promotion.destination)).unwrap();
+        assert_eq!(returned.status, "promoted");
+        assert_eq!(returned.promoted_to, vec![promotion.destination]);
     }
 }
