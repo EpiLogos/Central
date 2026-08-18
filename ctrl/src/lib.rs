@@ -83,8 +83,10 @@ pub use picker::{
 };
 pub use projectcentral::{
     projectcentral_paths, read_project_manifest, ManifestValidation, ProjectCentralManifest,
-    ProjectCentralPaths, WikiBinding, HUMAN_APERTURE, PROJECTCENTRAL_DIR, PROJECT_MANIFEST,
-    PROJECT_SCHEMA, ROOT_WIKI_SOURCE, WIKI_DIR, WIKI_PROFILE, WIKI_SOURCE,
+    ProjectCentralPaths, WikiBinding, AGENT_DIR, AGENT_GOVERNANCE_DIR, HUMAN_SOURCE_DIR,
+    PROJECTCENTRAL_DIR, PROJECT_MANIFEST, PROJECT_SCHEMA, ROOT_AGENT_DIR,
+    ROOT_AGENT_GOVERNANCE_DIR, ROOT_HUMAN_SOURCE_DIR, ROOT_WIKI_DIR, ROOT_WIKI_SOURCE,
+    WIKI_DIR, WIKI_PROFILE, WIKI_SOURCE,
 };
 pub use projectcentral_ops::{
     adopt_in_place, doctor_projectcentral, ensure_root_federation, initialize_projectcentral,
