@@ -3,6 +3,9 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+// Root initialisation establishes the same human-source / Agent-space relation that
+// ProjectCentral repeats per Project. The root Wiki itself is created separately at
+// Control/agents/wiki/wiki.json by ensure_root_federation; no human document is implied.
 pub const REQUIRED_DIRECTORIES: [&str; 6] = [
     "Control/user",
     "Control/agents/governance",
