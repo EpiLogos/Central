@@ -1,5 +1,6 @@
 use crate::action::{create_core_action_registry, ActionExecutionContext};
 use crate::picker::{run_guided_action_picker, NullTerminalSurface, TerminalSurface};
+use crate::projectcentral_ops::register_projectcentral_actions;
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::RootOptions;
 use central_connector_sdk::ConnectorContext;
@@ -367,7 +368,8 @@ pub fn run_cli_with_surface(
         connectors: &connectors,
         connector_context: &connector_context,
     };
-    let registry = create_core_action_registry();
+    let mut registry = create_core_action_registry();
+    register_projectcentral_actions(&mut registry);
     let result = match parsed.target {
         CommandTarget::Direct { action_id, input } => registry.execute(&action_id, &input, &context),
         CommandTarget::Guided => run_guided_action_picker(&registry, &context, surface),
