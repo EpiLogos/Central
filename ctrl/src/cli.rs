@@ -1,5 +1,6 @@
 use crate::action::{create_core_action_registry, ActionExecutionContext};
 use crate::picker::{run_guided_action_picker, NullTerminalSurface, TerminalSurface};
+use crate::projectcentral_ground::register_projectcentral_ground_actions;
 use crate::projectcentral_ops::register_projectcentral_actions;
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::RootOptions;
@@ -139,6 +140,21 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         }
         [domain, verb] if domain == "control" && verb == "search" => {
             return Err((structured, "control search requires a query.".to_owned()));
+        }
+        [domain, noun, verb, project]
+            if domain == "projectcentral" && noun == "ground" && matches!(verb.as_str(), "inspect" | "plan") =>
+        {
+            let action = if verb == "inspect" {
+                "projectcentral.ground.inspect"
+            } else {
+                "projectcentral.ground.plan"
+            };
+            (action, json!({ "project": project }))
+        }
+        [domain, noun, verb]
+            if domain == "projectcentral" && noun == "ground" && matches!(verb.as_str(), "inspect" | "plan") =>
+        {
+            return Err((structured, format!("projectcentral ground {verb} requires a Work project.")));
         }
         [domain, verb] if domain == "machine" && verb == "inspect" => ("machine.inspect", json!({})),
         [domain, verb, role]
@@ -325,6 +341,34 @@ fn human_output(result: &ActionResult) -> String {
             let path = data.get("item").and_then(|item| item.get("path")).and_then(Value::as_str).unwrap_or_default();
             format!("{name}\t{path}")
         }
+        Some("projectcentral.ground.inspect") => {
+            let status = data.get("status").and_then(Value::as_str).unwrap_or("unknown");
+            let project_root = data.get("project_root").and_then(Value::as_str).unwrap_or_default();
+            let recognised = data.get("recognised_sources").and_then(Value::as_array).map(Vec::len).unwrap_or(0);
+            let candidates = data.get("native_candidates").and_then(Value::as_array).map(Vec::len).unwrap_or(0);
+            let mut lines = vec![
+                format!("Project: {project_root}"),
+                format!("Authored ground: {status}"),
+                format!("Recognised source relations: {recognised}"),
+                format!("Unresolved native candidates: {candidates}"),
+            ];
+            if let Some(next) = data.get("next_actions").and_then(Value::as_array) {
+                for item in next.iter().filter_map(Value::as_str) {
+                    lines.push(format!("Optional: {item}"));
+                }
+            }
+            lines.join("\n")
+        }
+        Some("projectcentral.ground.plan") => {
+            let status = data.get("current").and_then(|current| current.get("status")).and_then(Value::as_str).unwrap_or("unknown");
+            let proposals = data.get("proposals").and_then(Value::as_array).map(Vec::len).unwrap_or(0);
+            format!("Authored ground: {status}\nReviewable ground proposals: {proposals}\nUse --json for source-by-source treatments.")
+        }
+        Some("projectcentral.ground.apply") => {
+            let status = data.get("ground_status").and_then(Value::as_str).unwrap_or("unknown");
+            let path = data.get("relation").and_then(|relation| relation.get("path")).and_then(Value::as_str).unwrap_or_default();
+            format!("Recorded accepted source relation: {path}\nAuthored ground: {status}\nSource bytes/path unchanged.")
+        }
         _ => data.to_string(),
     }
 }
@@ -370,6 +414,7 @@ pub fn run_cli_with_surface(
     };
     let mut registry = create_core_action_registry();
     register_projectcentral_actions(&mut registry);
+    register_projectcentral_ground_actions(&mut registry);
     let result = match parsed.target {
         CommandTarget::Direct { action_id, input } => registry.execute(&action_id, &input, &context),
         CommandTarget::Guided => run_guided_action_picker(&registry, &context, surface),
