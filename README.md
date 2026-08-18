@@ -94,8 +94,9 @@ Read the package in this order:
 1. [`docs/CENTRAL-VISION.md`](docs/CENTRAL-VISION.md) — product purpose, experience, and system boundaries.
 2. [`docs/CENTRAL-SYSTEM-SPEC.md`](docs/CENTRAL-SYSTEM-SPEC.md) — normative product and architecture specification.
 3. [`docs/CONTROL-CONTENT-PROTOCOL.md`](docs/CONTROL-CONTENT-PROTOCOL.md) — durable information, authorship, disclosure, and Skill boundaries.
-4. [`docs/CONNECTOR-SDK-SPEC.md`](docs/CONNECTOR-SDK-SPEC.md) — Action, Port, Connector, Surface, SDK, and conformance architecture.
-5. [`docs/PERSONAL-EXTENSION-SPEC.md`](docs/PERSONAL-EXTENSION-SPEC.md) — first real extension set used to prove and harden the open architecture.
-6. [`docs/INSTALL.md`](docs/INSTALL.md) — native `ctrl` source installation and clean-root verification.
+4. [`docs/PERSONAL-WORLD-PROJECTION.md`](docs/PERSONAL-WORLD-PROJECTION.md) — how selected Central material becomes the person's O:I world/profile without creating a shadow profile or mutating Control.
+5. [`docs/CONNECTOR-SDK-SPEC.md`](docs/CONNECTOR-SDK-SPEC.md) — Action, Port, Connector, Surface, SDK, and conformance architecture.
+6. [`docs/PERSONAL-EXTENSION-SPEC.md`](docs/PERSONAL-EXTENSION-SPEC.md) — first real extension set used to prove and harden the open architecture.
+7. [`docs/INSTALL.md`](docs/INSTALL.md) — native `ctrl` source installation and clean-root verification.
 
 The issue tracker contains the development map and implementation tickets.
