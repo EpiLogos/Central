@@ -10,7 +10,10 @@ pub mod result;
 pub mod root;
 
 #[cfg(test)]
-pub mod tempfile {
+extern crate self as tempfile;
+
+#[cfg(test)]
+mod test_tempfile {
     use std::fs;
     use std::io;
     use std::path::{Path, PathBuf};
@@ -49,6 +52,9 @@ pub mod tempfile {
         Ok(TempDir { path })
     }
 }
+
+#[cfg(test)]
+pub use test_tempfile::tempdir;
 
 pub use action::{
     create_core_action_registry, ActionAvailability, ActionDescriptor, ActionExecutionContext,
