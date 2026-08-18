@@ -58,17 +58,31 @@ fn root_discovery_prefers_explicit_then_configured_then_home_default() {
 }
 
 #[test]
-fn initialization_creates_only_the_protocol_roots_and_is_repeatable() {
+fn initialization_creates_recursive_control_roots_and_root_wiki_and_is_repeatable() {
     let root = temporary_directory("init").join("Central");
     initialize_central(&root).unwrap();
     initialize_central(&root).unwrap();
 
-    for relative in ["Control/user", "Control/agents", "Control/machines", ".central", "Work"] {
+    for relative in [
+        "Control/user",
+        "Control/agents/governance",
+        "Control/agents/wiki",
+        "Control/machines",
+        ".central",
+        "Work",
+    ] {
         assert!(root.join(relative).is_dir(), "missing {relative}");
     }
-    for control in ["user", "agents", "machines"] {
-        assert_eq!(fs::read_dir(root.join("Control").join(control)).unwrap().count(), 0);
-    }
+    assert_eq!(fs::read_dir(root.join("Control/user")).unwrap().count(), 0);
+    assert_eq!(fs::read_dir(root.join("Control/agents/governance")).unwrap().count(), 0);
+    assert_eq!(fs::read_dir(root.join("Control/machines")).unwrap().count(), 0);
+
+    let root_wiki = root.join("Control/agents/wiki/wiki.json");
+    assert!(root_wiki.is_file());
+    let wiki: serde_json::Value = serde_json::from_slice(&fs::read(root_wiki).unwrap()).unwrap();
+    assert_eq!(wiki["objects"][0]["profile"], "okf-wiki/v1");
+    assert_eq!(wiki["objects"][0]["object"], "space");
+    assert_eq!(wiki["objects"][0]["ref"], "central:wiki:root");
     assert!(inspect_central(&root).unwrap().valid);
 }
 
@@ -153,12 +167,32 @@ fn action_list_has_human_and_structured_cli_renderings() {
     assert!(human.output.contains("machine.verify\tVerify machine declaration"));
     assert!(human.output.contains("work.open\tOpen Work item"));
     assert!(human.output.contains("work.reveal\tReveal Work item"));
+    assert!(human.output.contains("projectcentral.inspect\tInspect ProjectCentral"));
+    assert!(human.output.contains("projectcentral.doctor\tVerify ProjectCentral"));
+    assert!(human.output.contains("projectcentral.init\tInitialize ProjectCentral"));
+    assert!(human.output.contains("projectcentral.adopt.preview\tPreview Wiki adoption"));
+    assert!(human.output.contains("projectcentral.adopt\tAdopt Wiki in place"));
+    assert!(human.output.contains("projectcentral.migrate.preview\tPreview Wiki migration"));
+    assert!(human.output.contains("projectcentral.migrate\tMigrate selected Wiki"));
 
     let structured = central_ctrl::run_cli(&["--json".to_owned(), "action.list".to_owned()], &environment);
     assert_eq!(structured.exit_code, 0);
     let value: serde_json::Value = serde_json::from_str(&structured.output).unwrap();
     assert_eq!(value["status"], "success");
-    assert_eq!(value["data"]["actions"].as_array().unwrap().len(), 17);
+    let actions = value["data"]["actions"].as_array().unwrap();
+    assert_eq!(actions.len(), 24);
+    let ids = actions.iter().filter_map(|action| action["id"].as_str()).collect::<Vec<_>>();
+    for id in [
+        "projectcentral.inspect",
+        "projectcentral.doctor",
+        "projectcentral.init",
+        "projectcentral.adopt.preview",
+        "projectcentral.adopt",
+        "projectcentral.migrate.preview",
+        "projectcentral.migrate",
+    ] {
+        assert!(ids.contains(&id), "missing ProjectCentral Action {id}");
+    }
 }
 
 #[test]
@@ -186,4 +220,6 @@ fn binary_is_the_stable_development_entrypoint() {
     let payload: serde_json::Value = serde_json::from_slice(&init.stdout).unwrap();
     assert_eq!(payload["action"], "central.init");
     assert!(Path::new(root.to_str().unwrap()).join("Control/user").is_dir());
+    assert!(Path::new(root.to_str().unwrap()).join("Control/agents/governance").is_dir());
+    assert!(Path::new(root.to_str().unwrap()).join("Control/agents/wiki/wiki.json").is_file());
 }
