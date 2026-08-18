@@ -261,6 +261,12 @@ fn human_output(result: &ActionResult) -> String {
                     lines.push(format!("{}  {path}", if ok { "ok" } else { "missing" }));
                 }
             }
+            if let Some(mixed) = data.get("mixed_root") {
+                if mixed.get("detected").and_then(Value::as_bool).unwrap_or(false) {
+                    let message = mixed.get("message").and_then(Value::as_str).unwrap_or("Central personal root is also the Central product source checkout.");
+                    lines.push(format!("warning: {message}"));
+                }
+            }
             lines.join("\n")
         }
         Some("central.recovery.plan") => crate::recovery::explain_recovery_plan(data),

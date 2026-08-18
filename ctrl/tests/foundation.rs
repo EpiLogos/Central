@@ -2,7 +2,7 @@ use central_ctrl::action::{ActionAvailability, ActionDescriptor, ActionOutputDef
 use central_ctrl::{
     create_core_action_registry, inspect_central, initialize_central, resolve_central_root,
     ActionExecutionContext, ActionRegistry, CliEnvironment, ConnectorContext, ConnectorRegistry,
-    MutationClass, ResultStatus, RootOptions,
+    MixedRootSignal, MutationClass, ResultStatus, RootOptions,
 };
 use serde_json::json;
 use std::fs;
@@ -103,6 +103,75 @@ fn doctor_reports_missing_invalid_and_valid_structure() {
     fs::write(&file_root, "not a directory").unwrap();
     let file_options = RootOptions { explicit_root: Some(file_root), ..RootOptions::default() };
     assert_eq!(execute(&registry, "central.doctor", &file_options).status, ResultStatus::InvalidCentralStructure);
+}
+
+#[test]
+fn doctor_diagnoses_a_personal_root_that_is_also_the_product_checkout() {
+    let root = temporary_directory("mixed-root-checkout").join("Central");
+    initialize_central(&root).unwrap();
+    // Product-source collision signals at the root itself.
+    fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
+    fs::create_dir_all(root.join("ctrl/src")).unwrap();
+    fs::create_dir_all(root.join("crates/connector-sdk")).unwrap();
+
+    let report = inspect_central(&root).unwrap();
+    assert!(report.valid, "structure alone remains valid");
+    assert!(report.mixed_root.detected);
+    assert!(report
+        .mixed_root
+        .message
+        .as_deref()
+        .unwrap_or_default()
+        .contains("personal root is also the Central product source checkout"));
+    assert!(report.mixed_root.signals.contains(&MixedRootSignal::CargoManifest));
+    assert!(report.mixed_root.signals.contains(&MixedRootSignal::CtrlSourceDirectory));
+    assert!(report.mixed_root.signals.contains(&MixedRootSignal::ConnectorSdkCrate));
+}
+
+#[test]
+fn doctor_does_not_flag_a_personal_root_with_one_generic_file() {
+    let root = temporary_directory("mixed-root-plain").join("Central");
+    initialize_central(&root).unwrap();
+    // A lone Cargo.toml is not a strong Central-source collision.
+    fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
+
+    let report = inspect_central(&root).unwrap();
+    assert!(report.valid);
+    assert!(!report.mixed_root.detected);
+}
+
+#[test]
+fn doctor_flags_connectors_directory_with_the_product_remote() {
+    let root = temporary_directory("mixed-root-remote").join("Central");
+    initialize_central(&root).unwrap();
+    fs::create_dir_all(root.join("connectors")).unwrap();
+    fs::create_dir_all(root.join(".git")).unwrap();
+    fs::write(
+        root.join(".git/config"),
+        "[remote \"origin\"]\n\turl = https://github.com/EpiLogos/Central\n",
+    )
+    .unwrap();
+
+    let report = inspect_central(&root).unwrap();
+    assert!(report.mixed_root.detected);
+    assert!(report.mixed_root.signals.contains(&MixedRootSignal::ConnectorsDirectory));
+    assert!(report.mixed_root.signals.contains(&MixedRootSignal::ProductRepositoryRemote));
+}
+
+#[test]
+fn doctor_action_reports_mixed_root_without_failing_structure() {
+    let root = temporary_directory("mixed-root-action").join("Central");
+    initialize_central(&root).unwrap();
+    fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
+    fs::create_dir_all(root.join("ctrl")).unwrap();
+
+    let registry = create_core_action_registry();
+    let options = RootOptions { explicit_root: Some(root.clone()), ..RootOptions::default() };
+    let result = execute(&registry, "central.doctor", &options);
+    assert_eq!(result.status, ResultStatus::Success);
+    let data = result.data.expect("doctor data");
+    assert_eq!(data["mixed_root"]["detected"], json!(true));
+    assert!(data["mixed_root"]["message"].as_str().unwrap_or_default().contains("product source checkout"));
 }
 
 #[test]

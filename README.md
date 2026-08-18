@@ -51,20 +51,31 @@ current platform, tool or service
 
 The current Connector can disappear and another can take its place without retroactively changing what the person meant.
 
-## The product in one view
+## The two worlds
+
+Central deliberately separates two things that are easy to fuse:
 
 ```text
-Central
-├── Control/      durable human-authored source
-│   ├── user/     what the person deliberately carries forward
-│   ├── agents/   the durable relation they want with software agents
-│   └── machines/ intended machine roles and operating intent
-├── ctrl/         stable executable Actions and public SDK
-├── connectors/   replaceable bindings from Ports to real technologies
-├── skills/       reusable agent procedures for working with Central
-├── Work/         ordinary work, not a proprietary project format
-└── .central/     derived local state subordinate to authored source
+Personal root                     Product source checkout
+~/Central                         (this repository)
+├── Control/   authored source    ├── ctrl/        executable Actions
+│   ├── user/                     ├── crates/      public SDK
+│   ├── agents/                   ├── connectors/  Port bindings
+│   └── machines/                 ├── skills/      agent procedures
+├── Work/     ordinary work       ├── docs/        documentation corpus
+├── .central/ derived local state └── .github/     product workflows
+└── .obsidian/ local editor state
 ```
+
+The personal root is the lived authored world: durable `Control/`, ordinary
+`Work/`, subordinate `.central/` derived state, and — when the person opens the
+root in Obsidian — local `.obsidian/` editor state. None of those are product
+repository state. The product checkout is a developer artifact; on a machine
+whose personal root is `~/Central` it can live at `~/Central/Work/Central`,
+following the same convention as the other {O:I} suite products under `Work/`.
+
+`ctrl doctor` detects the strong collision of a personal root that is also the
+Central source checkout and reports it (`mixed_root` in the structured output).
 
 The compact dependency rule is:
 
@@ -137,13 +148,13 @@ Current main is the authority for implemented behaviour. Open extension PRs and 
 
 ## Documentation
 
-Read the package in this order:
+Start at the docs front door: [`docs/README.md`](docs/README.md) — it indexes
+the corpus by role and gives explicit reading routes.
+
+The primary route for a new reader:
 
 1. [`docs/CENTRAL-VISION.md`](docs/CENTRAL-VISION.md) — why the authored root exists and the experience it should preserve.
 2. [`docs/CENTRAL-SYSTEM-SPEC.md`](docs/CENTRAL-SYSTEM-SPEC.md) — normative product and architecture specification.
 3. [`docs/CONTROL-CONTENT-PROTOCOL.md`](docs/CONTROL-CONTENT-PROTOCOL.md) — authorship, durable information and disclosure boundaries.
-4. [`docs/PRODUCT-GROUND-CONVENTION.md`](docs/PRODUCT-GROUND-CONVENTION.md) — optional human-authored `Control/user/products/<product>/` convention and the returned-reality proposal boundary.
-5. [`docs/PERSONAL-WORLD-PROJECTION.md`](docs/PERSONAL-WORLD-PROJECTION.md) — selected personal/world Projection, public disclosure and explicit return to Central source.
-6. [`docs/CONNECTOR-SDK-SPEC.md`](docs/CONNECTOR-SDK-SPEC.md) — Action, Port, Connector, Surface, SDK and conformance architecture.
-7. [`docs/PERSONAL-EXTENSION-SPEC.md`](docs/PERSONAL-EXTENSION-SPEC.md) — first real extension set used to harden the public architecture.
-8. [`docs/INSTALL.md`](docs/INSTALL.md) — native `ctrl` installation and clean-root verification.
+4. [`docs/CONNECTOR-SDK-SPEC.md`](docs/CONNECTOR-SDK-SPEC.md) — Action, Port, Connector, Surface, SDK and conformance architecture.
+5. [`docs/INSTALL.md`](docs/INSTALL.md) — native `ctrl` installation and clean-root verification.

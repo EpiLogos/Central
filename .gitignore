@@ -1,5 +1,10 @@
+# Personal authored world — never product repository state
+/Control/
 /Work/
 /.central/
+
+# Local editor state (Obsidian vault configuration)
+/.obsidian/
 
 # Local platform noise
 .DS_Store

@@ -34,6 +34,12 @@ ctrl version
 
 ## Establish a Central root
 
+A Central root is a **personal world**, not a product checkout. `ctrl init`
+creates the personal root shape; the Central source repository itself belongs in
+a developer checkout (for example `~/Central/Work/Central` on a machine whose
+personal root is `~/Central`), never fused with the personal root. `ctrl doctor`
+diagnoses a personal root that also resembles the product checkout.
+
 The base command owns the native filesystem protocol. Initialize a root with:
 
 ```sh
