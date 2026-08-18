@@ -3,6 +3,7 @@ pub mod cli;
 pub mod control;
 pub mod machine;
 pub mod picker;
+pub mod projectcentral;
 pub mod recovery;
 pub mod result;
 pub mod root;
@@ -31,6 +32,11 @@ pub use machine::{
 pub use picker::{
     run_guided_action_picker, search_action_descriptors, NullTerminalSurface, StdioTerminalSurface,
     TerminalSurface,
+};
+pub use projectcentral::{
+    projectcentral_paths, read_project_manifest, ManifestValidation, ProjectCentralManifest,
+    ProjectCentralPaths, WikiBinding, HUMAN_APERTURE, PROJECTCENTRAL_DIR, PROJECT_MANIFEST,
+    PROJECT_SCHEMA, ROOT_WIKI_SOURCE, WIKI_DIR, WIKI_PROFILE, WIKI_SOURCE,
 };
 pub use recovery::{
     explain_recovery, explain_recovery_plan, AuthoredRecoveryDeclaration, RecoveryDeclaration,
