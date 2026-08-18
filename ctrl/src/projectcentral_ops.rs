@@ -149,7 +149,7 @@ pub fn inspect_projectcentral(project_root: &Path) -> io::Result<ProjectCentralI
                     return Ok(ProjectCentralInspection {
                         project_root: project_root.to_path_buf(),
                         outcome: ProjectCentralOutcome::UnresolvedHumanDecisionRequired,
-                        manifest: Some(manifest),
+                        manifest: Some(manifest.clone()),
                         manifest_errors: vec![],
                         wiki_candidates,
                         source_signals,
