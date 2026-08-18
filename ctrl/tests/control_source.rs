@@ -61,6 +61,46 @@ fn control_search_reads_multiple_human_readable_formats_without_schema() {
 }
 
 #[test]
+fn product_ground_is_ordinary_nested_user_source_not_a_fourth_control_root() {
+    let root = temporary_directory("product-ground").join("Central");
+    initialize_central(&root).unwrap();
+    let product = root.join("Control/user/products/example");
+    fs::create_dir_all(product.join("expressions")).unwrap();
+    fs::create_dir_all(product.join("positions")).unwrap();
+    fs::write(
+        product.join("expressions/encounter.md"),
+        "I want the encounter to remain directly manipulable by the person.\n",
+    )
+    .unwrap();
+    fs::write(
+        product.join("positions/INTERACTION.md"),
+        "The primary interaction remains human-addressable.\n",
+    )
+    .unwrap();
+    fs::write(
+        product.join("VISION.md"),
+        "The product should preserve human authorship while increasing agency.\n",
+    )
+    .unwrap();
+
+    let opened = execute(&root, "control.open", json!({ "target": "user" }));
+    assert_eq!(opened.status, ResultStatus::Success);
+    assert_eq!(opened.data.unwrap()["source_class"], "authored");
+
+    let result = execute(&root, "control.search", json!({ "query": "human" }));
+    assert_eq!(result.status, ResultStatus::Success);
+    let data = result.data.unwrap();
+    let matches = data["matches"].as_array().unwrap();
+    assert_eq!(matches.len(), 2);
+    assert!(matches.iter().all(|item| item["target"] == "user"));
+    assert!(matches.iter().all(|item| item["source_class"] == "authored"));
+    assert!(matches.iter().any(|item| item["source_path"] == "Control/user/products/example/positions/INTERACTION.md"));
+    assert!(matches.iter().any(|item| item["source_path"] == "Control/user/products/example/VISION.md"));
+    assert_eq!(fs::read_dir(root.join(".central")).unwrap().count(), 0);
+    assert_eq!(CONTROL_ROOTS, ["user", "agents", "machines"]);
+}
+
+#[test]
 fn control_search_reports_unsupported_non_text_sources_explicitly() {
     let root = temporary_directory("unsupported").join("Central");
     initialize_central(&root).unwrap();
