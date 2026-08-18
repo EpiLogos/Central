@@ -1,9 +1,26 @@
-pub mod action;
+#[path = "action.rs"]
+mod action_base;
+
+pub mod action {
+    pub use super::action_base::{
+        ActionAvailability, ActionDescriptor, ActionExecutionContext, ActionHandler,
+        ActionInputDefinition, ActionInputSelection, ActionOutputDefinition, ActionRegistry,
+        MutationClass,
+    };
+
+    pub fn create_core_action_registry() -> ActionRegistry {
+        let mut registry = super::action_base::create_core_action_registry();
+        super::projectcentral_now::register_projectcentral_now_actions(&mut registry);
+        registry
+    }
+}
+
 pub mod cli;
 pub mod control;
 pub mod machine;
 pub mod picker;
 pub mod projectcentral;
+pub mod projectcentral_now;
 pub mod projectcentral_ops;
 pub mod recovery;
 pub mod result;
@@ -87,6 +104,12 @@ pub use projectcentral::{
     PROJECTCENTRAL_DIR, PROJECT_MANIFEST, PROJECT_SCHEMA, ROOT_AGENT_DIR,
     ROOT_AGENT_GOVERNANCE_DIR, ROOT_HUMAN_SOURCE_DIR, ROOT_WIKI_DIR, ROOT_WIKI_SOURCE,
     WIKI_DIR, WIKI_PROFILE, WIKI_SOURCE,
+};
+pub use projectcentral_now::{
+    initialize_now, inspect_now, promote as promote_now, rollover as rollover_now, NowHandoff,
+    NowInspection, NowPaths, NowPolicy, NowPromotion, PromotionReceipt, RolloverReport,
+    NOW_AGENT_DIR, NOW_DAY_DIR, NOW_DIR, NOW_POLICY, NOW_PROMOTIONS, NOW_USER_DIR,
+    WIKI_RETURN_DIR,
 };
 pub use projectcentral_ops::{
     adopt_in_place, doctor_projectcentral, ensure_root_federation, initialize_projectcentral,
