@@ -174,13 +174,16 @@ fn action_list_has_human_and_structured_cli_renderings() {
     assert!(human.output.contains("projectcentral.adopt\tAdopt Wiki in place"));
     assert!(human.output.contains("projectcentral.migrate.preview\tPreview Wiki migration"));
     assert!(human.output.contains("projectcentral.migrate\tMigrate selected Wiki"));
+    assert!(human.output.contains("projectcentral.ground.inspect\tInspect authored Project ground"));
+    assert!(human.output.contains("projectcentral.ground.plan\tPlan authored Project ground"));
+    assert!(human.output.contains("projectcentral.ground.apply\tApply accepted Project ground relation"));
 
     let structured = central_ctrl::run_cli(&["--json".to_owned(), "action.list".to_owned()], &environment);
     assert_eq!(structured.exit_code, 0);
     let value: serde_json::Value = serde_json::from_str(&structured.output).unwrap();
     assert_eq!(value["status"], "success");
     let actions = value["data"]["actions"].as_array().unwrap();
-    assert_eq!(actions.len(), 24);
+    assert_eq!(actions.len(), 27);
     let ids = actions.iter().filter_map(|action| action["id"].as_str()).collect::<Vec<_>>();
     for id in [
         "projectcentral.inspect",
@@ -190,9 +193,33 @@ fn action_list_has_human_and_structured_cli_renderings() {
         "projectcentral.adopt",
         "projectcentral.migrate.preview",
         "projectcentral.migrate",
+        "projectcentral.ground.inspect",
+        "projectcentral.ground.plan",
+        "projectcentral.ground.apply",
     ] {
         assert!(ids.contains(&id), "missing ProjectCentral Action {id}");
     }
+}
+
+#[test]
+fn authored_ground_has_direct_work_cli_reading() {
+    let root = temporary_directory("ground-cli").join("Central");
+    fs::create_dir_all(root.join("Work/example")).unwrap();
+    let environment = CliEnvironment { configured_root: None, home: None };
+    let inspect = central_ctrl::run_cli(
+        &[
+            "--root".to_owned(),
+            root.display().to_string(),
+            "projectcentral".to_owned(),
+            "ground".to_owned(),
+            "inspect".to_owned(),
+            "example".to_owned(),
+        ],
+        &environment,
+    );
+    assert_eq!(inspect.exit_code, 0);
+    assert!(inspect.output.contains("Authored ground: empty"));
+    assert!(inspect.output.contains("Optional: Initialize ProjectCentral"));
 }
 
 #[test]
