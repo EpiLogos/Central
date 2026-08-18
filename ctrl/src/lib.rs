@@ -1,27 +1,25 @@
-#[path = "action.rs"]
-mod action_base;
-
-pub mod action {
-    pub use super::action_base::{
-        ActionAvailability, ActionDescriptor, ActionExecutionContext, ActionHandler,
-        ActionInputDefinition, ActionInputSelection, ActionOutputDefinition, ActionRegistry,
-        MutationClass,
-    };
-
-    pub fn create_core_action_registry() -> ActionRegistry {
-        let mut registry = super::action_base::create_core_action_registry();
-        super::projectcentral_now::register_projectcentral_now_actions(&mut registry);
-        registry
-    }
-}
-
+pub mod action;
 pub mod cli;
 pub mod control;
 pub mod machine;
 pub mod picker;
 pub mod projectcentral;
 pub mod projectcentral_now;
-pub mod projectcentral_ops;
+#[path = "projectcentral_ops.rs"]
+mod projectcentral_ops_base;
+pub mod projectcentral_ops {
+    pub use super::projectcentral_ops_base::{
+        adopt_in_place, doctor_projectcentral, ensure_root_federation, initialize_projectcentral,
+        inspect_projectcentral, migrate_selected, preview_adopt, preview_migrate, DoctorCheck,
+        MutationPlan, ProjectCentralDoctor, ProjectCentralInspection, ProjectCentralMutation,
+        ProjectCentralOutcome, SourceSignal, WikiCandidate, PROJECT_PROVENANCE, ROOT_WIKI_REF,
+    };
+
+    pub fn register_projectcentral_actions(registry: &mut crate::action::ActionRegistry) {
+        super::projectcentral_ops_base::register_projectcentral_actions(registry);
+        super::projectcentral_now::register_projectcentral_now_actions(registry);
+    }
+}
 pub mod recovery;
 pub mod result;
 pub mod root;
