@@ -34,7 +34,7 @@ DAY = a dated local-civil aggregation / rollover boundary
 
 `NOW` is deliberately session-independent. Several Sessions can contribute to one NOW, and a later Agent can recover the useful current horizon without receiving the old chat transcript.
 
-`DAY` is a closure reading of what the NOW horizon contained at one supplied local civil date and what the rollover did with it. The dated reading survives cleanup so that removal from the moving horizon does not erase what happened.
+`DAY` is a closure reading of what the NOW horizon contained at one supplied local civil date and what the rollover did with it. Its source snapshot and derived reading survive cleanup so that later edits to moving human scratch, or removal of transient Agent returns, do not rewrite what that DAY contained.
 
 The following distinctions are constitutional:
 
@@ -58,27 +58,33 @@ NOW is an opt-in child of an already-valid ProjectCentral:
 
 ```text
 ProjectCentral/
-├── user/                       durable human Project ground
+├── user/                         durable human Project ground
 ├── agents/
 │   ├── governance/
 │   └── wiki/
-│       ├── wiki.json           canonical Agent Wiki source
-│       └── returns/            returned sources awaiting/feeding Wiki-owner maintenance
+│       ├── wiki.json             canonical Agent Wiki source
+│       └── returns/              returned sources awaiting/feeding Wiki-owner maintenance
 └── now/
-    ├── user/                   free human scratch/current source
-    ├── agents/                 attributed bounded Agent returns
-    ├── day/                    derived dated closure readings
-    ├── policy.json             inspectable rollover policy
-    └── promotions.json         current promotion receipts
+    ├── user/                     free human scratch/current source
+    ├── agents/                   attributed bounded Agent returns
+    ├── day/
+    │   ├── YYYY-MM-DD.md         derived dated closure reading
+    │   └── YYYY-MM-DD.sources/   byte-preserving source state at close
+    │       ├── user/**
+    │       └── agents/**
+    ├── policy.json               inspectable rollover policy
+    └── promotions.json           current promotion receipts
 ```
 
 A ProjectCentral without `now/` remains fully valid. `projectcentral.now.inspect` is read-only and does not opt the Project in. `projectcentral.now.init` performs that explicit opt-in.
 
-The shape intentionally separates authorship before it tries to aggregate experience. One shared Markdown file would make a human sentence, an Agent inference and a derived daily summary difficult to distinguish later.
+The shape intentionally separates authorship before it aggregates experience. One shared Markdown file would make a human sentence, an Agent inference and a derived daily summary difficult to distinguish later. DAY therefore keeps the human and Agent source copies separate, while its Markdown reading points back to those copies.
 
 ### Human side
 
 `ProjectCentral/now/user/**` is ordinary human-owned source. A person can create or edit Markdown, text, sketches or other files directly. Central does not require a frontmatter schema for scratch and rollover does not automatically delete it.
+
+At DAY close, that current human source is copied byte-for-byte under `day/YYYY-MM-DD.sources/user/**`. UTF-8 material is also rendered into the dated reading so the person's state remains legible in their own words. Non-UTF-8 material is retained in the source snapshot without pretending it can be safely rendered as prose.
 
 Temporal human material is not durable authored Project ground merely because the same human wrote it. Promotion to `ProjectCentral/user/**` is an explicit operation requiring `acceptance = human-accepted`; Central copies the source and records the return rather than silently changing its standing in place.
 
@@ -105,7 +111,9 @@ carry / promotion lineage
 
 This small envelope exists because a result that must survive its Session needs enough authorship and lifecycle information to remain intelligible. It is not a substitute for Factory Artifact, Claim, Evidence, Decision, Run or HumanRequest identities. Where those objects exist, the NOW record points to them.
 
-Agent learning returns toward the existing Wiki owner path through `ProjectCentral/agents/wiki/returns/**`. This deliberately does **not** edit `wiki.json` directly. The returned source is made durable in the Wiki-owned region with provenance intact; the system that owns semantic Wiki maintenance can decide how it should alter the Wiki.
+Agent returns are likewise snapshotted under `day/YYYY-MM-DD.sources/agents/**` before rollover mutates or removes the moving record.
+
+Agent learning returns toward the existing Wiki owner path through `ProjectCentral/agents/wiki/returns/**`. This deliberately does **not** edit `wiki.json` directly. The durable returned copy is written with `status = promoted` and its `promoted_to` lineage already present, so provenance does not depend on consulting the transient source after rollover. The system that owns semantic Wiki maintenance can then decide how that returned source should alter the Wiki.
 
 ## Read model
 
@@ -123,11 +131,13 @@ policy
 boundary statements
 ```
 
+`day_records` lists the top-level dated Markdown closure readings; each reading names its adjacent `.sources/` snapshot.
+
 This is the source/read-model seam for AIKit and future Surfaces. Central does not rank these records or decide how much of them belongs in a model context.
 
 ## DAY rollover
 
-The caller supplies `day` and `next_day` as local civil dates (`YYYY-MM-DD`). Central does not guess a timezone from UTC and does not require a scheduler.
+The caller supplies `day` and `next_day` as valid local civil dates (`YYYY-MM-DD`), with `next_day` later than `day`. Central does not guess a timezone from UTC and does not require a scheduler.
 
 The current default policy is explicitly stored in `ProjectCentral/now/policy.json`:
 
@@ -144,16 +154,17 @@ Rollover proceeds in this order:
 
 1. inspect human scratch, bounded Agent returns and current promotion receipts;
 2. classify Agent records under the current policy;
-3. write `day/YYYY-MM-DD.md` as the dated closure reading **before** cleanup;
-4. leave live records at their stable paths and mark them `carried`, adding the closed DAY to their carry lineage;
-5. delete resolved/expired/promoted Agent records from moving NOW when no `preserve_refs` protect them;
-6. retain inactive records with preserve refs;
-7. keep human scratch under human control;
-8. clear the transient promotion-receipt ledger after the receipts have entered the DAY reading.
+3. snapshot human and Agent source state into `day/YYYY-MM-DD.sources/**`;
+4. derive `day/YYYY-MM-DD.md` from that snapshot and the lifecycle classification, **before** any cleanup;
+5. leave live Agent records at their stable NOW paths and mark them `carried`, adding the closed DAY to their carry lineage;
+6. delete resolved/expired/promoted Agent records from moving NOW when no `preserve_refs` protect them;
+7. retain inactive records with preserve refs;
+8. keep human scratch under human control;
+9. clear the transient promotion-receipt ledger after the receipts have entered the DAY reading.
 
-The DAY reading includes source paths plus Agent actor/provenance and the bounded returned text. Therefore deleting a resolved transient return from NOW removes current clutter without making the day's historical fact disappear.
+If snapshotting or writing the DAY reading fails, moving NOW has not yet been cleaned. If DAY is durably written but a later carry/delete/reset step fails, the Action returns `partial_completion` and identifies the failed cleanup instead of claiming atomic success.
 
-If DAY was written but a later cleanup step fails, the Action returns `partial_completion` and reports the failed cleanup operation rather than claiming an atomic success that did not happen.
+The DAY reading contains human temporal source in its own words where renderable, plus source/snapshot refs, and it records Agent actor/provenance, bounded result, lifecycle standing and foreign refs. Therefore deleting a resolved transient return from NOW removes current clutter without erasing the dated source from which the DAY reading was made.
 
 ### Reference protection
 
@@ -169,14 +180,14 @@ projectcentral.now.init       opt a valid ProjectCentral into NOW/DAY
 projectcentral.now.return     write attributed bounded Agent return
 projectcentral.now.update     update status / add preserve refs
 projectcentral.now.promote    explicit return into human ground or Agent Wiki owner path
-projectcentral.now.rollover   close DAY and clean/carry NOW
+projectcentral.now.rollover   snapshot DAY, then clean/carry NOW
 ```
 
 Human scratch requires no Action. Generic Agent/action callers can use the structured Actions; a future O:I Surface can project the same contract.
 
 ## Ownership boundaries
 
-**Central owns:** directory/source identity, provenance envelope, inspectable retention policy, DAY closure and temporal cleanup, explicit source-return semantics.
+**Central owns:** directory/source identity, provenance envelope, inspectable retention policy, DAY source snapshot/closure and temporal cleanup, explicit source-return semantics.
 
 **AIKit owns:** discovery as a ContextSource, relevance/ranking, bounded retrieval and ContextResolution. Central does not push the entire NOW horizon into every Agent context.
 
@@ -204,7 +215,7 @@ human current source
 + active refs
 + open questions
         ↓
-DAY reading
+DAY source snapshot + derived reading
         ↓
 carry what remains live
 remove current clutter
@@ -220,15 +231,17 @@ human writes direct scratch
 → later Action/Agent reads NOW
 → Agent writes bounded question/handoff/learning
 → another reading sees the question without chat history
-→ meaningful Agent learning returns into the Wiki owner path
+→ meaningful Agent learning returns into the Wiki owner path with promotion lineage
 → meaningful human source returns into authored Project ground only with human acceptance
-→ DAY closes
+→ DAY snapshots source state and closes
 → resolved and promoted transient Agent records leave moving NOW
 → waiting question carries at the same source ref
 → carried question retains Run/Session refs
 → no Session/Run/Focus/Wiki replacement is created
 ```
 
-`ctrl/tests/projectcentral_now_portable_real.rs` additionally copies exact files from the checked-out Central Project into a portable `Central/Work/Central-current` specimen, opts that Project into NOW, performs DAY rollover, and verifies that native README, vision and implementation source bytes remain unchanged.
+Module-level tests additionally prove that changing moving human scratch after rollover cannot rewrite the prior DAY snapshot/reading, and that a Wiki-return copy carries its own `promoted_to` lineage.
+
+`ctrl/tests/projectcentral_now_portable_real.rs` copies exact files from the checked-out Central Project into a portable `Central/Work/Central-current` specimen, opts that Project into NOW, performs DAY rollover, and verifies that native README, vision and implementation source bytes remain unchanged.
 
 This portable evidence is deliberately distinct from a receipt against the owner's physical `~/Central/Work/*` installation. CI can prove the repository contract; it cannot truthfully claim access to a machine it does not have.
