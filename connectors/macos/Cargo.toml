@@ -1,0 +1,19 @@
+[package]
+name = "central-macos-connectors"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "central_macos_connectors"
+path = "src/lib.rs"
+
+[dependencies]
+central-connector-sdk = { path = "../../crates/connector-sdk" }
+plist = "1"
+xattr = "1"
+
+[dev-dependencies]
+central-reference-connectors = { path = "../reference" }
+ctrl = { path = "../../ctrl" }
+serde_json = "1"
