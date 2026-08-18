@@ -97,18 +97,18 @@ Version 1 has this minimal shape:
   "project_id": "<stable project identity>",
   "wiki": {
     "profile": "okf-wiki/v1",
-    "source": "Wiki/wiki.json"
+    "source": "ProjectCentral/Wiki/wiki.json"
   },
-  "human_aperture": "README.md"
+  "human_aperture": "ProjectCentral/README.md"
 }
 ```
 
 Rules:
 
 1. `project_id` is a stable Project identity, not a repository URL and not a database row id.
-2. Relative paths resolve from `ProjectCentral/` and must not escape it.
+2. Source paths resolve from the **Project root**, are relative, and must not escape the Project. This lets an adopted Wiki remain at `docs/...`, `Wiki/...`, or another native in-project location without file movement.
 3. `wiki.profile` names the accepted interoperable Wiki profile. Central does not define its node/edge schema.
-4. `wiki.source` may later bind an adopted in-place Wiki outside `ProjectCentral/Wiki/` only through an explicit adoption result that records the binding and provenance; Central must not guess among multiple candidates.
+4. `wiki.source` may bind an adopted in-place Wiki outside `ProjectCentral/Wiki/` only through an explicit adoption result that records the binding and provenance; Central must not guess among multiple candidates.
 5. The manifest does not declare that human source has been migrated into the Agent Wiki.
 
 ## 6. Native Wiki identity
