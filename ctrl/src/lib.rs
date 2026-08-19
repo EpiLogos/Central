@@ -1,4 +1,5 @@
 pub mod action;
+pub mod agent_governance;
 pub mod cli;
 pub mod control;
 pub mod machine;
@@ -61,6 +62,15 @@ pub use action::{
     create_core_action_registry, ActionAvailability, ActionDescriptor, ActionExecutionContext,
     ActionInputDefinition, ActionInputSelection, ActionOutputDefinition, ActionRegistry,
     MutationClass,
+};
+pub use agent_governance::{
+    apply_project_governance_relation, inspect_project_governance, inspect_root_governance,
+    plan_project_governance, GovernanceApplyResult, GovernanceCandidate,
+    GovernanceCompositionBoundary, GovernanceMaintenancePolicy, GovernancePlanItem,
+    GovernanceProvenance, GovernanceSkippedSource, GovernanceSourceRecord,
+    GovernanceSourceRelation, GovernanceTreatment, ProjectGovernanceInspection,
+    ProjectGovernancePlan, RootGovernanceInspection, GOVERNANCE_RELATIONS_SCHEMA,
+    GOVERNANCE_RELATIONS_SOURCE,
 };
 pub use cli::{run_cli, run_cli_with_surface, CliEnvironment, CliExecution};
 pub use control::{
