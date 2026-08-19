@@ -177,13 +177,19 @@ fn action_list_has_human_and_structured_cli_renderings() {
     assert!(human.output.contains("projectcentral.ground.inspect\tInspect authored Project ground"));
     assert!(human.output.contains("projectcentral.ground.plan\tPlan authored Project ground"));
     assert!(human.output.contains("projectcentral.ground.apply\tApply accepted Project ground relation"));
+    assert!(human.output.contains("projectcentral.now.inspect\tInspect Project NOW"));
+    assert!(human.output.contains("projectcentral.now.init\tInitialize Project NOW"));
+    assert!(human.output.contains("projectcentral.now.return\tWrite bounded Agent return"));
+    assert!(human.output.contains("projectcentral.now.update\tUpdate NOW lifecycle"));
+    assert!(human.output.contains("projectcentral.now.promote\tPromote NOW material"));
+    assert!(human.output.contains("projectcentral.now.rollover\tClose DAY and roll NOW"));
 
     let structured = central_ctrl::run_cli(&["--json".to_owned(), "action.list".to_owned()], &environment);
     assert_eq!(structured.exit_code, 0);
     let value: serde_json::Value = serde_json::from_str(&structured.output).unwrap();
     assert_eq!(value["status"], "success");
     let actions = value["data"]["actions"].as_array().unwrap();
-    assert_eq!(actions.len(), 27);
+    assert_eq!(actions.len(), 33);
     let ids = actions.iter().filter_map(|action| action["id"].as_str()).collect::<Vec<_>>();
     for id in [
         "projectcentral.inspect",
@@ -196,6 +202,12 @@ fn action_list_has_human_and_structured_cli_renderings() {
         "projectcentral.ground.inspect",
         "projectcentral.ground.plan",
         "projectcentral.ground.apply",
+        "projectcentral.now.inspect",
+        "projectcentral.now.init",
+        "projectcentral.now.return",
+        "projectcentral.now.update",
+        "projectcentral.now.promote",
+        "projectcentral.now.rollover",
     ] {
         assert!(ids.contains(&id), "missing ProjectCentral Action {id}");
     }
