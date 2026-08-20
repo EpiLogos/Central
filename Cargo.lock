@@ -33,6 +33,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "central-ubuntu-connectors"
+version = "0.1.0"
+dependencies = [
+ "central-connector-sdk",
+ "ctrl",
+ "serde_json",
+]
+
+[[package]]
+name = "central-ubuntu-host"
+version = "0.1.0"
+dependencies = [
+ "central-ubuntu-connectors",
+ "ctrl",
+]
+
+[[package]]
 name = "ctrl"
 version = "0.1.0"
 dependencies = [
