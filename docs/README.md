@@ -74,6 +74,11 @@ resembles the product checkout (`mixed_root` in the structured health report).
   hosted/remote acceptance matrix against the normative criteria, and the
   explicit separation of hosted evidence from named physical-machine evidence.
 
+## ProjectCentral
+
+- [PROJECTCENTRAL-CONTRACT.md](PROJECTCENTRAL-CONTRACT.md) — the authored Project
+  ground, NOW/DAY temporal field, and ProjectCentral ↔ Central integration contract.
+
 ## Supporting product understanding
 
 - [VISUAL-PRODUCT-UNDERSTANDING.md](VISUAL-PRODUCT-UNDERSTANDING.md) — the
