@@ -3,7 +3,7 @@ use crate::picker::{run_guided_action_picker, NullTerminalSurface, TerminalSurfa
 use crate::projectcentral_ops::register_projectcentral_actions;
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::RootOptions;
-use central_connector_sdk::ConnectorContext;
+use central_connector_sdk::{ConnectorContext, ConnectorRegistry};
 use central_reference_connectors::create_default_connector_registry;
 use serde_json::{json, Value};
 use std::env;
@@ -348,10 +348,12 @@ fn exit_code(result: &ActionResult) -> i32 {
     }
 }
 
-pub fn run_cli_with_surface(
+pub fn run_cli_with_runtime(
     args: &[String],
     environment: &CliEnvironment,
     surface: &mut dyn TerminalSurface,
+    connectors: &ConnectorRegistry,
+    connector_context: &ConnectorContext,
 ) -> CliExecution {
     let parsed = match parse_args(args) {
         Ok(parsed) => parsed,
@@ -367,12 +369,10 @@ pub fn run_cli_with_surface(
         configured_root: environment.configured_root.clone(),
         home: environment.home.clone(),
     };
-    let connectors = create_default_connector_registry();
-    let connector_context = ConnectorContext::current();
     let context = ActionExecutionContext {
         root_options: &root_options,
-        connectors: &connectors,
-        connector_context: &connector_context,
+        connectors,
+        connector_context,
     };
     let mut registry = create_core_action_registry();
     register_projectcentral_actions(&mut registry);
@@ -386,6 +386,16 @@ pub fn run_cli_with_surface(
         human_output(&result)
     };
     CliExecution { exit_code: exit_code(&result), result, output }
+}
+
+pub fn run_cli_with_surface(
+    args: &[String],
+    environment: &CliEnvironment,
+    surface: &mut dyn TerminalSurface,
+) -> CliExecution {
+    let connectors = create_default_connector_registry();
+    let connector_context = ConnectorContext::current();
+    run_cli_with_runtime(args, environment, surface, &connectors, &connector_context)
 }
 
 pub fn run_cli(args: &[String], environment: &CliEnvironment) -> CliExecution {

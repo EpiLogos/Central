@@ -489,6 +489,7 @@ fn declaration_action(
 fn inspect_current_machine(
     context: &ActionExecutionContext<'_>,
     action: &str,
+    input: &MachineInspectionInput,
 ) -> Result<ObservedMachine, ActionResult> {
     let resolution = context.connectors.resolve(&MACHINE_INSPECTOR_PORT, context.connector_context);
     let diagnostics = resolution.diagnostics.clone();
@@ -512,7 +513,7 @@ fn inspect_current_machine(
             })),
         ));
     };
-    match implementation.inspect(&MachineInspectionInput::default()) {
+    match implementation.inspect(input) {
         Ok(observation) => Ok(ObservedMachine {
             observation,
             source: MachineObservationSource {
@@ -540,7 +541,8 @@ fn inspect_action(
     _input: &Value,
     context: &ActionExecutionContext<'_>,
 ) -> ActionResult {
-    match inspect_current_machine(context, "machine.inspect") {
+    let input = MachineInspectionInput::default();
+    match inspect_current_machine(context, "machine.inspect", &input) {
         Ok(observed) => ActionResult::success(
             "machine.inspect",
             to_value(observed).expect("machine observation serializes"),
@@ -987,6 +989,29 @@ fn compare_machine(
     })
 }
 
+fn inspection_input_for_declaration(declaration: &MachineDeclaration) -> MachineInspectionInput {
+    MachineInspectionInput {
+        package_ids: declaration
+            .requirements
+            .packages
+            .iter()
+            .map(|item| item.id.clone())
+            .collect(),
+        configuration_ids: declaration
+            .requirements
+            .configurations
+            .iter()
+            .map(|item| item.id.clone())
+            .collect(),
+        service_ids: declaration
+            .requirements
+            .services
+            .iter()
+            .map(|item| item.id.clone())
+            .collect(),
+    }
+}
+
 fn load_plan(
     input: &Value,
     context: &ActionExecutionContext<'_>,
@@ -997,7 +1022,8 @@ fn load_plan(
         .map_err(|message| ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None))?;
     let authored = read_machine_declaration(&root.path, &role)
         .map_err(|error| declaration_failure(action, error))?;
-    let observed = inspect_current_machine(context, action)?;
+    let inspection_input = inspection_input_for_declaration(&authored.declaration);
+    let observed = inspect_current_machine(context, action, &inspection_input)?;
     compare_machine(authored, observed, context, action)
 }
 

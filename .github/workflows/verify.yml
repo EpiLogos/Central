@@ -76,6 +76,16 @@ jobs:
           assert repeated["status"] == "success"
           PY
 
+  ubuntu-extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Public Port conformance and Ubuntu acceptance
+        run: cargo test -p central-ubuntu-connectors
+      - name: Headless Ubuntu host compiles
+        run: cargo build -p central-ubuntu-host --bin ctrl-ubuntu
+
   git-sync-extension:
     runs-on: ubuntu-latest
     steps:
@@ -88,7 +98,7 @@ jobs:
         run: |
           cargo tree -p ctrl --edges normal > "$RUNNER_TEMP/ctrl-tree.txt"
           cat "$RUNNER_TEMP/ctrl-tree.txt"
-          if grep -q 'central-git-sync-connector' "$RUNNER_TEMP/ctrl-tree.txt"; then
-            echo "fresh-session proving Connector leaked into ctrl core dependencies"
+          if grep -E 'central-(ubuntu|macos|shortcuts)|raycast' "$RUNNER_TEMP/ctrl-tree.txt"; then
+            echo "provider-specific personal extension leaked into ctrl core dependencies"
             exit 1
           fi
