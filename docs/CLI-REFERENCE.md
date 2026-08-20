@@ -28,7 +28,7 @@ The current core registry exposes:
 | `action.list` | discover Action descriptors | `actions`, `action list` |
 | `central.root` | resolve the active Central root | `root` |
 | `central.init` | initialise the required Central root shape | `init` |
-| `central.doctor` | inspect Central structural health | `doctor` |
+| `central.doctor` | inspect Central structural health and diagnose a root that is also the product source checkout | `doctor` |
 | `central.recovery.plan` | explain recovery for an authored machine role | `recovery plan <role>` |
 | `central.recover` | reconcile supported recovery for an authored machine role | `recover <role>` |
 | `control.open` | resolve one authored Control source root | `control open <user|agents|machines>` |
