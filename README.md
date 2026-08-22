@@ -56,26 +56,32 @@ The current Connector can disappear and another can take its place without retro
 Central deliberately separates two things that are easy to fuse:
 
 ```text
-Personal root                     Product source checkout
-~/Central                         (this repository)
-├── Control/   authored source    ├── ctrl/        executable Actions
-│   ├── user/                     ├── crates/      public SDK
-│   ├── agents/                   ├── connectors/  Port bindings
-│   └── machines/                 ├── skills/      agent procedures
-├── Work/     ordinary work       ├── docs/        documentation corpus
-├── .central/ derived local state └── .github/     product workflows
+Personal root                              Product source checkout
+~/Central                                  (this repository)
+├── Control/   durable personal ground     ├── ctrl/        executable Actions
+│   ├── user/                              ├── crates/      public SDK
+│   ├── agents/                            ├── connectors/  Port bindings
+│   │   ├── governance/                    ├── skills/      agent procedures
+│   │   └── wiki/                          ├── docs/        documentation corpus
+│   │       └── wiki.json                  └── .github/     product workflows
+│   └── machines/
+├── Work/     ordinary Projects
+│   └── <Project>/
+│       └── ProjectCentral/
+│           ├── user/
+│           ├── agents/
+│           │   ├── governance/
+│           │   └── wiki/wiki.json
+│           └── project.json
+├── .central/ derived local state
 └── .obsidian/ local editor state
 ```
 
-The personal root is the lived authored world: durable `Control/`, ordinary
-`Work/`, subordinate `.central/` derived state, and — when the person opens the
-root in Obsidian — local `.obsidian/` editor state. None of those are product
-repository state. The product checkout is a developer artifact; on a machine
-whose personal root is `~/Central` it can live at `~/Central/Work/Central`,
-following the same convention as the other {O:I} suite products under `Work/`.
+The personal root is the lived authored world: durable `Control/`, ordinary `Work/`, subordinate `.central/` derived state, and — when the person opens the root in Obsidian — local `.obsidian/` editor state. None of those are product repository state. The product checkout is a developer artifact; on a machine whose personal root is `~/Central` it can live at `~/Central/Work/Central`, following the same convention as the other {O:I} suite products under `Work/`.
 
-`ctrl doctor` detects the strong collision of a personal root that is also the
-Central source checkout and reports it (`mixed_root` in the structured output).
+`Control/agents/wiki/wiki.json` is the root Agent-Wiki federation source. A Project can remain an ordinary heterogeneous directory while `ProjectCentral/` supplies its recursive human-source / Agent-governance / Agent-Wiki relation. ProjectCentral initialization or adoption preserves existing Project material by default and records the relation rather than requiring wholesale migration into a Central-owned content layout.
+
+`ctrl doctor` detects the strong collision of a personal root that is also the Central source checkout and reports it (`mixed_root` in the structured output).
 
 The compact dependency rule is:
 
@@ -96,6 +102,8 @@ An agent can enter a world with a stable, permission-bounded authored ground rat
 Availability still does not imply disclosure. A file can exist, be indexable and be retrievable without being loaded into every context. Central supplies the source; systems such as AIKit can decide what is relevant and permitted for the current act.
 
 Agents can also invoke the same canonical Actions humans use. A launcher, shell command, agent tool and future UI do not need separate meanings for the same operation.
+
+The recursive ProjectCentral relation also gives an agent a stable Project-local distinction between human source, Agent governance, and maintained Agent Wiki material. The root Wiki can federate those Project WikiSpaces without turning every Project into one database or requiring existing source to move.
 
 ## Relation to the wider {O:I} field
 
@@ -142,14 +150,38 @@ ctrl --root /path/to/Central doctor --json
 ctrl --root /path/to/Central action list --json
 ```
 
-Initialization creates only `Control/user`, `Control/agents`, `Control/machines`, `.central`, and `Work`. The authored Control roots begin empty rather than being populated by guessed personal facts.
+Current `main` initialization creates the recursive base shape:
 
-Current main is the authority for implemented behaviour. Open extension PRs and physical-machine acceptance work remain development state until accepted; they should not be read back into the product vision as completed capability.
+```text
+Control/user/
+Control/agents/governance/
+Control/agents/wiki/wiki.json
+Control/machines/
+.central/
+Work/
+```
+
+The authored Control apertures begin empty rather than being populated by guessed personal facts. `Control/agents/wiki/wiki.json` is initialized as the root federation source.
+
+For a Work Project, current `main` also exposes the ProjectCentral lifecycle Actions:
+
+```text
+projectcentral.inspect
+projectcentral.doctor
+projectcentral.init
+projectcentral.adopt.preview
+projectcentral.adopt
+projectcentral.migrate.preview
+projectcentral.migrate
+```
+
+These operations establish `ProjectCentral/user`, `ProjectCentral/agents/{governance,wiki}`, `ProjectCentral/project.json`, provenance, and root-Wiki federation while preserving heterogeneous existing Project source according to the selected operation.
+
+Current main is the authority for implemented behaviour. Open extension PRs — including richer authored-ground, NOW/DAY, governance and physical-machine lines — remain development state until accepted; they should not be read back into the product vision as completed capability merely because their repository tests are green.
 
 ## Documentation
 
-Start at the docs front door: [`docs/README.md`](docs/README.md) — it indexes
-the corpus by role and gives explicit reading routes.
+Start at the docs front door: [`docs/README.md`](docs/README.md) — it indexes the corpus by role and gives explicit reading routes.
 
 The primary route for a new reader:
 
