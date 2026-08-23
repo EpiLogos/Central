@@ -21,7 +21,7 @@ Root resolution is, in order:
 
 ## Canonical Actions
 
-The current composed registry exposes 34 Actions:
+The current composed registry exposes 37 Actions:
 
 | Action | Purpose | Common CLI projection |
 |---|---|---|
@@ -53,6 +53,9 @@ The current composed registry exposes 34 Actions:
 | `projectcentral.ground.inspect` | inspect authored Project ground and provenance standing | `action run projectcentral.ground.inspect` |
 | `projectcentral.ground.plan` | propose reviewable source-ground relations | `action run projectcentral.ground.plan` |
 | `projectcentral.ground.apply` | record an explicitly human-accepted source-ground relation | `action run projectcentral.ground.apply` |
+| `projectcentral.change.horizon` | reconcile participating Project sources and read the deterministic Source Change Horizon | `action run projectcentral.change.horizon` |
+| `projectcentral.change.reconcile` | reconcile authoritative Project source revisions | `action run projectcentral.change.reconcile` |
+| `projectcentral.change.ack` | advance one named consumer cursor without changing source | `action run projectcentral.change.ack` |
 | `projectcentral.now.inspect` | inspect the opt-in Project NOW field | `action run projectcentral.now.inspect` |
 | `projectcentral.now.init` | initialise Project NOW / DAY state | `action run projectcentral.now.init` |
 | `projectcentral.now.return` | write a bounded Agent return into the Project Wiki relation | `action run projectcentral.now.return` |
@@ -67,6 +70,7 @@ ctrl --json action run action.list
 ctrl --json action run work.search '{"query":"Central"}'
 ctrl --json action run machine.plan '{"role":"home-server"}'
 ctrl --json action run projectcentral.ground.inspect '{"project":"Central"}'
+ctrl --json action run projectcentral.change.horizon '{"project":"Central"}'
 ctrl --json action run projectcentral.now.inspect '{"project":"Central"}'
 ctrl --json action run central.recover '{"role":"primary-workstation"}'
 ```
