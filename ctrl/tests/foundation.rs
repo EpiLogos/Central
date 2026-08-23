@@ -289,7 +289,7 @@ fn structured_failures_distinguish_input_structure_and_internal_failure() {
     assert_eq!(invalid_input.exit_code, 2);
     assert_eq!(invalid_input.result.status, ResultStatus::InvalidInput);
 
-    let missing_root = temporary_directory("missing").join("Central\");
+    let missing_root = temporary_directory("missing").join("Central");
     let invalid_structure = central_ctrl::run_cli(
         &["--json".to_owned(), "--root".to_owned(), missing_root.display().to_string(), "doctor".to_owned()],
         &environment,
