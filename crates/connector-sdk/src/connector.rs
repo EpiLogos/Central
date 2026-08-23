@@ -1,6 +1,7 @@
+use crate::notification::UserNotification;
 use crate::port::{
-    ConfigurationManager, MachineInspector, NativeOpen, NativeReveal, PackageManager, PortContract,
-    ServiceManager, Synchronizer, TagStore, WorkDiscovery,
+    Automation, ConfigurationManager, MachineInspector, NativeOpen, NativeReveal, PackageManager,
+    PortContract, ServiceManager, Synchronizer, TagStore, WorkDiscovery,
 };
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -115,6 +116,9 @@ pub trait Connector: Send + Sync {
     fn work_discovery(&self) -> Option<&dyn WorkDiscovery> {
         None
     }
+    fn automation(&self) -> Option<&dyn Automation> {
+        None
+    }
     fn native_open(&self) -> Option<&dyn NativeOpen> {
         None
     }
@@ -137,6 +141,9 @@ pub trait Connector: Send + Sync {
         None
     }
     fn synchronizer(&self) -> Option<&dyn Synchronizer> {
+        None
+    }
+    fn user_notification(&self) -> Option<&dyn UserNotification> {
         None
     }
 }
