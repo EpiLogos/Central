@@ -8,28 +8,35 @@ Central is the person's durable local authored world.
 
 A person can choose a face of that world to make present in O:I without creating a second profile database or transferring ownership of Central source.
 
-The relation is:
+The current relation is:
 
 ```text
 Central
-├── Control/user
-├── Control/agents
-├── Control/machines
-└── Work
-     └── ordinary Projects
-        │
-        │ local selection + authored / reviewed presentation
-        ▼
-O:I WorldPresentation
-        │
-        │ explicit ratification
-        ▼
-O:I Projection revision
-        │
-        └── local/public personal world — the meaningful profile
+├── Control/user/**
+├── Control/agents/
+│   ├── governance/**
+│   └── wiki/wiki.json
+├── Control/machines/**
+└── Work/
+    └── <project>/ProjectCentral/
+        ├── user/**
+        ├── agents/governance/**
+        ├── agents/wiki/wiki.json
+        ├── relations/source-relations.json   # optional
+        └── project.json
+             │
+             │ selected provenance-aware reading
+             ▼
+        O:I WorldPresentation
+             │
+             │ explicit ratification
+             ▼
+        O:I Projection revision
+             │
+             └── local/public personal world — the meaningful profile
 ```
 
-The Projection is a selected reading of Central. Central remains the canonical owner of the authored source.
+The Projection is a selected reading of Central. Central remains the canonical owner of Central source and accepted ProjectCentral source relations.
 
 ## 2. No profile shadow
 
@@ -49,23 +56,26 @@ This integration does not change the Central root law.
 
 ```text
 Control/user
-    authored personal ground
+    human-owned personal authorship ground
 
-Control/agents
-    authored ground for recurring human-Agent relation
+Control/agents/governance
+    human-authored recurring human-Agent relation
+
+Control/agents/wiki
+    Agent-maintained personal/root semantic knowledge
 
 Control/machines
     authored machine and environment ground
 
 Work
-    ordinary Projects and working material
+    ordinary Projects, each optionally carrying ProjectCentral
 ```
 
-The content protocol still defines no fixed schema beneath these roots.
+The content protocol still defines no fixed schema beneath the authored roots.
+
+ProjectCentral recursively preserves the same human-source ↔ Agent-Wiki distinction inside an ordinary Work Project. It does not make `Work/` a proprietary project format.
 
 Rich account documents are optional authored or generated surfaces. They can help a person understand or present their world. They do not become required root schemas.
-
-For example, `Control/user` can contain a sustained personal account, or only a few natural prose files. `Control/machines` can contain a visual environment account, or ordinary declarations. Both are valid.
 
 ## 4. Selection is narrower than readability
 
@@ -75,15 +85,16 @@ Keep these relations distinct:
 
 ```text
 source exists
+source is readable
 source can be indexed
 source can be retrieved
-source is relevant
-source is allowed in this context
+source is selected for a reading
+source is selected for local presentation
 source is selected for this Projection
 source is public
 ```
 
-A Projection must name the material actually selected. Selecting one file beneath `Control/user` does not project the root. Selecting one Project beneath `Work` does not project every Project or every source file inside it.
+A Projection must name the material actually selected. Selecting one file beneath `Control/user` does not project the root. Selecting one Project beneath `Work` does not project every Project, every ProjectCentral source relation, or every WikiNode inside it.
 
 The safest public representation is therefore omission by default: unselected material does not enter the Projection representation.
 
@@ -91,7 +102,7 @@ The safest public representation is therefore omission by default: unselected ma
 
 Central does not introduce an `Account` ontology.
 
-An account is a coherent authored or generated reading over native source material. Several accounts can exist over the same Central world.
+An account is a coherent authored or generated reading over native source material. Several accounts can exist over the same Central world or Project.
 
 Examples include:
 
@@ -99,11 +110,12 @@ Examples include:
 - a private personal account;
 - an Agent-collaboration account;
 - a machine/environment account;
-- a current-work account.
+- a current-work account;
+- a deep Project account relating authored purpose to implementation/evidence.
 
 Each account keeps source provenance. None silently replaces its sources.
 
-This follows the existing Control content rule that generated projections, summaries, indexes, and target-specific representations remain subordinate to authored source.
+For ProjectCentral, `projectcentral.ground.inspect` supplies exact recognised human-source refs/standing, other source relations, and Agent Wiki source/WikiSpace identity as an account handoff. AIKit owns the reusable account-authoring procedure. HTML remains a renderer.
 
 ## 6. Work remains ordinary Projects
 
@@ -113,30 +125,33 @@ A Project can be a lightly documented directory, an imported repository, a matur
 
 Central must not require a special Project document format as the price of Projection.
 
-Rich Project account work develops with the Project when it is useful:
+Where ProjectCentral exists, the current reading can be formed from heterogeneous native source without moving it into one folder:
 
 ```text
-Work/<project>
-    ├── raw intent / positions
-    ├── vision
-    ├── design
-    ├── diagrams
-    ├── architecture
+Work/<project>/
+    ├── ProjectCentral/user/**
+    │      recognised human-authored/adopted ground
+    ├── ProjectCentral/relations/source-relations.json
+    │      accepted relations to native Project sources
+    ├── ProjectCentral/agents/wiki/wiki.json
+    │      Agent-maintained semantic knowledge
+    ├── native vision / design / architecture
     ├── source / code
-    ├── Wiki / knowledge
-    ├── Runs / decisions / evidence
+    ├── Runs / decisions / evidence (native owners referenced)
     └── current reality
          │
          ▼
-    authored reading
+    provenance-aware reading
          │
          ▼
-    O:I Projection
+    WorldPresentation / O:I Projection
 ```
 
-The Project's native source remains its authority.
+A native source may remain in place and still be explicitly related as human-authored Project ground. Discovery alone does not infer that authorship.
 
-## 7. Public refinement does not mutate Control
+The Project's native source and authority relations remain canonical at their own scopes.
+
+## 7. Public refinement does not mutate Central
 
 A human can edit the projected presentation of their world. That operation changes the Projection representation, not Central source.
 
@@ -152,7 +167,7 @@ Projection P2
 
 O:I owns this Projection revision relation.
 
-Central must not treat a browser draft, local presentation state, or public refinement as an accepted source mutation.
+Central must not treat a browser draft, local presentation state, standalone HTML account, or public refinement as an accepted source mutation.
 
 ## 8. Return from Projection to Central
 
@@ -167,7 +182,7 @@ proposed Central change
         ├── target source
         ├── proposed content
         ├── reason
-        ├── supporting context
+        ├── supporting context / provenance
         └── final diff
         ↓
 human review
@@ -179,18 +194,28 @@ This is the existing durable-change proposal law in `CONTROL-CONTENT-PROTOCOL.md
 
 The return is explicit because Projection authority and Central authorship are different things.
 
+Where the target is ProjectCentral, return also preserves the distinction:
+
+```text
+return to Agent-maintained Wiki knowledge
+        ≠
+proposal to human-authored / human-adopted Project source
+```
+
 ## 9. Skill ownership
 
-Central owns the source being worked upon and the accepted return mutation.
+Central owns the source being worked upon and the accepted return mutation/source relation.
 
 Reusable authoring procedure belongs in AIKit Skills rather than being copied into Control:
 
 ```text
 Central
-    authored personal source
+    authored personal / Project source
+    ProjectCentral source relations
 
 AIKit
     product-understanding
+    Knowledge Navigation / Agent Wiki maintenance
     structured-account-authoring
     projection-authoring
     html-account
@@ -199,13 +224,13 @@ O:I
     Projection / WorldPresentation / Explore
 ```
 
-A Skill being available does not grant read authority to all Control material. Source treatment, relevance, context eligibility, and explicit Projection selection still apply.
+A Skill being available does not grant read authority to all Central material. Source treatment, relevance, context eligibility and explicit Projection selection still apply.
 
 ## 10. Local and public are readings of one world
 
 The local O:I application can show more of Central than public Explore because it can operate under different source treatment and audience boundaries.
 
-Local Central can include private authored material, machine state, current Projects, local Agents, proposals, and current operations.
+Local Central can include private authored material, machine state, current Projects, local Agents, proposals, Agent Wiki knowledge, source-return pressure and current operations.
 
 A public Central Projection contains only explicitly projected material.
 
@@ -219,12 +244,16 @@ Humans can encounter it through Explore, O:I desktop, or a standalone HTML accou
 
 Agents should receive the structured WorldPresentation/Projection reading with source refs and provenance. They should not need to scrape HTML.
 
+For Project readings, recognised human source, Agent Wiki knowledge, design/architecture, implementation/evidence, current development state and inference remain distinguishable rather than being flattened into one generated narrative authority.
+
 ## 12. Boundary summary
 
-The integration preserves five ownership laws:
+The integration preserves seven ownership laws:
 
 1. Central remains the person's durable local authored world.
-2. A projected personal world is the meaningful profile; no shadow profile database is required.
-3. Public selection never implies that an entire Central root is public.
-4. Public presentation refinement changes Projection, not Control.
-5. A refinement returns to durable Central source only through an explicit accepted proposal.
+2. ProjectCentral recursively preserves human-owned authored ground and Agent-maintained Wiki knowledge without making them the same authority.
+3. A projected personal world is the meaningful profile; no shadow profile database is required.
+4. Local/source readability never implies Projection or public selection.
+5. Public presentation refinement changes Projection, not Central.
+6. A refinement returns to durable Central human source only through direct human authorship or an explicit accepted proposal.
+7. A return to Agent Wiki knowledge is a different operation from human-source revision.
