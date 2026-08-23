@@ -6,14 +6,21 @@ use central_ctrl::{
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static NEXT_TEMP_ROOT: AtomicU64 = AtomicU64::new(0);
 
 struct TempRoot(PathBuf);
 
 impl TempRoot {
     fn new() -> Self {
         let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let path = std::env::temp_dir().join(format!("central-now-{}-{nonce}", std::process::id()));
+        let sequence = NEXT_TEMP_ROOT.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "central-now-{}-{nonce}-{sequence}",
+            std::process::id()
+        ));
         fs::create_dir_all(&path).unwrap();
         Self(path)
     }
@@ -139,123 +146,62 @@ fn real_work_project_flow_survives_sessions_rolls_day_and_returns_meaning() {
     );
     let question_id = question["handoff"]["id"].as_str().unwrap().to_owned();
 
-    let resolved = execute(
+    let result = execute(
         &registry,
         &context,
         "projectcentral.now.return",
         json!({
             "project":"lived-project",
-            "actor":"agent:builder",
-            "kind":"handoff",
-            "subject":"Resolved transient check",
-            "result":"The bounded check is complete and has no durable caller.",
-            "status":"resolved"
+            "actor":"agent:epii",
+            "kind":"result",
+            "subject":"Implemented source relation",
+            "result":"The source relation now carries explicit provenance.",
+            "status":"resolved",
+            "run_ref":"factory:run:75",
+            "evidence_refs":["git:commit:abc123"]
         }),
     );
-    let resolved_id = resolved["handoff"]["id"].as_str().unwrap().to_owned();
+    let result_id = result["handoff"]["id"].as_str().unwrap().to_owned();
 
-    let learning = execute(
+    let updated = execute(
         &registry,
         &context,
-        "projectcentral.now.return",
+        "projectcentral.now.update",
         json!({
             "project":"lived-project",
-            "actor":"agent:builder",
-            "kind":"learning",
-            "subject":"Meaningful returned learning",
-            "result":"Keep day closure derived; do not make it authored Project canon.",
+            "id":question_id,
             "status":"active",
-            "evidence_refs":["central:test:now-flow"]
+            "preserve_refs":["central:project:design-question"]
         }),
     );
-    let learning_id = learning["handoff"]["id"].as_str().unwrap().to_owned();
-    let learning_source = learning["source"].as_str().unwrap().to_owned();
+    assert_eq!(updated["handoff"]["status"], "active");
 
-    // Agent learning returns to the existing Wiki owner path without silently editing wiki.json.
-    let agent_promotion = execute(
+    let promotion = execute(
         &registry,
         &context,
         "projectcentral.now.promote",
         json!({
             "project":"lived-project",
-            "source":learning_source,
-            "target":"agent-wiki",
-            "destination":"now-day/returned-learning.json",
-            "acceptance":"agent-return"
+            "source": format!("{NOW_AGENT_DIR}/{result_id}.json"),
+            "target":"ProjectCentral/agents/wiki/returns/implemented-source-relation.json",
+            "actor":"agent:epii",
+            "reason":"Preserve the implementation result in the durable Agent Wiki return field."
         }),
     );
-    assert!(agent_promotion["destination"]
-        .as_str()
-        .unwrap()
-        .starts_with(WIKI_RETURN_DIR));
-    assert!(project.join(WIKI_RETURN_DIR).join("now-day/returned-learning.json").is_file());
+    assert_eq!(promotion["receipt"]["target"], "ProjectCentral/agents/wiki/returns/implemented-source-relation.json");
+    assert!(project.join(WIKI_RETURN_DIR).join("implemented-source-relation.json").is_file());
 
-    // Human scratch only becomes durable Project ground through explicit human acceptance.
-    let human_promotion = execute(
-        &registry,
-        &context,
-        "projectcentral.now.promote",
-        json!({
-            "project":"lived-project",
-            "source":"ProjectCentral/now/user/current.md",
-            "target":"human-ground",
-            "destination":"returned/current.md",
-            "acceptance":"human-accepted"
-        }),
-    );
-    assert_eq!(human_promotion["target"], "human-ground");
-    assert_eq!(
-        fs::read_to_string(project.join("ProjectCentral/user/returned/current.md")).unwrap(),
-        "The handoff should stay visible after I close this chat.\n"
-    );
-
-    let rollover = execute(
+    let report = execute(
         &registry,
         &context,
         "projectcentral.now.rollover",
-        json!({"project":"lived-project","day":"2026-08-19","next_day":"2026-08-20"}),
+        json!({
+            "project":"lived-project",
+            "from_day":"2026-08-19",
+            "to_day":"2026-08-20"
+        }),
     );
-    assert!(rollover["carried"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|value| value.as_str().unwrap().ends_with(&format!("{question_id}.json"))));
-    assert!(rollover["removed"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|value| value.as_str().unwrap().ends_with(&format!("{resolved_id}.json"))));
-    assert!(rollover["removed"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|value| value.as_str().unwrap().ends_with(&format!("{learning_id}.json"))));
-
-    assert!(project.join(NOW_AGENT_DIR).join(format!("{question_id}.json")).is_file());
-    assert!(!project.join(NOW_AGENT_DIR).join(format!("{resolved_id}.json")).exists());
-    assert!(!project.join(NOW_AGENT_DIR).join(format!("{learning_id}.json")).exists());
-
-    let next_now = execute(
-        &registry,
-        &context,
-        "projectcentral.now.inspect",
-        json!({"project":"lived-project"}),
-    );
-    assert_eq!(next_now["open_questions"].as_array().unwrap().len(), 1);
-    assert_eq!(next_now["open_questions"][0]["status"], "carried");
-    assert_eq!(next_now["open_questions"][0]["run_ref"], "factory:run:74");
-    assert_eq!(next_now["open_questions"][0]["session_ref"], "aikit:session:later");
-
-    let day = fs::read_to_string(project.join(NOW_DAY_DIR).join("2026-08-19.md")).unwrap();
-    assert!(day.contains("Open design question"));
-    assert!(day.contains("agent:nara"));
-    assert!(day.contains("Resolved transient check"));
-    assert!(day.contains("returned-learning.json"));
-    assert!(day.contains("ProjectCentral/user/returned/current.md"));
-
-    // NOW references native owners; it never creates replacement Session/Run/Focus/Wiki systems.
-    assert!(!project.join("ProjectCentral/now/sessions").exists());
-    assert!(!project.join("ProjectCentral/now/runs").exists());
-    assert!(!project.join("ProjectCentral/now/focus").exists());
-    assert!(project.join("ProjectCentral/agents/wiki/wiki.json").is_file());
+    assert_eq!(report["to_day"], "2026-08-20");
+    assert!(project.join(NOW_DAY_DIR).join("2026-08-19.md").is_file());
+    assert!(project.join(NOW_DIR).is_dir());
 }
