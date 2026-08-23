@@ -1,14 +1,16 @@
+mod notification;
+
 use central_connector_sdk::{
     CapabilityProbe, Connector, ConnectorContext, ConnectorManifest, ConnectorPortDeclaration,
     MachineInspectionInput, MachineInspectionOutput, MachineInspector, NativeOpen, NativeOpenInput,
-    NativeOpenOutput, NativeReveal, NativeRevealInput, NativeRevealOutput, PortContract, PortError,
-    PortErrorCode, TagReadInput, TagReadOutput, TagReplaceInput, TagReplaceOutput, TagStore,
-    CONNECTOR_API_VERSION, MACHINE_INSPECTOR_PORT, NATIVE_OPEN_PORT, NATIVE_REVEAL_PORT,
-    TAG_STORE_PORT,
+    NativeOpenOutput, NativeReveal, NativeRevealInput, NativeRevealOutput, ObservedConfiguration,
+    ObservedPackage, PortContract, PortError, PortErrorCode, TagReadInput, TagReadOutput,
+    TagReplaceInput, TagReplaceOutput, TagStore, CONNECTOR_API_VERSION, MACHINE_INSPECTOR_PORT,
+    NATIVE_OPEN_PORT, NATIVE_REVEAL_PORT, TAG_STORE_PORT, USER_NOTIFICATION_PORT,
 };
 use std::collections::BTreeSet;
 use std::io::Cursor;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const CONNECTOR_ID: &str = "personal.macos-native";
@@ -16,21 +18,34 @@ const FINDER_TAGS_XATTR: &str = "com.apple.metadata:_kMDItemUserTags";
 
 pub struct MacOsNativeConnector {
     manifest: ConnectorManifest,
+    brew_executable: PathBuf,
+    home: PathBuf,
 }
 
 impl MacOsNativeConnector {
     pub fn new() -> Self {
+        let brew_executable = std::env::var_os("CENTRAL_BREW_EXECUTABLE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("brew"));
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/"));
+        Self::with_host_tools(brew_executable, home)
+    }
+
+    pub fn with_host_tools(brew_executable: PathBuf, home: PathBuf) -> Self {
         Self {
             manifest: ConnectorManifest {
                 api_version: CONNECTOR_API_VERSION.to_owned(),
                 id: CONNECTOR_ID.to_owned(),
-                version: "0.1.0".to_owned(),
+                version: "0.2.0".to_owned(),
                 display_name: "macOS native host integration".to_owned(),
                 ports: [
                     NATIVE_OPEN_PORT,
                     NATIVE_REVEAL_PORT,
                     TAG_STORE_PORT,
                     MACHINE_INSPECTOR_PORT,
+                    USER_NOTIFICATION_PORT,
                 ]
                 .iter()
                 .map(|port| ConnectorPortDeclaration {
@@ -41,10 +56,14 @@ impl MacOsNativeConnector {
                 platforms: vec!["macos".to_owned()],
                 entrypoint: "rust:central-macos-connectors::MacOsNativeConnector".to_owned(),
                 runtime_requirements: vec!["macOS".to_owned()],
-                dependency_probes: vec!["/usr/bin/open".to_owned()],
-                configuration_requirements: Vec::new(),
+                dependency_probes: vec!["/usr/bin/open".to_owned(), "/usr/bin/osascript".to_owned()],
+                configuration_requirements: vec![
+                    "macOS Notification settings govern notification presentation".to_owned(),
+                ],
                 mutation_scope: "externally-mutating".to_owned(),
             },
+            brew_executable,
+            home,
         }
     }
 
@@ -117,6 +136,23 @@ impl MacOsNativeConnector {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_owned)
+    }
+
+    fn package_present(&self, id: &str) -> bool {
+        Command::new(&self.brew_executable)
+            .args(["list", "--formula", "--versions", id])
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+
+    fn configuration_target(&self, id: &str) -> PathBuf {
+        let target = PathBuf::from(id);
+        if target.is_absolute() {
+            target
+        } else {
+            self.home.join(target)
+        }
     }
 }
 
@@ -196,7 +232,27 @@ impl TagStore for MacOsNativeConnector {
 }
 
 impl MachineInspector for MacOsNativeConnector {
-    fn inspect(&self, _input: &MachineInspectionInput) -> Result<MachineInspectionOutput, PortError> {
+    fn inspect(&self, input: &MachineInspectionInput) -> Result<MachineInspectionOutput, PortError> {
+        let mut packages = input
+            .package_ids
+            .iter()
+            .map(|id| ObservedPackage {
+                id: id.clone(),
+                present: self.package_present(id),
+            })
+            .collect::<Vec<_>>();
+        packages.sort_by(|left, right| left.id.cmp(&right.id));
+
+        let mut configurations = input
+            .configuration_ids
+            .iter()
+            .map(|id| ObservedConfiguration {
+                id: id.clone(),
+                present: self.configuration_target(id).exists(),
+            })
+            .collect::<Vec<_>>();
+        configurations.sort_by(|left, right| left.id.cmp(&right.id));
+
         Ok(MachineInspectionOutput {
             platform: std::env::consts::OS.to_owned(),
             architecture: std::env::consts::ARCH.to_owned(),
@@ -205,9 +261,10 @@ impl MachineInspector for MacOsNativeConnector {
                 NATIVE_OPEN_PORT.id.to_owned(),
                 NATIVE_REVEAL_PORT.id.to_owned(),
                 TAG_STORE_PORT.id.to_owned(),
+                USER_NOTIFICATION_PORT.id.to_owned(),
             ],
-            packages: Vec::new(),
-            configurations: Vec::new(),
+            packages,
+            configurations,
             services: Vec::new(),
         })
     }
@@ -239,6 +296,9 @@ impl Connector for MacOsNativeConnector {
         if matches!(port.id, "NativeOpen" | "NativeReveal") && !Path::new("/usr/bin/open").is_file() {
             return CapabilityProbe::unavailable("Required dependency is missing: /usr/bin/open");
         }
+        if port.id == USER_NOTIFICATION_PORT.id && !Path::new("/usr/bin/osascript").is_file() {
+            return CapabilityProbe::unavailable("Required dependency is missing: /usr/bin/osascript");
+        }
         CapabilityProbe::available()
     }
 
@@ -255,6 +315,10 @@ impl Connector for MacOsNativeConnector {
     }
 
     fn machine_inspector(&self) -> Option<&dyn MachineInspector> {
+        Some(self)
+    }
+
+    fn user_notification(&self) -> Option<&dyn central_connector_sdk::UserNotification> {
         Some(self)
     }
 }
