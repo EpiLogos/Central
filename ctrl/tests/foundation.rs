@@ -254,13 +254,16 @@ fn action_list_has_human_and_structured_cli_renderings() {
     assert!(human.output.contains("projectcentral.now.update\tUpdate NOW lifecycle"));
     assert!(human.output.contains("projectcentral.now.promote\tPromote NOW material"));
     assert!(human.output.contains("projectcentral.now.rollover\tClose DAY and roll NOW"));
+    assert!(human.output.contains("projectcentral.flow.create\tCreate Project Flow"));
+    assert!(human.output.contains("projectcentral.flow.write\tWrite Project Flow revision"));
+    assert!(human.output.contains("projectcentral.flow.history\tRead Project Flow history"));
 
     let structured = central_ctrl::run_cli(&["--json".to_owned(), "action.list".to_owned()], &environment);
     assert_eq!(structured.exit_code, 0);
     let value: serde_json::Value = serde_json::from_str(&structured.output).unwrap();
     assert_eq!(value["status"], "success");
     let actions = value["data"]["actions"].as_array().unwrap();
-    assert_eq!(actions.len(), 37);
+    assert_eq!(actions.len(), 45);
     let ids = actions.iter().filter_map(|action| action["id"].as_str()).collect::<Vec<_>>();
     for id in [
         "projectcentral.inspect",
@@ -282,6 +285,14 @@ fn action_list_has_human_and_structured_cli_renderings() {
         "projectcentral.now.update",
         "projectcentral.now.promote",
         "projectcentral.now.rollover",
+        "projectcentral.flow.list",
+        "projectcentral.flow.read",
+        "projectcentral.flow.create",
+        "projectcentral.flow.adopt",
+        "projectcentral.flow.write",
+        "projectcentral.flow.rename",
+        "projectcentral.flow.lifecycle",
+        "projectcentral.flow.history",
         "machine.account",
     ] {
         assert!(ids.contains(&id), "missing Action {id}");

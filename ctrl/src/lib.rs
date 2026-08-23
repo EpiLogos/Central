@@ -10,6 +10,7 @@ pub mod picker;
 pub mod projectcentral;
 pub mod projectcentral_ground;
 pub mod projectcentral_now;
+pub mod projectcentral_flow;
 pub mod source_horizon;
 #[path = "projectcentral_ops.rs"]
 mod projectcentral_ops_base;
@@ -25,6 +26,7 @@ pub mod projectcentral_ops {
         super::projectcentral_ops_base::register_projectcentral_actions(registry);
         super::projectcentral_ground::register_projectcentral_ground_actions(registry);
         super::projectcentral_now::register_projectcentral_now_actions(registry);
+        super::projectcentral_flow::register_projectcentral_flow_actions(registry);
         super::source_horizon::register_source_horizon_actions(registry);
     }
 }
@@ -133,6 +135,12 @@ pub use projectcentral_ground::{
     GroundSkippedSource, GroundSourceRecord, GroundSourceRelation, GroundStatus,
     SourceProvenance, SourceStanding, SourceTreatment, GROUND_RELATIONS_DIR,
     GROUND_RELATIONS_SCHEMA, GROUND_RELATIONS_SOURCE,
+};
+pub use projectcentral_flow::{
+    adopt_flow, create_flow, list_flows, read_flow, registered_flow_records, rename_flow,
+    set_flow_lifecycle, snapshot_flows_for_day, write_flow, FlowDaySnapshot, FlowList,
+    FlowReading, FlowRecord, FlowRevisionReceipt, DEFAULT_FLOW_DIR, FLOW_DAY_SCHEMA,
+    FLOW_HISTORY_DIR, FLOW_REGISTRY, FLOW_REGISTRY_SCHEMA,
 };
 pub use projectcentral_now::{
     initialize_now, inspect_now, promote as promote_now, rollover as rollover_now, NowHandoff,
