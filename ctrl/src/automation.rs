@@ -90,7 +90,7 @@ fn run_automation(
     }
 }
 
-pub(crate) fn register_automation_actions(registry: &mut ActionRegistry) {
+pub fn register_automation_actions(registry: &mut ActionRegistry) {
     registry
         .register(
             ActionDescriptor {
