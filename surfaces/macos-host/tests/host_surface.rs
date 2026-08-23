@@ -54,13 +54,24 @@ mod unix_tests {
     }
 
     #[test]
-    fn macos_action_registry_extends_but_does_not_mutate_core_identity() {
+    fn macos_action_registry_extends_current_projectcentral_without_mutating_core_identity() {
         let core = create_core_action_registry();
-        assert_eq!(core.list().len(), 15);
+        assert_eq!(core.list().len(), 18);
         assert!(core.get("automation.run").is_none());
+        let core_ids = core
+            .list()
+            .into_iter()
+            .map(|action| action.id)
+            .collect::<Vec<_>>();
 
         let macos = create_macos_action_registry();
-        assert_eq!(macos.list().len(), 16);
+        assert_eq!(macos.list().len(), 38);
+        for id in core_ids {
+            assert!(macos.get(&id).is_some(), "macOS host lost core Action {id}");
+        }
+        assert!(macos.get("projectcentral.ground.inspect").is_some());
+        assert!(macos.get("projectcentral.now.inspect").is_some());
+        assert!(macos.get("projectcentral.change.horizon").is_some());
         let automation = macos.get("automation.run").unwrap();
         assert_eq!(automation.required_ports, vec!["Automation"]);
         assert_eq!(automation.mutation_class.as_str(), "externally-mutating");
