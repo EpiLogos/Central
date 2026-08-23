@@ -5,7 +5,22 @@ pub mod machine;
 pub mod machine_account;
 pub mod picker;
 pub mod projectcentral;
-pub mod projectcentral_ops;
+pub mod projectcentral_now;
+#[path = "projectcentral_ops.rs"]
+mod projectcentral_ops_base;
+pub mod projectcentral_ops {
+    pub use super::projectcentral_ops_base::{
+        adopt_in_place, doctor_projectcentral, ensure_root_federation, initialize_projectcentral,
+        inspect_projectcentral, migrate_selected, preview_adopt, preview_migrate, DoctorCheck,
+        MutationPlan, ProjectCentralDoctor, ProjectCentralInspection, ProjectCentralMutation,
+        ProjectCentralOutcome, SourceSignal, WikiCandidate, PROJECT_PROVENANCE, ROOT_WIKI_REF,
+    };
+
+    pub fn register_projectcentral_actions(registry: &mut crate::action::ActionRegistry) {
+        super::projectcentral_ops_base::register_projectcentral_actions(registry);
+        super::projectcentral_now::register_projectcentral_now_actions(registry);
+    }
+}
 pub mod recovery;
 pub mod result;
 pub mod root;
@@ -92,6 +107,12 @@ pub use projectcentral::{
     PROJECTCENTRAL_DIR, PROJECT_MANIFEST, PROJECT_SCHEMA, ROOT_AGENT_DIR,
     ROOT_AGENT_GOVERNANCE_DIR, ROOT_HUMAN_SOURCE_DIR, ROOT_WIKI_DIR, ROOT_WIKI_SOURCE,
     WIKI_DIR, WIKI_PROFILE, WIKI_SOURCE,
+};
+pub use projectcentral_now::{
+    initialize_now, inspect_now, promote as promote_now, rollover as rollover_now, NowHandoff,
+    NowInspection, NowPaths, NowPolicy, NowPromotion, PromotionReceipt, RolloverReport,
+    NOW_AGENT_DIR, NOW_DAY_DIR, NOW_DIR, NOW_POLICY, NOW_PROMOTIONS, NOW_USER_DIR,
+    WIKI_RETURN_DIR,
 };
 pub use projectcentral_ops::{
     adopt_in_place, doctor_projectcentral, ensure_root_federation, initialize_projectcentral,
