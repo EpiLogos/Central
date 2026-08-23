@@ -6,6 +6,7 @@ pub mod machine_account;
 pub mod picker;
 pub mod projectcentral;
 pub mod projectcentral_now;
+pub mod source_horizon;
 #[path = "projectcentral_ops.rs"]
 mod projectcentral_ops_base;
 pub mod projectcentral_ops {
@@ -19,6 +20,7 @@ pub mod projectcentral_ops {
     pub fn register_projectcentral_actions(registry: &mut crate::action::ActionRegistry) {
         super::projectcentral_ops_base::register_projectcentral_actions(registry);
         super::projectcentral_now::register_projectcentral_now_actions(registry);
+        super::source_horizon::register_source_horizon_actions(registry);
     }
 }
 pub mod recovery;
@@ -125,6 +127,14 @@ pub use recovery::{
     RecoveryDeclarationSource, RecoveryPlan, RecoverySynchronizationPlan,
     RecoverySynchronizationStatus, SynchronizationDeclaration, RECOVERY_DECLARATION_SCHEMA,
     RECOVERY_DECLARATION_VERSION,
+};
+pub use source_horizon::{
+    acknowledge_project_cursor, compact_project_changes, control_source_bindings,
+    project_source_bindings, read_project_change_horizon, reconcile_control_sources,
+    reconcile_project_sources, CompactionReport, ObservedSource, ReconcileReport, SourceBinding,
+    SourceChange, SourceChangeKind, SourceHorizon, SourceRevision, CONTROL_HORIZON_STATE,
+    GROUND_RELATIONS_SCHEMA, GROUND_RELATIONS_SOURCE, PROJECT_HORIZON_STATE,
+    SOURCE_CHANGE_SCHEMA, SOURCE_HORIZON_PROVIDER, SOURCE_HORIZON_SCHEMA,
 };
 pub use central_connector_sdk::{
     run_configuration_manager_conformance, run_machine_inspector_conformance,
