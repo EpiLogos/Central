@@ -2,6 +2,7 @@ pub mod action;
 pub mod cli;
 pub mod control;
 pub mod machine;
+pub mod machine_account;
 pub mod picker;
 pub mod projectcentral;
 pub mod projectcentral_ops;
@@ -76,6 +77,10 @@ pub use machine::{
     MachinePlanStatus, MachinePlanSummary, MachineRequirements, MachineSourceReference,
     MachineVerification, ObservedMachine, PackageRequirement, PresenceState, ServiceRequirement,
     MACHINE_DECLARATION_SCHEMA, MACHINE_DECLARATION_VERSION,
+};
+pub use machine_account::{
+    explain_account, AuthoredRoleSummary, DriftStatus, MachineAccount, MachineDriftEntry,
+    MachineIdentity, MachineObservationRecord,
 };
 pub use picker::{
     run_guided_action_picker, search_action_descriptors, NullTerminalSurface, StdioTerminalSurface,

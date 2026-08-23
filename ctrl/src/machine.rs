@@ -1399,6 +1399,8 @@ pub(crate) fn register_machine_actions(registry: &mut ActionRegistry) {
         apply_action,
     ).expect("machine Action id is valid");
 
+    crate::machine_account::register_account_action(registry);
+
     registry.register(
         ActionDescriptor {
             id: "machine.verify".to_owned(),

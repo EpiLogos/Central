@@ -15,6 +15,29 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --workspace
 
+  core-without-macos:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p central-connector-sdk -p central-reference-connectors -p central-connector-template -p central-git-sync-connector -p ctrl
+      - name: Prove core has no macOS extension dependency
+        run: |
+          cargo tree -p ctrl > /tmp/ctrl-tree.txt
+          if grep -q 'central-macos-connectors' /tmp/ctrl-tree.txt; then
+            echo 'ctrl unexpectedly depends on the optional macOS extension package' >&2
+            exit 1
+          fi
+
+  macos-native:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --workspace
+      - name: Explicit macOS extension acceptance
+        run: cargo test -p central-macos-connectors
+
   source-install:
     runs-on: ubuntu-latest
     steps:

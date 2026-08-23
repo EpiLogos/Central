@@ -2,6 +2,7 @@
 members = [
     "crates/connector-sdk",
     "connectors/git-sync",
+    "connectors/macos",
     "connectors/reference",
     "connectors/template",
     "ctrl",
