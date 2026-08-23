@@ -3,6 +3,7 @@ use crate::action::{
     ActionOutputDefinition, ActionRegistry, MutationClass,
 };
 use crate::control::AGENT_RETRIEVAL_DENY_MARKER;
+use crate::projectcentral_flow::registered_flow_records;
 use crate::projectcentral::{
     read_project_manifest, AGENT_GOVERNANCE_DIR, ROOT_AGENT_GOVERNANCE_DIR,
     ROOT_HUMAN_SOURCE_DIR, ROOT_WIKI_DIR, WIKI_DIR,
@@ -394,6 +395,29 @@ pub fn project_source_bindings(project_root: &Path) -> io::Result<Vec<SourceBind
                 agent_retrieval_allowed: retrieval_allowed(project_root, &path),
             });
         }
+    }
+
+    for flow in registered_flow_records(project_root)? {
+        validate_project_member(&flow.path)?;
+        let path = project_root.join(&flow.path);
+        if !safe_regular_file(project_root, &path)? {
+            continue;
+        }
+        // FlowRef is the continuity identity. SourceRef remains the current ordinary-file
+        // relation and may therefore change when the retained source is renamed.
+        bindings.retain(|_, binding| binding.path != flow.path);
+        bindings.insert(
+            flow.source_ref.clone(),
+            SourceBinding {
+                source_ref: flow.source_ref,
+                path: flow.path,
+                roles: vec!["flow-source".to_owned()],
+                provenance: "collaborative-revision-provenance".to_owned(),
+                standing: "working-source".to_owned(),
+                treatment: "projectcentral-flow-retained-in-place".to_owned(),
+                agent_retrieval_allowed: retrieval_allowed(project_root, &path),
+            },
+        );
     }
 
     Ok(bindings.into_values().collect())

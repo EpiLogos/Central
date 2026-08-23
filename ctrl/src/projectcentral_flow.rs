@@ -701,7 +701,7 @@ fn project_context(action: &str, input: &Value, context: &ActionExecutionContext
 fn io_failure(action: &str, error: io::Error) -> ActionResult {
     let status = match error.kind() {
         io::ErrorKind::InvalidInput | io::ErrorKind::NotFound => ResultStatus::InvalidInput,
-        io::ErrorKind::AlreadyExists => ResultStatus::Conflict,
+        io::ErrorKind::AlreadyExists => ResultStatus::InvalidInput,
         io::ErrorKind::InvalidData => ResultStatus::VerificationFailure,
         _ => ResultStatus::InternalFailure,
     };

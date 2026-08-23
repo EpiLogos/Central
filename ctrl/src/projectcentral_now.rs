@@ -3,6 +3,7 @@ use crate::action::{
     ActionOutputDefinition, ActionRegistry, MutationClass,
 };
 use crate::projectcentral::{read_project_manifest, HUMAN_SOURCE_DIR};
+use crate::projectcentral_flow::{snapshot_flows_for_day, FlowDaySnapshot};
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
 use serde::{Deserialize, Serialize};
@@ -147,6 +148,7 @@ pub struct RolloverReport {
     pub protected: Vec<String>,
     pub human_scratch: Vec<String>,
     pub promotions: Vec<PromotionReceipt>,
+    pub flows: Vec<FlowDaySnapshot>,
     pub cleanup_failures: Vec<String>,
 }
 
@@ -761,7 +763,7 @@ fn snapshot_day_sources(
     day: &str,
     human_scratch: &[String],
     handoffs: &[(String, NowHandoff)],
-) -> io::Result<PathBuf> {
+) -> io::Result<(PathBuf, Vec<FlowDaySnapshot>)> {
     let snapshot_root = day_root.join(format!("{day}.sources"));
     if snapshot_root.exists() {
         return Err(io::Error::new(
@@ -797,7 +799,14 @@ fn snapshot_day_sources(
         let _ = fs::remove_dir_all(&snapshot_root);
         return Err(error);
     }
-    Ok(snapshot_root)
+    let flows = match snapshot_flows_for_day(project_root, &snapshot_root, day) {
+        Ok(flows) => flows,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&snapshot_root);
+            return Err(error);
+        }
+    };
+    Ok((snapshot_root, flows))
 }
 
 fn indented(text: &str) -> String {
@@ -824,6 +833,7 @@ fn render_day(
     removed: &[String],
     protected: &[String],
     promotions: &[PromotionReceipt],
+    flows: &[FlowDaySnapshot],
 ) -> io::Result<String> {
     let mut output = format!(
         "# DAY — {day}\n\nDerived closure reading for the ProjectCentral NOW horizon. Human and Agent authorship remain attached to separately snapshotted source records; this aggregation is not Project canon.\n\n- next local civil day: `{next_day}`\n- DAY source snapshot: `{}`\n- NOW remains the moving working horizon after this boundary\n\n## Human current source at close\n\n",
@@ -903,6 +913,19 @@ fn render_day(
             output.push('\n');
         }
     }
+
+    output.push_str("## Flows present at close\n\n");
+    if flows.is_empty() {
+        output.push_str("- none\n");
+    } else {
+        for flow in flows {
+            output.push_str(&format!(
+                "- `{}` @ `{}` — source `{}`; DAY snapshot `{}`; lifecycle `{}`\n",
+                flow.flow_ref, flow.revision, flow.source_path, flow.snapshot_source, flow.lifecycle
+            ));
+        }
+    }
+    output.push_str("\nFlowRef remains the continuity identity across this DAY boundary; DAY records the exact revision present at close.\n\n");
 
     output.push_str("## Carry forward by stable NOW source ref\n\n");
     if carried.is_empty() {
@@ -1012,7 +1035,7 @@ pub fn rollover(project_root: &Path, day: &str, next_day: &str) -> io::Result<Ro
         ));
     }
 
-    let snapshot_root = snapshot_day_sources(
+    let (snapshot_root, flows) = snapshot_day_sources(
         project_root,
         &paths.day,
         day,
@@ -1030,6 +1053,7 @@ pub fn rollover(project_root: &Path, day: &str, next_day: &str) -> io::Result<Ro
         &removed,
         &protected,
         &promotions,
+        &flows,
     ) {
         Ok(text) => text,
         Err(error) => {
@@ -1074,6 +1098,7 @@ pub fn rollover(project_root: &Path, day: &str, next_day: &str) -> io::Result<Ro
         protected,
         human_scratch,
         promotions,
+        flows,
         cleanup_failures,
     })
 }
