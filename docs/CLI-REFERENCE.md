@@ -21,7 +21,7 @@ Root resolution is, in order:
 
 ## Canonical Actions
 
-The current core registry exposes:
+The current composed registry exposes 34 Actions:
 
 | Action | Purpose | Common CLI projection |
 |---|---|---|
@@ -43,13 +43,31 @@ The current core registry exposes:
 | `work.search` | search discovered Work by name | `work search <query>` |
 | `work.open` | open a Work item through `NativeOpen` | `work open <query>`, `open <query>` |
 | `work.reveal` | reveal a Work item through `NativeReveal` | `work reveal <query>` |
+| `projectcentral.inspect` | inspect ProjectCentral without mutating Project source | `action run projectcentral.inspect` |
+| `projectcentral.doctor` | verify ProjectCentral structure and bindings | `action run projectcentral.doctor` |
+| `projectcentral.init` | initialise ProjectCentral for an existing Project | `action run projectcentral.init` |
+| `projectcentral.adopt.preview` | preview Wiki adoption in place | `action run projectcentral.adopt.preview` |
+| `projectcentral.adopt` | adopt a selected Wiki without source migration | `action run projectcentral.adopt` |
+| `projectcentral.migrate.preview` | preview selected Wiki migration | `action run projectcentral.migrate.preview` |
+| `projectcentral.migrate` | migrate a selected Wiki explicitly | `action run projectcentral.migrate` |
+| `projectcentral.ground.inspect` | inspect authored Project ground and provenance standing | `action run projectcentral.ground.inspect` |
+| `projectcentral.ground.plan` | propose reviewable source-ground relations | `action run projectcentral.ground.plan` |
+| `projectcentral.ground.apply` | record an explicitly human-accepted source-ground relation | `action run projectcentral.ground.apply` |
+| `projectcentral.now.inspect` | inspect the opt-in Project NOW field | `action run projectcentral.now.inspect` |
+| `projectcentral.now.init` | initialise Project NOW / DAY state | `action run projectcentral.now.init` |
+| `projectcentral.now.return` | write a bounded Agent return into the Project Wiki relation | `action run projectcentral.now.return` |
+| `projectcentral.now.update` | update NOW lifecycle material | `action run projectcentral.now.update` |
+| `projectcentral.now.promote` | promote selected NOW material with lineage | `action run projectcentral.now.promote` |
+| `projectcentral.now.rollover` | close a DAY snapshot and roll NOW forward | `action run projectcentral.now.rollover` |
 
-Every row is also invokable through `action run`. Examples:
+Every row is invokable through `action run`. Examples:
 
 ```text
 ctrl --json action run action.list
 ctrl --json action run work.search '{"query":"Central"}'
 ctrl --json action run machine.plan '{"role":"home-server"}'
+ctrl --json action run projectcentral.ground.inspect '{"project":"Central"}'
+ctrl --json action run projectcentral.now.inspect '{"project":"Central"}'
 ctrl --json action run central.recover '{"role":"primary-workstation"}'
 ```
 

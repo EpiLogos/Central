@@ -29,6 +29,8 @@ resembles the product checkout (`mixed_root` in the structured health report).
 - [CENTRAL-VISION.md](CENTRAL-VISION.md) — why the authored root exists, the
   experience it preserves, and what Central is (and is not) inside the {O:I}
   field. **Start here if you are new.**
+- [CENTRAL-PUBLIC-HANDOFF.md](CENTRAL-PUBLIC-HANDOFF.md) — concise outward-facing
+  framing for O:I/site descriptions without replacing the canonical vision.
 
 ## Normative system / source law
 
@@ -40,6 +42,9 @@ resembles the product checkout (`mixed_root` in the structured health report).
 - [CONTROL-RETRIEVAL-TREATMENT.md](CONTROL-RETRIEVAL-TREATMENT.md) — the
   executable `.no-agent-retrieval` treatment that implements the protocol's
   disclosure boundary (supporting the Content Protocol).
+- [AGENT-GOVERNANCE-SOURCES.md](AGENT-GOVERNANCE-SOURCES.md) — layered
+  human-authored root/Project Agent-governance sources and their relation to
+  AIKit operational composition.
 
 ## Personal / projected world
 
@@ -81,6 +86,9 @@ resembles the product checkout (`mixed_root` in the structured health report).
 
 - [PROJECTCENTRAL-CONTRACT.md](PROJECTCENTRAL-CONTRACT.md) — the authored Project
   ground and ProjectCentral ↔ Central integration contract.
+- [PROJECTCENTRAL-AUTHORED-GROUND.md](PROJECTCENTRAL-AUTHORED-GROUND.md) —
+  conservative inspection and explicit accepted source/provenance/standing
+  relations for existing or ProjectCentral-local human Project source.
 - [PROJECTCENTRAL-NOW.md](PROJECTCENTRAL-NOW.md) — the opt-in NOW temporal field,
   DAY source snapshots/closure, bounded Agent returns, promotion lineage and
   rollover semantics over an already-valid ProjectCentral.
@@ -98,7 +106,9 @@ resembles the product checkout (`mixed_root` in the structured health report).
 | Implementing a Connector | `CONNECTOR-SDK-SPEC.md` → `CONNECTOR-SDK-RUST.md` → `CONNECTOR-SDK-RUST.md` conformance harnesses → `skills/connector-authoring` |
 | Operating `ctrl` | `CLI-REFERENCE.md` → `INSTALL.md` |
 | Establishing the current machine | `MACHINE-WORKCELL-RELATION.md` → `CLI-REFERENCE.md` |
+| Working with authored Project ground | `PROJECTCENTRAL-CONTRACT.md` → `PROJECTCENTRAL-AUTHORED-GROUND.md` → `CLI-REFERENCE.md` |
 | Working with Project NOW / DAY | `PROJECTCENTRAL-CONTRACT.md` → `PROJECTCENTRAL-NOW.md` → `CLI-REFERENCE.md` |
+| Working with Agent governance source | `AGENT-GOVERNANCE-SOURCES.md` → `CONTROL-CONTENT-PROTOCOL.md` → AIKit operational composition docs |
 | Recovering a machine | `RECOVERY-PROTOCOL.md` → `machine.declaration` Skill → `CONTROL-CONTENT-PROTOCOL.md` |
 | Accepting the product | `PRODUCT-ACCEPTANCE-MATRIX.md` → `CENTRAL-SYSTEM-SPEC.md` |
 

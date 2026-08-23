@@ -242,15 +242,15 @@ fn action_list_has_human_and_structured_cli_renderings() {
     assert!(human.output.contains("projectcentral.adopt\tAdopt Wiki in place"));
     assert!(human.output.contains("projectcentral.migrate.preview\tPreview Wiki migration"));
     assert!(human.output.contains("projectcentral.migrate\tMigrate selected Wiki"));
+    assert!(human.output.contains("projectcentral.ground.inspect\tInspect authored Project ground"));
+    assert!(human.output.contains("projectcentral.ground.plan\tPlan authored Project ground"));
+    assert!(human.output.contains("projectcentral.ground.apply\tApply accepted Project ground relation"));
     assert!(human.output.contains("projectcentral.now.inspect\tInspect Project NOW"));
     assert!(human.output.contains("projectcentral.now.init\tInitialize Project NOW"));
     assert!(human.output.contains("projectcentral.now.return\tWrite bounded Agent return"));
     assert!(human.output.contains("projectcentral.now.update\tUpdate NOW lifecycle"));
     assert!(human.output.contains("projectcentral.now.promote\tPromote NOW material"));
     assert!(human.output.contains("projectcentral.now.rollover\tClose DAY and roll NOW"));
-    assert!(human.output.contains("projectcentral.change.horizon\tRead current Source Change Horizon"));
-    assert!(human.output.contains("projectcentral.change.reconcile\tReconcile Project source revisions"));
-    assert!(human.output.contains("projectcentral.change.ack\tAcknowledge Source Change cursor"));
 
     let structured = central_ctrl::run_cli(&["--json".to_owned(), "action.list".to_owned()], &environment);
     assert_eq!(structured.exit_code, 0);
@@ -267,15 +267,15 @@ fn action_list_has_human_and_structured_cli_renderings() {
         "projectcentral.adopt",
         "projectcentral.migrate.preview",
         "projectcentral.migrate",
+        "projectcentral.ground.inspect",
+        "projectcentral.ground.plan",
+        "projectcentral.ground.apply",
         "projectcentral.now.inspect",
         "projectcentral.now.init",
         "projectcentral.now.return",
         "projectcentral.now.update",
         "projectcentral.now.promote",
         "projectcentral.now.rollover",
-        "projectcentral.change.horizon",
-        "projectcentral.change.reconcile",
-        "projectcentral.change.ack",
         "machine.account",
     ] {
         assert!(ids.contains(&id), "missing Action {id}");
