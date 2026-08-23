@@ -349,6 +349,25 @@ fn validate_lifecycle(value: &str) -> io::Result<()> {
     }
 }
 
+fn validate_flow_placement(project_root: &Path, path: &str) -> io::Result<()> {
+    let manifest = read_project_manifest(project_root)?;
+    let candidate = Path::new(path);
+    let reserved = [
+        manifest.human_source.as_str(),
+        "ProjectCentral/agents/governance",
+        "ProjectCentral/agents/wiki",
+        "ProjectCentral/now/user",
+        "ProjectCentral/now/agents",
+    ];
+    if reserved.iter().any(|root| candidate.starts_with(Path::new(root))) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Flow source placement would overlap an existing Central authority container; retain Flow in its own or a neutral provider/domain-local source container",
+        ));
+    }
+    Ok(())
+}
+
 fn default_path(local_stamp: Option<&str>) -> io::Result<String> {
     let filename = match local_stamp {
         Some(stamp) => {
@@ -422,6 +441,7 @@ pub fn create_flow(
         None => default_path(local_stamp)?,
     };
     ensure_unique_path(&registry, &path, None)?;
+    validate_flow_placement(project_root, &path)?;
     let source = safe_flow_path(project_root, &path, false)?;
     if source.exists() {
         return Err(io::Error::new(io::ErrorKind::AlreadyExists, "Flow source already exists; use adopt for retained source"));
@@ -460,6 +480,7 @@ pub fn adopt_flow(
     let mut registry = load_registry(project_root)?;
     let path = relative_member(raw_path)?.to_string_lossy().replace('\\', "/");
     ensure_unique_path(&registry, &path, None)?;
+    validate_flow_placement(project_root, &path)?;
     let source = safe_flow_path(project_root, &path, true)?;
     let bytes = fs::read(source)?;
     let flow_ref = format!("central:flow:project:{}:{}", registry.project_id, unique_nanos());
@@ -567,12 +588,15 @@ pub fn rename_flow(
         .iter()
         .position(|flow| flow.flow_ref == flow_ref)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "FlowRef is not registered in this Project"))?;
-    reconcile_record(project_root, &mut registry.flows[index])?;
+    if reconcile_record(project_root, &mut registry.flows[index])? {
+        write_registry(project_root, &registry)?;
+    }
     if registry.flows[index].current_revision != expected_revision {
         return Err(io::Error::new(io::ErrorKind::AlreadyExists, "Flow revision conflict before rename"));
     }
     let normalized = relative_member(new_path)?.to_string_lossy().replace('\\', "/");
     ensure_unique_path(&registry, &normalized, Some(flow_ref))?;
+    validate_flow_placement(project_root, &normalized)?;
     let destination = safe_flow_path(project_root, &normalized, false)?;
     if destination.exists() {
         return Err(io::Error::new(io::ErrorKind::AlreadyExists, "rename destination already exists"));
@@ -600,7 +624,9 @@ pub fn set_flow_lifecycle(
         .iter()
         .position(|flow| flow.flow_ref == flow_ref)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "FlowRef is not registered in this Project"))?;
-    reconcile_record(project_root, &mut registry.flows[index])?;
+    if reconcile_record(project_root, &mut registry.flows[index])? {
+        write_registry(project_root, &registry)?;
+    }
     if registry.flows[index].current_revision != expected_revision {
         return Err(io::Error::new(io::ErrorKind::AlreadyExists, "Flow revision conflict before lifecycle change"));
     }

@@ -92,6 +92,9 @@ resembles the product checkout (`mixed_root` in the structured health report).
 - [PROJECTCENTRAL-NOW.md](PROJECTCENTRAL-NOW.md) — the opt-in NOW temporal field,
   DAY source snapshots/closure, bounded Agent returns, promotion lineage and
   rollover semantics over an already-valid ProjectCentral.
+- [PROJECTCENTRAL-FLOW.md](PROJECTCENTRAL-FLOW.md) — stable Flow source identity,
+  revision-safe collaborative writes, retained-in-place source placement,
+  Source Change Horizon participation and exact DAY revision snapshots.
 
 ## Supporting product understanding
 
@@ -108,6 +111,7 @@ resembles the product checkout (`mixed_root` in the structured health report).
 | Establishing the current machine | `MACHINE-WORKCELL-RELATION.md` → `CLI-REFERENCE.md` |
 | Working with authored Project ground | `PROJECTCENTRAL-CONTRACT.md` → `PROJECTCENTRAL-AUTHORED-GROUND.md` → `CLI-REFERENCE.md` |
 | Working with Project NOW / DAY | `PROJECTCENTRAL-CONTRACT.md` → `PROJECTCENTRAL-NOW.md` → `CLI-REFERENCE.md` |
+| Working with a live Flow | `PROJECTCENTRAL-FLOW.md` → `PROJECTCENTRAL-NOW.md` → `CLI-REFERENCE.md` |
 | Working with Agent governance source | `AGENT-GOVERNANCE-SOURCES.md` → `CONTROL-CONTENT-PROTOCOL.md` → AIKit operational composition docs |
 | Recovering a machine | `RECOVERY-PROTOCOL.md` → `machine.declaration` Skill → `CONTROL-CONTENT-PROTOCOL.md` |
 | Accepting the product | `PRODUCT-ACCEPTANCE-MATRIX.md` → `CENTRAL-SYSTEM-SPEC.md` |

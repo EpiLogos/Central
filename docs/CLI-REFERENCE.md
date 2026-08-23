@@ -21,7 +21,7 @@ Root resolution is, in order:
 
 ## Canonical Actions
 
-The current composed registry exposes 37 Actions:
+The current composed registry exposes 45 Actions:
 
 | Action | Purpose | Common CLI projection |
 |---|---|---|
@@ -62,6 +62,14 @@ The current composed registry exposes 37 Actions:
 | `projectcentral.now.update` | update NOW lifecycle material | `action run projectcentral.now.update` |
 | `projectcentral.now.promote` | promote selected NOW material with lineage | `action run projectcentral.now.promote` |
 | `projectcentral.now.rollover` | close a DAY snapshot and roll NOW forward | `action run projectcentral.now.rollover` |
+| `projectcentral.flow.list` | list stable Flow identities and current source/revision state | `action run projectcentral.flow.list` |
+| `projectcentral.flow.read` | read current Flow source by FlowRef and reconcile external edits | `action run projectcentral.flow.read` |
+| `projectcentral.flow.create` | create a blank ordinary-file Flow with stable identity | `action run projectcentral.flow.create` |
+| `projectcentral.flow.adopt` | adopt an existing retained ordinary file as a Flow without moving it | `action run projectcentral.flow.adopt` |
+| `projectcentral.flow.write` | perform a revision-safe human/Agent Flow write | `action run projectcentral.flow.write` |
+| `projectcentral.flow.rename` | rename the retained source while preserving FlowRef | `action run projectcentral.flow.rename` |
+| `projectcentral.flow.lifecycle` | set active/dormant/closed lifecycle without changing source revision | `action run projectcentral.flow.lifecycle` |
+| `projectcentral.flow.history` | read exact Flow revision provenance/history | `action run projectcentral.flow.history` |
 
 Every row is invokable through `action run`. Examples:
 
@@ -72,6 +80,7 @@ ctrl --json action run machine.plan '{"role":"home-server"}'
 ctrl --json action run projectcentral.ground.inspect '{"project":"Central"}'
 ctrl --json action run projectcentral.change.horizon '{"project":"Central"}'
 ctrl --json action run projectcentral.now.inspect '{"project":"Central"}'
+ctrl --json action run projectcentral.flow.create '{"project":"Central","actor":"human:local","actor_kind":"human","local_stamp":"2026-08-23-2310"}'
 ctrl --json action run central.recover '{"role":"primary-workstation"}'
 ```
 

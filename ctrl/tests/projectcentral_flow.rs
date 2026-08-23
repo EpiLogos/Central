@@ -174,3 +174,20 @@ fn multiple_flows_have_independent_lifecycle_and_revision_history() {
     assert_eq!(read_flow(&project, &second.flow_ref).unwrap().flow.lifecycle, "active");
     assert_ne!(first.flow_ref, second.flow_ref);
 }
+
+
+#[test]
+fn flow_adoption_preserves_existing_central_authority_boundaries() {
+    let (_central, project) = temporary_project("authority-boundary");
+    let human_source = project.join("ProjectCentral/user/meaning.md");
+    fs::write(&human_source, "authored ground candidate\n").unwrap();
+    let attempt = adopt_flow(
+        &project,
+        "ProjectCentral/user/meaning.md",
+        None,
+        "human:test",
+        "human",
+        None,
+    );
+    assert!(attempt.is_err());
+}
