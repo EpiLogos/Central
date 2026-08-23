@@ -37,3 +37,5 @@ jobs:
           git rm .github/workflows/oi97-native-extension-compose.yml
           git commit -m 'build(oi97): normalize native extension workspace lockfile'
           git push origin HEAD:converge/oi97-native-extensions
+
+# Current-head rerun after docs-front-door composition.
