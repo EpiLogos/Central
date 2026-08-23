@@ -136,7 +136,7 @@ fn run(args: Args) -> Result<String, String> {
         let mut value = json!({
             "schema": MACHINE_DECLARATION_SCHEMA,
             "version": MACHINE_DECLARATION_VERSION,
-            "role": args.role,
+            "role": args.role.clone(),
             "capabilities": capabilities,
             "requirements": {
                 "packages": [],
@@ -146,7 +146,7 @@ fn run(args: Args) -> Result<String, String> {
             "bindings": [
                 {
                     "kind": "workcell",
-                    "reference": args.workcell_ref
+                    "reference": args.workcell_ref.clone()
                 }
             ]
         });
@@ -166,7 +166,7 @@ fn run(args: Args) -> Result<String, String> {
         "role": args.role,
         "workcell_ref": args.workcell_ref,
         "source": {
-            "path": relative_path,
+            "path": relative_path.clone(),
             "source_class": "authored"
         },
         "declaration": declaration,
