@@ -1,0 +1,13 @@
+[package]
+name = "central-ubuntu-host"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "ctrl-ubuntu"
+path = "src/main.rs"
+
+[dependencies]
+central-ctrl = { package = "ctrl", path = "../../ctrl" }
+central-ubuntu-connectors = { path = "../../connectors/ubuntu" }
