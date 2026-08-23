@@ -19,7 +19,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - name: Restore scoped machine-plan inspection and composed macOS expectation
+      - name: Restore the #40 authored-declaration inspection scope
         shell: bash
         run: |
           set -euo pipefail
@@ -42,14 +42,16 @@ jobs:
           s = s.replace(old, new, 1)
 
           old = '    match implementation.inspect(&MachineInspectionInput::default()) {'
-          new = '    match implementation.inspect(inspection) {'
           assert old in s, 'MachineInspector invocation anchor moved'
-          s = s.replace(old, new, 1)
+          s = s.replace(old, '    match implementation.inspect(inspection) {', 1)
 
           old = '    match inspect_current_machine(context, "machine.inspect") {'
-          new = '    match inspect_current_machine(context, "machine.inspect", &MachineInspectionInput::default()) {'
           assert old in s, 'machine.inspect invocation anchor moved'
-          s = s.replace(old, new, 1)
+          s = s.replace(
+              old,
+              '    match inspect_current_machine(context, "machine.inspect", &MachineInspectionInput::default()) {',
+              1,
+          )
 
           anchor = '''fn load_plan(
               input: &Value,
@@ -57,6 +59,7 @@ jobs:
               action: &str,
           ) -> Result<MachinePlan, ActionResult> {'''
           assert anchor in s, 'load_plan anchor moved'
+          assert 'fn inspection_input(declaration: &MachineDeclaration)' not in s
           scoped = '''fn inspection_input(declaration: &MachineDeclaration) -> MachineInspectionInput {
               MachineInspectionInput {
                   package_ids: declaration
@@ -81,7 +84,6 @@ jobs:
           }
 
           '''
-          assert 'fn inspection_input(declaration: &MachineDeclaration)' not in s, 'scoped inspection already present unexpectedly'
           s = s.replace(anchor, scoped + anchor, 1)
 
           old = '''    let observed = inspect_current_machine(context, action)?;
@@ -101,22 +103,17 @@ jobs:
                           "UserNotification".to_owned(),
                       ],'''
           assert old in s, 'macOS capability expectation anchor moved'
-          s = s.replace(old, new, 1)
-          test.write_text(s)
+          test.write_text(s.replace(old, new, 1))
           PY
-      - name: Regenerate composed lockfile
-        run: cargo generate-lockfile
-      - name: Format patched Rust
+      - name: Format recovered Rust delta
         run: cargo fmt --all
-      - name: Workspace tests
-        run: cargo test --workspace
-      - name: Commit composed semantics, lockfile and remove one-shot workflow
+      - name: Commit recovered semantics and retire one-shot helper
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add Cargo.lock ctrl/src/machine.rs connectors/macos/tests/package_configuration.rs
+          git add ctrl/src/machine.rs connectors/macos/tests/package_configuration.rs
           git rm .github/workflows/oi97-native-extension-compose.yml
-          git commit -m 'fix(oi97): compose scoped machine planning with native extensions'
+          git commit -m 'fix(oi97): restore declaration-scoped machine planning'
           git push origin HEAD:converge/oi97-native-extensions
