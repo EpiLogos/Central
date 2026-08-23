@@ -65,6 +65,9 @@ resembles the product checkout (`mixed_root` in the structured health report).
 
 - [INSTALL.md](INSTALL.md) — native `ctrl` installation and clean-root
   verification.
+- [MACHINE-WORKCELL-RELATION.md](MACHINE-WORKCELL-RELATION.md) — how the current
+  computer becomes the first durable `Control/machines` relation and binds to
+  its current Workcell material context.
 - [RECOVERY-PROTOCOL.md](RECOVERY-PROTOCOL.md) — recovery of Central machine
   state through the canonical Actions and Ports.
 
@@ -91,6 +94,7 @@ resembles the product checkout (`mixed_root` in the structured health report).
 | New to Central | `CENTRAL-VISION.md` → `CENTRAL-SYSTEM-SPEC.md` → `CONTROL-CONTENT-PROTOCOL.md` |
 | Implementing a Connector | `CONNECTOR-SDK-SPEC.md` → `CONNECTOR-SDK-RUST.md` → `CONNECTOR-SDK-RUST.md` conformance harnesses → `skills/connector-authoring` |
 | Operating `ctrl` | `CLI-REFERENCE.md` → `INSTALL.md` |
+| Establishing the current machine | `MACHINE-WORKCELL-RELATION.md` → `CLI-REFERENCE.md` |
 | Recovering a machine | `RECOVERY-PROTOCOL.md` → `machine.declaration` Skill → `CONTROL-CONTENT-PROTOCOL.md` |
 | Accepting the product | `PRODUCT-ACCEPTANCE-MATRIX.md` → `CENTRAL-SYSTEM-SPEC.md` |
 
