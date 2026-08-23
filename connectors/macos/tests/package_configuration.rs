@@ -118,13 +118,23 @@ exit 64
         .unwrap();
     }
 
-    fn registry(brew: PathBuf, chezmoi: PathBuf, home: PathBuf, include_managers: bool) -> ConnectorRegistry {
+    fn registry(
+        brew: PathBuf,
+        chezmoi: PathBuf,
+        home: PathBuf,
+        include_managers: bool,
+    ) -> ConnectorRegistry {
         let mut connectors = ConnectorRegistry::default();
         connectors
-            .register(MacOsNativeConnector::with_host_tools(brew.clone(), home.clone()))
+            .register(MacOsNativeConnector::with_host_tools(
+                brew.clone(),
+                home.clone(),
+            ))
             .unwrap();
         if include_managers {
-            connectors.register(HomebrewConnector::with_executable(brew)).unwrap();
+            connectors
+                .register(HomebrewConnector::with_executable(brew))
+                .unwrap();
             connectors
                 .register(ChezmoiConnector::with_paths(chezmoi, home))
                 .unwrap();
@@ -163,7 +173,11 @@ exit 64
         fs::create_dir_all(&home).unwrap();
         fs::write(home.join("fixture.txt"), "present\n").unwrap();
         let brew = fake_brew(&fixture);
-        fs::write(PathBuf::from(format!("{}.state", brew.display())), "central-fixture").unwrap();
+        fs::write(
+            PathBuf::from(format!("{}.state", brew.display())),
+            "central-fixture",
+        )
+        .unwrap();
         let connector = MacOsNativeConnector::with_host_tools(brew, home);
         let input = MachineInspectionInput {
             package_ids: vec!["central-fixture".to_owned()],
@@ -178,6 +192,7 @@ exit 64
                 "NativeOpen".to_owned(),
                 "NativeReveal".to_owned(),
                 "TagStore".to_owned(),
+                "UserNotification".to_owned(),
             ],
             packages: vec![ObservedPackage {
                 id: "central-fixture".to_owned(),
@@ -226,7 +241,10 @@ exit 64
         assert_eq!(data["summary"]["changeable"], 2);
         assert_eq!(data["summary"]["missing"], 0);
         let entries = data["entries"].as_array().unwrap();
-        let package = entries.iter().find(|entry| entry["kind"] == "package").unwrap();
+        let package = entries
+            .iter()
+            .find(|entry| entry["kind"] == "package")
+            .unwrap();
         assert_eq!(package["port"], "PackageManager");
         assert_eq!(package["connector"]["id"], "personal.homebrew");
         let configuration = entries
@@ -281,7 +299,10 @@ exit 64
         let data = plan.data.unwrap();
         assert_eq!(data["summary"]["missing"], 2);
         let entries = data["entries"].as_array().unwrap();
-        let package = entries.iter().find(|entry| entry["kind"] == "package").unwrap();
+        let package = entries
+            .iter()
+            .find(|entry| entry["kind"] == "package")
+            .unwrap();
         assert!(package["reason"]
             .as_str()
             .unwrap()
