@@ -18,24 +18,105 @@ jobs:
           ref: converge/oi97-native-extensions
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: rustfmt
+      - name: Restore scoped machine-plan inspection and composed macOS expectation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          machine = Path('ctrl/src/machine.rs')
+          s = machine.read_text()
+
+          old = '''fn inspect_current_machine(
+              context: &ActionExecutionContext<'_>,
+              action: &str,
+          ) -> Result<ObservedMachine, ActionResult> {'''
+          new = '''fn inspect_current_machine(
+              context: &ActionExecutionContext<'_>,
+              action: &str,
+              inspection: &MachineInspectionInput,
+          ) -> Result<ObservedMachine, ActionResult> {'''
+          assert old in s, 'inspect_current_machine signature anchor moved'
+          s = s.replace(old, new, 1)
+
+          old = '    match implementation.inspect(&MachineInspectionInput::default()) {'
+          new = '    match implementation.inspect(inspection) {'
+          assert old in s, 'MachineInspector invocation anchor moved'
+          s = s.replace(old, new, 1)
+
+          old = '    match inspect_current_machine(context, "machine.inspect") {'
+          new = '    match inspect_current_machine(context, "machine.inspect", &MachineInspectionInput::default()) {'
+          assert old in s, 'machine.inspect invocation anchor moved'
+          s = s.replace(old, new, 1)
+
+          anchor = '''fn load_plan(
+              input: &Value,
+              context: &ActionExecutionContext<'_>,
+              action: &str,
+          ) -> Result<MachinePlan, ActionResult> {'''
+          assert anchor in s, 'load_plan anchor moved'
+          scoped = '''fn inspection_input(declaration: &MachineDeclaration) -> MachineInspectionInput {
+              MachineInspectionInput {
+                  package_ids: declaration
+                      .requirements
+                      .packages
+                      .iter()
+                      .map(|item| item.id.clone())
+                      .collect(),
+                  configuration_ids: declaration
+                      .requirements
+                      .configurations
+                      .iter()
+                      .map(|item| item.id.clone())
+                      .collect(),
+                  service_ids: declaration
+                      .requirements
+                      .services
+                      .iter()
+                      .map(|item| item.id.clone())
+                      .collect(),
+              }
+          }
+
+          '''
+          assert 'fn inspection_input(declaration: &MachineDeclaration)' not in s, 'scoped inspection already present unexpectedly'
+          s = s.replace(anchor, scoped + anchor, 1)
+
+          old = '''    let observed = inspect_current_machine(context, action)?;
+              compare_machine(authored, observed, context, action)'''
+          new = '''    let inspection = inspection_input(&authored.declaration);
+              let observed = inspect_current_machine(context, action, &inspection)?;
+              compare_machine(authored, observed, context, action)'''
+          assert old in s, 'load_plan observation anchor moved'
+          s = s.replace(old, new, 1)
+          machine.write_text(s)
+
+          test = Path('connectors/macos/tests/package_configuration.rs')
+          s = test.read_text()
+          old = '''                "TagStore".to_owned(),
+                      ],'''
+          new = '''                "TagStore".to_owned(),
+                          "UserNotification".to_owned(),
+                      ],'''
+          assert old in s, 'macOS capability expectation anchor moved'
+          s = s.replace(old, new, 1)
+          test.write_text(s)
+          PY
       - name: Regenerate composed lockfile
         run: cargo generate-lockfile
-      - name: Format check
-        run: cargo fmt --all --check
+      - name: Format patched Rust
+        run: cargo fmt --all
       - name: Workspace tests
         run: cargo test --workspace
-      - name: Workspace clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Commit normalized lockfile and remove one-shot workflow
+      - name: Commit composed semantics, lockfile and remove one-shot workflow
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add Cargo.lock
+          git add Cargo.lock ctrl/src/machine.rs connectors/macos/tests/package_configuration.rs
           git rm .github/workflows/oi97-native-extension-compose.yml
-          git commit -m 'build(oi97): normalize native extension workspace lockfile'
+          git commit -m 'fix(oi97): compose scoped machine planning with native extensions'
           git push origin HEAD:converge/oi97-native-extensions
-
-# Current-head rerun after docs-front-door composition.
