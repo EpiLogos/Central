@@ -2,11 +2,18 @@ use central_ctrl::CliEnvironment;
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static NEXT_TEMP_ROOT: AtomicU64 = AtomicU64::new(0);
 
 fn temporary_root() -> PathBuf {
     let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    std::env::temp_dir().join(format!("central-ground-actions-{}-{nonce}", std::process::id()))
+    let sequence = NEXT_TEMP_ROOT.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "central-ground-actions-{}-{nonce}-{sequence}",
+        std::process::id()
+    ))
 }
 
 fn run(root: &PathBuf, action: &str, input: &str) -> central_ctrl::CliExecution {
