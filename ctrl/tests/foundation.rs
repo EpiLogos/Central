@@ -245,6 +245,9 @@ fn action_list_has_human_and_structured_cli_renderings() {
     assert!(human.output.contains("projectcentral.ground.inspect\tInspect authored Project ground"));
     assert!(human.output.contains("projectcentral.ground.plan\tPlan authored Project ground"));
     assert!(human.output.contains("projectcentral.ground.apply\tApply accepted Project ground relation"));
+    assert!(human.output.contains("projectcentral.change.horizon\tRead current Source Change Horizon"));
+    assert!(human.output.contains("projectcentral.change.reconcile\tReconcile Project source revisions"));
+    assert!(human.output.contains("projectcentral.change.ack\tAcknowledge Source Change cursor"));
     assert!(human.output.contains("projectcentral.now.inspect\tInspect Project NOW"));
     assert!(human.output.contains("projectcentral.now.init\tInitialize Project NOW"));
     assert!(human.output.contains("projectcentral.now.return\tWrite bounded Agent return"));
@@ -257,7 +260,7 @@ fn action_list_has_human_and_structured_cli_renderings() {
     let value: serde_json::Value = serde_json::from_str(&structured.output).unwrap();
     assert_eq!(value["status"], "success");
     let actions = value["data"]["actions"].as_array().unwrap();
-    assert_eq!(actions.len(), 34);
+    assert_eq!(actions.len(), 37);
     let ids = actions.iter().filter_map(|action| action["id"].as_str()).collect::<Vec<_>>();
     for id in [
         "projectcentral.inspect",
@@ -270,6 +273,9 @@ fn action_list_has_human_and_structured_cli_renderings() {
         "projectcentral.ground.inspect",
         "projectcentral.ground.plan",
         "projectcentral.ground.apply",
+        "projectcentral.change.horizon",
+        "projectcentral.change.reconcile",
+        "projectcentral.change.ack",
         "projectcentral.now.inspect",
         "projectcentral.now.init",
         "projectcentral.now.return",
