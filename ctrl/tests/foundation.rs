@@ -109,7 +109,6 @@ fn doctor_reports_missing_invalid_and_valid_structure() {
 fn doctor_diagnoses_a_personal_root_that_is_also_the_product_checkout() {
     let root = temporary_directory("mixed-root-checkout").join("Central");
     initialize_central(&root).unwrap();
-    // Product-source collision signals at the root itself.
     fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
     fs::create_dir_all(root.join("ctrl/src")).unwrap();
     fs::create_dir_all(root.join("crates/connector-sdk")).unwrap();
@@ -132,7 +131,6 @@ fn doctor_diagnoses_a_personal_root_that_is_also_the_product_checkout() {
 fn doctor_does_not_flag_a_personal_root_with_one_generic_file() {
     let root = temporary_directory("mixed-root-plain").join("Central");
     initialize_central(&root).unwrap();
-    // A lone Cargo.toml is not a strong Central-source collision.
     fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
 
     let report = inspect_central(&root).unwrap();
@@ -244,13 +242,19 @@ fn action_list_has_human_and_structured_cli_renderings() {
     assert!(human.output.contains("projectcentral.adopt\tAdopt Wiki in place"));
     assert!(human.output.contains("projectcentral.migrate.preview\tPreview Wiki migration"));
     assert!(human.output.contains("projectcentral.migrate\tMigrate selected Wiki"));
+    assert!(human.output.contains("projectcentral.now.inspect\tInspect Project NOW"));
+    assert!(human.output.contains("projectcentral.now.init\tInitialize Project NOW"));
+    assert!(human.output.contains("projectcentral.now.return\tWrite bounded Agent return"));
+    assert!(human.output.contains("projectcentral.now.update\tUpdate NOW lifecycle"));
+    assert!(human.output.contains("projectcentral.now.promote\tPromote NOW material"));
+    assert!(human.output.contains("projectcentral.now.rollover\tClose DAY and roll NOW"));
 
     let structured = central_ctrl::run_cli(&["--json".to_owned(), "action.list".to_owned()], &environment);
     assert_eq!(structured.exit_code, 0);
     let value: serde_json::Value = serde_json::from_str(&structured.output).unwrap();
     assert_eq!(value["status"], "success");
     let actions = value["data"]["actions"].as_array().unwrap();
-    assert_eq!(actions.len(), 25);
+    assert_eq!(actions.len(), 31);
     let ids = actions.iter().filter_map(|action| action["id"].as_str()).collect::<Vec<_>>();
     for id in [
         "projectcentral.inspect",
@@ -260,6 +264,12 @@ fn action_list_has_human_and_structured_cli_renderings() {
         "projectcentral.adopt",
         "projectcentral.migrate.preview",
         "projectcentral.migrate",
+        "projectcentral.now.inspect",
+        "projectcentral.now.init",
+        "projectcentral.now.return",
+        "projectcentral.now.update",
+        "projectcentral.now.promote",
+        "projectcentral.now.rollover",
         "machine.account",
     ] {
         assert!(ids.contains(&id), "missing Action {id}");
