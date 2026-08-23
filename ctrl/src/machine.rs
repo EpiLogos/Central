@@ -9,8 +9,7 @@ use central_connector_sdk::{
     ConfigurationStateRequest, ConnectorDiagnostics, ConnectorSummary, MachineInspectionInput,
     MachineInspectionOutput, PackageStateRequest, PortContract, PortError,
     ReconciliationSourceReference, ServiceStateRequest, StateChangePreview, StateChangeResult,
-    CONFIGURATION_MANAGER_PORT, MACHINE_INSPECTOR_PORT, PACKAGE_MANAGER_PORT,
-    SERVICE_MANAGER_PORT,
+    CONFIGURATION_MANAGER_PORT, MACHINE_INSPECTOR_PORT, PACKAGE_MANAGER_PORT, SERVICE_MANAGER_PORT,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, to_value, Value};
@@ -221,7 +220,9 @@ fn validate_role_name(role: &str) -> Result<&str, MachineDeclarationError> {
             Some("role"),
         ));
     }
-    if !role.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+    if !role
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
         || matches!(role, "." | "..")
     {
         return Err(MachineDeclarationError::new(
@@ -255,7 +256,10 @@ fn validate_source(
     validate_nonempty(&source.reference, &format!("{field}.reference"), path)
 }
 
-fn validate_capabilities(declaration: &MachineDeclaration, path: &Path) -> Result<(), MachineDeclarationError> {
+fn validate_capabilities(
+    declaration: &MachineDeclaration,
+    path: &Path,
+) -> Result<(), MachineDeclarationError> {
     let mut seen = BTreeSet::new();
     for capability in &declaration.capabilities {
         validate_nonempty(capability, "capabilities[]", path)?;
@@ -295,7 +299,11 @@ where
             ));
         }
         if let Some(source) = source(item) {
-            validate_source(source, &format!("requirements.{kind}[{index}].source"), path)?;
+            validate_source(
+                source,
+                &format!("requirements.{kind}[{index}].source"),
+                path,
+            )?;
         }
     }
     Ok(())
@@ -358,7 +366,11 @@ fn validate_declaration(
 
     let mut services = BTreeSet::new();
     for (index, service) in declaration.requirements.services.iter().enumerate() {
-        validate_nonempty(&service.id, &format!("requirements.services[{index}].id"), path)?;
+        validate_nonempty(
+            &service.id,
+            &format!("requirements.services[{index}].id"),
+            path,
+        )?;
         if !services.insert(service.id.as_str()) {
             return Err(MachineDeclarationError::new(
                 "duplicate_requirement",
@@ -379,7 +391,11 @@ fn validate_declaration(
             ));
         }
         if let Some(source) = &service.source {
-            validate_source(source, &format!("requirements.services[{index}].source"), path)?;
+            validate_source(
+                source,
+                &format!("requirements.services[{index}].source"),
+                path,
+            )?;
         }
     }
     Ok(())
@@ -390,7 +406,9 @@ pub fn read_machine_declaration(
     role: &str,
 ) -> Result<AuthoredMachineDeclaration, MachineDeclarationError> {
     let role = validate_role_name(role)?;
-    let relative = PathBuf::from("Control").join("machines").join(format!("{role}.json"));
+    let relative = PathBuf::from("Control")
+        .join("machines")
+        .join(format!("{role}.json"));
     let path = central_root.join(&relative);
     let text = fs::read_to_string(&path).map_err(|error| {
         let code = if error.kind() == std::io::ErrorKind::NotFound {
@@ -489,14 +507,20 @@ fn declaration_action(
 fn inspect_current_machine(
     context: &ActionExecutionContext<'_>,
     action: &str,
+    inspection: &MachineInspectionInput,
 ) -> Result<ObservedMachine, ActionResult> {
-    let resolution = context.connectors.resolve(&MACHINE_INSPECTOR_PORT, context.connector_context);
+    let resolution = context
+        .connectors
+        .resolve(&MACHINE_INSPECTOR_PORT, context.connector_context);
     let diagnostics = resolution.diagnostics.clone();
     let Some(connector) = resolution.connector else {
         return Err(ActionResult::failure(
             Some(action),
             ResultStatus::UnavailableCapability,
-            format!("No eligible Connector implements {}.", MACHINE_INSPECTOR_PORT.id),
+            format!(
+                "No eligible Connector implements {}.",
+                MACHINE_INSPECTOR_PORT.id
+            ),
             Some(json!({ "port": MACHINE_INSPECTOR_PORT.id, "diagnostics": diagnostics })),
         ));
     };
@@ -504,7 +528,10 @@ fn inspect_current_machine(
         return Err(ActionResult::failure(
             Some(action),
             ResultStatus::ConnectorFailure,
-            format!("Selected Connector does not expose {} implementation.", MACHINE_INSPECTOR_PORT.id),
+            format!(
+                "Selected Connector does not expose {} implementation.",
+                MACHINE_INSPECTOR_PORT.id
+            ),
             Some(json!({
                 "port": MACHINE_INSPECTOR_PORT.id,
                 "connector": connector.manifest().id,
@@ -512,7 +539,7 @@ fn inspect_current_machine(
             })),
         ));
     };
-    match implementation.inspect(&MachineInspectionInput::default()) {
+    match implementation.inspect(inspection) {
         Ok(observation) => Ok(ObservedMachine {
             observation,
             source: MachineObservationSource {
@@ -524,7 +551,10 @@ fn inspect_current_machine(
         Err(error) => Err(ActionResult::failure(
             Some(action),
             ResultStatus::ConnectorFailure,
-            format!("Connector failed while executing {}.", MACHINE_INSPECTOR_PORT.id),
+            format!(
+                "Connector failed while executing {}.",
+                MACHINE_INSPECTOR_PORT.id
+            ),
             Some(json!({
                 "port": MACHINE_INSPECTOR_PORT.id,
                 "connector": connector.manifest().id,
@@ -540,7 +570,11 @@ fn inspect_action(
     _input: &Value,
     context: &ActionExecutionContext<'_>,
 ) -> ActionResult {
-    match inspect_current_machine(context, "machine.inspect") {
+    match inspect_current_machine(
+        context,
+        "machine.inspect",
+        &MachineInspectionInput::default(),
+    ) {
         Ok(observed) => ActionResult::success(
             "machine.inspect",
             to_value(observed).expect("machine observation serializes"),
@@ -667,7 +701,9 @@ fn package_difference(
     context: &ActionExecutionContext<'_>,
     action: &str,
 ) -> Result<MachinePlanEntry, ActionResult> {
-    let resolution = context.connectors.resolve(&PACKAGE_MANAGER_PORT, context.connector_context);
+    let resolution = context
+        .connectors
+        .resolve(&PACKAGE_MANAGER_PORT, context.connector_context);
     let diagnostics = resolution.diagnostics.clone();
     let Some(connector) = resolution.connector else {
         return Ok(unavailable_difference(
@@ -684,8 +720,13 @@ fn package_difference(
         return Err(ActionResult::failure(
             Some(action),
             ResultStatus::ConnectorFailure,
-            format!("Selected Connector does not expose {} implementation.", PACKAGE_MANAGER_PORT.id),
-            Some(json!({ "port": PACKAGE_MANAGER_PORT.id, "connector": summary, "diagnostics": diagnostics })),
+            format!(
+                "Selected Connector does not expose {} implementation.",
+                PACKAGE_MANAGER_PORT.id
+            ),
+            Some(
+                json!({ "port": PACKAGE_MANAGER_PORT.id, "connector": summary, "diagnostics": diagnostics }),
+            ),
         ));
     };
     let request = PackageStateRequest {
@@ -694,7 +735,13 @@ fn package_difference(
         source: source_ref(requirement.source.as_ref()),
     };
     let preview = manager.preview(&request).map_err(|error| {
-        preview_failure(action, &PACKAGE_MANAGER_PORT, &summary, diagnostics.clone(), error)
+        preview_failure(
+            action,
+            &PACKAGE_MANAGER_PORT,
+            &summary,
+            diagnostics.clone(),
+            error,
+        )
     })?;
     Ok(MachinePlanEntry {
         kind: "package".to_owned(),
@@ -717,7 +764,9 @@ fn configuration_difference(
     context: &ActionExecutionContext<'_>,
     action: &str,
 ) -> Result<MachinePlanEntry, ActionResult> {
-    let resolution = context.connectors.resolve(&CONFIGURATION_MANAGER_PORT, context.connector_context);
+    let resolution = context
+        .connectors
+        .resolve(&CONFIGURATION_MANAGER_PORT, context.connector_context);
     let diagnostics = resolution.diagnostics.clone();
     let Some(connector) = resolution.connector else {
         return Ok(unavailable_difference(
@@ -734,8 +783,13 @@ fn configuration_difference(
         return Err(ActionResult::failure(
             Some(action),
             ResultStatus::ConnectorFailure,
-            format!("Selected Connector does not expose {} implementation.", CONFIGURATION_MANAGER_PORT.id),
-            Some(json!({ "port": CONFIGURATION_MANAGER_PORT.id, "connector": summary, "diagnostics": diagnostics })),
+            format!(
+                "Selected Connector does not expose {} implementation.",
+                CONFIGURATION_MANAGER_PORT.id
+            ),
+            Some(
+                json!({ "port": CONFIGURATION_MANAGER_PORT.id, "connector": summary, "diagnostics": diagnostics }),
+            ),
         ));
     };
     let request = ConfigurationStateRequest {
@@ -744,7 +798,13 @@ fn configuration_difference(
         source: source_ref(requirement.source.as_ref()),
     };
     let preview = manager.preview(&request).map_err(|error| {
-        preview_failure(action, &CONFIGURATION_MANAGER_PORT, &summary, diagnostics.clone(), error)
+        preview_failure(
+            action,
+            &CONFIGURATION_MANAGER_PORT,
+            &summary,
+            diagnostics.clone(),
+            error,
+        )
     })?;
     Ok(MachinePlanEntry {
         kind: "configuration".to_owned(),
@@ -767,18 +827,30 @@ fn configuration_source_verification(
     context: &ActionExecutionContext<'_>,
     action: &str,
 ) -> Result<MachinePlanEntry, ActionResult> {
-    let resolution = context.connectors.resolve(&CONFIGURATION_MANAGER_PORT, context.connector_context);
+    let resolution = context
+        .connectors
+        .resolve(&CONFIGURATION_MANAGER_PORT, context.connector_context);
     let diagnostics = resolution.diagnostics.clone();
     let Some(connector) = resolution.connector else {
-        return Ok(unavailable_source_verification(requirement, desired, observed, diagnostics));
+        return Ok(unavailable_source_verification(
+            requirement,
+            desired,
+            observed,
+            diagnostics,
+        ));
     };
     let summary = ConnectorSummary::from_connector(connector);
     let Some(manager) = connector.configuration_manager() else {
         return Err(ActionResult::failure(
             Some(action),
             ResultStatus::ConnectorFailure,
-            format!("Selected Connector does not expose {} implementation.", CONFIGURATION_MANAGER_PORT.id),
-            Some(json!({ "port": CONFIGURATION_MANAGER_PORT.id, "connector": summary, "diagnostics": diagnostics })),
+            format!(
+                "Selected Connector does not expose {} implementation.",
+                CONFIGURATION_MANAGER_PORT.id
+            ),
+            Some(
+                json!({ "port": CONFIGURATION_MANAGER_PORT.id, "connector": summary, "diagnostics": diagnostics }),
+            ),
         ));
     };
     let request = ConfigurationStateRequest {
@@ -787,7 +859,13 @@ fn configuration_source_verification(
         source: source_ref(requirement.source.as_ref()),
     };
     let preview = manager.preview(&request).map_err(|error| {
-        preview_failure(action, &CONFIGURATION_MANAGER_PORT, &summary, diagnostics.clone(), error)
+        preview_failure(
+            action,
+            &CONFIGURATION_MANAGER_PORT,
+            &summary,
+            diagnostics.clone(),
+            error,
+        )
     })?;
     Ok(MachinePlanEntry {
         kind: "configuration".to_owned(),
@@ -814,7 +892,9 @@ fn service_difference(
     context: &ActionExecutionContext<'_>,
     action: &str,
 ) -> Result<MachinePlanEntry, ActionResult> {
-    let resolution = context.connectors.resolve(&SERVICE_MANAGER_PORT, context.connector_context);
+    let resolution = context
+        .connectors
+        .resolve(&SERVICE_MANAGER_PORT, context.connector_context);
     let diagnostics = resolution.diagnostics.clone();
     let Some(connector) = resolution.connector else {
         return Ok(unavailable_difference(
@@ -831,8 +911,13 @@ fn service_difference(
         return Err(ActionResult::failure(
             Some(action),
             ResultStatus::ConnectorFailure,
-            format!("Selected Connector does not expose {} implementation.", SERVICE_MANAGER_PORT.id),
-            Some(json!({ "port": SERVICE_MANAGER_PORT.id, "connector": summary, "diagnostics": diagnostics })),
+            format!(
+                "Selected Connector does not expose {} implementation.",
+                SERVICE_MANAGER_PORT.id
+            ),
+            Some(
+                json!({ "port": SERVICE_MANAGER_PORT.id, "connector": summary, "diagnostics": diagnostics }),
+            ),
         ));
     };
     let request = ServiceStateRequest {
@@ -842,7 +927,13 @@ fn service_difference(
         source: source_ref(requirement.source.as_ref()),
     };
     let preview = manager.preview(&request).map_err(|error| {
-        preview_failure(action, &SERVICE_MANAGER_PORT, &summary, diagnostics.clone(), error)
+        preview_failure(
+            action,
+            &SERVICE_MANAGER_PORT,
+            &summary,
+            diagnostics.clone(),
+            error,
+        )
     })?;
     Ok(MachinePlanEntry {
         kind: "service".to_owned(),
@@ -869,7 +960,11 @@ fn compare_machine(
     let mut entries = Vec::new();
 
     for capability in &declaration.capabilities {
-        if observation.capabilities.iter().any(|value| value == capability) {
+        if observation
+            .capabilities
+            .iter()
+            .any(|value| value == capability)
+        {
             entries.push(satisfied_entry(
                 "capability",
                 capability,
@@ -892,7 +987,11 @@ fn compare_machine(
     for requirement in &declaration.requirements.packages {
         let desired_present = requirement.state == PresenceState::Present;
         let desired = to_value(requirement).expect("package requirement serializes");
-        let Some(item) = observation.packages.iter().find(|item| item.id == requirement.id) else {
+        let Some(item) = observation
+            .packages
+            .iter()
+            .find(|item| item.id == requirement.id)
+        else {
             entries.push(unsupported_entry(
                 "package",
                 &requirement.id,
@@ -909,14 +1008,24 @@ fn compare_machine(
         if item.present == desired_present {
             entries.push(satisfied_entry("package", &requirement.id, desired, actual));
         } else {
-            entries.push(package_difference(requirement, desired, actual, context, action)?);
+            entries.push(package_difference(
+                requirement,
+                desired,
+                actual,
+                context,
+                action,
+            )?);
         }
     }
 
     for requirement in &declaration.requirements.configurations {
         let desired_present = requirement.state == PresenceState::Present;
         let desired = to_value(requirement).expect("configuration requirement serializes");
-        let Some(item) = observation.configurations.iter().find(|item| item.id == requirement.id) else {
+        let Some(item) = observation
+            .configurations
+            .iter()
+            .find(|item| item.id == requirement.id)
+        else {
             entries.push(unsupported_entry(
                 "configuration",
                 &requirement.id,
@@ -931,17 +1040,38 @@ fn compare_machine(
         };
         let actual = json!({ "present": item.present });
         if item.present != desired_present {
-            entries.push(configuration_difference(requirement, desired, actual, context, action)?);
+            entries.push(configuration_difference(
+                requirement,
+                desired,
+                actual,
+                context,
+                action,
+            )?);
         } else if desired_present && requirement.source.is_some() {
-            entries.push(configuration_source_verification(requirement, desired, actual, context, action)?);
+            entries.push(configuration_source_verification(
+                requirement,
+                desired,
+                actual,
+                context,
+                action,
+            )?);
         } else {
-            entries.push(satisfied_entry("configuration", &requirement.id, desired, actual));
+            entries.push(satisfied_entry(
+                "configuration",
+                &requirement.id,
+                desired,
+                actual,
+            ));
         }
     }
 
     for requirement in &declaration.requirements.services {
         let desired = to_value(requirement).expect("service requirement serializes");
-        let Some(item) = observation.services.iter().find(|item| item.id == requirement.id) else {
+        let Some(item) = observation
+            .services
+            .iter()
+            .find(|item| item.id == requirement.id)
+        else {
             entries.push(unsupported_entry(
                 "service",
                 &requirement.id,
@@ -959,12 +1089,22 @@ fn compare_machine(
             "running": item.running,
             "enabled": item.enabled,
         });
-        let matches_running = requirement.running.map_or(true, |desired| desired == item.running);
-        let matches_enabled = requirement.enabled.map_or(true, |desired| desired == item.enabled);
+        let matches_running = requirement
+            .running
+            .map_or(true, |desired| desired == item.running);
+        let matches_enabled = requirement
+            .enabled
+            .map_or(true, |desired| desired == item.enabled);
         if matches_running && matches_enabled {
             entries.push(satisfied_entry("service", &requirement.id, desired, actual));
         } else {
-            entries.push(service_difference(requirement, desired, actual, context, action)?);
+            entries.push(service_difference(
+                requirement,
+                desired,
+                actual,
+                context,
+                action,
+            )?);
         }
     }
 
@@ -987,17 +1127,42 @@ fn compare_machine(
     })
 }
 
+fn inspection_input(declaration: &MachineDeclaration) -> MachineInspectionInput {
+    MachineInspectionInput {
+        package_ids: declaration
+            .requirements
+            .packages
+            .iter()
+            .map(|item| item.id.clone())
+            .collect(),
+        configuration_ids: declaration
+            .requirements
+            .configurations
+            .iter()
+            .map(|item| item.id.clone())
+            .collect(),
+        service_ids: declaration
+            .requirements
+            .services
+            .iter()
+            .map(|item| item.id.clone())
+            .collect(),
+    }
+}
+
 fn load_plan(
     input: &Value,
     context: &ActionExecutionContext<'_>,
     action: &str,
 ) -> Result<MachinePlan, ActionResult> {
     let role = required_role(input, action)?;
-    let root = resolve_central_root(context.root_options)
-        .map_err(|message| ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None))?;
+    let root = resolve_central_root(context.root_options).map_err(|message| {
+        ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None)
+    })?;
     let authored = read_machine_declaration(&root.path, &role)
         .map_err(|error| declaration_failure(action, error))?;
-    let observed = inspect_current_machine(context, action)?;
+    let inspection = inspection_input(&authored.declaration);
+    let observed = inspect_current_machine(context, action, &inspection)?;
     compare_machine(authored, observed, context, action)
 }
 
@@ -1065,7 +1230,9 @@ fn selected_connector_for_plan<'a>(
             Some(json!({ "entry": entry, "diagnostics": resolution.diagnostics })),
         ));
     };
-    if entry.connector.as_ref().map(|value| value.id.as_str()) != Some(connector.manifest().id.as_str()) {
+    if entry.connector.as_ref().map(|value| value.id.as_str())
+        != Some(connector.manifest().id.as_str())
+    {
         return Err(ActionResult::failure(
             Some("machine.apply"),
             ResultStatus::ConnectorFailure,
@@ -1081,14 +1248,15 @@ fn selected_connector_for_plan<'a>(
 }
 
 fn package_request(entry: &MachinePlanEntry) -> Result<PackageStateRequest, ActionResult> {
-    let requirement: PackageRequirement = serde_json::from_value(entry.desired.clone()).map_err(|error| {
-        ActionResult::failure(
-            Some("machine.apply"),
-            ResultStatus::InternalFailure,
-            format!("Planned package request is invalid: {error}"),
-            Some(json!({ "entry": entry })),
-        )
-    })?;
+    let requirement: PackageRequirement =
+        serde_json::from_value(entry.desired.clone()).map_err(|error| {
+            ActionResult::failure(
+                Some("machine.apply"),
+                ResultStatus::InternalFailure,
+                format!("Planned package request is invalid: {error}"),
+                Some(json!({ "entry": entry })),
+            )
+        })?;
     Ok(PackageStateRequest {
         id: requirement.id,
         present: requirement.state == PresenceState::Present,
@@ -1096,15 +1264,18 @@ fn package_request(entry: &MachinePlanEntry) -> Result<PackageStateRequest, Acti
     })
 }
 
-fn configuration_request(entry: &MachinePlanEntry) -> Result<ConfigurationStateRequest, ActionResult> {
-    let requirement: ConfigurationRequirement = serde_json::from_value(entry.desired.clone()).map_err(|error| {
-        ActionResult::failure(
-            Some("machine.apply"),
-            ResultStatus::InternalFailure,
-            format!("Planned configuration request is invalid: {error}"),
-            Some(json!({ "entry": entry })),
-        )
-    })?;
+fn configuration_request(
+    entry: &MachinePlanEntry,
+) -> Result<ConfigurationStateRequest, ActionResult> {
+    let requirement: ConfigurationRequirement = serde_json::from_value(entry.desired.clone())
+        .map_err(|error| {
+            ActionResult::failure(
+                Some("machine.apply"),
+                ResultStatus::InternalFailure,
+                format!("Planned configuration request is invalid: {error}"),
+                Some(json!({ "entry": entry })),
+            )
+        })?;
     Ok(ConfigurationStateRequest {
         id: requirement.id,
         present: requirement.state == PresenceState::Present,
@@ -1113,14 +1284,15 @@ fn configuration_request(entry: &MachinePlanEntry) -> Result<ConfigurationStateR
 }
 
 fn service_request(entry: &MachinePlanEntry) -> Result<ServiceStateRequest, ActionResult> {
-    let requirement: ServiceRequirement = serde_json::from_value(entry.desired.clone()).map_err(|error| {
-        ActionResult::failure(
-            Some("machine.apply"),
-            ResultStatus::InternalFailure,
-            format!("Planned service request is invalid: {error}"),
-            Some(json!({ "entry": entry })),
-        )
-    })?;
+    let requirement: ServiceRequirement =
+        serde_json::from_value(entry.desired.clone()).map_err(|error| {
+            ActionResult::failure(
+                Some("machine.apply"),
+                ResultStatus::InternalFailure,
+                format!("Planned service request is invalid: {error}"),
+                Some(json!({ "entry": entry })),
+            )
+        })?;
     Ok(ServiceStateRequest {
         id: requirement.id,
         running: requirement.running,
@@ -1148,12 +1320,17 @@ fn execute_planned_entry(
             ActionResult::failure(
                 Some("machine.apply"),
                 ResultStatus::ConnectorFailure,
-                format!("Selected Connector does not expose {} implementation.", PACKAGE_MANAGER_PORT.id),
+                format!(
+                    "Selected Connector does not expose {} implementation.",
+                    PACKAGE_MANAGER_PORT.id
+                ),
                 Some(json!({ "entry": entry })),
             )
         })?;
         let request = package_request(entry)?;
-        let result = manager.apply(&request).map_err(|error| apply_port_failure(entry, error))?;
+        let result = manager
+            .apply(&request)
+            .map_err(|error| apply_port_failure(entry, error))?;
         (connector, result)
     } else if port == CONFIGURATION_MANAGER_PORT.id {
         let connector = selected_connector_for_plan(entry, &CONFIGURATION_MANAGER_PORT, context)?;
@@ -1161,12 +1338,17 @@ fn execute_planned_entry(
             ActionResult::failure(
                 Some("machine.apply"),
                 ResultStatus::ConnectorFailure,
-                format!("Selected Connector does not expose {} implementation.", CONFIGURATION_MANAGER_PORT.id),
+                format!(
+                    "Selected Connector does not expose {} implementation.",
+                    CONFIGURATION_MANAGER_PORT.id
+                ),
                 Some(json!({ "entry": entry })),
             )
         })?;
         let request = configuration_request(entry)?;
-        let result = manager.apply(&request).map_err(|error| apply_port_failure(entry, error))?;
+        let result = manager
+            .apply(&request)
+            .map_err(|error| apply_port_failure(entry, error))?;
         (connector, result)
     } else if port == SERVICE_MANAGER_PORT.id {
         let connector = selected_connector_for_plan(entry, &SERVICE_MANAGER_PORT, context)?;
@@ -1174,12 +1356,17 @@ fn execute_planned_entry(
             ActionResult::failure(
                 Some("machine.apply"),
                 ResultStatus::ConnectorFailure,
-                format!("Selected Connector does not expose {} implementation.", SERVICE_MANAGER_PORT.id),
+                format!(
+                    "Selected Connector does not expose {} implementation.",
+                    SERVICE_MANAGER_PORT.id
+                ),
                 Some(json!({ "entry": entry })),
             )
         })?;
         let request = service_request(entry)?;
-        let result = manager.apply(&request).map_err(|error| apply_port_failure(entry, error))?;
+        let result = manager
+            .apply(&request)
+            .map_err(|error| apply_port_failure(entry, error))?;
         (connector, result)
     } else {
         return Err(ActionResult::failure(
@@ -1203,7 +1390,10 @@ fn apply_port_failure(entry: &MachinePlanEntry, error: PortError) -> ActionResul
     ActionResult::failure(
         Some("machine.apply"),
         ResultStatus::ConnectorFailure,
-        format!("Connector failed while applying planned {} '{}'.", entry.kind, entry.id),
+        format!(
+            "Connector failed while applying planned {} '{}'.",
+            entry.kind, entry.id
+        ),
         Some(json!({ "entry": entry, "provider_error": error })),
     )
 }
@@ -1219,7 +1409,10 @@ fn apply_action(
     };
 
     if plan_satisfied(&initial_plan) {
-        let verification = MachineVerification { satisfied: true, plan: initial_plan.clone() };
+        let verification = MachineVerification {
+            satisfied: true,
+            plan: initial_plan.clone(),
+        };
         return ActionResult::success(
             "machine.apply",
             to_value(MachineApplyReport {
@@ -1227,7 +1420,8 @@ fn apply_action(
                 initial_plan,
                 operations: Vec::new(),
                 verification: Some(verification),
-            }).expect("machine apply report serializes"),
+            })
+            .expect("machine apply report serializes"),
         );
     }
 
@@ -1248,7 +1442,11 @@ fn apply_action(
 
     let has_unavailable = initial_plan.summary.missing > 0 || initial_plan.summary.unsupported > 0;
     let mut operations = Vec::new();
-    for entry in initial_plan.entries.iter().filter(|entry| entry.status == MachinePlanStatus::Changeable) {
+    for entry in initial_plan
+        .entries
+        .iter()
+        .filter(|entry| entry.status == MachinePlanStatus::Changeable)
+    {
         match execute_planned_entry(entry, context) {
             Ok(operation) => operations.push(operation),
             Err(failure) if operations.is_empty() => return failure,
@@ -1263,7 +1461,9 @@ fn apply_action(
                     .error
                     .as_ref()
                     .map(|error| error.message.clone())
-                    .unwrap_or_else(|| "Machine reconciliation failed after partial application.".to_owned());
+                    .unwrap_or_else(|| {
+                        "Machine reconciliation failed after partial application.".to_owned()
+                    });
                 return ActionResult::failure(
                     Some("machine.apply"),
                     ResultStatus::PartialCompletion,
@@ -1418,9 +1618,17 @@ pub(crate) fn register_machine_actions(registry: &mut ActionRegistry) {
 }
 
 fn render_reference(source: Option<&Value>) -> String {
-    let Some(source) = source else { return String::new(); };
-    let kind = source.get("kind").and_then(Value::as_str).unwrap_or_default();
-    let reference = source.get("reference").and_then(Value::as_str).unwrap_or_default();
+    let Some(source) = source else {
+        return String::new();
+    };
+    let kind = source
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let reference = source
+        .get("reference")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     if kind.is_empty() && reference.is_empty() {
         String::new()
     } else {
@@ -1430,9 +1638,18 @@ fn render_reference(source: Option<&Value>) -> String {
 
 pub fn explain_machine_declaration(data: &Value) -> String {
     let declaration = data.get("declaration").unwrap_or(&Value::Null);
-    let schema = declaration.get("schema").and_then(Value::as_str).unwrap_or_default();
-    let version = declaration.get("version").and_then(Value::as_u64).unwrap_or_default();
-    let role = declaration.get("role").and_then(Value::as_str).unwrap_or_default();
+    let schema = declaration
+        .get("schema")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let version = declaration
+        .get("version")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let role = declaration
+        .get("role")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let source = data
         .get("source")
         .and_then(|value| value.get("path"))
@@ -1459,16 +1676,29 @@ pub fn explain_machine_declaration(data: &Value) -> String {
     }
 
     let requirements = declaration.get("requirements").unwrap_or(&Value::Null);
-    for (label, key) in [("Packages", "packages"), ("Configurations", "configurations")] {
+    for (label, key) in [
+        ("Packages", "packages"),
+        ("Configurations", "configurations"),
+    ] {
         lines.push(format!("{label}:"));
-        let items = requirements.get(key).and_then(Value::as_array).cloned().unwrap_or_default();
+        let items = requirements
+            .get(key)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
         if items.is_empty() {
             lines.push("  - none".to_owned());
         } else {
             for item in items {
                 let id = item.get("id").and_then(Value::as_str).unwrap_or_default();
-                let state = item.get("state").and_then(Value::as_str).unwrap_or_default();
-                lines.push(format!("  - {id}: {state}{}", render_reference(item.get("source"))));
+                let state = item
+                    .get("state")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                lines.push(format!(
+                    "  - {id}: {state}{}",
+                    render_reference(item.get("source"))
+                ));
             }
         }
     }
@@ -1483,7 +1713,10 @@ pub fn explain_machine_declaration(data: &Value) -> String {
         lines.push("  - none".to_owned());
     } else {
         for service in services {
-            let id = service.get("id").and_then(Value::as_str).unwrap_or_default();
+            let id = service
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             let mut states = Vec::new();
             if let Some(running) = service.get("running").and_then(Value::as_bool) {
                 states.push(format!("running={running}"));
@@ -1503,8 +1736,14 @@ pub fn explain_machine_declaration(data: &Value) -> String {
 
 pub fn explain_machine_inspection(data: &Value) -> String {
     let observation = data.get("observation").unwrap_or(&Value::Null);
-    let platform = observation.get("platform").and_then(Value::as_str).unwrap_or_default();
-    let architecture = observation.get("architecture").and_then(Value::as_str).unwrap_or_default();
+    let platform = observation
+        .get("platform")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let architecture = observation
+        .get("architecture")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let connector = data
         .get("source")
         .and_then(|value| value.get("connector"))
@@ -1527,18 +1766,40 @@ pub fn explain_machine_plan(data: &Value) -> String {
         format!("Machine plan: {role}"),
         format!(
             "Satisfied: {} | Changeable: {} | Missing: {} | Unsupported: {}",
-            summary.get("satisfied").and_then(Value::as_u64).unwrap_or_default(),
-            summary.get("changeable").and_then(Value::as_u64).unwrap_or_default(),
-            summary.get("missing").and_then(Value::as_u64).unwrap_or_default(),
-            summary.get("unsupported").and_then(Value::as_u64).unwrap_or_default(),
+            summary
+                .get("satisfied")
+                .and_then(Value::as_u64)
+                .unwrap_or_default(),
+            summary
+                .get("changeable")
+                .and_then(Value::as_u64)
+                .unwrap_or_default(),
+            summary
+                .get("missing")
+                .and_then(Value::as_u64)
+                .unwrap_or_default(),
+            summary
+                .get("unsupported")
+                .and_then(Value::as_u64)
+                .unwrap_or_default(),
         ),
     ];
     if let Some(entries) = data.get("entries").and_then(Value::as_array) {
         for entry in entries {
-            let status = entry.get("status").and_then(Value::as_str).unwrap_or_default();
-            let kind = entry.get("kind").and_then(Value::as_str).unwrap_or_default();
+            let status = entry
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let kind = entry
+                .get("kind")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             let id = entry.get("id").and_then(Value::as_str).unwrap_or_default();
-            let port = entry.get("port").and_then(Value::as_str).map(|value| format!(" via {value}")).unwrap_or_default();
+            let port = entry
+                .get("port")
+                .and_then(Value::as_str)
+                .map(|value| format!(" via {value}"))
+                .unwrap_or_default();
             let connector = entry
                 .get("connector")
                 .and_then(|value| value.get("id"))
@@ -1560,7 +1821,10 @@ pub fn explain_machine_plan(data: &Value) -> String {
 }
 
 pub fn explain_machine_verification(data: &Value) -> String {
-    let satisfied = data.get("satisfied").and_then(Value::as_bool).unwrap_or(false);
+    let satisfied = data
+        .get("satisfied")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let plan = data.get("plan").unwrap_or(&Value::Null);
     format!(
         "Machine verification: {}\n{}",
@@ -1570,14 +1834,22 @@ pub fn explain_machine_verification(data: &Value) -> String {
 }
 
 pub fn explain_machine_apply(data: &Value) -> String {
-    let outcome = data.get("outcome").and_then(Value::as_str).unwrap_or("unknown");
-    let operations = data.get("operations").and_then(Value::as_array).map_or(0, Vec::len);
+    let outcome = data
+        .get("outcome")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let operations = data
+        .get("operations")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
     let verification = data
         .get("verification")
         .and_then(|value| value.get("satisfied"))
         .and_then(Value::as_bool);
     format!(
         "Machine apply: {outcome}\nOperations: {operations}\nVerified: {}",
-        verification.map(|value| if value { "yes" } else { "no" }).unwrap_or("not-run"),
+        verification
+            .map(|value| if value { "yes" } else { "no" })
+            .unwrap_or("not-run"),
     )
 }

@@ -1,9 +1,11 @@
 pub mod action;
 pub mod agent_governance;
+pub mod automation;
 pub mod cli;
 pub mod control;
 pub mod machine;
 pub mod machine_account;
+pub mod personal;
 pub mod picker;
 pub mod projectcentral;
 pub mod projectcentral_ground;
@@ -91,7 +93,8 @@ pub use agent_governance::{
     ProjectGovernancePlan, RootGovernanceInspection, GOVERNANCE_RELATIONS_SCHEMA,
     GOVERNANCE_RELATIONS_SOURCE,
 };
-pub use cli::{run_cli, run_cli_with_surface, CliEnvironment, CliExecution};
+pub use automation::register_automation_actions;
+pub use cli::{run_cli, run_cli_with_runtime, run_cli_with_surface, CliEnvironment, CliExecution};
 pub use control::{
     locate_control_root, search_control, ControlSearchMatch, ControlSearchResult,
     ControlSkippedSource, ControlSourceRoot, SourceClass, AGENT_RETRIEVAL_DENY_MARKER,
@@ -111,6 +114,7 @@ pub use machine_account::{
     explain_account, AuthoredRoleSummary, DriftStatus, MachineAccount, MachineDriftEntry,
     MachineIdentity, MachineObservationRecord,
 };
+pub use personal::{create_personal_action_registry, register_personal_actions};
 pub use picker::{
     run_guided_action_picker, search_action_descriptors, NullTerminalSurface, StdioTerminalSurface,
     TerminalSurface,
@@ -158,25 +162,28 @@ pub use source_horizon::{
     SOURCE_CHANGE_SCHEMA, SOURCE_HORIZON_PROVIDER, SOURCE_HORIZON_SCHEMA,
 };
 pub use central_connector_sdk::{
-    run_configuration_manager_conformance, run_machine_inspector_conformance,
-    run_native_open_conformance, run_native_reveal_conformance, run_package_manager_conformance,
-    run_service_manager_conformance, run_synchronizer_conformance, run_tag_store_conformance,
-    validate_connector_manifest, CapabilityProbe, ConfigurationManager,
+    run_automation_conformance, run_configuration_manager_conformance,
+    run_machine_inspector_conformance, run_native_open_conformance, run_native_reveal_conformance,
+    run_package_manager_conformance, run_service_manager_conformance, run_synchronizer_conformance,
+    run_tag_store_conformance, validate_connector_manifest, Automation, AutomationConformanceFixture,
+    AutomationRunInput, AutomationRunOutput, CapabilityProbe, ConfigurationManager,
     ConfigurationManagerConformanceFixture, ConfigurationStateRequest, Connector,
     ConnectorContext, ConnectorDiagnostics, ConnectorManifest, ConnectorPortDeclaration,
     ConnectorRegistry, ConnectorSummary, MachineInspectionInput, MachineInspectionOutput,
     MachineInspector, MachineInspectorConformanceFixture, NativeOpen, NativeOpenInput,
     NativeOpenOutput, NativeReveal, NativeRevealInput, NativeRevealOutput,
-    NativeTargetConformanceFixture, ObservedConfiguration, ObservedPackage, ObservedService,
-    PackageManager, PackageManagerConformanceFixture, PackageStateRequest, PortContract, PortError,
-    PortErrorCode, ReconciliationSourceReference, ServiceManager, ServiceManagerConformanceFixture,
+    NativeTargetConformanceFixture, NotificationAuthorizationState, NotificationCapabilities,
+    NotificationCapabilityRequest, NotificationDelivery, NotificationDeliveryState,
+    NotificationRequest, ObservedConfiguration, ObservedPackage, ObservedService, PackageManager,
+    PackageManagerConformanceFixture, PackageStateRequest, PortContract, PortError, PortErrorCode,
+    ReconciliationSourceReference, ServiceManager, ServiceManagerConformanceFixture,
     ServiceStateRequest, StateChangePreview, StateChangeResult, SynchronizationRequest,
     Synchronizer, SynchronizerConformanceFixture, SynchronizerConformanceReport, TagReadInput,
     TagReadOutput, TagReplaceInput, TagReplaceOutput, TagStore, TagStoreConformanceFixture,
-    WorkDiscovery, WorkDiscoveryInput, WorkDiscoveryOutput, WorkItem,
-    CONFIGURATION_MANAGER_PORT, CONNECTOR_API_VERSION, MACHINE_INSPECTOR_PORT, NATIVE_OPEN_PORT,
-    NATIVE_REVEAL_PORT, PACKAGE_MANAGER_PORT, SERVICE_MANAGER_PORT, SYNCHRONIZER_PORT,
-    TAG_STORE_PORT, WORK_DISCOVERY_PORT,
+    UserNotification, WorkDiscovery, WorkDiscoveryInput, WorkDiscoveryOutput, WorkItem,
+    AUTOMATION_PORT, CONFIGURATION_MANAGER_PORT, CONNECTOR_API_VERSION, MACHINE_INSPECTOR_PORT,
+    NATIVE_OPEN_PORT, NATIVE_REVEAL_PORT, PACKAGE_MANAGER_PORT, SERVICE_MANAGER_PORT,
+    SYNCHRONIZER_PORT, TAG_STORE_PORT, USER_NOTIFICATION_PORT, WORK_DISCOVERY_PORT,
 };
 pub use central_reference_connectors::{
     create_default_connector_registry, FilesystemWorkConnector, InMemoryMachineConnector,

@@ -15,6 +15,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
 
 [[package]]
+name = "central-chezmoi-connector"
+version = "0.1.0"
+dependencies = [
+ "central-connector-sdk",
+]
+
+[[package]]
 name = "central-connector-sdk"
 version = "0.1.0"
 dependencies = [
@@ -38,10 +45,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "central-macos-connectors"
+name = "central-homebrew-connector"
 version = "0.1.0"
 dependencies = [
  "central-connector-sdk",
+]
+
+[[package]]
+name = "central-macos-connectors"
+version = "0.1.0"
+dependencies = [
+ "central-chezmoi-connector",
+ "central-connector-sdk",
+ "central-homebrew-connector",
  "central-reference-connectors",
  "ctrl",
  "plist",
@@ -50,10 +66,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "central-macos-host"
+version = "0.1.0"
+dependencies = [
+ "central-connector-sdk",
+ "central-macos-connectors",
+ "central-reference-connectors",
+ "central-shortcuts-connector",
+ "ctrl",
+ "serde_json",
+]
+
+[[package]]
 name = "central-reference-connectors"
 version = "0.1.0"
 dependencies = [
  "central-connector-sdk",
+]
+
+[[package]]
+name = "central-shortcuts-connector"
+version = "0.1.0"
+dependencies = [
+ "central-connector-sdk",
+]
+
+[[package]]
+name = "central-ubuntu-connectors"
+version = "0.1.0"
+dependencies = [
+ "central-connector-sdk",
+ "ctrl",
+ "serde_json",
+]
+
+[[package]]
+name = "central-ubuntu-host"
+version = "0.1.0"
+dependencies = [
+ "central-ubuntu-connectors",
+ "ctrl",
 ]
 
 [[package]]

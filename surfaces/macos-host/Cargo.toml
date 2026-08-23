@@ -1,0 +1,21 @@
+[package]
+name = "central-macos-host"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "central_macos_host"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ctrl-macos"
+path = "src/main.rs"
+
+[dependencies]
+central-connector-sdk = { path = "../../crates/connector-sdk" }
+central-macos-connectors = { path = "../../connectors/macos" }
+central-reference-connectors = { path = "../../connectors/reference" }
+central-shortcuts-connector = { path = "../../connectors/shortcuts" }
+ctrl = { path = "../../ctrl" }
+serde_json = "1"
