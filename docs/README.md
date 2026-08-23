@@ -80,7 +80,10 @@ resembles the product checkout (`mixed_root` in the structured health report).
 ## ProjectCentral
 
 - [PROJECTCENTRAL-CONTRACT.md](PROJECTCENTRAL-CONTRACT.md) — the authored Project
-  ground, NOW/DAY temporal field, and ProjectCentral ↔ Central integration contract.
+  ground and ProjectCentral ↔ Central integration contract.
+- [PROJECTCENTRAL-NOW.md](PROJECTCENTRAL-NOW.md) — the opt-in NOW temporal field,
+  DAY source snapshots/closure, bounded Agent returns, promotion lineage and
+  rollover semantics over an already-valid ProjectCentral.
 
 ## Supporting product understanding
 
@@ -95,6 +98,7 @@ resembles the product checkout (`mixed_root` in the structured health report).
 | Implementing a Connector | `CONNECTOR-SDK-SPEC.md` → `CONNECTOR-SDK-RUST.md` → `CONNECTOR-SDK-RUST.md` conformance harnesses → `skills/connector-authoring` |
 | Operating `ctrl` | `CLI-REFERENCE.md` → `INSTALL.md` |
 | Establishing the current machine | `MACHINE-WORKCELL-RELATION.md` → `CLI-REFERENCE.md` |
+| Working with Project NOW / DAY | `PROJECTCENTRAL-CONTRACT.md` → `PROJECTCENTRAL-NOW.md` → `CLI-REFERENCE.md` |
 | Recovering a machine | `RECOVERY-PROTOCOL.md` → `machine.declaration` Skill → `CONTROL-CONTENT-PROTOCOL.md` |
 | Accepting the product | `PRODUCT-ACCEPTANCE-MATRIX.md` → `CENTRAL-SYSTEM-SPEC.md` |
 
