@@ -404,20 +404,30 @@ pub fn project_source_bindings(project_root: &Path) -> io::Result<Vec<SourceBind
             continue;
         }
         // FlowRef is the continuity identity. SourceRef remains the current ordinary-file
-        // relation and may therefore change when the retained source is renamed.
-        bindings.retain(|_, binding| binding.path != flow.path);
-        bindings.insert(
-            flow.source_ref.clone(),
-            SourceBinding {
-                source_ref: flow.source_ref,
-                path: flow.path,
-                roles: vec!["flow-source".to_owned()],
-                provenance: "collaborative-revision-provenance".to_owned(),
-                standing: "working-source".to_owned(),
-                treatment: "projectcentral-flow-retained-in-place".to_owned(),
-                agent_retrieval_allowed: retrieval_allowed(project_root, &path),
-            },
-        );
+        // relation and may therefore change when the retained source is renamed. If the same
+        // retained file already participates through another explicit source relation (for
+        // example an adopted Wiki source), Flow is an additional role on that source rather
+        // than a replacement for the existing authority relation.
+        if let Some(existing) = bindings.values_mut().find(|binding| binding.path == flow.path) {
+            if !existing.roles.iter().any(|role| role == "flow-source") {
+                existing.roles.push("flow-source".to_owned());
+                existing.roles.sort();
+                existing.roles.dedup();
+            }
+        } else {
+            bindings.insert(
+                flow.source_ref.clone(),
+                SourceBinding {
+                    source_ref: flow.source_ref,
+                    path: flow.path,
+                    roles: vec!["flow-source".to_owned()],
+                    provenance: "collaborative-revision-provenance".to_owned(),
+                    standing: "working-source".to_owned(),
+                    treatment: "projectcentral-flow-retained-in-place".to_owned(),
+                    agent_retrieval_allowed: retrieval_allowed(project_root, &path),
+                },
+            );
+        }
     }
 
     Ok(bindings.into_values().collect())
