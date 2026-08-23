@@ -8,14 +8,21 @@ use central_ctrl::{
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static NEXT_TEMP_ROOT: AtomicU64 = AtomicU64::new(0);
 
 struct TempRoot(PathBuf);
 
 impl TempRoot {
     fn new() -> Self {
         let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let path = std::env::temp_dir().join(format!("central-source-horizon-{}-{nonce}", std::process::id()));
+        let sequence = NEXT_TEMP_ROOT.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "central-source-horizon-{}-{nonce}-{sequence}",
+            std::process::id()
+        ));
         fs::create_dir_all(&path).unwrap();
         Self(path)
     }
@@ -60,7 +67,6 @@ fn baseline_then_direct_edit_yields_one_logical_change_without_agent_invocation(
     assert_eq!(changed.new_changes[0].cursor, 1);
     assert!(changed.new_changes[0].actor.is_none());
 
-    // A save/touch whose bytes are unchanged is not a semantic source revision.
     fs::write(&source, "beta\n").unwrap();
     let unchanged = reconcile_project_sources(&project).unwrap();
     assert!(unchanged.new_changes.is_empty());
@@ -93,7 +99,6 @@ fn restart_and_offline_edit_are_recovered_by_horizon_read() {
     let original = fs::read_to_string(&source).unwrap();
     fs::write(&source, original.replace("\n}", ",\n  \"offline_marker\": true\n}" )).unwrap();
 
-    // No watcher process is required: the read seam itself reconciles current source truth.
     let horizon = read_project_change_horizon(&project, Some(0)).unwrap();
     assert_eq!(horizon.cursor, 1);
     assert_eq!(horizon.changes.len(), 1);
