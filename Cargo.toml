@@ -1,10 +1,16 @@
 [workspace]
 members = [
     "crates/connector-sdk",
+    "connectors/chezmoi",
     "connectors/git-sync",
+    "connectors/homebrew",
     "connectors/macos",
     "connectors/reference",
+    "connectors/shortcuts",
     "connectors/template",
+    "connectors/ubuntu",
     "ctrl",
+    "hosts/ubuntu",
+    "surfaces/macos-host",
 ]
 resolver = "2"
