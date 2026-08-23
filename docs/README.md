@@ -56,6 +56,10 @@ resembles the product checkout (`mixed_root` in the structured health report).
   Central source.
 - [PERSONAL-EXTENSION-SPEC.md](PERSONAL-EXTENSION-SPEC.md) — the first real
   extension set, used to prove and harden the public extension architecture.
+- [PERSONAL-SURFACE-AND-NOTIFICATION.md](PERSONAL-SURFACE-AND-NOTIFICATION.md) —
+  the composable Personal authored-ground Action extension and provider-neutral
+  user-notification Port, including the distinction between delivery and human
+  acknowledgement.
 
 ## Actions / Connectors / public implementation
 
@@ -109,6 +113,7 @@ resembles the product checkout (`mixed_root` in the structured health report).
 | Working with authored Project ground | `PROJECTCENTRAL-CONTRACT.md` → `PROJECTCENTRAL-AUTHORED-GROUND.md` → `CLI-REFERENCE.md` |
 | Working with Project NOW / DAY | `PROJECTCENTRAL-CONTRACT.md` → `PROJECTCENTRAL-NOW.md` → `CLI-REFERENCE.md` |
 | Working with Agent governance source | `AGENT-GOVERNANCE-SOURCES.md` → `CONTROL-CONTENT-PROTOCOL.md` → AIKit operational composition docs |
+| Working with Personal notification/proposal extensions | `PERSONAL-SURFACE-AND-NOTIFICATION.md` → `CONNECTOR-SDK-SPEC.md` → `CONTROL-CONTENT-PROTOCOL.md` |
 | Recovering a machine | `RECOVERY-PROTOCOL.md` → `machine.declaration` Skill → `CONTROL-CONTENT-PROTOCOL.md` |
 | Accepting the product | `PRODUCT-ACCEPTANCE-MATRIX.md` → `CENTRAL-SYSTEM-SPEC.md` |
 
