@@ -1,0 +1,39 @@
+name: OI97 native extension compose
+
+on:
+  push:
+    branches: [converge/oi97-native-extensions]
+    paths:
+      - '.github/workflows/oi97-native-extension-compose.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: converge/oi97-native-extensions
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Regenerate composed lockfile
+        run: cargo generate-lockfile
+      - name: Format check
+        run: cargo fmt --all --check
+      - name: Workspace tests
+        run: cargo test --workspace
+      - name: Workspace clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Commit normalized lockfile and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Cargo.lock
+          git rm .github/workflows/oi97-native-extension-compose.yml
+          git commit -m 'build(oi97): normalize native extension workspace lockfile'
+          git push origin HEAD:converge/oi97-native-extensions
