@@ -4,7 +4,7 @@ use crate::action::{
 };
 use crate::control::AGENT_RETRIEVAL_DENY_MARKER;
 use crate::projectcentral::{
-    read_project_manifest, AGENT_GOVERNANCE_DIR, HUMAN_SOURCE_DIR, ROOT_AGENT_GOVERNANCE_DIR,
+    read_project_manifest, AGENT_GOVERNANCE_DIR, ROOT_AGENT_GOVERNANCE_DIR,
     ROOT_HUMAN_SOURCE_DIR, ROOT_WIKI_DIR, WIKI_DIR,
 };
 use crate::result::{ActionResult, ResultStatus};
@@ -355,15 +355,19 @@ pub fn project_source_bindings(project_root: &Path) -> io::Result<Vec<SourceBind
     )?;
 
     for relation in read_ground_relations(project_root, &manifest.project_id)? {
-        let path = project_root.join(&relation.path);
+        let relative = relation.path.clone();
+        let path = project_root.join(&relative);
         if !safe_regular_file(project_root, &path)? {
             continue;
         }
+        // An explicit recognised relation is the identity/standing authority for its path.
+        // Remove the aperture fallback first so one physical source produces one logical change.
+        bindings.retain(|_, binding| binding.path != relative);
         bindings.insert(
             relation.source_ref.clone(),
             SourceBinding {
                 source_ref: relation.source_ref,
-                path: relation.path,
+                path: relative,
                 roles: relation.roles,
                 provenance: relation.provenance,
                 standing: relation.standing,
