@@ -1,10 +1,12 @@
 pub mod action;
+pub mod agent_governance;
 pub mod cli;
 pub mod control;
 pub mod machine;
 pub mod machine_account;
 pub mod picker;
 pub mod projectcentral;
+pub mod projectcentral_ground;
 pub mod projectcentral_now;
 pub mod source_horizon;
 #[path = "projectcentral_ops.rs"]
@@ -19,6 +21,7 @@ pub mod projectcentral_ops {
 
     pub fn register_projectcentral_actions(registry: &mut crate::action::ActionRegistry) {
         super::projectcentral_ops_base::register_projectcentral_actions(registry);
+        super::projectcentral_ground::register_projectcentral_ground_actions(registry);
         super::projectcentral_now::register_projectcentral_now_actions(registry);
         super::source_horizon::register_source_horizon_actions(registry);
     }
@@ -79,6 +82,15 @@ pub use action::{
     ActionInputDefinition, ActionInputSelection, ActionOutputDefinition, ActionRegistry,
     MutationClass,
 };
+pub use agent_governance::{
+    apply_project_governance_relation, inspect_project_governance, inspect_root_governance,
+    plan_project_governance, GovernanceApplyResult, GovernanceCandidate,
+    GovernanceCompositionBoundary, GovernanceMaintenancePolicy, GovernancePlanItem,
+    GovernanceProvenance, GovernanceSkippedSource, GovernanceSourceRecord,
+    GovernanceSourceRelation, GovernanceTreatment, ProjectGovernanceInspection,
+    ProjectGovernancePlan, RootGovernanceInspection, GOVERNANCE_RELATIONS_SCHEMA,
+    GOVERNANCE_RELATIONS_SOURCE,
+};
 pub use cli::{run_cli, run_cli_with_surface, CliEnvironment, CliExecution};
 pub use control::{
     locate_control_root, search_control, ControlSearchMatch, ControlSearchResult,
@@ -110,6 +122,14 @@ pub use projectcentral::{
     ROOT_AGENT_GOVERNANCE_DIR, ROOT_HUMAN_SOURCE_DIR, ROOT_WIKI_DIR, ROOT_WIKI_SOURCE,
     WIKI_DIR, WIKI_PROFILE, WIKI_SOURCE,
 };
+pub use projectcentral_ground::{
+    apply_accepted_ground_relation, inspect_project_ground, plan_project_ground,
+    register_projectcentral_ground_actions, GroundAccountHandoff, GroundApplyResult,
+    GroundCandidate, GroundInspection, GroundPlan, GroundPlanItem, GroundReturnPolicy,
+    GroundSkippedSource, GroundSourceRecord, GroundSourceRelation, GroundStatus,
+    SourceProvenance, SourceStanding, SourceTreatment, GROUND_RELATIONS_DIR,
+    GROUND_RELATIONS_SCHEMA, GROUND_RELATIONS_SOURCE,
+};
 pub use projectcentral_now::{
     initialize_now, inspect_now, promote as promote_now, rollover as rollover_now, NowHandoff,
     NowInspection, NowPaths, NowPolicy, NowPromotion, PromotionReceipt, RolloverReport,
@@ -133,7 +153,8 @@ pub use source_horizon::{
     project_source_bindings, read_project_change_horizon, reconcile_control_sources,
     reconcile_project_sources, CompactionReport, ObservedSource, ReconcileReport, SourceBinding,
     SourceChange, SourceChangeKind, SourceHorizon, SourceRevision, CONTROL_HORIZON_STATE,
-    GROUND_RELATIONS_SCHEMA, GROUND_RELATIONS_SOURCE, PROJECT_HORIZON_STATE,
+    GROUND_RELATIONS_SCHEMA as SOURCE_HORIZON_GROUND_RELATIONS_SCHEMA,
+    GROUND_RELATIONS_SOURCE as SOURCE_HORIZON_GROUND_RELATIONS_SOURCE, PROJECT_HORIZON_STATE,
     SOURCE_CHANGE_SCHEMA, SOURCE_HORIZON_PROVIDER, SOURCE_HORIZON_SCHEMA,
 };
 pub use central_connector_sdk::{
