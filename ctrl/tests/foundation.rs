@@ -248,13 +248,16 @@ fn action_list_has_human_and_structured_cli_renderings() {
     assert!(human.output.contains("projectcentral.now.update\tUpdate NOW lifecycle"));
     assert!(human.output.contains("projectcentral.now.promote\tPromote NOW material"));
     assert!(human.output.contains("projectcentral.now.rollover\tClose DAY and roll NOW"));
+    assert!(human.output.contains("projectcentral.change.horizon\tRead current Source Change Horizon"));
+    assert!(human.output.contains("projectcentral.change.reconcile\tReconcile Project source revisions"));
+    assert!(human.output.contains("projectcentral.change.ack\tAcknowledge Source Change cursor"));
 
     let structured = central_ctrl::run_cli(&["--json".to_owned(), "action.list".to_owned()], &environment);
     assert_eq!(structured.exit_code, 0);
     let value: serde_json::Value = serde_json::from_str(&structured.output).unwrap();
     assert_eq!(value["status"], "success");
     let actions = value["data"]["actions"].as_array().unwrap();
-    assert_eq!(actions.len(), 31);
+    assert_eq!(actions.len(), 34);
     let ids = actions.iter().filter_map(|action| action["id"].as_str()).collect::<Vec<_>>();
     for id in [
         "projectcentral.inspect",
@@ -270,6 +273,9 @@ fn action_list_has_human_and_structured_cli_renderings() {
         "projectcentral.now.update",
         "projectcentral.now.promote",
         "projectcentral.now.rollover",
+        "projectcentral.change.horizon",
+        "projectcentral.change.reconcile",
+        "projectcentral.change.ack",
         "machine.account",
     ] {
         assert!(ids.contains(&id), "missing Action {id}");
