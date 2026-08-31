@@ -12,6 +12,7 @@ pub mod projectcentral_ground;
 pub mod projectcentral_now;
 pub mod projectcentral_flow;
 pub mod source_horizon;
+pub mod world;
 #[path = "projectcentral_ops.rs"]
 mod projectcentral_ops_base;
 pub mod projectcentral_ops {
@@ -168,6 +169,13 @@ pub use source_horizon::{
     GROUND_RELATIONS_SCHEMA as SOURCE_HORIZON_GROUND_RELATIONS_SCHEMA,
     GROUND_RELATIONS_SOURCE as SOURCE_HORIZON_GROUND_RELATIONS_SOURCE, PROJECT_HORIZON_STATE,
     SOURCE_CHANGE_SCHEMA, SOURCE_HORIZON_PROVIDER, SOURCE_HORIZON_SCHEMA,
+};
+pub use world::{
+    AgentSetMember, AgentSetRecord, AgentSetRef, AgentSetRegistry, EffectiveSourceState,
+    EffectiveWorldSource, PlacementIntent, PlacementPreference, PlacementStrength, PlacementSubject,
+    ResolvedAgentSet, SourceProvenanceHop, SourceTreatment as WorldSourceTreatment,
+    WorldError, WorldGraph, WorldRecord, WorldRef, WorldReturnProposal, WorldSourceRelation,
+    AGENT_SET_SCHEMA, WORLD_RELATION_SCHEMA,
 };
 pub use central_connector_sdk::{
     run_automation_conformance, run_configuration_manager_conformance,
