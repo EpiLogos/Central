@@ -4,6 +4,7 @@ mod connector;
 mod notification;
 mod port;
 mod scoped_conformance;
+mod source_history;
 mod synchronization_conformance;
 
 pub use automation_conformance::{run_automation_conformance, AutomationConformanceFixture};
@@ -46,6 +47,11 @@ pub use port::{
 pub use scoped_conformance::{
     run_scoped_machine_inspector_conformance, ScopedMachineInspectorConformanceFixture,
     ScopedMachineInspectorConformanceReport,
+};
+pub use source_history::{
+    SourceCompareOutput, SourceCompareRequest, SourceHistory, SourceHistoryEntry,
+    SourceHistoryOutput, SourceHistoryRequest, SourceRevisionReadOutput, SourceRevisionReadRequest,
+    SOURCE_HISTORY_OPERATIONS, SOURCE_HISTORY_PORT,
 };
 pub use synchronization_conformance::{
     run_synchronizer_conformance, SynchronizerConformanceFixture, SynchronizerConformanceReport,

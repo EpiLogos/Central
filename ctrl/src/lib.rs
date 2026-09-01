@@ -30,6 +30,7 @@ pub mod projectcentral_ops {
         super::projectcentral_now::register_projectcentral_now_actions(registry);
         super::projectcentral_flow::register_projectcentral_flow_actions(registry);
         super::source_horizon::register_source_horizon_actions(registry);
+        super::source_history::register_source_history_actions(registry);
     }
 }
 pub mod recovery;
@@ -49,31 +50,15 @@ mod test_tempfile {
 
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
-    pub struct TempDir {
-        path: PathBuf,
-    }
-
-    impl TempDir {
-        pub fn path(&self) -> &Path {
-            &self.path
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
+    pub struct TempDir { path: PathBuf }
+    impl TempDir { pub fn path(&self) -> &Path { &self.path } }
+    impl Drop for TempDir { fn drop(&mut self) { let _ = fs::remove_dir_all(&self.path); } }
 
     pub fn tempdir() -> io::Result<TempDir> {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
         let sequence = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
-            "central-projectcentral-test-{}-{nonce}-{sequence}",
-            std::process::id()
+            "central-projectcentral-test-{}-{nonce}-{sequence}", std::process::id()
         ));
         fs::create_dir_all(&path)?;
         Ok(TempDir { path })
@@ -172,8 +157,10 @@ pub use source_horizon::{
     SOURCE_CHANGE_SCHEMA, SOURCE_HORIZON_PROVIDER, SOURCE_HORIZON_SCHEMA,
 };
 pub use source_history::{
-    SourceDifference, SourceHistoryEntry, SourceHistoryError, SourceHistoryProvider,
-    SourceHistoryRevision, SOURCE_DIFFERENCE_SCHEMA, SOURCE_HISTORY_SCHEMA,
+    compare_source_history, preview_source_recovery, read_source_history,
+    register_source_history_actions, CentralSourceCompare, CentralSourceHistory,
+    SourceRecoveryPreview, CENTRAL_SOURCE_HISTORY_SCHEMA,
+    CENTRAL_SOURCE_RECOVERY_PREVIEW_SCHEMA,
 };
 pub use world::{
     AgentSetMember, AgentSetRecord, AgentSetRef, AgentSetRegistry, EffectiveSourceState,
@@ -198,13 +185,16 @@ pub use central_connector_sdk::{
     NotificationRequest, ObservedConfiguration, ObservedPackage, ObservedService, PackageManager,
     PackageManagerConformanceFixture, PackageStateRequest, PortContract, PortError, PortErrorCode,
     ReconciliationSourceReference, ServiceManager, ServiceManagerConformanceFixture,
-    ServiceStateRequest, StateChangePreview, StateChangeResult, SynchronizationRequest,
+    ServiceStateRequest, SourceCompareOutput, SourceCompareRequest, SourceHistory,
+    SourceHistoryEntry, SourceHistoryOutput, SourceHistoryRequest, SourceRevisionReadOutput,
+    SourceRevisionReadRequest, StateChangePreview, StateChangeResult, SynchronizationRequest,
     Synchronizer, SynchronizerConformanceFixture, SynchronizerConformanceReport, TagReadInput,
     TagReadOutput, TagReplaceInput, TagReplaceOutput, TagStore, TagStoreConformanceFixture,
     UserNotification, WorkDiscovery, WorkDiscoveryInput, WorkDiscoveryOutput, WorkItem,
     AUTOMATION_PORT, CONFIGURATION_MANAGER_PORT, CONNECTOR_API_VERSION, MACHINE_INSPECTOR_PORT,
     NATIVE_OPEN_PORT, NATIVE_REVEAL_PORT, PACKAGE_MANAGER_PORT, SERVICE_MANAGER_PORT,
-    SYNCHRONIZER_PORT, TAG_STORE_PORT, USER_NOTIFICATION_PORT, WORK_DISCOVERY_PORT,
+    SOURCE_HISTORY_PORT, SYNCHRONIZER_PORT, TAG_STORE_PORT, USER_NOTIFICATION_PORT,
+    WORK_DISCOVERY_PORT,
 };
 pub use central_reference_connectors::{
     create_default_connector_registry, FilesystemWorkConnector, InMemoryMachineConnector,
