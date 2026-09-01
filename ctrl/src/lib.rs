@@ -12,6 +12,7 @@ pub mod projectcentral_ground;
 pub mod projectcentral_now;
 pub mod projectcentral_flow;
 pub mod source_horizon;
+pub mod source_history;
 pub mod world;
 #[path = "projectcentral_ops.rs"]
 mod projectcentral_ops_base;
@@ -169,6 +170,10 @@ pub use source_horizon::{
     GROUND_RELATIONS_SCHEMA as SOURCE_HORIZON_GROUND_RELATIONS_SCHEMA,
     GROUND_RELATIONS_SOURCE as SOURCE_HORIZON_GROUND_RELATIONS_SOURCE, PROJECT_HORIZON_STATE,
     SOURCE_CHANGE_SCHEMA, SOURCE_HORIZON_PROVIDER, SOURCE_HORIZON_SCHEMA,
+};
+pub use source_history::{
+    SourceDifference, SourceHistoryEntry, SourceHistoryError, SourceHistoryProvider,
+    SourceHistoryRevision, SOURCE_DIFFERENCE_SCHEMA, SOURCE_HISTORY_SCHEMA,
 };
 pub use world::{
     AgentSetMember, AgentSetRecord, AgentSetRef, AgentSetRegistry, EffectiveSourceState,
