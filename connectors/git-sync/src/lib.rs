@@ -1,7 +1,10 @@
+mod source_history;
+
 use central_connector_sdk::{
     CapabilityProbe, Connector, ConnectorContext, ConnectorManifest, ConnectorPortDeclaration,
-    PortContract, PortError, PortErrorCode, StateChangePreview, StateChangeResult,
-    SynchronizationRequest, Synchronizer, CONNECTOR_API_VERSION, SYNCHRONIZER_PORT,
+    PortContract, PortError, PortErrorCode, SourceHistory, StateChangePreview, StateChangeResult,
+    SynchronizationRequest, Synchronizer, CONNECTOR_API_VERSION, SOURCE_HISTORY_PORT,
+    SYNCHRONIZER_PORT,
 };
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -34,18 +37,24 @@ impl GitSynchronizerConnector {
             manifest: ConnectorManifest {
                 api_version: CONNECTOR_API_VERSION.to_owned(),
                 id: GIT_SYNCHRONIZER_CONNECTOR_ID.to_owned(),
-                version: "0.1.0".to_owned(),
-                display_name: "Git fast-forward synchronization".to_owned(),
-                ports: vec![ConnectorPortDeclaration {
-                    id: SYNCHRONIZER_PORT.id.to_owned(),
-                    version: SYNCHRONIZER_PORT.version.to_owned(),
-                }],
+                version: "0.2.0".to_owned(),
+                display_name: "Git synchronization and source history".to_owned(),
+                ports: vec![
+                    ConnectorPortDeclaration {
+                        id: SYNCHRONIZER_PORT.id.to_owned(),
+                        version: SYNCHRONIZER_PORT.version.to_owned(),
+                    },
+                    ConnectorPortDeclaration {
+                        id: SOURCE_HISTORY_PORT.id.to_owned(),
+                        version: SOURCE_HISTORY_PORT.version.to_owned(),
+                    },
+                ],
                 platforms: vec!["*".to_owned()],
                 entrypoint: "rust:central-git-sync-connector::GitSynchronizerConnector".to_owned(),
                 runtime_requirements: vec!["git".to_owned()],
                 dependency_probes: vec!["git --version".to_owned()],
                 configuration_requirements: vec![format!(
-                    "{TARGET_ENV} must name an existing Git working tree to synchronize."
+                    "{TARGET_ENV} is required only for Synchronizer; SourceHistory uses the request-scoped world root."
                 )],
                 mutation_scope: "externally-mutating".to_owned(),
             },
@@ -372,11 +381,14 @@ impl Connector for GitSynchronizerConnector {
         &self.manifest
     }
 
-    fn probe(&self, _port: &PortContract, _context: &ConnectorContext) -> CapabilityProbe {
+    fn probe(&self, port: &PortContract, _context: &ConnectorContext) -> CapabilityProbe {
         if !self.git_available() {
             return CapabilityProbe::unavailable(format!(
                 "Git executable is unavailable; configure {GIT_ENV} when git is not on PATH."
             ));
+        }
+        if port.id == SOURCE_HISTORY_PORT.id {
+            return CapabilityProbe::available();
         }
         if self.target.as_os_str().is_empty() {
             return CapabilityProbe::unavailable(format!(
@@ -393,6 +405,10 @@ impl Connector for GitSynchronizerConnector {
     }
 
     fn synchronizer(&self) -> Option<&dyn Synchronizer> {
+        Some(self)
+    }
+
+    fn source_history(&self) -> Option<&dyn SourceHistory> {
         Some(self)
     }
 }
