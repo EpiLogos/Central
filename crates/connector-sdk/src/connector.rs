@@ -3,6 +3,7 @@ use crate::port::{
     Automation, ConfigurationManager, MachineInspector, NativeOpen, NativeReveal, PackageManager,
     PortContract, ServiceManager, Synchronizer, TagStore, WorkDiscovery,
 };
+use crate::source_history::SourceHistory;
 use serde::Serialize;
 use std::collections::BTreeSet;
 
@@ -113,39 +114,18 @@ impl CapabilityProbe {
 pub trait Connector: Send + Sync {
     fn manifest(&self) -> &ConnectorManifest;
     fn probe(&self, port: &PortContract, context: &ConnectorContext) -> CapabilityProbe;
-    fn work_discovery(&self) -> Option<&dyn WorkDiscovery> {
-        None
-    }
-    fn automation(&self) -> Option<&dyn Automation> {
-        None
-    }
-    fn native_open(&self) -> Option<&dyn NativeOpen> {
-        None
-    }
-    fn native_reveal(&self) -> Option<&dyn NativeReveal> {
-        None
-    }
-    fn tag_store(&self) -> Option<&dyn TagStore> {
-        None
-    }
-    fn machine_inspector(&self) -> Option<&dyn MachineInspector> {
-        None
-    }
-    fn package_manager(&self) -> Option<&dyn PackageManager> {
-        None
-    }
-    fn configuration_manager(&self) -> Option<&dyn ConfigurationManager> {
-        None
-    }
-    fn service_manager(&self) -> Option<&dyn ServiceManager> {
-        None
-    }
-    fn synchronizer(&self) -> Option<&dyn Synchronizer> {
-        None
-    }
-    fn user_notification(&self) -> Option<&dyn UserNotification> {
-        None
-    }
+    fn work_discovery(&self) -> Option<&dyn WorkDiscovery> { None }
+    fn automation(&self) -> Option<&dyn Automation> { None }
+    fn native_open(&self) -> Option<&dyn NativeOpen> { None }
+    fn native_reveal(&self) -> Option<&dyn NativeReveal> { None }
+    fn tag_store(&self) -> Option<&dyn TagStore> { None }
+    fn machine_inspector(&self) -> Option<&dyn MachineInspector> { None }
+    fn package_manager(&self) -> Option<&dyn PackageManager> { None }
+    fn configuration_manager(&self) -> Option<&dyn ConfigurationManager> { None }
+    fn service_manager(&self) -> Option<&dyn ServiceManager> { None }
+    fn synchronizer(&self) -> Option<&dyn Synchronizer> { None }
+    fn source_history(&self) -> Option<&dyn SourceHistory> { None }
+    fn user_notification(&self) -> Option<&dyn UserNotification> { None }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
