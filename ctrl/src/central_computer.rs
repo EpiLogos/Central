@@ -320,7 +320,7 @@ impl fmt::Display for CentralComputerError {
             Self::InvalidSelectedSources => formatter.write_str("selected-source scope requires non-empty source refs"),
             Self::WrongComputerRelation { expected, actual } => write!(formatter, "access intent belongs to Central Computer {actual}, expected {expected}"),
             Self::ScopeOutsideProjection(world) => write!(formatter, "access scope World {world} is not projected on this Central Computer"),
-            Self::World(error) => Display::fmt(error, formatter),
+            Self::World(error) => fmt::Display::fmt(error, formatter),
         }
     }
 }
