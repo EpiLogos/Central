@@ -122,7 +122,7 @@ fn mixed_project_context_preserves_role_authority_and_presentation_distinctions(
         .find(|candidate| candidate.path == "AGENTS.md")
         .expect("AGENTS.md is a governance candidate");
     assert_eq!(agents.provenance, "unresolved");
-    assert!(agents.roles.iter().any(|role| role == "possible-project-agent-governance"));
+    assert_eq!(agents.source_role, "possible-project-agent-governance");
 
     assert_eq!(governance.composition.operational_resolution_owner, "AIKit");
     assert!(!governance
