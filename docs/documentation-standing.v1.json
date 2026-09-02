@@ -1,0 +1,140 @@
+{
+  "schema": "central.documentation-standing/v1",
+  "purpose": "Canonical machine-readable documentation standing ladder for source recovery, claim management, drift detection and standing-aware retrieval across O:I Projects.",
+  "standing_is_not_precedence": true,
+  "standing_is_not_project_act_position": true,
+  "filename_establishes_standing": false,
+  "standings": [
+    {
+      "order": 0,
+      "id": "authored-human-position",
+      "label": "authored position",
+      "question": "What meaning or determination does a recognised author remain responsible for at this scope?",
+      "established_by": [
+        "explicit human authorship",
+        "explicit human adoption or Recognition"
+      ],
+      "does_not_establish": [
+        "current implementation",
+        "observed result"
+      ]
+    },
+    {
+      "order": 1,
+      "id": "design-commitment",
+      "label": "design commitment",
+      "question": "What deliberately adopted design determination is intended to realise the authored position?",
+      "established_by": [
+        "accepted design decision",
+        "owner-recognised design commitment"
+      ],
+      "does_not_establish": [
+        "architecture contract by filename alone",
+        "current implementation"
+      ]
+    },
+    {
+      "order": 2,
+      "id": "architecture-contract",
+      "label": "architecture contract",
+      "question": "What structural relation, interface, invariant or ownership boundary is implementation expected to satisfy?",
+      "established_by": [
+        "accepted structural contract",
+        "owner-recognised protocol, schema, interface or architecture relation"
+      ],
+      "does_not_establish": [
+        "current implementation merely because a diagram describes it",
+        "authored product meaning"
+      ]
+    },
+    {
+      "order": 3,
+      "id": "implementation-fact",
+      "label": "implementation fact",
+      "question": "What does the current source or executable implementation actually contain or do at this revision?",
+      "established_by": [
+        "revision-specific source",
+        "merged executable or configuration state"
+      ],
+      "does_not_establish": [
+        "design adoption",
+        "architecture authority",
+        "successful observed behaviour"
+      ]
+    },
+    {
+      "order": 4,
+      "id": "observed-evidence",
+      "label": "observed evidence",
+      "question": "What actually happened in an identifiable Run, test, CI job, measurement, deployment or human observation?",
+      "established_by": [
+        "concrete attributable observation",
+        "Run, test, CI, benchmark, acceptance or experience receipt"
+      ],
+      "does_not_establish": [
+        "general implementation fact outside the observed condition",
+        "upstream design or architecture adoption"
+      ]
+    },
+    {
+      "order": 5,
+      "id": "agent-inference",
+      "label": "Agent inference",
+      "question": "What interpretation, synthesis, diagnosis, hypothesis or proposal is derived from other sources?",
+      "established_by": [
+        "explicitly attributable Agent or generated synthesis"
+      ],
+      "does_not_establish": [
+        "authorship",
+        "design adoption",
+        "architecture contract",
+        "implementation fact",
+        "observed evidence"
+      ]
+    }
+  ],
+  "orthogonal_dimensions": {
+    "project_act_position": [
+      "P0-ground",
+      "P1-world",
+      "P2-praxis",
+      "P3-intent",
+      "P4-context-frame",
+      "P5-return-recognition"
+    ],
+    "temporal_development_state": [
+      "current-main revision",
+      "active branch, PR or issue",
+      "open, draft, blocked, merged, superseded or closed",
+      "NOW, DAY, Focus or Commission",
+      "local versus remote convergence state"
+    ],
+    "source_dimensions": [
+      "identity/provenance",
+      "semantic role/documentation standing",
+      "scope/relations/temporal state",
+      "authority/mutation",
+      "availability/disclosure/activation",
+      "return/lifecycle"
+    ]
+  },
+  "non_standing_values": [
+    "current-development-state",
+    "filename-role",
+    "project-act-position",
+    "runtime-precedence",
+    "freshness"
+  ],
+  "management_rules": [
+    "Recover relevant native sources before assigning or relying on standing.",
+    "Treat filenames and extensions as discovery hints only.",
+    "Preserve provenance, scope and exact revision alongside standing.",
+    "Classify materially different claims independently when one file contains more than one standing.",
+    "Surface conflicts between adjacent standings as drift rather than resolving them with a scalar highest-wins rule.",
+    "Do not silently promote Agent inference into observed evidence, implementation fact, architecture contract, design commitment or authored position.",
+    "Do not silently promote observed evidence into implementation fact or implementation fact into architecture/design/authorship.",
+    "Keep current development state as temporal/lifecycle context rather than a documentation standing.",
+    "Attach P0-P5 only as situated Project-act participation; never use P1 World as a catch-all documentation standing.",
+    "Retain heterogeneous native Project sources in place when stable refs and relations are sufficient."
+  ]
+}
