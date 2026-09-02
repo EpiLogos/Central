@@ -1,6 +1,7 @@
 pub mod action;
 pub mod agent_governance;
 pub mod automation;
+pub mod central_computer;
 pub mod cli;
 pub mod control;
 pub mod machine;
@@ -83,6 +84,11 @@ pub use agent_governance::{
     GOVERNANCE_RELATIONS_SOURCE,
 };
 pub use automation::register_automation_actions;
+pub use central_computer::{
+    CentralComputerAccessIntent, CentralComputerError, CentralComputerHandoff,
+    CentralComputerProjection, ComputerAccessScope, ComputerAccessSubject, WorkspaceIntent,
+    CENTRAL_COMPUTER_ACCESS_SCHEMA, CENTRAL_COMPUTER_PROJECTION_SCHEMA,
+};
 pub use cli::{run_cli, run_cli_with_runtime, run_cli_with_surface, CliEnvironment, CliExecution};
 pub use control::{
     locate_control_root, search_control, ControlSearchMatch, ControlSearchResult,
