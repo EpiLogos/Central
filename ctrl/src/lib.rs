@@ -1,6 +1,7 @@
 pub mod action;
 pub mod agent_governance;
 pub mod agent_profile;
+pub mod agent_profile_store;
 pub mod automation;
 pub mod central_computer;
 pub mod cli;
@@ -87,6 +88,10 @@ pub use agent_governance::{
 pub use agent_profile::{
     AgentProfile, AgentProfileError, AgentProfileHandoff, AgentProfileScope,
     AGENT_PROFILE_SCHEMA,
+};
+pub use agent_profile_store::{
+    AgentProfileReading, AgentProfileStore, AgentProfileStoreError, AgentProfileWriteReceipt,
+    PROJECT_AGENT_PROFILE_DIR, ROOT_AGENT_PROFILE_DIR,
 };
 pub use automation::register_automation_actions;
 pub use central_computer::{
