@@ -1,6 +1,6 @@
 # Central — Project Context Protocol
 
-**Status:** proposed canonical context/source convention for Central #104  
+**Status:** correction candidate over the merged Central #104 protocol  
 **Suite Wayfinder:** EpiLogos/O-I#84  
 **Builds on:** ProjectCentral authored Ground (#70), Agent governance (#72), temporal working field (#74), Project praxis/source work (#82)  
 **Operational consumer:** AIKit ContextResolution / Knowledge / praxis  
@@ -8,223 +8,319 @@
 
 ## 1. Why this protocol exists
 
-A Project already contains several kinds of context which matter to humans and Agents for different reasons:
+A Project contains several kinds of context which matter to humans and Agents for different reasons:
 
 - human-authored purpose, founding positions, values and vision;
-- bounded current intent, briefs and desired outcomes;
-- native Project source, architecture, code, tests and external constraints;
-- Agent-maintained Wiki knowledge and derived structural understanding;
+- design decisions and commitments;
+- architecture contracts and structural constraints;
+- current implementation, code, schemas and tests;
+- observed Runs, test results and other evidence;
+- Agent-maintained Wiki knowledge and derived inference;
+- bounded current Intent, briefs and desired outcomes;
 - human-authored Agent governance;
 - Skills, Methods, capabilities, tools and learned praxis;
-- temporal material such as NOW, DAY, Focus and current developmental state;
+- temporal material such as NOW, DAY, Focus and current development state;
 - harness-native instruction files such as `AGENTS.md` or `CLAUDE.md`;
-- Runs, Claims, Evidence, drift, proposals and Recognition;
 - presentations such as HTML accounts and O:I `WorldPresentation` projections.
 
-Central already preserves many of these distinctions separately. This protocol states how they participate in one Project context field without turning them into one source class, one prompt, one database or one mandatory document tree.
+Central already preserves many of these distinctions separately. This protocol states how they compose without turning them into one source class, one prompt, one database or one mandatory document tree.
 
-The primary law is:
+The primary law remains:
 
 > **source role != source authority != disclosure / activation != runtime precedence**
 
-A filename can suggest a role. It does not prove authorship or authority. A source can be authoritative without being relevant to the current act. A harness can make text operative without Central or AIKit having selected it. A generated presentation can be useful without becoming canonical source.
+This correction adds another equally important law:
 
-The protocol therefore separates the **meaning and standing of Project context** from the **situated act by which some of that context becomes operative**.
+> **documentation standing != Project-act position**
 
-## 2. The sixfold Project-context movement
+The merged #104 protocol accidentally made the P0–P5 Project-act movement carry too much of the documentation burden. P1 `World` then had to contain architecture, design, code, tests, evidence, constraints and Agent knowledge at once. That sixfold remains useful as an agency/context grammar, but it is not the documentation ladder.
 
-The context field is represented as six related positions:
+For documentation, source recovery, claim management and bot reasoning, the canonical standing ladder is:
 
 ```text
-P0 — GROUND
-    durable authored meaning / originating horizon
-    founding positions · purpose · value · vision
-        ↓
-P1 — WORLD
-    the Project as encountered and known
-    native source · docs · architecture · code · tests · constraints · Agent Wiki
-        ↓
-P2 — PRAXIS
-    developed ways and powers of acting
-    governance · Skills · Methods · capabilities · tools · reusable working relations
-        ↓
-P3 — INTENT / DETERMINATION
-    the bounded present determination
-    desired change/outcome · reason-now · scope · constraints · success conditions
-        ↓
-P4 — CONTEXT FRAME
-    the situated composition for this act
-    Project · Focus · actor/Agency · authority · temporal state · selected context
-    · harness/body · disclosure condition
-        ↓
-P5 — RETURN / RECOGNITION
-    what the act and world return
-    Run · Claims · Evidence · encounter · drift · Wiki return · proposal · Recognition
-        ↺
-    renewed Ground / World / Praxis / Intent
+authored position
+    ↓
+design commitment
+    ↓
+architecture contract
+    ↓
+implementation fact
+    ↓
+observed evidence
+    ↓
+Agent inference
 ```
 
-These positions are **not six required directories** and **not six exclusive file classes**. They describe what a distinction is doing in the contextual whole.
+The standing of a claim is established by provenance, scope, owner recognition and the relation the source actually bears to the Project. A filename is only a discovery hint.
 
-A human-authored `intent.md`, for example, remains human-authored source in Central's provenance model while participating at P3 as the bounded determination of a particular developmental movement. A Wiki node remains Agent-maintained knowledge while participating at P1. A Project governance source remains human-authored governance while participating at P2. Storage/source class and contextual position remain distinct.
+`VISION.md` does not become authored position because it is named `VISION.md`. An architecture diagram does not become an architecture contract because it is a diagram. A test file is not observed evidence until something was actually run or observed. An Agent Wiki page does not become implementation fact because it accurately describes code.
 
-### P0 — Ground
+## 2. The documentation standing ladder
 
-Ground carries the durable human-authored reason from which the Project remains intelligible across changing implementations.
+The standing ladder is the default grammar for understanding Project documentation and claims across O:I products.
 
-It can include:
+It answers a different question from P0–P5:
+
+```text
+documentation standing
+    What kind of determination or truth claim is this?
+
+Project-act position
+    What is this source doing in the situated act now?
+```
+
+A single source may contain claims at more than one standing. Classification should therefore be claim-sensitive where material rather than assigning one standing to an entire file merely for convenience.
+
+### Authored position
+
+An authored position states meaning for which a human or recognised author remains responsible at the relevant scope.
+
+Typical material includes:
 
 ```text
 founding positions
 purpose / why
 values
-philosophical or conceptual positions
-relatively stabilised vision
-desired encounter / experience
+philosophical or conceptual determinations
+intended human encounter
+stabilised product vision
 important refusals or non-negotiable judgements
 ```
 
-Ground is authoritative for authored meaning at its scope. It is not evidence that current implementation realises that meaning.
+It is authoritative for authored meaning at its scope. It is not evidence that a design exists or that an implementation currently realises that meaning.
 
-### P1 — World
+Machine standing id: `authored-human-position`.
 
-World is the Project as it actually exists, resists and becomes known.
+### Design commitment
 
-It can include:
+A design commitment is a deliberately adopted determination of how an authored position is to be realised.
+
+Typical material includes:
 
 ```text
-native Project source and documents
-architecture and interfaces
-code / tests / schemas
-external systems and constraints
-current implementation facts
-Agent Wiki knowledge
-SourcePool / research evidence
-structural indexes when clearly derived
+accepted product/design decisions
+interaction or experience commitments
+data-model or workflow decisions before structural contract
+accepted ADR decisions where the decision itself is the important claim
+explicitly adopted design constraints
 ```
 
-The sources inside P1 can have different authority. `code` can be implementation truth without becoming authorship of purpose. Agent Wiki knowledge can be highly useful without becoming human-authored Ground.
+A design document, mockup, prototype or ADR is only a design commitment where its relevant claim has actually been adopted at that scope.
 
-### P2 — Praxis
+Machine standing id: `design-commitment`.
 
-Praxis holds developed relations for acting with the Project.
+### Architecture contract
 
-It can include:
+An architecture contract is a structural relation that implementations and integrations are expected to satisfy.
+
+Typical material includes:
 
 ```text
-human Agent governance
-Skills
-Methods / UsageOverlays
-SkillSets / Profiles
-capabilities / Actions
-tools / environment conventions
-reusable verification practice
-learned working routes with attributable fitness evidence
+public interfaces and protocols
+schemas and invariants
+ownership boundaries
+component relations
+accepted architecture diagrams
+compatibility contracts
+cross-product handoff contracts
 ```
 
-Governance and procedure remain distinct source classes even though both can participate at P2. Central owns durable human-authored governance/source identity. AIKit owns Skill/Method resolution and operative composition.
+Architecture is not merely an explanatory drawing of current code. A contract has a determining relation to implementations at its scope.
 
-### P3 — Intent / Determination
+Machine standing id: `architecture-contract`.
 
-Intent is the bounded present determination through which the larger Ground becomes a concrete developmental movement.
+### Implementation fact
 
-A useful Intent states enough of the following to guide action without becoming a mandatory schema:
+An implementation fact states what the current executable/source world actually contains or does at a specific revision.
+
+Typical material includes:
 
 ```text
-what is presently wanted
-why this change matters now
-subject / scope
-important constraints
-material relations or sources which must be preserved
-recognisable success / acceptance conditions
-known exclusions where they protect a real boundary
+current code paths
+current schema or configuration values
+current CLI/API behaviour encoded in source
+merged implementation state
+exact revision-specific capability
 ```
 
-`intent.md` is therefore a useful emerging convention, not a new Central ontology. `INTENT.md`, `intent/<feature>.md`, a product brief, an issue, a design brief or another native source may play this role when provenance and standing support that reading.
+Code can establish implementation fact without becoming the source of product purpose or retroactively redefining an architecture contract.
 
-Intent is more temporally determined than Vision:
+Machine standing id: `implementation-fact`.
+
+### Observed evidence
+
+Observed evidence records what actually happened when a system, user, Run, test or environment returned a result.
+
+Typical material includes:
 
 ```text
-founding positions
-    durable originating determinations
-        ↓
+test / CI result
+Run receipt
+benchmark or measurement
+physical/local acceptance result
+user-observed behaviour
+deployment or environment observation
+failure log tied to a concrete execution
+```
+
+Evidence can support or contradict an implementation claim or architecture expectation. It is not lower-value merely because it appears later in the ladder; the ladder is a provenance/standing relation, not a simplistic precedence ranking.
+
+Machine standing id: `observed-evidence`.
+
+### Agent inference
+
+Agent inference is a derived interpretation, synthesis, hypothesis, diagnosis or proposed relation produced from other sources.
+
+Typical material includes:
+
+```text
+Agent Wiki synthesis
+cross-source summary
+inferred architecture not yet adopted as contract
+diagnosis of likely cause
+research synthesis
+proposed design or source change
+```
+
+Inference can be excellent and highly useful. Its standing remains inference until the relevant determining relation changes through observation, implementation, contract adoption, design adoption or authorship.
+
+Machine standing id: `agent-inference`.
+
+## 3. Standing is not filename, freshness, role or precedence
+
+The ladder is useful only if adjacent dimensions remain distinct.
+
+### Filename / semantic role
+
+Filename and content can provide role hints such as:
+
+```text
 vision
-    relatively stabilised intended horizon
-        ↓
 intent
-    bounded present determination within that horizon
+architecture
+design
+research
+prototype
+governance
+wiki
+run-report
 ```
 
-A bounded Intent may be revised, superseded or closed without implying that the Project's founding position or long-range Vision has changed.
+Those hints drive discovery. They do not establish standing.
 
-### P4 — Context Frame
-
-The Context Frame is not another document category. It is the **integral situated composition** in which relevant context becomes the World of a particular act.
-
-A frame may compose:
+Examples:
 
 ```text
-Project / subject
-Focus / Commission / task
-actor / Agent / Agency
-current authority
-NOW / DAY / temporal state
-relevant Ground
-relevant World/source/Wiki material
-relevant Praxis
-active Intent
-harness / model / runtime body
-available and selected capabilities
-disclosure / activation conditions
-expected proof / Return path
+VISION.md
+    may contain authored position, design commitment, an unadopted draft,
+    or a generated proposal
+
+ARCHITECTURE.md
+    may contain an architecture contract, a descriptive implementation account,
+    or an Agent inference
+
+prototype.html
+    may be an authored desired-experience source, a design commitment,
+    a generated presentation, or ordinary implementation
+
+Agent Wiki page
+    may faithfully cite implementation facts and evidence while its own synthesis
+    remains Agent inference
 ```
 
-Central supplies stable source identity, provenance, standing, scope and retrieval eligibility. AIKit owns operational resolution, progressive disclosure, harness adaptation and precedence. Actuation owns situated Agency/WorldBinding semantics. Factory consumes the resolved condition for developmental work.
+### Current development state
 
-### P5 — Return / Recognition
+`current-development-state` is **not a seventh documentation standing**.
 
-Return carries the difference produced or revealed by the act back into the Project field.
-
-It can include:
+Current development state is temporal/lifecycle context:
 
 ```text
-Run / Execution identity
-Artifacts
-Claims / Evidence
-verification result
-experienced result
-changed implementation state
-Wiki update
-praxis fitness observation
-drift / conflict / staleness
-proposal against human-authored source
-human Recognition / accepted revision / rejection
+active branch / PR / issue
+current Focus / Commission
+merged / open / draft / blocked / superseded
+current-main revision
+local-vs-remote convergence state
+work presently in flight
 ```
 
-Returned reality can revise Agent knowledge directly where that source is Agent-maintained and authority permits it. It can pressure authored Ground, governance or Intent. It does not silently become human authorship.
+It belongs with scope/temporal applicability and lifecycle/Return. A statement such as “PR #165 is green” still needs a substantive standing for the underlying claim — normally observed evidence — plus temporal state saying which PR/revision is current.
 
-## 3. QL compatibility: relation, complement, nesting and return
+Existing serialized `current-development-state` values are a compatibility concern for the current Central source-relation implementation; new documentation reasoning must not treat that legacy value as a rung in the ladder.
 
-The sixfold is deliberately compatible with QL's dynamic grammar without making QL-MEF a dependency of ordinary Project correctness.
+### Runtime precedence
 
-The positions are meaningful through their relations rather than as six labels applied to six nouns.
+A higher standing is not automatically injected earlier or allowed to override every other source. AIKit owns operative ContextResolution and precedence. Standing tells the resolver and Agent what kind of claim it is handling; it does not replace situated resolution.
 
-A useful conjugate/complement reading is:
+### Conflict is relational, not “highest wins”
+
+The ladder is not a scalar trust score.
+
+Useful conflicts include:
+
+```text
+authored position ↔ design commitment
+    Is the adopted design still true to what the Project means?
+
+design commitment ↔ architecture contract
+    Does the structural contract actually express the accepted design?
+
+architecture contract ↔ implementation fact
+    Does current code satisfy the contract?
+
+implementation fact ↔ observed evidence
+    Did the implementation behave as its source/state suggested?
+
+observed evidence ↔ Agent inference
+    Does the interpretation actually follow from what was observed?
+```
+
+A bot should preserve both sides of a real conflict and name the drift. It should not erase returned reality because an upstream source is more authoritative for a different question.
+
+## 4. The P0–P5 Project-act movement
+
+P0–P5 remains the canonical grammar for how a Project field participates in a situated act:
+
+```text
+P0 — GROUND
+    durable originating horizon relevant to the act
+        ↓
+P1 — WORLD
+    the Project/world encountered for the act
+        ↓
+P2 — PRAXIS
+    developed ways and powers of acting
+        ↓
+P3 — INTENT / DETERMINATION
+    bounded present determination
+        ↓
+P4 — CONTEXT FRAME
+    situated composition for this act
+        ↓
+P5 — RETURN / RECOGNITION
+    what the act and world return
+        ↺
+    renewed Ground / World / Praxis / Intent
+```
+
+These positions are **not documentation levels, required directories or exclusive file classes**. They answer what a distinction is doing in the contextual whole.
+
+A design commitment can participate at P0 when it is part of the relevant inherited ground for a narrow implementation act. The same design commitment can participate at P3 when the present task is explicitly to realise it. An implementation fact can participate at P1 as encountered World and at P5 when a just-completed implementation is the returned reality of the Run. Observed evidence often participates at P5 but may be part of P1 for the next act. Agent inference can appear in P1 as available knowledge without becoming implementation truth.
+
+This is why the two sixes must not be collapsed.
+
+### QL compatibility
+
+The P-cycle remains deliberately compatible with QL's dynamic grammar without making QL-MEF a dependency of ordinary Project correctness.
+
+A useful conjugate reading remains:
 
 ```text
 P0 Ground        ↔ P5 Return / Recognition
-    authored origin   reality returned to authorship
-
 P1 World         ↔ P4 Context Frame
-    available world   situated composition of that world for this act
-
 P2 Praxis        ↔ P3 Intent
-    powers / ways     bounded determination those powers are acting toward
 ```
 
-The pairs do not collapse into one another. Their relation is what produces developmental movement.
-
-P4 is the recursive aperture. When a Context Frame internalises the whole contextual relation, it can expose the same six positions at the scale of the current act:
+P4 remains the recursive aperture. A resolved frame may expose:
 
 ```text
 4.0 — relevant Ground
@@ -235,48 +331,11 @@ P4 is the recursive aperture. When a Context Frame internalises the whole contex
 4.5 — expected and actual Return / evidence / Recognition path
 ```
 
-A deeper Focus or subtask can form another Context Frame inside that frame without requiring a second ontology. Recursion changes scope; it does not erase source identity or provenance.
+That recursive agency grammar is complementary to documentation standing. It does not classify architecture, code, evidence or inference into P-level documentation buckets.
 
-The cycle closes through Return:
+## 5. The Context Source Form
 
-```text
-0 → 1 → 2 → 3 → 4 → 5
-↑                   │
-└──── Recognition ──┘
-```
-
-P5 may return pressure to any earlier position:
-
-```text
-implementation fact changed       → P1 World update
-Skill repeatedly fails            → P2 Praxis pressure
-acceptance condition was wrong    → P3 Intent proposal
-context omitted a critical source → P4 resolution/praxis pressure
-project meaning itself matured    → P0 Ground proposal + human Recognition
-```
-
-## 4. Convention files and their contextual roles
-
-Well-known filenames are useful because humans and harnesses can discover them cheaply. They remain **signals, not constitutional authority**.
-
-| Convention / source | Typical contextual participation | Important boundary |
-| --- | --- | --- |
-| `FOUNDING-POSITIONS.md` / stabilised positions | P0 Ground | authored meaning; not proof of current capability |
-| `VISION.md` | P0 Ground | intended horizon; not current implementation truth |
-| `intent.md`, `INTENT.md`, briefs | P3 Intent | bounded determination; filename does not prove authorship |
-| `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, Copilot instructions | commonly P2 Praxis/governance; sometimes local P1 contract | semantic standing and harness activation are independent |
-| README / ADR / design / architecture docs | usually P1 World, sometimes P0 design commitment | determine role from content/provenance, not name alone |
-| Agent Wiki / ProjectMap | P1 World/knowledge | Agent-maintained knowledge != authored telos |
-| Skills / Methods | P2 Praxis | procedure != persistent governance |
-| NOW / DAY / Focus / Commission | P3/P4 situated determination | temporal state is not durable Ground by default |
-| Runs / Claims / Evidence | P5 Return | evidence != preference or authored intent |
-| HTML account / prototype / `WorldPresentation` | presentation over any position | extension/rendering != source authority |
-
-A source can legitimately participate in more than one contextual relation. The protocol preserves that multiplicity rather than forcing migration into a single bucket.
-
-## 5. The six-part Context Source Form
-
-Every materially relevant context source or relation should be describable through six questions. This is a protocol/form, not a requirement to serialise every field for every trivial source.
+Every materially relevant context source or claim should be describable through the following dimensions. This is a protocol/form, not a requirement to serialise every field for every trivial source.
 
 ### C0 — Identity / provenance
 
@@ -297,37 +356,36 @@ authorship/provenance
 
 Question: **what is this source and where did it come from?**
 
-### C1 — Role / standing
+### C1 — Role / documentation standing
 
 ```text
 semantic roles
-truth / claim standing
+standing
     authored-human-position
     design-commitment
     architecture-contract
     implementation-fact
     observed-evidence
-    current-development-state
-    Agent-inference
+    agent-inference
     unresolved
 ```
 
-Question: **what does this source mean here, and what kind of claim can it support?**
+Question: **what kind of determination or truth claim is this here?**
 
-A contextual-position hint (`P0`…`P5`) may be attached where useful without replacing the more precise semantic roles.
+`current-development-state` is not part of this list. P0–P5 may be attached separately as situated participation.
 
-### C2 — Scope / relation
+### C2 — Scope / relation / temporal state
 
 ```text
 suite / product / Project
 subtree / module / subject
 Focus / task / Commission
-temporal applicability
+temporal applicability / current-development-state
 actor / Agency / harness applicability
-relations to neighbouring sources / concepts / code / Runs
+relations to neighbouring sources / claims / code / Runs
 ```
 
-Question: **where and in relation to what does it apply?**
+Question: **where, when and in relation to what does it apply?**
 
 ### C3 — Authority / mutation
 
@@ -345,8 +403,6 @@ Question: **who determines this source and how may it change?**
 
 ### C4 — Availability / disclosure / activation
 
-The operative path is intentionally differentiated:
-
 ```text
 source exists
     ↓
@@ -361,28 +417,17 @@ retrieved / projected / harness-auto-loaded
 materially active in this act
 ```
 
-Where relevant, an activation receipt should retain:
-
-```text
-loader / resolver
-harness
-scope
-selection reason
-activation mode
-runtime precedence / conflict explanation
-o:i selected? yes/no
-materially active? yes/no
-```
+Where relevant, an activation receipt should retain loader/resolver, harness, scope, selection reason, activation mode, runtime precedence explanation and whether O:I selected the source.
 
 Question: **how, if at all, did this source become operative now?**
 
-Central owns source existence, durable identity and its own retrieval/privacy eligibility. **AIKit owns runtime composition, progressive disclosure and ContextResolution/Explain.** Native harnesses may independently auto-load their own convention files; AIKit should account for that fact rather than attribute the activation to Central.
+Central owns source existence, durable identity and its own retrieval/privacy eligibility. AIKit owns runtime composition, progressive disclosure and ContextResolution/Explain. Native harnesses may independently auto-load convention files; AIKit should account for that fact rather than attribute the activation to Central.
 
 ### C5 — Return / lifecycle
 
 ```text
 supersedes / superseded-by
-stale / conflict relation
+current / stale / conflicted / blocked / closed
 Run / Claim / Evidence refs
 returned pressure
 proposal
@@ -392,125 +437,221 @@ accepted / rejected / narrowed / deleted revision
 
 Question: **what has reality returned about this source or its use, and what happened next?**
 
-## 6. Ambient harness context is a first-class observable condition
+## 6. Convention files
 
-Agent harnesses increasingly treat well-known files as extensions of their operative instruction field. That behaviour must remain distinguishable from O:I/Central source recognition.
+Well-known filenames are useful because humans and harnesses can discover them cheaply. They remain signals, not constitutional authority.
 
-A Project may therefore truthfully have this state:
+| Convention / source | Useful role hint | Standing must be established from |
+| --- | --- | --- |
+| `FOUNDING-POSITIONS.md` | founding position | authorship/adoption + scope |
+| `VISION.md` | vision / intended horizon | provenance + actual determining relation |
+| `intent.md`, `INTENT.md`, briefs | bounded Intent | provenance + present scope; often authored position or design commitment, but not by name |
+| README / design docs / ADRs | explanation / design | adoption and relation to implementation |
+| architecture docs / diagrams | architecture | accepted contract relation, not drawing format |
+| source code / schemas | implementation | exact revision and executable/source ownership |
+| test source | verification mechanism | code alone is implementation; a concrete result is evidence |
+| CI / Run / acceptance receipt | evidence | identifiable execution / observation |
+| Agent Wiki / ProjectMap | Agent knowledge | source-linked claims plus Agent-inference standing for synthesis |
+| `AGENTS.md`, `CLAUDE.md`, equivalent | possible governance / local contract | provenance/recognition independently of harness activation |
+| NOW / DAY / Focus / Commission | current development state / intent | temporal scope, not a standing rung by filename |
+| HTML / `WorldPresentation` | presentation | provenance + source relation; extension is orthogonal to standing |
+
+A source can legitimately participate in more than one semantic role and Project-act position. Where one file contains materially different claims, the bot should preserve claim-level distinctions rather than force the whole file into one standing.
+
+## 7. Bot retrieval and documentation management
+
+Central should make the standing relation easy for a bot to use across heterogeneous existing Projects without forcing migration.
+
+### Receive before determining
+
+For a substantive Project question or mutation, recover enough of the actual field before synthesising:
 
 ```text
-source_ref                central/project-native stable ref
+question / requested change
+    ↓
+recover relevant native sources and current revisions
+    ↓
+identify provenance + standing + scope for material claims
+    ↓
+follow relations between standings
+    ↓
+inspect current development state separately
+    ↓
+resolve the smallest sufficient situated Context Frame
+    ↓
+act / return with source refs and standing-preserving evidence
+```
+
+The bot should not begin from a generic documentation taxonomy and then search for files to fill it.
+
+### Retrieval by question
+
+The ladder informs retrieval depth, not mandatory prompt size.
+
+```text
+product meaning / why
+    authored position → design commitment as needed
+
+design decision
+    authored position ↔ design commitment → relevant architecture
+
+architecture question
+    design commitment ↔ architecture contract ↔ current implementation
+
+implementation / bug question
+    implementation fact ↔ observed evidence
+    + upstream contract/design only where materially relevant
+
+cross-source synthesis / recommendation
+    recover the standings actually needed
+    → return new synthesis explicitly as Agent inference
+```
+
+### Drift detection
+
+The bot should be able to report standing-sensitive drift such as:
+
+```text
+design not represented by architecture
+architecture contract not realised by current code
+implementation claim contradicted by test/Run evidence
+observed result not yet reflected in current-state account
+Agent Wiki inference stale against current implementation
+a generated proposal presented as though it were adopted design
+```
+
+Drift is a relation to surface, not permission to silently rewrite the upstream source.
+
+### Promotion / adoption law
+
+No source silently promotes itself up the ladder.
+
+```text
+Agent inference
+    -- observation --> may be supported by observed evidence
+    -- implementation --> may become true in code as implementation fact
+    -- architecture adoption --> may become architecture contract
+    -- design adoption --> may become design commitment
+    -- human authorship/adoption --> may become authored position
+```
+
+These arrows are changes in relation and authority, not automatic transformations of the original generated text.
+
+Observed evidence likewise does not automatically become implementation fact; it may reveal what the implementation did in one concrete condition. Implementation fact does not automatically become architecture contract. Architecture does not retroactively author product meaning.
+
+### Management actions
+
+A documentation-aware bot may:
+
+- discover and classify candidate sources conservatively;
+- attach or propose standing/provenance/scope relations;
+- retain native source in place;
+- identify unresolved standing rather than guessing;
+- show conflicts and drift across adjacent standings;
+- update Agent-maintained Wiki material when authority permits and current sources warrant it;
+- propose owner-native changes at the standing where the correction belongs;
+- retain exact source/revision/evidence refs for consequential returns.
+
+It must not:
+
+- infer authorship or adoption from filename, folder or prose style;
+- rewrite authored position from implementation or evidence without Recognition;
+- present an Agent inference as architecture/implementation/evidence merely because it is plausible;
+- use P1 `World` as a documentation bucket that erases standing;
+- use `current-development-state` as a substitute for documentation standing;
+- force Projects into a new folder/file taxonomy to gain layered awareness.
+
+## 8. Ambient harness context
+
+Agent harnesses increasingly treat well-known files as extensions of their operative instruction field. That behaviour remains distinguishable from O:I/Central source recognition and from documentation standing.
+
+A Project may truthfully have:
+
+```text
+source_ref                native / stable ref
 path                      AGENTS.md
 semantic_role             possible-project-agent-governance
+standing                  unresolved
 provenance                unresolved
 central_recognised        false
-agent_readable             true
+agent_readable            true
 harness                   codex
 activation                harness-native-auto-loaded
-scope                     repository root → current working directory
 runtime_precedence        harness-owned / explainable by adapter
 ai-kit-selected           false
 materially_active         true
 ```
 
-And similarly:
+`materially_active` does not mean `authoritative`, and neither property determines documentation standing.
+
+## 9. Intent and returned development
+
+A recognised bounded Intent should enter execution through existing identities rather than a new universal `IntentRef` database:
 
 ```text
-path                      CLAUDE.md
-semantic_role             possible-project-agent-governance
-provenance                human-adopted
-harness                   claude-code
-activation                harness-native-auto-loaded
-materially_active         true
-```
-
-These states are not contradictory. They express different dimensions of the same source relation.
-
-This distinction protects both honesty and security:
-
-```text
-Central recognised / trusted
-    !=
-text happened to influence the model
-```
-
-An Explain surface should be able to show both.
-
-## 7. Intent as developmental input
-
-A recognised bounded Intent should enter execution through existing identities rather than a new universal `IntentRef` database.
-
-The preferred relation is:
-
-```text
-human-authored / human-adopted Intent source
-        ↓ stable SourceRef / ContextSourceRef
+recognised Intent source
+        ↓ standing + SourceRef / ContextSourceRef
 P3 developmental determination
         ↓
 Factory Commission / Focus
         ↓
-P4 Context Frame
-    Ground + World + Praxis + Intent
-    + actor/authority/temporal/harness condition
+P4 situated Context Frame
         ↓
 Run / development
         ↓
-Claims + Evidence against success conditions
+implementation facts + observed evidence
         ↓
 P5 Return
-        ├─ Wiki / current-state update where warranted
+        ├─ Agent inference / Wiki update where warranted
         ├─ praxis fitness evidence
-        └─ authored-source proposal only where warranted
+        └─ owner-native proposal at the standing actually pressured
 ```
 
-An Anthropic-style `intent.md → requirements/design → plan → implementation → verification` workflow can therefore be consumed naturally, but Central does not constitutionalise one vendor's complete artifact sequence.
+A workflow such as `intent → requirements/design → plan → implementation → verification` can therefore be consumed naturally without constitutionalising one vendor's artifact sequence. Its useful distinctions are represented by provenance, standing, scope and Return rather than filename mandate.
 
-## 8. HTML and WorldPresentation
+## 10. HTML and WorldPresentation
 
-Presentation is orthogonal to contextual position.
-
-A human-authored vision, bounded Intent, Wiki reading, Run report or whole Project account can all have an HTML or `WorldPresentation` representation.
-
-The governing relation remains:
+Presentation remains orthogonal to documentation standing and Project-act position.
 
 ```text
-native / recognised source + contextual relations
+native / recognised source + standing + contextual relations
         ↓ explicit reading / projection
 structured account / WorldPresentation
         ↓
 HTML / desktop / Explore / another Surface
 ```
 
-A `.html` or `.htm` path is therefore a useful `html-prototype-or-presentation` role hint. It is not proof that the material is derived, generated or non-authoritative. Explicit provenance/Recognition can establish an authored HTML source where that is genuinely the source arrangement.
+A `.html` or `.htm` path is a role hint. Explicit provenance and recognition determine whether its claims are authored position, design commitment, implementation, generated presentation or something else.
 
-Conversely, generated HTML must not become human-authored Ground merely because a person viewed or liked the rendering.
-
-## 9. Ownership across O:I
+## 11. Ownership across O:I
 
 ### Central
 
-Owns:
+Central owns the durable source side:
 
 ```text
-durable source identity
-human authorship / adoption provenance
-ProjectCentral source relations
+source identity
+provenance / human authorship / adoption
+semantic role and documentation standing relation
+scope / temporal applicability
+ProjectCentral relations
 Agent governance source
 Agent Wiki filesystem identity
-native-source recognition / retain-in-place relation
+native-source recognition / retain-native-in-place
 retrieval/privacy eligibility in Central
-source revision / durable return proposal relation
+durable lifecycle / source-return proposal relation
 ```
 
-Central describes the context field; it does not resolve a runtime prompt.
+Central describes the field; it does not resolve a runtime prompt.
 
 ### AIKit
 
-Owns:
+AIKit owns:
 
 ```text
 ContextSource integration
 Knowledge traversal
+standing-aware source selection where useful
 Skill / Method / Profile resolution
 progressive disclosure
 Context Frame operational composition
@@ -519,25 +660,28 @@ ambient native-instruction accounting
 ContextResolution / Explain
 ```
 
+AIKit may use standing to explain why a source was selected and what kind of claim it can support. It does not change the source's standing merely by activating it.
+
 ### Factory
 
-Consumes stable refs and the resolved developmental condition:
+Factory consumes stable refs and the resolved developmental condition:
 
 ```text
 Project / Focus / Commission
-context sources materially consulted
+materially consulted source refs + standings
+current implementation state
 Methods / Skills / capability condition
 Run / Artifacts / Claims / Evidence
-praxis fitness and source-return pressure
+returned pressure against the standing actually implicated
 ```
 
 Factory does not become source, Wiki, Skill or prompt authority.
 
 ### Actuation / Workcell / O:I surfaces
 
-Actuation owns the situated Agency and Return relation. Workcell owns material execution lifecycle. O:I Projection/WorldPresentation owns explicit presentation/publication envelopes. Each can return evidence about context use without rewriting Central source authority.
+Actuation owns situated Agency and Return semantics. Workcell owns material execution lifecycle. O:I Projection/WorldPresentation owns explicit presentation/publication envelopes. Each can return evidence about context use without rewriting Central source authority.
 
-## 10. Context economy
+## 12. Context economy
 
 The protocol describes a whole larger than any one prompt.
 
@@ -547,110 +691,78 @@ Project Context Field
 load all Project context
 ```
 
-The common operating law is:
+The operating law is:
 
-> **resolve the smallest sufficient Context Frame for the present act, while retaining addresses back into the larger Project field.**
+> **resolve the smallest sufficient Context Frame for the present act while retaining addresses and standings back into the larger Project field.**
 
-This means:
+Standing-aware retrieval should increase precision, not create a requirement to load all six standings for every task.
 
-- durable Ground can remain available without always being injected;
-- deep Wiki/source context can be traversed progressively;
-- procedures can remain behind Skills/Methods until relevant;
-- Intent can anchor a developmental Run without carrying every founding note;
-- harness-native ambient context is accounted for even when it was not deliberately selected;
-- Return retains enough provenance to explain which context materially conditioned a consequential act.
+## 13. Conformance
 
-## 11. Conformance
+A healthy implementation should prove at least these relations:
 
-A healthy implementation should prove at least the following relations.
+1. The exact six documentation standings are represented in order: authored position → design commitment → architecture contract → implementation fact → observed evidence → Agent inference.
+2. `current-development-state` is represented as temporal/lifecycle context and not as a seventh standing in new reasoning/contracts.
+3. P0–P5 remains available as a situated Project-act grammar and is explicitly orthogonal to documentation standing.
+4. Filename/extension does not establish standing.
+5. A mixed Project can distinguish a Vision/position, adopted design, architecture contract, current code, concrete test/Run evidence and Agent Wiki inference without moving them into required directories.
+6. A conflict between architecture and code or between code and evidence is surfaced as drift rather than collapsed by scalar precedence.
+7. Agent inference cannot silently promote to authored/design/architecture/implementation/evidence standing.
+8. AIKit can progressively disclose the smallest sufficient sources while retaining standing/provenance in Explain.
+9. Factory/Actuation/Workcell can return implementation/evidence pressure to the correct owner-native source without becoming source authority.
+10. Existing native Projects remain valid; the pattern works by relation and provenance rather than migration.
 
-### Mixed Project source field
-
-A real or fixture Project contains:
-
-```text
-VISION.md
-intent/feature.md
-AGENTS.md and/or CLAUDE.md
-README / architecture or design source
-ProjectCentral Agent Wiki
-Skill / Method reference
-NOW / Focus material
-HTML prototype or account
-Run / Evidence
-```
-
-Inspection preserves the different role/provenance/authority relations rather than treating all Markdown as one context class.
-
-### Intent / Vision distinction
-
-A stabilised Vision can remain unchanged while a bounded Intent is completed or superseded. Returned implementation evidence can challenge Intent without automatically revising Vision or founding Ground.
-
-### Harness-native activation
-
-One real/conformance Claude Code or Codex session proves that a convention file can be materially active because of native harness behaviour while Central semantic recognition/adoption remains separately reported.
-
-### Progressive disclosure
-
-A small task does not receive the whole Project context corpus. A product-meaning task can deepen into Ground/Intent. A code-structure task can traverse World/Wiki/source. A procedural task can invoke relevant Praxis.
-
-### Return
-
-A consequential Run retains the smallest sufficient source/ContextResolution evidence to explain the operative condition and routes returned difference to the correct owner:
-
-```text
-Wiki/current reality → maintainable derived/Agent source
-Praxis problem        → Skill/Method/governance proposal as appropriate
-Intent pressure       → bounded Intent proposal/Recognition
-Ground pressure       → explicit human-authored proposal/Recognition
-```
-
-## 12. Non-goals
+## 14. Non-goals
 
 This protocol does not create:
 
-- a mandatory `INTENT.md` or `VISION.md`;
-- a six-directory ProjectCentral taxonomy;
+- six required documentation directories;
+- a requirement that every file have exactly one standing;
+- a scalar “authority score” where upstream always wins;
+- a mandatory `INTENT.md`, `VISION.md`, `ARCHITECTURE.md` or documentation suite;
 - a universal `ProjectContext` database;
-- an `IntentRef` primitive in Factory;
 - a Central-owned runtime precedence engine;
 - a requirement for QL-MEF in ordinary operation;
-- a rule that HTML is always derived or Markdown is always source;
 - permission for Agent-generated interpretation to become human authorship automatically.
 
-## 13. Compact form
+## 15. Compact form
 
-For human and Agent inspection, the protocol should ultimately support a concise readout equivalent to:
-
-```text
-PROJECT CONTEXT
-
-0 Ground       why / horizon
-1 World        what exists and is known
-2 Praxis       how action is developed / enabled
-3 Intent       what is presently being determined
-4 Context      what is actually composed for this act
-5 Return       what reality returned and what changed
-
-SOURCE
-0 identity     where / from whom
-1 role         what it means
-2 scope        where it applies
-3 authority    who determines it
-4 disclosure   how it became operative
-5 return       what happened to/through it
-```
-
-The purpose of the form is not taxonomy for its own sake. It is to let a person or Agent answer, without losing provenance:
+For human and Agent inspection, the canonical compact readout is now two-dimensional:
 
 ```text
-What world am I in?
-What does this Project mean?
-What is actually true now?
-What ways of acting are available or governing?
-What are we presently trying to bring about?
-What context is materially conditioning this act?
-What did reality return, and to which source should that difference go?
+DOCUMENTATION STANDING
+
+authored position
+    ↓
+design commitment
+    ↓
+architecture contract
+    ↓
+implementation fact
+    ↓
+observed evidence
+    ↓
+Agent inference
+
+PROJECT ACT
+
+P0 Ground
+P1 World
+P2 Praxis
+P3 Intent
+P4 Context Frame
+P5 Return / Recognition
 ```
 
-That is the Project context relation Central should make durable and AIKit should make operative.
+And every material source remains inspectable through:
+
+```text
+identity / provenance
+role / standing
+scope / temporal state / relations
+authority / mutation
+disclosure / activation
+return / lifecycle
+```
+
+The result is a Project field in which a bot can recover meaning, design, structure, implementation, evidence and inference without flattening them into `World`, while still using the P-cycle to understand how those sources compose in an actual act.
