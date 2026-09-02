@@ -1,4 +1,5 @@
 use crate::action::{create_core_action_registry, ActionExecutionContext};
+use crate::agent_profile_actions::register_agent_profile_actions;
 use crate::picker::{run_guided_action_picker, NullTerminalSurface, TerminalSurface};
 use crate::projectcentral_ops::register_projectcentral_actions;
 use crate::result::{ActionResult, ResultStatus};
@@ -380,6 +381,7 @@ pub fn run_cli_with_runtime(
     };
     let mut registry = create_core_action_registry();
     register_projectcentral_actions(&mut registry);
+    register_agent_profile_actions(&mut registry);
     let result = match parsed.target {
         CommandTarget::Direct { action_id, input } => registry.execute(&action_id, &input, &context),
         CommandTarget::Guided => run_guided_action_picker(&registry, &context, surface),
