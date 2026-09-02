@@ -257,13 +257,17 @@ fn action_list_has_human_and_structured_cli_renderings() {
     assert!(human.output.contains("projectcentral.flow.create\tCreate Project Flow"));
     assert!(human.output.contains("projectcentral.flow.write\tWrite Project Flow revision"));
     assert!(human.output.contains("projectcentral.flow.history\tRead Project Flow history"));
+    assert!(human.output.contains("agent-profile.list\tList Agent Profiles"));
+    assert!(human.output.contains("agent-profile.read\tRead Agent Profile"));
+    assert!(human.output.contains("agent-profile.save\tSave Agent Profile"));
+    assert!(human.output.contains("agent-profile.remove\tRemove Agent Profile"));
 
     let structured = central_ctrl::run_cli(&["--json".to_owned(), "action.list".to_owned()], &environment);
     assert_eq!(structured.exit_code, 0);
     let value: serde_json::Value = serde_json::from_str(&structured.output).unwrap();
     assert_eq!(value["status"], "success");
     let actions = value["data"]["actions"].as_array().unwrap();
-    assert_eq!(actions.len(), 48);
+    assert_eq!(actions.len(), 52);
     let ids = actions.iter().filter_map(|action| action["id"].as_str()).collect::<Vec<_>>();
     for id in [
         "projectcentral.inspect",
@@ -297,6 +301,10 @@ fn action_list_has_human_and_structured_cli_renderings() {
         "projectcentral.source.compare",
         "projectcentral.source.recovery.preview",
         "machine.account",
+        "agent-profile.list",
+        "agent-profile.read",
+        "agent-profile.save",
+        "agent-profile.remove",
     ] {
         assert!(ids.contains(&id), "missing Action {id}");
     }
