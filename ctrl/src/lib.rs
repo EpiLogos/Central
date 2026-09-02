@@ -1,5 +1,6 @@
 pub mod action;
 pub mod agent_governance;
+pub mod agent_profile;
 pub mod automation;
 pub mod central_computer;
 pub mod cli;
@@ -82,6 +83,10 @@ pub use agent_governance::{
     GovernanceSourceRelation, GovernanceTreatment, ProjectGovernanceInspection,
     ProjectGovernancePlan, RootGovernanceInspection, GOVERNANCE_RELATIONS_SCHEMA,
     GOVERNANCE_RELATIONS_SOURCE,
+};
+pub use agent_profile::{
+    AgentProfile, AgentProfileError, AgentProfileHandoff, AgentProfileScope,
+    AGENT_PROFILE_SCHEMA,
 };
 pub use automation::register_automation_actions;
 pub use central_computer::{
