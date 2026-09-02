@@ -1,3 +1,8 @@
+---
+name: documentation-standing
+description: Recover, compare, audit and manage Project documentation through the canonical authored-position → design-commitment → architecture-contract → implementation-fact → observed-evidence → Agent-inference standing ladder without collapsing it into the P0–P5 Project-act cycle.
+---
+
 # Documentation Standing Steward
 
 Use this Skill when an Agent is recovering, comparing, explaining, auditing or proposing changes to Project documentation and source claims across O:I products.
