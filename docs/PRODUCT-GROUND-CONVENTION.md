@@ -2,7 +2,8 @@
 
 **Status:** optional Control convention over the existing human-authored source contract  
 **Owner:** the human author through Central / Control  
-**Does not create:** a new Control root, schema, database, Profile system, or automatic import path
+**Does not create:** a new Control root, schema, database, Profile system, or automatic import path  
+**Whole-context relation:** `PROJECT-CONTEXT-PROTOCOL.md` — authored Ground participates at P0; bounded Intent participates at P3 without becoming a separate source authority
 
 Central already fixes the important boundary: `Control/user`, `Control/agents`, and `Control/machines` are human-authored source roots, while the tree beneath them remains open. Product ground uses that existing contract rather than adding another ontology.
 
@@ -74,6 +75,12 @@ A stabilised position is a human-authored determination that has become useful a
 ### Stabilised vision
 
 Vision states what the product is meant to become or preserve. It is authoritative for intended meaning at its scope. It is not evidence that the implementation currently realises that intent.
+
+### Bounded intent
+
+The whole-context protocol distinguishes stabilised Vision from a bounded present Intent. Intent states what is presently being brought about within the larger authored horizon: the desired change/outcome, why it matters now, its scope/constraints and recognisable success conditions where those are known.
+
+This is a semantic role, not a required filename or new source store. `intent.md`, `INTENT.md`, an issue, brief or another native Project source may play the role when provenance and standing support that reading. A completed or superseded Intent does not by itself revise the Project's Vision or founding positions.
 
 ## Retrieval and provenance
 
@@ -147,5 +154,6 @@ A product-ground implementation is healthy when all of these remain true:
 - raw human material is not replaced by an agent summary merely for neatness;
 - open/search continue to use ordinary Control source rather than a second database;
 - vision is never presented as proof of current capability;
+- bounded Intent can change without silently changing stabilised Vision/founding Ground;
 - code is never treated as retroactive authorship of product purpose;
 - returned evidence can generate a reviewable proposal without mutating authored source before explicit acceptance.

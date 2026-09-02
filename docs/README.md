@@ -39,6 +39,10 @@ resembles the product checkout (`mixed_root` in the structured health report).
   Connectors, and the observation/authoring boundary.
 - [CONTROL-CONTENT-PROTOCOL.md](CONTROL-CONTENT-PROTOCOL.md) — authorship,
   durable information, disclosure boundaries and the Control source roots.
+- [PROJECT-CONTEXT-PROTOCOL.md](PROJECT-CONTEXT-PROTOCOL.md) — the sixfold
+  Project-context movement (Ground → World → Praxis → Intent → Context Frame →
+  Return), the context-source form, and the boundary between source standing,
+  authority, disclosure/activation and runtime precedence.
 - [CONTROL-RETRIEVAL-TREATMENT.md](CONTROL-RETRIEVAL-TREATMENT.md) — the
   executable `.no-agent-retrieval` treatment that implements the protocol's
   disclosure boundary (supporting the Content Protocol).
@@ -113,10 +117,11 @@ resembles the product checkout (`mixed_root` in the structured health report).
 | Implementing a Connector | `CONNECTOR-SDK-SPEC.md` → `CONNECTOR-SDK-RUST.md` → `CONNECTOR-SDK-RUST.md` conformance harnesses → `skills/connector-authoring` |
 | Operating `ctrl` | `CLI-REFERENCE.md` → `INSTALL.md` |
 | Establishing the current machine | `MACHINE-WORKCELL-RELATION.md` → `CLI-REFERENCE.md` |
-| Working with authored Project ground | `PROJECTCENTRAL-CONTRACT.md` → `PROJECTCENTRAL-AUTHORED-GROUND.md` → `CLI-REFERENCE.md` |
+| Working with authored Project ground | `PROJECT-CONTEXT-PROTOCOL.md` → `PROJECTCENTRAL-CONTRACT.md` → `PROJECTCENTRAL-AUTHORED-GROUND.md` → `CLI-REFERENCE.md` |
+| Working with Project context / Intent / disclosure | `PROJECT-CONTEXT-PROTOCOL.md` → `PRODUCT-GROUND-CONVENTION.md` → `AGENT-GOVERNANCE-SOURCES.md` → AIKit ContextResolution/Explain contracts |
 | Working with Project NOW / DAY | `PROJECTCENTRAL-CONTRACT.md` → `PROJECTCENTRAL-NOW.md` → `CLI-REFERENCE.md` |
 | Working with a live Flow | `PROJECTCENTRAL-FLOW.md` → `PROJECTCENTRAL-NOW.md` → `CLI-REFERENCE.md` |
-| Working with Agent governance source | `AGENT-GOVERNANCE-SOURCES.md` → `CONTROL-CONTENT-PROTOCOL.md` → AIKit operational composition docs |
+| Working with Agent governance source | `PROJECT-CONTEXT-PROTOCOL.md` → `AGENT-GOVERNANCE-SOURCES.md` → `CONTROL-CONTENT-PROTOCOL.md` → AIKit operational composition docs |
 | Working with Personal notification/proposal extensions | `PERSONAL-SURFACE-AND-NOTIFICATION.md` → `CONNECTOR-SDK-SPEC.md` → `CONTROL-CONTENT-PROTOCOL.md` |
 | Recovering a machine | `RECOVERY-PROTOCOL.md` → `machine.declaration` Skill → `CONTROL-CONTENT-PROTOCOL.md` |
 | Accepting the product | `PRODUCT-ACCEPTANCE-MATRIX.md` → `CENTRAL-SYSTEM-SPEC.md` |
