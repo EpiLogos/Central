@@ -6,5 +6,8 @@
 # Local editor state (Obsidian vault configuration)
 /.obsidian/
 
+# Rust build artifacts
+/target/
+
 # Local platform noise
 .DS_Store
