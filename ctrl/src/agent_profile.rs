@@ -1,6 +1,7 @@
 use crate::central_computer::{CentralComputerAccessIntent, ComputerAccessSubject};
 use crate::world::{WorldError, WorldGraph, WorldRef};
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
@@ -53,7 +54,7 @@ pub struct AgentProfile {
     /// Authored/default repeatable-praxis assignments. Central stores only the
     /// Routine refs: proof validity, enablement, trigger and Action authority
     /// remain AIKit-owned and provider material state remains downstream.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_routine_refs")]
     pub routine_refs: Vec<String>,
     /// Worlds whose knowledge/source horizons this profile intends to make
     /// available for downstream resolution. Presence here is not disclosure.
@@ -306,6 +307,25 @@ fn validate_refs(field: &str, refs: &[String]) -> Result<(), AgentProfileError> 
     Ok(())
 }
 
+fn deserialize_routine_refs<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let refs = Vec::<String>::deserialize(deserializer)?;
+    let mut seen = BTreeSet::new();
+    for value in &refs {
+        if value.trim().is_empty() || value != value.trim() {
+            return Err(D::Error::custom(
+                "Routine refs contain an empty or untrimmed ref",
+            ));
+        }
+        if !seen.insert(value) {
+            return Err(D::Error::custom(format!("Routine refs repeat ref {value}")));
+        }
+    }
+    Ok(refs)
+}
+
 fn validate_world_refs(worlds: &[WorldRef]) -> Result<(), AgentProfileError> {
     let mut seen = BTreeSet::new();
     for world in worlds {
@@ -479,6 +499,33 @@ mod tests {
         }))
         .unwrap();
         assert!(profile.routine_refs.is_empty());
+    }
+
+    #[test]
+    fn invalid_routine_refs_are_rejected_during_json_ingestion() {
+        let duplicate = serde_json::from_value::<AgentProfile>(serde_json::json!({
+            "schema": AGENT_PROFILE_SCHEMA,
+            "ref": "agent-profile:invalid",
+            "revision": "p1",
+            "agent_ref": "agent:invalid",
+            "scope": "personal",
+            "world_ref": "world:personal",
+            "routine_refs": ["routine:a", "routine:a"],
+            "ratified_world_refs": ["world:personal"]
+        }));
+        assert!(duplicate.is_err());
+
+        let empty = serde_json::from_value::<AgentProfile>(serde_json::json!({
+            "schema": AGENT_PROFILE_SCHEMA,
+            "ref": "agent-profile:invalid",
+            "revision": "p1",
+            "agent_ref": "agent:invalid",
+            "scope": "personal",
+            "world_ref": "world:personal",
+            "routine_refs": [""],
+            "ratified_world_refs": ["world:personal"]
+        }));
+        assert!(empty.is_err());
     }
 
     #[test]
