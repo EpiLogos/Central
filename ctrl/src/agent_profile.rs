@@ -50,6 +50,11 @@ pub struct AgentProfile {
     pub skill_set_refs: Vec<String>,
     #[serde(default)]
     pub method_refs: Vec<String>,
+    /// Authored/default repeatable-praxis assignments. Central stores only the
+    /// Routine refs: proof validity, enablement, trigger and Action authority
+    /// remain AIKit-owned and provider material state remains downstream.
+    #[serde(default)]
+    pub routine_refs: Vec<String>,
     /// Worlds whose knowledge/source horizons this profile intends to make
     /// available for downstream resolution. Presence here is not disclosure.
     #[serde(default)]
@@ -96,6 +101,7 @@ impl AgentProfile {
             skill_refs: Vec::new(),
             skill_set_refs: Vec::new(),
             method_refs: Vec::new(),
+            routine_refs: Vec::new(),
             ratified_world_refs: vec![world_ref],
             knowledge_source_refs: Vec::new(),
             computer_access_intent_refs: Vec::new(),
@@ -234,6 +240,7 @@ impl AgentProfile {
         validate_refs("Skill refs", &self.skill_refs)?;
         validate_refs("SkillSet refs", &self.skill_set_refs)?;
         validate_refs("Method refs", &self.method_refs)?;
+        validate_refs("Routine refs", &self.routine_refs)?;
         validate_refs("Knowledge source refs", &self.knowledge_source_refs)?;
         validate_refs(
             "Central Computer access intent refs",
@@ -406,6 +413,7 @@ mod tests {
         profile.skill_refs = vec!["skill:review-return".into()];
         profile.skill_set_refs = vec!["skill-set:personal".into()];
         profile.method_refs = vec!["method:daily-orientation".into()];
+        profile.routine_refs = vec!["routine:daily-orientation".into()];
         profile.ratified_world_refs.push(project);
         profile.validate_against(&graph).unwrap();
 
@@ -432,6 +440,7 @@ mod tests {
         .unwrap();
         personal_profile.skill_set_refs = vec!["skill-set:research".into()];
         personal_profile.method_refs = vec!["method:source-return".into()];
+        personal_profile.routine_refs = vec!["routine:source-return".into()];
 
         let project_profile = personal_profile
             .project_variant(
@@ -450,10 +459,26 @@ mod tests {
         );
         assert_eq!(project_profile.skill_set_refs, personal_profile.skill_set_refs);
         assert_eq!(project_profile.method_refs, personal_profile.method_refs);
+        assert_eq!(project_profile.routine_refs, personal_profile.routine_refs);
         assert!(project_profile
             .provenance_refs
             .contains(&personal_profile.profile_ref));
         project_profile.validate_against(&graph).unwrap();
+    }
+
+    #[test]
+    fn legacy_v1_profile_without_routine_refs_loads_with_empty_assignment() {
+        let profile: AgentProfile = serde_json::from_value(serde_json::json!({
+            "schema": AGENT_PROFILE_SCHEMA,
+            "ref": "agent-profile:legacy",
+            "revision": "p1",
+            "agent_ref": "agent:legacy",
+            "scope": "personal",
+            "world_ref": "world:personal",
+            "ratified_world_refs": ["world:personal"]
+        }))
+        .unwrap();
+        assert!(profile.routine_refs.is_empty());
     }
 
     #[test]
@@ -543,7 +568,14 @@ mod tests {
             Err(AgentProfileError::DuplicateRef { .. })
         ));
 
-        profile.skill_refs = vec!["".into()];
+        profile.skill_refs.clear();
+        profile.routine_refs = vec!["routine:a".into(), "routine:a".into()];
+        assert!(matches!(
+            profile.validate_shape(),
+            Err(AgentProfileError::DuplicateRef { .. })
+        ));
+
+        profile.routine_refs = vec!["".into()];
         assert!(matches!(
             profile.validate_shape(),
             Err(AgentProfileError::InvalidText(_))
