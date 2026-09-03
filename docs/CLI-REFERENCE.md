@@ -2,6 +2,8 @@
 
 The `ctrl` binary is a Surface over Central's canonical Action registry. Command aliases are conveniences; the Action ID is the stable product identity.
 
+`ctrl help`, `--help`, and `-h` print the stable command doorway: the top-level families and a pointer to capability discovery. They are not Actions and do not enumerate the Action field. `ctrl capabilities [--json]` is an exact alias of `ctrl actions` / `action.list`; it does not introduce a second catalogue.
+
 ## Invocation
 
 ```text
@@ -25,7 +27,7 @@ The current composed registry exposes 45 Actions:
 
 | Action | Purpose | Common CLI projection |
 |---|---|---|
-| `action.list` | discover Action descriptors | `actions`, `action list` |
+| `action.list` | discover Action descriptors | `capabilities`, `actions`, `action list` |
 | `central.root` | resolve the active Central root | `root` |
 | `central.init` | initialise the required Central root shape | `init` |
 | `central.doctor` | inspect Central structural health and diagnose a root that is also the product source checkout | `doctor` |
