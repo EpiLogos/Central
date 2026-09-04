@@ -102,7 +102,7 @@ fn unique_nanos() -> u128 {
         .as_nanos()
 }
 
-fn relative_member(raw: &str) -> io::Result<PathBuf> {
+pub(crate) fn relative_member(raw: &str) -> io::Result<PathBuf> {
     if raw.trim().is_empty() || raw != raw.trim() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -123,7 +123,7 @@ fn relative_member(raw: &str) -> io::Result<PathBuf> {
     Ok(path.to_path_buf())
 }
 
-fn reject_symlink_components(project_root: &Path, relative: &Path) -> io::Result<()> {
+pub(crate) fn reject_symlink_components(project_root: &Path, relative: &Path) -> io::Result<()> {
     let mut current = project_root.to_path_buf();
     for component in relative.components() {
         let Component::Normal(component) = component else {
@@ -145,7 +145,7 @@ fn reject_symlink_components(project_root: &Path, relative: &Path) -> io::Result
     Ok(())
 }
 
-fn safe_flow_path(project_root: &Path, raw: &str, must_exist: bool) -> io::Result<PathBuf> {
+pub(crate) fn safe_source_member_path(project_root: &Path, raw: &str, must_exist: bool) -> io::Result<PathBuf> {
     let relative = relative_member(raw)?;
     reject_symlink_components(project_root, &relative)?;
     let path = project_root.join(&relative);
@@ -322,12 +322,12 @@ fn seed_revision(
 }
 
 fn reconcile_record(project_root: &Path, record: &mut FlowRecord) -> io::Result<bool> {
-    let path = safe_flow_path(project_root, &record.path, true)?;
+    let path = safe_source_member_path(project_root, &record.path, true)?;
     let bytes = fs::read(path)?;
     store_revision(project_root, record, &bytes, "unknown", "unknown-external", None)
 }
 
-fn validate_actor_kind(kind: &str) -> io::Result<()> {
+pub(crate) fn validate_actor_kind(kind: &str) -> io::Result<()> {
     if matches!(kind, "human" | "agent" | "system") {
         Ok(())
     } else {
@@ -442,7 +442,7 @@ pub fn create_flow(
     };
     ensure_unique_path(&registry, &path, None)?;
     validate_flow_placement(project_root, &path)?;
-    let source = safe_flow_path(project_root, &path, false)?;
+    let source = safe_source_member_path(project_root, &path, false)?;
     if source.exists() {
         return Err(io::Error::new(io::ErrorKind::AlreadyExists, "Flow source already exists; use adopt for retained source"));
     }
@@ -481,7 +481,7 @@ pub fn adopt_flow(
     let path = relative_member(raw_path)?.to_string_lossy().replace('\\', "/");
     ensure_unique_path(&registry, &path, None)?;
     validate_flow_placement(project_root, &path)?;
-    let source = safe_flow_path(project_root, &path, true)?;
+    let source = safe_source_member_path(project_root, &path, true)?;
     let bytes = fs::read(source)?;
     let flow_ref = format!("central:flow:project:{}:{}", registry.project_id, unique_nanos());
     let mut record = FlowRecord {
@@ -512,7 +512,7 @@ pub fn read_flow(project_root: &Path, flow_ref: &str) -> io::Result<FlowReading>
         .find(|flow| flow.flow_ref == flow_ref)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "FlowRef is not registered in this Project"))?;
     let reconciled = reconcile_record(project_root, flow)?;
-    let source = safe_flow_path(project_root, &flow.path, true)?;
+    let source = safe_source_member_path(project_root, &flow.path, true)?;
     let content = String::from_utf8(fs::read(source)?)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Flow source is not UTF-8 text"))?;
     let record = flow.clone();
@@ -558,7 +558,7 @@ pub fn write_flow(
             ),
         ));
     }
-    let source = safe_flow_path(project_root, &registry.flows[index].path, true)?;
+    let source = safe_source_member_path(project_root, &registry.flows[index].path, true)?;
     fs::write(&source, content.as_bytes())?;
     let changed = store_revision(
         project_root,
@@ -597,11 +597,11 @@ pub fn rename_flow(
     let normalized = relative_member(new_path)?.to_string_lossy().replace('\\', "/");
     ensure_unique_path(&registry, &normalized, Some(flow_ref))?;
     validate_flow_placement(project_root, &normalized)?;
-    let destination = safe_flow_path(project_root, &normalized, false)?;
+    let destination = safe_source_member_path(project_root, &normalized, false)?;
     if destination.exists() {
         return Err(io::Error::new(io::ErrorKind::AlreadyExists, "rename destination already exists"));
     }
-    let old = safe_flow_path(project_root, &registry.flows[index].path, true)?;
+    let old = safe_source_member_path(project_root, &registry.flows[index].path, true)?;
     fs::rename(old, &destination)?;
     registry.flows[index].path = normalized.clone();
     registry.flows[index].source_ref = escaped_source_ref(&registry.project_id, &normalized);
@@ -655,7 +655,7 @@ pub fn snapshot_flows_for_day(
     fs::create_dir_all(&root)?;
     let mut snapshots = Vec::new();
     for flow in &registry.flows {
-        let source = safe_flow_path(project_root, &flow.path, true)?;
+        let source = safe_source_member_path(project_root, &flow.path, true)?;
         let target = root.join(format!("{}.md", flow_key(&flow.flow_ref)));
         fs::copy(source, &target)?;
         snapshots.push(FlowDaySnapshot {

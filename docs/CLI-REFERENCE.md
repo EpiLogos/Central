@@ -21,7 +21,7 @@ Root resolution is, in order:
 
 ## Canonical Actions
 
-The current composed registry exposes 45 Actions:
+The current composed registry exposes 47 Actions:
 
 | Action | Purpose | Common CLI projection |
 |---|---|---|
@@ -70,6 +70,8 @@ The current composed registry exposes 45 Actions:
 | `projectcentral.flow.rename` | rename the retained source while preserving FlowRef | `action run projectcentral.flow.rename` |
 | `projectcentral.flow.lifecycle` | set active/dormant/closed lifecycle without changing source revision | `action run projectcentral.flow.lifecycle` |
 | `projectcentral.flow.history` | read exact Flow revision provenance/history | `action run projectcentral.flow.history` |
+| `projectcentral.source.read` | read one participating World source with its exact revision and provenance | `action run projectcentral.source.read` |
+| `projectcentral.source.write` | revise one participating World source under compare-and-swap with an attributed change record | `action run projectcentral.source.write` |
 
 Every row is invokable through `action run`. Examples:
 
@@ -85,6 +87,24 @@ ctrl --json action run central.recover '{"role":"primary-workstation"}'
 ```
 
 `action.list` is the machine-readable discovery surface. Its descriptors include input definitions, mutation class, preview support, required Ports, and availability metadata. Other Surfaces should consume those descriptors rather than maintain a second Action catalog.
+
+## Live World source
+
+`projectcentral.source.read` and `projectcentral.source.write` are the owner
+Actions for opening and revising live World source by `SourceRef`, the same
+address the Source Change Horizon publishes. `read` returns one source's exact
+content revision alongside its provenance, standing, treatment and retrieval
+eligibility; `write` is a whole-file compare-and-swap whose emitted Horizon
+change carries the declared `actor`, `actor_kind` and optional
+`agent_session_ref`. A stale `expected_revision` fails without mutating.
+
+The gates are Central's own, and they are the point of the seam: sources
+excluded by `.no-agent-retrieval` are neither read nor written here; recognised
+human-authored or human-adopted sources, human-source aperture material and
+agent-governance sources refuse non-human callers, who propose instead of
+writing. Working sources (Flow sources, agent-maintained Wiki material) remain
+open to attributed human and Agent callers through the same Action. No Action
+invokes an Agent or model.
 
 ## Guided use
 

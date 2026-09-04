@@ -79,8 +79,23 @@ pub struct SourceChange {
     pub kind: SourceChangeKind,
     pub observed_at_unix_seconds: u64,
     pub provider: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_session_ref: Option<String>,
+}
+
+/// Caller-supplied attribution carried onto the horizon change that one owner
+/// Action write produces. Attribution is declared by the caller and recorded
+/// verbatim; it is never inferred and never substituted for the human's own
+/// authorship.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceWriteAttribution {
+    pub actor: String,
+    pub actor_kind: String,
+    pub agent_session_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -189,7 +204,7 @@ fn source_ref(world_ref: &str, path: &str) -> String {
     format!("central:source:{world_ref}:{escaped}")
 }
 
-fn content_revision(path: &Path) -> io::Result<SourceRevision> {
+pub(crate) fn content_revision(path: &Path) -> io::Result<SourceRevision> {
     let bytes = fs::read(path)?;
     // Versioned FNV-1a is deliberately implemented in-tree: a change horizon needs a stable
     // content revision, not a new crypto/package dependency or a platform-specific metadata id.
@@ -536,6 +551,7 @@ fn reconcile(
     state_path: &Path,
     world_ref: &str,
     bindings: Vec<SourceBinding>,
+    attributions: &BTreeMap<String, SourceWriteAttribution>,
 ) -> io::Result<ReconcileReport> {
     let current = observe_bindings(world_root, bindings)?;
     let now = unix_seconds();
@@ -577,6 +593,7 @@ fn reconcile(
             let Some(kind) = kind else { continue };
             state.cursor = state.cursor.saturating_add(1);
             let basis = after.or(before).expect("change has a before or after source");
+            let attribution = attributions.get(&reference);
             let change = SourceChange {
                 schema: SOURCE_CHANGE_SCHEMA.to_owned(),
                 change_ref: format!("central:change:{world_ref}:{}", state.cursor),
@@ -594,7 +611,9 @@ fn reconcile(
                 kind,
                 observed_at_unix_seconds: now,
                 provider: SOURCE_HORIZON_PROVIDER.to_owned(),
-                actor: None,
+                actor: attribution.map(|value| value.actor.clone()),
+                actor_kind: attribution.map(|value| value.actor_kind.clone()),
+                agent_session_ref: attribution.and_then(|value| value.agent_session_ref.clone()),
             };
             state.changes.push(change.clone());
             new_changes.push(change);
@@ -608,6 +627,17 @@ fn reconcile(
 }
 
 pub fn reconcile_project_sources(project_root: &Path) -> io::Result<ReconcileReport> {
+    reconcile_project_source_writes(project_root, &BTreeMap::new())
+}
+
+/// Reconcile the Project Source Change Horizon while attributing the emitted
+/// change of each named source to the owner-Action caller that produced it.
+/// Attribution only attaches to the change this reconciliation observes; it is
+/// never back-filled onto changes that already exist.
+pub fn reconcile_project_source_writes(
+    project_root: &Path,
+    attributions: &BTreeMap<String, SourceWriteAttribution>,
+) -> io::Result<ReconcileReport> {
     let manifest = read_project_manifest(project_root)?;
     let world_ref = format!("project:{}", manifest.project_id);
     reconcile(
@@ -615,6 +645,7 @@ pub fn reconcile_project_sources(project_root: &Path) -> io::Result<ReconcileRep
         &project_root.join(PROJECT_HORIZON_STATE),
         &world_ref,
         project_source_bindings(project_root)?,
+        attributions,
     )
 }
 
@@ -624,6 +655,7 @@ pub fn reconcile_control_sources(central_root: &Path) -> io::Result<ReconcileRep
         &central_root.join(CONTROL_HORIZON_STATE),
         "control:root",
         control_source_bindings(central_root)?,
+        &BTreeMap::new(),
     )
 }
 

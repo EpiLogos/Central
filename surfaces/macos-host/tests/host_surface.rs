@@ -65,13 +65,15 @@ mod unix_tests {
             .collect::<Vec<_>>();
 
         let macos = create_macos_action_registry();
-        assert_eq!(macos.list().len(), 49);
+        assert_eq!(macos.list().len(), 51);
         for id in core_ids {
             assert!(macos.get(&id).is_some(), "macOS host lost core Action {id}");
         }
         assert!(macos.get("projectcentral.ground.inspect").is_some());
         assert!(macos.get("projectcentral.now.inspect").is_some());
         assert!(macos.get("projectcentral.change.horizon").is_some());
+        assert!(macos.get("projectcentral.source.read").is_some());
+        assert!(macos.get("projectcentral.source.write").is_some());
         let automation = macos.get("automation.run").unwrap();
         assert_eq!(automation.required_ports, vec!["Automation"]);
         assert_eq!(automation.mutation_class.as_str(), "externally-mutating");

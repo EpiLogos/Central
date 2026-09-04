@@ -18,6 +18,7 @@ pub mod projectcentral_flow;
 pub mod source_horizon;
 pub mod source_history;
 pub mod world;
+pub mod world_source;
 #[path = "projectcentral_ops.rs"]
 mod projectcentral_ops_base;
 pub mod projectcentral_ops {
@@ -35,6 +36,7 @@ pub mod projectcentral_ops {
         super::projectcentral_flow::register_projectcentral_flow_actions(registry);
         super::source_horizon::register_source_horizon_actions(registry);
         super::source_history::register_source_history_actions(registry);
+        super::world_source::register_world_source_actions(registry);
     }
 }
 pub mod recovery;
@@ -171,8 +173,9 @@ pub use recovery::{
 pub use source_horizon::{
     acknowledge_project_cursor, compact_project_changes, control_source_bindings,
     project_source_bindings, read_project_change_horizon, reconcile_control_sources,
-    reconcile_project_sources, CompactionReport, ObservedSource, ReconcileReport, SourceBinding,
-    SourceChange, SourceChangeKind, SourceHorizon, SourceRevision, CONTROL_HORIZON_STATE,
+    reconcile_project_source_writes, reconcile_project_sources, CompactionReport, ObservedSource,
+    ReconcileReport, SourceBinding, SourceChange, SourceChangeKind, SourceHorizon, SourceRevision,
+    SourceWriteAttribution, CONTROL_HORIZON_STATE,
     GROUND_RELATIONS_SCHEMA as SOURCE_HORIZON_GROUND_RELATIONS_SCHEMA,
     GROUND_RELATIONS_SOURCE as SOURCE_HORIZON_GROUND_RELATIONS_SOURCE, PROJECT_HORIZON_STATE,
     SOURCE_CHANGE_SCHEMA, SOURCE_HORIZON_PROVIDER, SOURCE_HORIZON_SCHEMA,
@@ -189,6 +192,10 @@ pub use world::{
     ResolvedAgentSet, SourceProvenanceHop, SourceTreatment as WorldSourceTreatment,
     WorldError, WorldGraph, WorldRecord, WorldRef, WorldReturnProposal, WorldSourceRelation,
     AGENT_SET_SCHEMA, WORLD_RELATION_SCHEMA,
+};
+pub use world_source::{
+    read_world_source, register_world_source_actions, write_world_source, WorldSourceReading,
+    WorldSourceWriteReceipt, WORLD_SOURCE_READING_SCHEMA, WORLD_SOURCE_WRITE_RECEIPT_SCHEMA,
 };
 pub use central_connector_sdk::{
     run_automation_conformance, run_configuration_manager_conformance,
