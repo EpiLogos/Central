@@ -332,6 +332,93 @@ fn non_human_callers_propose_rather_than_write_authored_human_ground() {
 }
 
 #[test]
+fn an_agent_session_cannot_claim_human_authorship_to_write_human_ground() {
+    let (_temp, central, project) = project_fixture("self-declared", "self-declared-project");
+    let source = project.join("ProjectCentral/user/intent.md");
+    fs::write(&source, "held by the human\n").unwrap();
+    let horizon = read_project_change_horizon(&project, None).unwrap();
+    let source_ref = source_ref_of(&horizon, "intent.md");
+
+    // Declaring actor_kind human while carrying an agent session is an
+    // incoherent declaration, refused before anything is written — the ledger
+    // must never record an agent session's write as human authorship.
+    let claimed = run_action(
+        "projectcentral.source.write",
+        json!({
+            "project": "self-declared-project",
+            "source_ref": source_ref,
+            "expected_revision": current_revision(&project, &source_ref),
+            "content": "written by the session, declared human\n",
+            "actor": "agent:epii",
+            "actor_kind": "human",
+            "agent_session_ref": "aikit:agent-session:9"
+        }),
+        &central,
+    );
+    assert_eq!(claimed.status, ResultStatus::InvalidInput, "{:?}", claimed.error);
+    assert!(
+        claimed
+            .error
+            .unwrap()
+            .message
+            .contains("does not also carry an agent_session_ref")
+    );
+    assert_eq!(fs::read_to_string(&source).unwrap(), "held by the human\n");
+    let after = read_project_change_horizon(&project, None).unwrap();
+    assert_eq!(after.cursor, horizon.cursor);
+    assert!(after.changes.iter().all(|change| change.source_ref != source_ref));
+    assert_eq!(
+        after
+            .sources
+            .iter()
+            .find(|source| source.binding.source_ref == source_ref)
+            .unwrap()
+            .revision
+            .revision,
+        current_revision(&project, &source_ref)
+    );
+
+    // The same incoherent declaration is refused on a working source too: it is
+    // the declaration that is invalid, not only the ground it targets.
+    let working = project.join("ProjectCentral/agents/wiki/notes.md");
+    fs::create_dir_all(working.parent().unwrap()).unwrap();
+    fs::write(&working, "session notes\n").unwrap();
+    let working_ref = source_ref_of(&read_project_change_horizon(&project, None).unwrap(), "notes.md");
+    let claimed_working = run_action(
+        "projectcentral.source.write",
+        json!({
+            "project": "self-declared-project",
+            "source_ref": working_ref,
+            "expected_revision": current_revision(&project, &working_ref),
+            "content": "still incoherent\n",
+            "actor": "agent:epii",
+            "actor_kind": "human",
+            "agent_session_ref": "aikit:agent-session:9"
+        }),
+        &central,
+    );
+    assert_eq!(claimed_working.status, ResultStatus::InvalidInput);
+    assert_eq!(fs::read_to_string(&working).unwrap(), "session notes\n");
+
+    // A coherent human declaration without a session still writes its own
+    // aperture ground through the same Action.
+    let human = run_action(
+        "projectcentral.source.write",
+        json!({
+            "project": "self-declared-project",
+            "source_ref": source_ref,
+            "expected_revision": current_revision(&project, &source_ref),
+            "content": "revised by the human\n",
+            "actor": "human:cradle",
+            "actor_kind": "human"
+        }),
+        &central,
+    );
+    assert_eq!(human.status, ResultStatus::Success, "{:?}", human.error);
+    assert_eq!(fs::read_to_string(&source).unwrap(), "revised by the human\n");
+}
+
+#[test]
 fn world_source_seam_and_flow_seam_compose_over_one_source_ref() {
     let (_temp, _central, project) = project_fixture("flow-compose", "flow-compose-project");
     let flow = create_flow(

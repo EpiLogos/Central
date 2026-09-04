@@ -99,12 +99,17 @@ change carries the declared `actor`, `actor_kind` and optional
 `agent_session_ref`. A stale `expected_revision` fails without mutating.
 
 The gates are Central's own, and they are the point of the seam: sources
-excluded by `.no-agent-retrieval` are neither read nor written here; recognised
+excluded by `.no-agent-retrieval` are neither read nor written here; and a
+write that declares `actor_kind` human never carries an `agent_session_ref` —
+a caller declaring both is refused before anything is written. Recognised
 human-authored or human-adopted sources, human-source aperture material and
-agent-governance sources refuse non-human callers, who propose instead of
-writing. Working sources (Flow sources, agent-maintained Wiki material) remain
-open to attributed human and Agent callers through the same Action. No Action
-invokes an Agent or model.
+agent-governance sources refuse declared non-human callers and refuse every
+agent-session write, who propose instead of writing. Attribution is declared,
+not proven: provenance and role recognisers are machine-checked from the
+Project's ground relations, and a bare self-declaration of human authorship is
+recorded verbatim as declared. Working sources (Flow sources, agent-maintained
+Wiki material) remain open to attributed human and Agent callers through the
+same Action. No Action invokes an Agent or model.
 
 ## Guided use
 

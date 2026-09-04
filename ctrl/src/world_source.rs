@@ -81,16 +81,38 @@ fn authored_human_ground(binding: &SourceBinding) -> bool {
         })
 }
 
-/// Human-authored ground keeps human authorship. A non-human caller may propose
-/// a change and have it recognised; it does not revise that source in place.
-fn enforce_write_authority(binding: &SourceBinding, actor_kind: &str) -> io::Result<()> {
-    if actor_kind == "human" || !authored_human_ground(binding) {
+/// Attribution is declared by the caller, and a declaration has to be coherent:
+/// human authorship does not happen inside an agent session, so a write that
+/// declares both is refusing to say what it is and is recorded as nothing.
+fn validate_attribution(actor_kind: &str, agent_session_ref: Option<&str>) -> io::Result<()> {
+    if actor_kind == "human" && agent_session_ref.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a write that declares actor_kind human does not also carry an agent_session_ref; a caller declaring both is not attributable as human authorship, so nothing is written",
+        ));
+    }
+    Ok(())
+}
+
+/// Human-authored ground keeps human authorship. A declared non-human caller —
+/// and any write carrying an agent session — may propose a change and have it
+/// recognised; it does not revise that source in place. The provenance and role
+/// recognisers are machine-checked from the Project's ground relations; what
+/// this gate guarantees is the refusal of declared agents and agent sessions,
+/// not of an unattested bare self-declaration of human authorship.
+fn enforce_write_authority(
+    binding: &SourceBinding,
+    actor_kind: &str,
+    agent_session_ref: Option<&str>,
+) -> io::Result<()> {
+    let declared_human = actor_kind == "human" && agent_session_ref.is_none();
+    if declared_human || !authored_human_ground(binding) {
         return Ok(());
     }
     Err(io::Error::new(
         io::ErrorKind::PermissionDenied,
         format!(
-            "source {} is authored human ground (provenance {}, roles {:?}); a non-human caller proposes rather than writes it, and the human authorship or an accepted relation is what changes it",
+            "source {} is authored human ground (provenance {}, roles {:?}); a declared non-human caller and any agent-session write propose rather than write it, and the human authorship or an accepted relation is what changes it",
             binding.source_ref, binding.provenance, binding.roles
         ),
     ))
@@ -138,6 +160,7 @@ pub fn write_world_source(
     agent_session_ref: Option<String>,
 ) -> io::Result<WorldSourceWriteReceipt> {
     validate_actor_kind(actor_kind)?;
+    validate_attribution(actor_kind, agent_session_ref.as_deref())?;
     if expected_revision.trim().is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -160,7 +183,7 @@ pub fn write_world_source(
     let binding = basis.binding.clone();
     let previous_revision = basis.revision.revision.clone();
     require_retrieval(&binding)?;
-    enforce_write_authority(&binding, actor_kind)?;
+    enforce_write_authority(&binding, actor_kind, agent_session_ref.as_deref())?;
 
     if previous_revision != expected_revision {
         return Err(io::Error::new(
@@ -391,7 +414,7 @@ pub fn register_world_source_actions(registry: &mut ActionRegistry) {
             descriptor(
                 "projectcentral.source.write",
                 "Write live World source revision",
-                "Revision-safe canonical whole-file write on one participating Project World source: a stale expected_revision fails without mutating, and the emitted Source Change Horizon change carries the declared actor, actor_kind and optional agent_session_ref. Recognised human-authored or human-adopted sources, human-source aperture material and agent-governance sources refuse non-human callers, who propose instead of writing. Never invokes an Agent or model.",
+                "Revision-safe canonical whole-file write on one participating Project World source: a stale expected_revision fails without mutating, and the emitted Source Change Horizon change carries the declared actor, actor_kind and optional agent_session_ref. Attribution is declared, not proven: a write declaring actor_kind human never carries an agent_session_ref, and recognised human-authored or human-adopted sources, human-source aperture material and agent-governance sources refuse declared non-human callers and refuse every agent-session write — those callers propose instead of writing. Provenance and role recognisers are machine-checked from the Project's ground relations; a bare self-declaration of human authorship is recorded verbatim as declared. Never invokes an Agent or model.",
                 MutationClass::LocallyMutating,
                 "projectcentral-world-source-write-receipt",
                 &[
