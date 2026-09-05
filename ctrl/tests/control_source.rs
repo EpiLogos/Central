@@ -2,10 +2,41 @@ use central_ctrl::{
     create_core_action_registry, initialize_central, run_cli, ActionExecutionContext, CliEnvironment,
     ConnectorContext, ConnectorRegistry, ResultStatus, RootOptions, CONTROL_ROOTS,
 };
+use central_ctrl::{
+    control_source_bindings, CONTROL_GROUND_RELATIONS_SCHEMA, CONTROL_GROUND_RELATIONS_SOURCE,
+};
 use serde_json::json;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static NEXT_TEMP_ROOT: AtomicU64 = AtomicU64::new(0);
+
+struct TempRoot(PathBuf);
+
+impl TempRoot {
+    fn new() -> Self {
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let sequence = NEXT_TEMP_ROOT.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "central-control-source-{}-{nonce}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&path).unwrap();
+        Self(path)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempRoot {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
 
 fn temporary_directory(label: &str) -> PathBuf {
     let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
@@ -220,4 +251,81 @@ fn cli_projects_control_open_and_search_over_the_same_actions() {
     let payload: serde_json::Value = serde_json::from_str(&search.output).unwrap();
     assert_eq!(payload["action"], "control.search");
     assert_eq!(payload["data"]["matches"][0]["source_path"], "Control/user/note.txt");
+}
+
+#[test]
+fn control_ground_relations_override_tree_provenance() {
+    let temp = TempRoot::new();
+    let central = temp.path();
+    let statement = central.join("Control/agents/governance/engineering/agent-operations.md");
+    fs::create_dir_all(statement.parent().unwrap()).unwrap();
+    fs::write(&statement, "You branch small and commit honestly.\n").unwrap();
+
+    // Tree default before relations exist.
+    let bindings = control_source_bindings(central).unwrap();
+    let tree_binding = bindings
+        .iter()
+        .find(|binding| binding.path == "Control/agents/governance/engineering/agent-operations.md")
+        .expect("statement appears in control bindings");
+    assert_eq!(tree_binding.provenance, "unresolved");
+    assert!(tree_binding
+        .roles
+        .iter()
+        .any(|role| role == "agent-governance-source"));
+
+    // Relations file promotes it to recognised human ground.
+    let relations = central.join(CONTROL_GROUND_RELATIONS_SOURCE);
+    fs::create_dir_all(relations.parent().unwrap()).unwrap();
+    fs::write(
+        &relations,
+        serde_json::to_string_pretty(&json!({
+            "schema": CONTROL_GROUND_RELATIONS_SCHEMA,
+            "project_id": "control:root",
+            "relations": [{
+                "ref": "central:source:control:root:Control/agents/governance/engineering/agent-operations.md",
+                "path": "Control/agents/governance/engineering/agent-operations.md",
+                "provenance": "human-authored",
+                "standing": "durable-source",
+                "roles": ["agent-governance-source"],
+                "treatment": "control-governance-retained-in-place"
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let bindings = control_source_bindings(central).unwrap();
+    let relation_binding = bindings
+        .iter()
+        .find(|binding| binding.path == "Control/agents/governance/engineering/agent-operations.md")
+        .expect("statement still appears");
+    assert_eq!(relation_binding.provenance, "human-authored");
+    assert_eq!(
+        relation_binding.source_ref,
+        "central:source:control:root:Control/agents/governance/engineering/agent-operations.md"
+    );
+    // One physical source, one logical binding: the tree fallback is replaced, not duplicated.
+    assert_eq!(
+        bindings
+            .iter()
+            .filter(|binding| binding.path == "Control/agents/governance/engineering/agent-operations.md")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn control_ground_relations_missing_file_keeps_tree_defaults() {
+    let temp = TempRoot::new();
+    let central = temp.path();
+    let statement = central.join("Control/agents/governance/engineering/coding-approach.md");
+    fs::create_dir_all(statement.parent().unwrap()).unwrap();
+    fs::write(&statement, "You change the smallest thing that can work.\n").unwrap();
+
+    let bindings = control_source_bindings(central).unwrap();
+    let binding = bindings
+        .iter()
+        .find(|binding| binding.path.ends_with("coding-approach.md"))
+        .expect("statement appears");
+    assert_eq!(binding.provenance, "unresolved");
 }

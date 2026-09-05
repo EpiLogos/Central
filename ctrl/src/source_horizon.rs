@@ -25,6 +25,9 @@ pub const PROJECT_HORIZON_STATE: &str = ".central/source-change-horizon.json";
 pub const CONTROL_HORIZON_STATE: &str = ".central/source-change-control.json";
 pub const GROUND_RELATIONS_SOURCE: &str = "ProjectCentral/relations/source-relations.json";
 pub const GROUND_RELATIONS_SCHEMA: &str = "central.project.ground-relations/v1";
+pub const CONTROL_GROUND_RELATIONS_SOURCE: &str = "Control/relations/source-relations.json";
+pub const CONTROL_GROUND_RELATIONS_SCHEMA: &str = "central.control.ground-relations/v1";
+pub const CONTROL_WORLD_REF: &str = "control:root";
 
 const MAX_SCAN_DEPTH: usize = 24;
 
@@ -311,23 +314,39 @@ fn insert_tree_bindings(
     Ok(())
 }
 
-fn read_ground_relations(project_root: &Path, expected_project_id: &str) -> io::Result<Vec<GroundRelation>> {
-    let path = project_root.join(GROUND_RELATIONS_SOURCE);
+fn read_relations_file(path: &Path, schema: &str, expected_id: &str) -> io::Result<Vec<GroundRelation>> {
     if !path.is_file() {
         return Ok(Vec::new());
     }
-    let relations: GroundRelationsFile = serde_json::from_slice(&fs::read(&path)?)
+    let relations: GroundRelationsFile = serde_json::from_slice(&fs::read(path)?)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    if relations.schema != GROUND_RELATIONS_SCHEMA || relations.project_id != expected_project_id {
+    if relations.schema != schema || relations.project_id != expected_id {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "ProjectCentral ground relation source has the wrong schema or Project identity",
+            "ground relations have an unsupported schema or world id",
         ));
     }
-    for relation in &relations.relations {
+    Ok(relations.relations)
+}
+
+fn read_ground_relations(project_root: &Path, expected_project_id: &str) -> io::Result<Vec<GroundRelation>> {
+    let relations = read_relations_file(
+        &project_root.join(GROUND_RELATIONS_SOURCE),
+        GROUND_RELATIONS_SCHEMA,
+        expected_project_id,
+    )?;
+    for relation in &relations {
         validate_project_member(&relation.path)?;
     }
-    Ok(relations.relations)
+    Ok(relations)
+}
+
+fn read_control_ground_relations(central_root: &Path) -> io::Result<Vec<GroundRelation>> {
+    read_relations_file(
+        &central_root.join(CONTROL_GROUND_RELATIONS_SOURCE),
+        CONTROL_GROUND_RELATIONS_SCHEMA,
+        CONTROL_WORLD_REF,
+    )
 }
 
 pub fn project_source_bindings(project_root: &Path) -> io::Result<Vec<SourceBinding>> {
@@ -449,7 +468,7 @@ pub fn project_source_bindings(project_root: &Path) -> io::Result<Vec<SourceBind
 }
 
 pub fn control_source_bindings(central_root: &Path) -> io::Result<Vec<SourceBinding>> {
-    let world_ref = "control:root";
+    let world_ref = CONTROL_WORLD_REF;
     let mut bindings = BTreeMap::<String, SourceBinding>::new();
     insert_tree_bindings(
         central_root,
@@ -481,6 +500,30 @@ pub fn control_source_bindings(central_root: &Path) -> io::Result<Vec<SourceBind
         "control-agent-wiki",
         &mut bindings,
     )?;
+
+    for relation in read_control_ground_relations(central_root)? {
+        let relative = relation.path.clone();
+        let path = central_root.join(&relative);
+        if !safe_regular_file(central_root, &path)? {
+            continue;
+        }
+        // Same law as the project flow: an explicit recognised relation is the
+        // identity/standing authority for its path; the tree fallback is replaced.
+        bindings.retain(|_, binding| binding.path != relative);
+        bindings.insert(
+            relation.source_ref.clone(),
+            SourceBinding {
+                source_ref: relation.source_ref,
+                path: relative,
+                roles: relation.roles,
+                provenance: relation.provenance,
+                standing: relation.standing,
+                treatment: relation.treatment,
+                agent_retrieval_allowed: retrieval_allowed(central_root, &path),
+            },
+        );
+    }
+
     Ok(bindings.into_values().collect())
 }
 
