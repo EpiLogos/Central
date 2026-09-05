@@ -23,7 +23,7 @@ Root resolution is, in order:
 
 ## Canonical Actions
 
-The current composed registry exposes 59 Actions:
+The current composed registry exposes 62 Actions:
 
 | Action | Purpose | Common CLI projection |
 |---|---|---|
@@ -32,6 +32,9 @@ The current composed registry exposes 59 Actions:
 | `central.init` | initialise the required Central root shape | `init` |
 | `central.doctor` | inspect Central structural health and diagnose a root that is also the product source checkout | `doctor` |
 | `central.world` | index the full world centred in the active root: Control source areas, root and Project WikiSpaces with child refs, declared source-relations overrides, and per-Project ProjectCentral state. Read-only; every fault is reported as data | `world` |
+| `central.world.project` | project the world onto one ProjectCentral: its fractal ground, Wiki, Flows, NOW folder, participating sources with provenance, and position under Work. Read-only | `world <project>` |
+| `central.world.reproject.plan` | list the canonical ProjectCentral scaffolding that is missing, classify everything else by source provenance, and state what reprojection would never do. Read-only | `world plan <project>` |
+| `central.world.reproject.apply` | stamp only the missing canonical ProjectCentral scaffolding; never moves, renames, deletes, relabels, or writes into anything that exists | `world apply <project>` |
 | `central.recovery.plan` | explain recovery for an authored machine role | `recovery plan <role>` |
 | `central.recover` | reconcile supported recovery for an authored machine role | `recover <role>` |
 | `control.open` | resolve one authored Control source root | `control open <user|agents|machines>` |

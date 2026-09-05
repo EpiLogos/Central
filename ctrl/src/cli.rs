@@ -101,6 +101,27 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         [command] if command == "init" => ("central.init", json!({})),
         [command] if command == "doctor" => ("central.doctor", json!({})),
         [command] if command == "world" => ("central.world", json!({})),
+        [command, rest @ ..] if command == "world" && rest.len() == 1 && rest[0] == "plan" => {
+            return Err((structured, "world plan requires a Project name.".to_owned()));
+        }
+        [command, rest @ ..] if command == "world" && rest.len() == 1 && rest[0] == "apply" => {
+            return Err((structured, "world apply requires a Project name.".to_owned()));
+        }
+        [command, rest @ ..] if command == "world"
+            && rest.first().map(String::as_str) == Some("plan")
+            && rest.len() == 2 =>
+        {
+            ("central.world.reproject.plan", json!({ "project": rest[1] }))
+        }
+        [command, rest @ ..] if command == "world"
+            && rest.first().map(String::as_str) == Some("apply")
+            && rest.len() == 2 =>
+        {
+            ("central.world.reproject.apply", json!({ "project": rest[1] }))
+        }
+        [command, rest @ ..] if command == "world" && rest.len() == 1 => {
+            ("central.world.project", json!({ "project": rest[0] }))
+        }
         [command] if command == "actions" => ("action.list", json!({})),
         [domain, verb] if domain == "action" && verb == "list" => ("action.list", json!({})),
         [domain, verb, action] if domain == "action" && verb == "run" => {
@@ -216,7 +237,10 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         [canonical]
             if matches!(
                 canonical.as_str(),
-                "central.root" | "central.init" | "central.doctor" | "central.world" | "action.list" | "machine.inspect" | "machine.account" | "work.list"
+                "central.root" | "central.init" | "central.doctor" | "central.world"
+                | "central.world.project" | "central.world.reproject.plan"
+                | "central.world.reproject.apply" | "action.list" | "machine.inspect"
+                | "machine.account" | "work.list"
             ) =>
         {
             (canonical.as_str(), json!({}))
@@ -275,6 +299,9 @@ fn human_output(result: &ActionResult) -> String {
             lines.join("\n")
         }
         Some("central.world") => crate::world_map::explain_world_map(data),
+        Some("central.world.project") => crate::world_map::explain_project_world_map(data),
+        Some("central.world.reproject.plan") => crate::world_map::explain_reproject_plan(data),
+        Some("central.world.reproject.apply") => crate::world_map::explain_reproject_receipt(data),
         Some("central.recovery.plan") => crate::recovery::explain_recovery_plan(data),
         Some("central.recover") => crate::recovery::explain_recovery(data),
         Some("action.list") => data

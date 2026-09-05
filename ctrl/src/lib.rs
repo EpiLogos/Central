@@ -31,6 +31,9 @@ pub mod projectcentral_ops {
         MutationPlan, ProjectCentralDoctor, ProjectCentralInspection, ProjectCentralMutation,
         ProjectCentralOutcome, SourceSignal, WikiCandidate, PROJECT_PROVENANCE, ROOT_WIKI_REF,
     };
+    pub(crate) use super::projectcentral_ops_base::{
+        project_space_ref, project_wiki_value, write_json_new,
+    };
 
     pub fn register_projectcentral_actions(registry: &mut crate::action::ActionRegistry) {
         super::projectcentral_ops_base::register_projectcentral_actions(registry);
@@ -211,9 +214,13 @@ pub use world_source::{
     WorldSourceWriteReceipt, WORLD_SOURCE_READING_SCHEMA, WORLD_SOURCE_WRITE_RECEIPT_SCHEMA,
 };
 pub use world_map::{
-    explain_world_map, map_world, register_world_map_actions, ControlMap, GroundState,
-    ProjectCentralMap, ProjectCentralState, ProjectMap, RelationsState, SourceArea, WikiArea,
-    WikiSpaceState, WorkMap, WorldMap, WORLD_MAP_SCHEMA,
+    apply_reproject, explain_project_world_map, explain_reproject_plan, explain_reproject_receipt,
+    explain_world_map, map_project_world, map_world, plan_reproject, register_world_map_actions,
+    ControlMap, FlowEntry, FlowState, GroundState, NowState, ProjectCentralMap, ProjectCentralState,
+    ProjectMap, ProjectPosition, ProjectSourceSummary, ProjectWorldMap, ProvenanceClassified,
+    RelationsState, ReprojectPlan, ReprojectReceipt, ScaffoldKind, ScaffoldStep, SourceArea,
+    WikiArea, WikiSpaceState, WorkMap, WorldProjection, WorldMap, PROJECT_RELATIONS_DIR,
+    REPROJECT_PLAN_SCHEMA, REPROJECT_RECEIPT_SCHEMA, WORLD_MAP_SCHEMA,
 };
 pub use central_connector_sdk::{
     run_automation_conformance, run_configuration_manager_conformance,

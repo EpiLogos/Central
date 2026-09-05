@@ -166,17 +166,16 @@ pub(crate) fn safe_source_member_path(project_root: &Path, raw: &str, must_exist
     Ok(path)
 }
 
-fn content_revision_bytes(bytes: &[u8]) -> String {
+/// The Flow revision of a byte span: the same scheme `store_revision` records,
+/// exposed so read-only callers can compare a retained source against its
+/// registered revision without reconciling anything.
+pub(crate) fn content_revision_bytes(bytes: &[u8]) -> String {
     let mut hash = 0xcbf29ce484222325u64;
     for byte in bytes {
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(0x100000001b3);
     }
     format!("central.content-fnv1a64/v1:{}:{hash:016x}", bytes.len())
-}
-
-fn content_revision(path: &Path) -> io::Result<String> {
-    Ok(content_revision_bytes(&fs::read(path)?))
 }
 
 fn escaped_source_ref(project_id: &str, path: &str) -> String {

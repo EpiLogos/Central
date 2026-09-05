@@ -617,11 +617,11 @@ fn validate_manifest(manifest: &ProjectCentralManifest) -> io::Result<()> {
     }
 }
 
-fn project_space_ref(project_id: &str) -> String {
+pub(crate) fn project_space_ref(project_id: &str) -> String {
     format!("central:wiki:project:{project_id}")
 }
 
-fn project_wiki_value(space_ref: &str, title: &str, child_space_refs: &[String]) -> Value {
+pub(crate) fn project_wiki_value(space_ref: &str, title: &str, child_space_refs: &[String]) -> Value {
     json!({"objects":[{
         "profile":WIKI_PROFILE,
         "object":"space",
@@ -722,7 +722,7 @@ fn ensure_project_member(raw: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn write_json_new(path: &Path, value: &Value) -> io::Result<()> {
+pub(crate) fn write_json_new(path: &Path, value: &Value) -> io::Result<()> {
     if path.exists() {
         return Err(io::Error::new(
             io::ErrorKind::AlreadyExists,

@@ -184,6 +184,9 @@ fn registry_has_stable_ids_and_complete_descriptors() {
         "central.recovery.plan",
         "central.root",
         "central.world",
+        "central.world.project",
+        "central.world.reproject.apply",
+        "central.world.reproject.plan",
         "control.open",
         "control.search",
         "machine.account",
@@ -269,7 +272,7 @@ fn action_list_has_human_and_structured_cli_renderings() {
     let value: serde_json::Value = serde_json::from_str(&structured.output).unwrap();
     assert_eq!(value["status"], "success");
     let actions = value["data"]["actions"].as_array().unwrap();
-    assert_eq!(actions.len(), 59);
+    assert_eq!(actions.len(), 62);
     let ids = actions.iter().filter_map(|action| action["id"].as_str()).collect::<Vec<_>>();
     for id in [
         "projectcentral.inspect",
