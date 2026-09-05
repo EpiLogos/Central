@@ -545,3 +545,57 @@ fn cli_doorway_discovers_and_serves_world_source_actions() {
     assert_eq!(change["actor_kind"], json!("human"));
     assert_eq!(horizon_data["source_payloads_exposed"], json!(false));
 }
+
+#[test]
+fn ground_inspection_discloses_the_ref_source_read_accepts() {
+    let (temp, central, project) = project_fixture("canonical-ref", "canonical-project");
+    let user = project.join("ProjectCentral").join("user").join("notes");
+    fs::create_dir_all(&user).unwrap();
+    fs::write(user.join("one.md"), "one").unwrap();
+    fs::write(user.join("two.md"), "two").unwrap();
+    fs::write(user.join("three.md"), "three").unwrap();
+
+    // U0.2 (cradle map D12): the ref ground inspection discloses and the ref
+    // source.read/write accept are one canonical grammar, byte-identical.
+    let inspection = central_ctrl::inspect_project_ground(&project).unwrap();
+    assert!(inspection.projectcentral_ready);
+    let expected_prefix = format!(
+        "central:source:project:{}:",
+        inspection.project_id.clone().unwrap()
+    );
+    let disclosed: Vec<String> = inspection
+        .account_handoff
+        .other_source_relations
+        .iter()
+        .map(|record| record.source_ref.clone())
+        .collect();
+    assert_eq!(disclosed.len(), 3, "three user-aperture sources disclosed");
+    for source_ref in &disclosed {
+        assert!(
+            source_ref.starts_with(&expected_prefix),
+            "canonical horizon grammar, got {source_ref}"
+        );
+        let reading = central_ctrl::read_world_source(&project, &source_ref).unwrap();
+        assert_eq!(reading.source.source_ref, *source_ref);
+    }
+
+    // Round-trip: the inspect-disclosed ref drives a CAS read/write cycle.
+    let first = disclosed[0].clone();
+    let reading = central_ctrl::read_world_source(&project, &first).unwrap();
+    let receipt = central_ctrl::write_world_source(
+        &project,
+        &first,
+        &reading.revision.revision,
+        "one revised",
+        "human:cradle",
+        "human",
+        None,
+    )
+    .unwrap();
+    assert!(receipt.changed);
+    assert_ne!(receipt.previous_revision, receipt.revision.revision);
+    let reopened = central_ctrl::read_world_source(&project, &first).unwrap();
+    assert_eq!(reopened.content, "one revised");
+    assert_eq!(reopened.revision.revision, receipt.revision.revision);
+    drop(temp);
+}

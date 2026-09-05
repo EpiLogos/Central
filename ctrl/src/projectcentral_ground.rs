@@ -562,8 +562,22 @@ fn read_ground_relations(
     project_root: &Path,
     project_id: Option<&str>,
 ) -> io::Result<Vec<GroundSourceRelation>> {
+    // A persisted relation ref is re-derived from its path so a relation
+    // recorded under the retired path-hash grammar is disclosed canonically;
+    // the path is the durable identity, the ref is derived, never stored truth.
     Ok(read_relations_file(project_root, project_id)?
-        .map(|value| value.relations)
+        .map(|value| {
+            value
+                .relations
+                .into_iter()
+                .map(|mut relation| {
+                    if let Some(project_id) = project_id {
+                        relation.source_ref = source_ref(project_id, &relation.path);
+                    }
+                    relation
+                })
+                .collect()
+        })
         .unwrap_or_default())
 }
 
@@ -798,13 +812,15 @@ fn parse_roles(raw: Option<&str>) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// The canonical Project source ref is the Source Change Horizon's grammar —
+/// `central:source:project:{project_id}:{escaped-path}` — so a ref disclosed by
+/// ground inspection is byte-identical to the ref `projectcentral.source.read`
+/// and `projectcentral.source.write` accept. Ground never mints a second
+/// grammar; the irreversible path-hash form it previously disclosed could not
+/// be resolved by any owner operation.
 fn source_ref(project_id: &str, path: &str) -> String {
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in path.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    format!("central:project-source:{project_id}:{hash:016x}")
+    let escaped = path.replace('%', "%25").replace(':', "%3A").replace(' ', "%20");
+    format!("central:source:project:{project_id}:{escaped}")
 }
 
 fn read_wiki_space_ref(path: &Path) -> io::Result<Option<String>> {
