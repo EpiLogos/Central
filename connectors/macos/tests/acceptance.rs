@@ -31,10 +31,22 @@ mod macos_acceptance {
         path
     }
 
+    /// No-op stand-in for /usr/bin/open so open/reveal acceptance exercises the
+    /// NativeOpen and NativeReveal ports without opening real Finder windows.
+    fn stub_open_executable(label: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let executable = temporary_directory(&format!("open-stub-{label}")).join("open");
+        fs::write(&executable, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        executable
+    }
+
     fn macos_registry() -> ConnectorRegistry {
         let mut connectors = ConnectorRegistry::default();
         connectors.register(FilesystemWorkConnector::new()).unwrap();
-        connectors.register(MacOsNativeConnector::new()).unwrap();
+        connectors
+            .register(MacOsNativeConnector::new().with_open_executable(stub_open_executable("registry")))
+            .unwrap();
         connectors
     }
 
@@ -60,7 +72,8 @@ mod macos_acceptance {
 
     #[test]
     fn native_open_and_reveal_pass_shared_conformance_on_macos() {
-        let connector = MacOsNativeConnector::new();
+        let connector =
+            MacOsNativeConnector::new().with_open_executable(stub_open_executable("conformance"));
         let directory = temporary_directory("native");
         let file = directory.join("reveal-me.txt");
         fs::write(&file, "central").unwrap();

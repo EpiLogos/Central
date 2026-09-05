@@ -19,6 +19,7 @@ const FINDER_TAGS_XATTR: &str = "com.apple.metadata:_kMDItemUserTags";
 pub struct MacOsNativeConnector {
     manifest: ConnectorManifest,
     brew_executable: PathBuf,
+    open_executable: PathBuf,
     home: PathBuf,
 }
 
@@ -63,8 +64,17 @@ impl MacOsNativeConnector {
                 mutation_scope: "externally-mutating".to_owned(),
             },
             brew_executable,
+            open_executable: PathBuf::from("/usr/bin/open"),
             home,
         }
+    }
+
+    /// Overrides the executable dispatched for NativeOpen and NativeReveal.
+    /// Production opens targets through /usr/bin/open; tests inject a no-op
+    /// double so conformance never opens real Finder windows.
+    pub fn with_open_executable(mut self, open_executable: PathBuf) -> Self {
+        self.open_executable = open_executable;
+        self
     }
 
     fn ensure_target(target: &Path, operation: &str) -> Result<(), PortError> {
@@ -83,9 +93,9 @@ impl MacOsNativeConnector {
         Ok(())
     }
 
-    fn run_open(arguments: &[&str], target: &Path, operation: &str) -> Result<(), PortError> {
+    fn run_open(&self, arguments: &[&str], target: &Path, operation: &str) -> Result<(), PortError> {
         Self::ensure_target(target, operation)?;
-        let status = Command::new("/usr/bin/open")
+        let status = Command::new(&self.open_executable)
             .args(arguments)
             .arg(target)
             .status()
@@ -164,14 +174,14 @@ impl Default for MacOsNativeConnector {
 
 impl NativeOpen for MacOsNativeConnector {
     fn open(&self, input: &NativeOpenInput) -> Result<NativeOpenOutput, PortError> {
-        Self::run_open(&[], &input.target, "open")?;
+        self.run_open(&[], &input.target, "open")?;
         Ok(NativeOpenOutput { target: input.target.clone() })
     }
 }
 
 impl NativeReveal for MacOsNativeConnector {
     fn reveal(&self, input: &NativeRevealInput) -> Result<NativeRevealOutput, PortError> {
-        Self::run_open(&["-R"], &input.target, "reveal")?;
+        self.run_open(&["-R"], &input.target, "reveal")?;
         Ok(NativeRevealOutput { target: input.target.clone() })
     }
 }
