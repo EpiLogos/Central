@@ -17,6 +17,7 @@ pub mod projectcentral_now;
 pub mod projectcentral_flow;
 pub mod source_horizon;
 pub mod source_history;
+pub mod template_stamp;
 pub mod world;
 pub mod world_source;
 #[path = "projectcentral_ops.rs"]
@@ -163,6 +164,10 @@ pub use projectcentral_ops::{
     inspect_projectcentral, migrate_selected, preview_adopt, preview_migrate, DoctorCheck,
     MutationPlan, ProjectCentralDoctor, ProjectCentralInspection, ProjectCentralMutation,
     ProjectCentralOutcome, SourceSignal, WikiCandidate, PROJECT_PROVENANCE, ROOT_WIKI_REF,
+};
+pub use template_stamp::{
+    register_template_stamp_actions, stamp_plan_for_project, stamp_plan_for_root, stamp_project,
+    stamp_root, StampFile, StampFileAction, StampScope, TemplateStampPlan, TemplateStampResult,
 };
 pub use recovery::{
     explain_recovery, explain_recovery_plan, AuthoredRecoveryDeclaration, RecoveryDeclaration,

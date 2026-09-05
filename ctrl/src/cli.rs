@@ -381,6 +381,7 @@ pub fn run_cli_with_runtime(
     };
     let mut registry = create_core_action_registry();
     register_projectcentral_actions(&mut registry);
+    crate::template_stamp::register_template_stamp_actions(&mut registry);
     register_agent_profile_actions(&mut registry);
     let result = match parsed.target {
         CommandTarget::Direct { action_id, input } => registry.execute(&action_id, &input, &context),
