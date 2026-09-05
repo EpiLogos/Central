@@ -436,7 +436,6 @@ mod tests {
         .unwrap();
         profile.skill_set_refs = vec!["skill-set:personal".into()];
         profile.method_refs = vec!["method:orientation".into()];
-        profile.operative_requirement_refs = vec!["routine:daily-orientation".into()];
         profile
     }
 

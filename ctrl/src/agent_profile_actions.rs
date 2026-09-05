@@ -207,14 +207,6 @@ fn validate_ingested_profile(profile: &AgentProfile) -> Result<(), String> {
             profile.computer_access_intent_refs.as_slice(),
         ),
         ("placement-intent refs", profile.placement_intent_refs.as_slice()),
-        (
-            "operative-requirement refs",
-            profile.operative_requirement_refs.as_slice(),
-        ),
-        (
-            "material-requirement refs",
-            profile.material_requirement_refs.as_slice(),
-        ),
         ("provenance refs", profile.provenance_refs.as_slice()),
     ] {
         validate_ref_list(field, refs)?;

@@ -70,12 +70,6 @@ pub struct AgentProfile {
     /// Existing Central placement/material-intent relations only.
     #[serde(default)]
     pub placement_intent_refs: Vec<String>,
-    /// Optional desired runtime/body relation refs. These are source-side wishes;
-    /// effective AIKit state is not stored here.
-    #[serde(default)]
-    pub operative_requirement_refs: Vec<String>,
-    #[serde(default)]
-    pub material_requirement_refs: Vec<String>,
     #[serde(default)]
     pub provenance_refs: Vec<String>,
 }
@@ -107,8 +101,6 @@ impl AgentProfile {
             knowledge_source_refs: Vec::new(),
             computer_access_intent_refs: Vec::new(),
             placement_intent_refs: Vec::new(),
-            operative_requirement_refs: Vec::new(),
-            material_requirement_refs: Vec::new(),
             provenance_refs: Vec::new(),
         };
         value.validate_shape()?;
@@ -248,11 +240,6 @@ impl AgentProfile {
             &self.computer_access_intent_refs,
         )?;
         validate_refs("placement intent refs", &self.placement_intent_refs)?;
-        validate_refs(
-            "operative requirement refs",
-            &self.operative_requirement_refs,
-        )?;
-        validate_refs("material requirement refs", &self.material_requirement_refs)?;
         validate_refs("provenance refs", &self.provenance_refs)?;
         if let Some(source) = &self.source_profile_ref {
             required(source.clone(), "source Agent Profile ref")?;
