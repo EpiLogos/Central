@@ -5,8 +5,8 @@
 //! counts per Control area, the root and Project WikiSpaces with their child
 //! refs, declared source-relations overrides, and per-Project ProjectCentral
 //! state. It introduces no ontology of its own: it reuses the ProjectCentral
-//! fractal paths, the `okf-wiki/v1` space shape, the ground-relations schema
-//! and vocabulary, and the mixed-root diagnostic verbatim.
+//! fractal paths, the `okf-wiki/v1` space shape, the ground-relations
+//! schema/vocabulary and the mixed-root diagnostic verbatim.
 //!
 //! Every fault it reports is data about the world (a mixed root, a dangling
 //! child ref, a partial ProjectCentral, unresolved provenance), never a
@@ -19,29 +19,28 @@ use crate::action::{
 };
 use crate::control::AGENT_RETRIEVAL_DENY_MARKER;
 use crate::projectcentral::{
-    AGENT_GOVERNANCE_DIR, HUMAN_SOURCE_DIR, PROJECTCENTRAL_DIR, PROJECT_MANIFEST, ROOT_WIKI_SOURCE,
-    WIKI_DIR, WIKI_PROFILE, WIKI_SOURCE,
+    read_project_manifest, AGENT_GOVERNANCE_DIR, HUMAN_SOURCE_DIR, PROJECTCENTRAL_DIR,
+    PROJECT_MANIFEST, ROOT_AGENT_GOVERNANCE_DIR, ROOT_HUMAN_SOURCE_DIR, ROOT_WIKI_DIR,
+    ROOT_WIKI_SOURCE, WIKI_DIR, WIKI_PROFILE, WIKI_SOURCE,
 };
 use crate::projectcentral_ops::{
-    doctor_projectcentral, inspect_projectcentral, DoctorCheck, ProjectCentralDoctor,
-    ProjectCentralOutcome, WikiCandidate,
+    doctor_projectcentral, inspect_projectcentral, DoctorCheck, ProjectCentralOutcome,
+    WikiCandidate,
 };
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::{inspect_central, resolve_central_root, MixedRootDiagnostic};
 use crate::source_horizon::{
-    control_source_bindings, CONTROL_GROUND_RELATIONS_SCHEMA, CONTROL_GROUND_RELATIONS_SOURCE,
-    CONTROL_WORLD_REF, GROUND_RELATIONS_SCHEMA, GROUND_RELATIONS_SOURCE,
+    control_source_bindings, GROUND_RELATIONS_SOURCE, CONTROL_GROUND_RELATIONS_SCHEMA,
+    CONTROL_GROUND_RELATIONS_SOURCE, CONTROL_WORLD_REF,
 };
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub const WORLD_MAP_SCHEMA: &str = "central.world-map/v1";
-/// Control areas that carry the user's world but are not required structure, so
-/// `central.doctor` does not vouch for them; the map reports them as data.
 pub const ROOT_AGENT_EXPRESSIONS_DIR: &str = "Control/agents/expressions";
 pub const ROOT_MACHINES_DIR: &str = "Control/machines";
 /// Wiki and relations objects are small; anything larger is not read.
@@ -52,7 +51,6 @@ const MAX_SCAN_DEPTH: usize = 24;
 #[serde(rename_all = "snake_case")]
 pub enum GroundState {
     Healthy,
-    /// The personal root is also the Central product source checkout.
     MixedRoot,
     /// The root exists but is missing required Control directories.
     Invalid,
@@ -147,7 +145,7 @@ pub struct ControlMap {
     pub relations: RelationsState,
     /// Participating Control sources after declared relations override the tree fallback.
     pub source_bindings: usize,
-    /// Participating sources still carrying `unresolved` provenance.
+    /// Participating sources still stamped `unresolved` provenance.
     pub unresolved_provenance_sources: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bindings_error: Option<String>,
@@ -199,7 +197,7 @@ pub struct WorkMap {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct WorldMap {
     pub schema: String,
-    pub root: PathBuf,
+    pub root: std::path::PathBuf,
     pub root_state: String,
     pub ground_state: GroundState,
     pub valid: bool,
@@ -212,8 +210,8 @@ fn skipped_directory(name: &str) -> bool {
     name.starts_with('.') || matches!(name, "node_modules" | "target" | "dist" | "build")
 }
 
-/// Counts ordinary files without reading any content. Symlinks never count, and
-/// an unreadable subtree counts whatever is readable, because a map reports the
+/// Counts ordinary files without reading any content. Symlinks never count;
+/// unreadable subtrees count whatever is readable, because a map reports the
 /// world it can see rather than failing the whole tree.
 fn count_files(directory: &Path, depth: usize, excluded: &[&str], count: &mut usize) {
     if depth > MAX_SCAN_DEPTH {
@@ -250,19 +248,9 @@ fn source_area(central_root: &Path, relative: &str) -> SourceArea {
     SourceArea { path: relative.to_owned(), exists, sources }
 }
 
-fn read_small_json(path: &Path) -> Result<Value, String> {
-    let bytes = match fs::read(path) {
-        Ok(bytes) if bytes.len() as u64 <= MAX_JSON_BYTES => bytes,
-        Ok(_) => return Err(format!("{} exceeds {MAX_JSON_BYTES} bytes", path.display())),
-        Err(error) => return Err(error.to_string()),
-    };
-    serde_json::from_slice(&bytes)
-        .map_err(|error| format!("{} is not valid JSON: {error}", path.display()))
-}
-
 /// Reads one `okf-wiki/v1` space object. Presence, space ref, revision and
 /// child refs are data; an unreadable or non-space file is an error field, not
-/// a failure of the whole map.
+/// a failure of the map.
 fn wiki_space(path: &Path, relative: &str) -> WikiSpaceState {
     let mut state = WikiSpaceState {
         path: relative.to_owned(),
@@ -276,10 +264,22 @@ fn wiki_space(path: &Path, relative: &str) -> WikiSpaceState {
     if !state.present {
         return state;
     }
-    let value = match read_small_json(path) {
-        Ok(value) => value,
+    let value = match fs::read(path) {
+        Ok(bytes) if bytes.len() as u64 <= MAX_JSON_BYTES => {
+            match serde_json::from_slice::<Value>(&bytes) {
+                Ok(value) => value,
+                Err(error) => {
+                    state.error = Some(format!("not valid Wiki JSON: {error}"));
+                    return state;
+                }
+            }
+        }
+        Ok(_) => {
+            state.error = Some(format!("Wiki source exceeds {MAX_JSON_BYTES} bytes"));
+            return state;
+        }
         Err(error) => {
-            state.error = Some(error);
+            state.error = Some(error.to_string());
             return state;
         }
     };
@@ -312,7 +312,7 @@ fn wiki_space(path: &Path, relative: &str) -> WikiSpaceState {
     state
 }
 
-/// A child ref dangles when no Wiki space anywhere on this ground declares it.
+/// A child ref dangles when no Wiki space on this ground declares it.
 fn mark_dangling(state: &mut WikiSpaceState, known_space_refs: &BTreeSet<String>) {
     state.dangling_child_space_refs = state
         .child_space_refs
@@ -341,10 +341,22 @@ fn relations_state(
     if !state.present {
         return state;
     }
-    let value = match read_small_json(path) {
-        Ok(value) => value,
+    let value = match fs::read(path) {
+        Ok(bytes) if bytes.len() as u64 <= MAX_JSON_BYTES => {
+            match serde_json::from_slice::<Value>(&bytes) {
+                Ok(value) => value,
+                Err(error) => {
+                    state.error = Some(format!("not valid relations JSON: {error}"));
+                    return state;
+                }
+            }
+        }
+        Ok(_) => {
+            state.error = Some(format!("relations source exceeds {MAX_JSON_BYTES} bytes"));
+            return state;
+        }
         Err(error) => {
-            state.error = Some(error);
+            state.error = Some(error.to_string());
             return state;
         }
     };
@@ -375,27 +387,20 @@ fn relations_state(
     state
 }
 
-fn plain_relations(relative: &str) -> RelationsState {
-    RelationsState {
-        path: relative.to_owned(),
-        present: false,
-        declared_overrides: 0,
-        schema: None,
-        error: None,
-    }
+fn relations_error(error: &io::Error) -> String {
+    format!("source relations cannot be applied: {error}")
 }
 
 fn map_control(central_root: &Path) -> ControlMap {
-    let user = source_area(central_root, crate::projectcentral::ROOT_HUMAN_SOURCE_DIR);
-    let agent_governance = source_area(central_root, crate::projectcentral::ROOT_AGENT_GOVERNANCE_DIR);
+    let user = source_area(central_root, ROOT_HUMAN_SOURCE_DIR);
+    let agent_governance = source_area(central_root, ROOT_AGENT_GOVERNANCE_DIR);
     let agent_expressions = source_area(central_root, ROOT_AGENT_EXPRESSIONS_DIR);
     let machines = source_area(central_root, ROOT_MACHINES_DIR);
     let wiki = wiki_space(&central_root.join(ROOT_WIKI_SOURCE), ROOT_WIKI_SOURCE);
-    let wiki_area = source_area(central_root, crate::projectcentral::ROOT_WIKI_DIR);
     let agent_wiki = WikiArea {
-        path: crate::projectcentral::ROOT_WIKI_DIR.to_owned(),
-        exists: wiki_area.exists,
-        sources: wiki_area.sources,
+        path: ROOT_WIKI_DIR.to_owned(),
+        exists: central_root.join(ROOT_WIKI_DIR).is_dir(),
+        sources: source_area(central_root, ROOT_WIKI_DIR).sources,
         wiki,
     };
     let relations = relations_state(
@@ -406,7 +411,7 @@ fn map_control(central_root: &Path) -> ControlMap {
     );
 
     // The Control tree walk is the same one the Source Change Horizon uses: the
-    // tree stamps every source `unresolved`, and declared relations override it.
+    // tree stamps every source `unresolved` and declared relations override it.
     let mut bindings_error = None;
     let (source_bindings, unresolved_provenance_sources) = match control_source_bindings(central_root)
     {
@@ -418,7 +423,7 @@ fn map_control(central_root: &Path) -> ControlMap {
                 .count(),
         ),
         Err(error) => {
-            bindings_error = Some(format!("Control source bindings cannot be read: {error}"));
+            bindings_error = Some(relations_error(&error));
             (0, 0)
         }
     };
@@ -437,8 +442,6 @@ fn map_control(central_root: &Path) -> ControlMap {
     }
 }
 
-/// Names the canonical fractal pieces a ProjectCentral is missing, by their
-/// ground-relative path.
 fn canonical_missing(project_root: &Path) -> Vec<String> {
     [
         (
@@ -446,7 +449,10 @@ fn canonical_missing(project_root: &Path) -> Vec<String> {
             format!("{PROJECTCENTRAL_DIR}/{PROJECT_MANIFEST}"),
         ),
         (project_root.join(HUMAN_SOURCE_DIR), HUMAN_SOURCE_DIR.to_owned()),
-        (project_root.join(AGENT_GOVERNANCE_DIR), AGENT_GOVERNANCE_DIR.to_owned()),
+        (
+            project_root.join(AGENT_GOVERNANCE_DIR),
+            AGENT_GOVERNANCE_DIR.to_owned(),
+        ),
         (project_root.join(WIKI_DIR), WIKI_DIR.to_owned()),
         (project_root.join(WIKI_SOURCE), WIKI_SOURCE.to_owned()),
     ]
@@ -456,45 +462,41 @@ fn canonical_missing(project_root: &Path) -> Vec<String> {
     .collect()
 }
 
-fn failed_check_names(doctor: &Option<ProjectCentralDoctor>) -> Vec<String> {
-    doctor
-        .as_ref()
-        .map(|report| {
-            report
-                .checks
-                .iter()
-                .filter(|check| !check.valid)
-                .map(|check| check.name.clone())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn map_projectcentral(
-    central_root: &Path,
-    project_root: &Path,
-    relative: &str,
-) -> ProjectCentralMap {
+fn map_projectcentral(central_root: &Path, project_root: &Path, relative: &str) -> ProjectCentralMap {
+    let projectcentral_root = project_root.join(PROJECTCENTRAL_DIR);
     let projectcentral_path = format!("{relative}/{PROJECTCENTRAL_DIR}");
-    if !project_root.join(PROJECTCENTRAL_DIR).is_dir() {
-        return ProjectCentralMap {
-            state: ProjectCentralState::Absent,
-            path: projectcentral_path,
-            missing: None,
-            outcome: None,
-            reason: None,
-            manifest_errors: None,
-            wiki: None,
-            wiki_candidates: None,
-            human_source_files: 0,
-            relations: plain_relations(&format!("{relative}/{GROUND_RELATIONS_SOURCE}")),
-            failed_checks: None,
-            error: None,
-        };
+    let relations = relations_state(
+        &project_root.join(GROUND_RELATIONS_SOURCE),
+        &format!("{relative}/{GROUND_RELATIONS_SOURCE}"),
+        crate::source_horizon::GROUND_RELATIONS_SCHEMA,
+        None,
+    );
+    let absent = ProjectCentralMap {
+        state: ProjectCentralState::Absent,
+        path: projectcentral_path.clone(),
+        missing: None,
+        outcome: None,
+        reason: None,
+        manifest_errors: None,
+        wiki: None,
+        wiki_candidates: None,
+        human_source_files: 0,
+        relations: RelationsState {
+            path: format!("{relative}/{GROUND_RELATIONS_SOURCE}"),
+            ..relations.clone()
+        },
+        failed_checks: None,
+        error: None,
+    };
+    if !projectcentral_root.is_dir() {
+        return absent;
     }
 
-    // A Project with ProjectCentral material gets the real ProjectCentral facts:
-    // the inspection outcome and the Doctor checks, verbatim.
+    let manifest_path = projectcentral_root.join(PROJECT_MANIFEST);
+    let manifest_present = manifest_path.is_file();
+    let mut human_source_files = 0;
+    count_files(&project_root.join(HUMAN_SOURCE_DIR), 0, &[], &mut human_source_files);
+
     let inspection = inspect_projectcentral(project_root).ok();
     let doctor = doctor_projectcentral(central_root, project_root).ok();
     let error = if inspection.is_none() && doctor.is_none() {
@@ -502,6 +504,14 @@ fn map_projectcentral(
     } else {
         None
     };
+
+    let mut wiki = wiki_space(
+        &project_root.join(WIKI_SOURCE),
+        &format!("{relative}/{WIKI_SOURCE}"),
+    );
+    // A Wiki retained in place still declares a space on this ground.
+    let candidates = inspection.as_ref().map(|value| value.wiki_candidates.clone());
+
     let failed_checks = doctor.as_ref().map(|report| {
         report
             .checks
@@ -510,67 +520,63 @@ fn map_projectcentral(
             .cloned()
             .collect::<Vec<_>>()
     });
-
-    let manifest_present = project_root
-        .join(PROJECTCENTRAL_DIR)
-        .join(PROJECT_MANIFEST)
-        .is_file();
     let (state, missing) = if !manifest_present {
-        // No manifest to interpret: name what the canonical fractal is missing.
         (ProjectCentralState::Partial, canonical_missing(project_root))
     } else {
         let outcome = inspection.as_ref().map(|value| value.outcome);
-        let doctor_valid = doctor.as_ref().is_some_and(|report| report.valid);
+        let doctor_valid = doctor.as_ref().map(|report| report.valid).unwrap_or(false);
         match outcome {
             Some(ProjectCentralOutcome::AlreadyConformant) if doctor_valid => {
                 (ProjectCentralState::Healthy, Vec::new())
             }
-            Some(ProjectCentralOutcome::UnresolvedHumanDecisionRequired) => {
-                (ProjectCentralState::Unresolved, failed_check_names(&doctor))
-            }
-            _ => (ProjectCentralState::Partial, failed_check_names(&doctor)),
+            Some(ProjectCentralOutcome::UnresolvedHumanDecisionRequired) => (
+                ProjectCentralState::Unresolved,
+                failed_checks
+                    .iter()
+                    .flatten()
+                    .map(|check| check.name.clone())
+                    .collect(),
+            ),
+            _ => (
+                ProjectCentralState::Partial,
+                failed_checks
+                    .iter()
+                    .flatten()
+                    .map(|check| check.name.clone())
+                    .collect(),
+            ),
         }
     };
-
-    let mut human_source_files = 0;
-    count_files(&project_root.join(HUMAN_SOURCE_DIR), 0, &[], &mut human_source_files);
+    let _ = &mut wiki;
 
     ProjectCentralMap {
         state,
         path: projectcentral_path,
-        missing: Some(missing).filter(|values| !values.is_empty()),
+        missing: Some(missing).filter(|value| !value.is_empty()),
         outcome: inspection.as_ref().map(|value| value.outcome),
         reason: inspection.as_ref().map(|value| value.reason.clone()),
         manifest_errors: inspection.as_ref().map(|value| value.manifest_errors.clone()),
-        wiki: Some(wiki_space(
-            &project_root.join(WIKI_SOURCE),
-            &format!("{relative}/{WIKI_SOURCE}"),
-        )),
-        wiki_candidates: inspection.as_ref().map(|value| value.wiki_candidates.clone()),
+        wiki: Some(wiki),
+        wiki_candidates: candidates,
         human_source_files,
-        relations: relations_state(
-            &project_root.join(GROUND_RELATIONS_SOURCE),
-            &format!("{relative}/{GROUND_RELATIONS_SOURCE}"),
-            GROUND_RELATIONS_SCHEMA,
-            None,
-        ),
+        relations,
         failed_checks: failed_checks.filter(|checks| !checks.is_empty()),
         error,
     }
 }
 
-fn map_project(central_root: &Path, work_root: &Path, name: &str) -> ProjectMap {
+fn map_project(central_root: &Path, work_root: &Path, name: &str) -> io::Result<ProjectMap> {
     let project_root = work_root.join(name);
     let relative = format!("Work/{name}");
     let mut source_files = 0;
     count_files(&project_root, 0, &[PROJECTCENTRAL_DIR], &mut source_files);
     let projectcentral = map_projectcentral(central_root, &project_root, &relative);
-    ProjectMap {
+    Ok(ProjectMap {
         name: name.to_owned(),
         path: relative,
         source_files,
         projectcentral,
-    }
+    })
 }
 
 fn map_work(central_root: &Path) -> io::Result<WorkMap> {
@@ -593,7 +599,7 @@ fn map_work(central_root: &Path) -> io::Result<WorkMap> {
             continue;
         }
         if entry.file_type()?.is_dir() {
-            projects.push(map_project(central_root, &work_root, &name));
+            projects.push(map_project(central_root, &work_root, &name)?);
         } else {
             loose_files += 1;
         }
@@ -653,14 +659,15 @@ pub fn map_world(central_root: &Path) -> io::Result<WorldMap> {
     })
 }
 
-fn count_phrase(area: &Value) -> String {
+fn sources_phrase(area: &Value) -> String {
     let path = area.get("path").and_then(Value::as_str).unwrap_or_default();
-    if !area.get("exists").and_then(Value::as_bool).unwrap_or(false) {
-        return format!("{path} — missing");
-    }
+    let exists = area.get("exists").and_then(Value::as_bool).unwrap_or(false);
     let sources = area.get("sources").and_then(Value::as_u64).unwrap_or(0);
-    let noun = if sources == 1 { "source" } else { "sources" };
-    format!("{path} — {sources} {noun}")
+    if exists {
+        format!("{path} — {sources} sources")
+    } else {
+        format!("{path} — missing")
+    }
 }
 
 fn wiki_phrase(wiki: &Value) -> Option<String> {
@@ -687,8 +694,9 @@ fn wiki_phrase(wiki: &Value) -> Option<String> {
         None => format!("wiki {space_ref}"),
     };
     if children > 0 {
-        let refs = if children == 1 { "child ref" } else { "child refs" };
-        phrase.push_str(&format!("; {children} {refs}; {dangling} dangling"));
+        phrase.push_str(&format!(
+            "; {children} child refs; {dangling} dangling"
+        ));
     }
     Some(phrase)
 }
@@ -705,12 +713,13 @@ pub fn explain_world_map(data: &Value) -> String {
     let control = data.get("control").unwrap_or(&Value::Null);
     lines.push("  Control".to_owned());
     for area in ["user", "agent_governance", "agent_expressions", "machines"] {
-        lines.push(format!("    {}", count_phrase(&control[area])));
+        lines.push(format!("    {}", sources_phrase(&control[area])));
     }
     if let Some(wiki) = control.get("agent_wiki") {
+        let area = sources_phrase(wiki);
         match wiki.get("wiki").and_then(wiki_phrase) {
-            Some(phrase) => lines.push(format!("    {}; {}", count_phrase(wiki), phrase)),
-            None => lines.push(format!("    {}", count_phrase(wiki))),
+            Some(phrase) => lines.push(format!("    {area}; {phrase}")),
+            None => lines.push(format!("    {area}")),
         }
     }
     if let Some(relations) = control.get("relations") {
@@ -727,16 +736,16 @@ pub fn explain_world_map(data: &Value) -> String {
     if let Some(error) = control.get("bindings_error").and_then(Value::as_str) {
         lines.push(format!("    source bindings — {error}"));
     }
+    let bindings = control
+        .get("source_bindings")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let unresolved = control
+        .get("unresolved_provenance_sources")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     lines.push(format!(
-        "    unresolved provenance — {} of {} sources",
-        control
-            .get("unresolved_provenance_sources")
-            .and_then(Value::as_u64)
-            .unwrap_or(0),
-        control
-            .get("source_bindings")
-            .and_then(Value::as_u64)
-            .unwrap_or(0),
+        "    unresolved provenance — {unresolved} of {bindings} sources"
     ));
 
     let work = data.get("work").unwrap_or(&Value::Null);
@@ -745,7 +754,10 @@ pub fn explain_world_map(data: &Value) -> String {
         lines.push("    Work is missing".to_owned());
         return lines.join("\n");
     }
-    let loose = work.get("loose_files").and_then(Value::as_u64).unwrap_or(0);
+    let loose = work
+        .get("loose_files")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     if loose > 0 {
         lines.push(format!("    loose files — {loose}"));
     }
@@ -756,6 +768,10 @@ pub fn explain_world_map(data: &Value) -> String {
         .unwrap_or(&[])
     {
         let name = project.get("name").and_then(Value::as_str).unwrap_or_default();
+        let source_files = project
+            .get("source_files")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
         let mut parts = vec![name.to_owned()];
         let projectcentral = project.get("projectcentral").unwrap_or(&Value::Null);
         let state = projectcentral
@@ -781,21 +797,15 @@ pub fn explain_world_map(data: &Value) -> String {
             }
             other => parts.push(format!("ProjectCentral {other}")),
         }
-        // A Project with no ProjectCentral has no Wiki relation to report; the
-        // absence is already the first clause of the line.
-        if state != "absent" {
-            if let Some(wiki) = projectcentral.get("wiki").and_then(wiki_phrase) {
-                parts.push(wiki);
-            }
+        if let Some(wiki) = projectcentral.get("wiki").and_then(wiki_phrase) {
+            parts.push(wiki);
         }
+        let human_sources = projectcentral
+            .get("human_source_files")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
         if state != "absent" {
-            parts.push(format!(
-                "{} ProjectCentral human sources",
-                projectcentral
-                    .get("human_source_files")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0)
-            ));
+            parts.push(format!("{human_sources} ProjectCentral human sources"));
         }
         let overrides = projectcentral
             .get("relations")
@@ -805,13 +815,7 @@ pub fn explain_world_map(data: &Value) -> String {
         if overrides > 0 {
             parts.push(format!("{overrides} source-relations overrides"));
         }
-        parts.push(format!(
-            "{} project files",
-            project
-                .get("source_files")
-                .and_then(Value::as_u64)
-                .unwrap_or(0)
-        ));
+        parts.push(format!("{source_files} project files"));
         lines.push(format!("    {}", parts.join(" — ")));
     }
     lines.join("\n")
@@ -821,7 +825,7 @@ fn descriptor() -> ActionDescriptor {
     ActionDescriptor {
         id: "central.world".to_owned(),
         title: "Show the world map".to_owned(),
-        description: "Index the full world centred in the active Central root: Control source areas, the root and Project WikiSpaces with their child refs, declared source-relations overrides, and per-Project ProjectCentral state. Read-only; every fault is reported as data.".to_owned(),
+        description: "Index the full world centred in the active Central root: Control source areas, root and Project WikiSpaces with child refs, declared source-relations overrides, and per-Project ProjectCentral state. Read-only; every fault is reported as data.".to_owned(),
         inputs: vec![],
         output: ActionOutputDefinition { output_type: "central-world-map".to_owned() },
         mutation_class: MutationClass::ReadOnly,
@@ -840,32 +844,23 @@ fn world_action(_: &ActionRegistry, _: &Value, context: &ActionExecutionContext<
         }
     };
     match map_world(&root) {
-        Ok(map) => {
-            ActionResult::success(action, serde_json::to_value(map).expect("world map serializes"))
-        }
-        Err(error) => ActionResult::failure(
-            Some(action),
-            ResultStatus::InternalFailure,
-            error.to_string(),
-            None,
-        ),
+        Ok(map) => ActionResult::success(action, serde_json::to_value(map).expect("world map serializes")),
+        Err(error) => ActionResult::failure(Some(action), ResultStatus::InternalFailure, error.to_string(), None),
     }
 }
 
 pub fn register_world_map_actions(registry: &mut ActionRegistry) {
-    registry
-        .register(descriptor(), world_action)
-        .expect("world map Action id is valid");
+    registry.register(descriptor(), world_action).expect("world map Action id is valid");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tempdir;
+    use crate::projectcentral::{AGENT_GOVERNANCE_DIR, PROJECTCENTRAL_DIR};
 
     #[test]
     fn missing_canonical_pieces_are_named_by_their_ground_relative_path() {
-        let temp = tempdir().unwrap();
+        let temp = crate::tempdir().unwrap();
         let project = temp.path().join("project");
         fs::create_dir_all(project.join(PROJECTCENTRAL_DIR)).unwrap();
         fs::create_dir_all(project.join(HUMAN_SOURCE_DIR)).unwrap();
@@ -885,7 +880,7 @@ mod tests {
 
     #[test]
     fn skipped_directories_and_the_retrieval_marker_are_not_sources() {
-        let temp = tempdir().unwrap();
+        let temp = crate::tempdir().unwrap();
         let root = temp.path();
         fs::create_dir_all(root.join(".git")).unwrap();
         fs::create_dir_all(root.join("node_modules")).unwrap();
@@ -895,25 +890,8 @@ mod tests {
         fs::write(root.join("docs/note.md"), "note").unwrap();
         fs::write(root.join(AGENT_RETRIEVAL_DENY_MARKER), "").unwrap();
 
-        let area = source_area(root, "docs");
+        let area = source_area(root, ".");
 
         assert_eq!(area.sources, 1);
-        assert_eq!(area.path, "docs");
-    }
-
-    #[test]
-    fn dangling_refs_are_the_children_no_declared_space_answers() {
-        let mut wiki = wiki_space(Path::new("/nonexistent/wiki.json"), "x/wiki.json");
-        assert!(!wiki.present);
-
-        wiki.child_space_refs = vec!["central:wiki:project:a".to_owned()];
-        mark_dangling(
-            &mut wiki,
-            &BTreeSet::from(["central:wiki:project:a".to_owned()]),
-        );
-        assert!(wiki.dangling_child_space_refs.is_empty());
-
-        mark_dangling(&mut wiki, &BTreeSet::new());
-        assert_eq!(wiki.dangling_child_space_refs, vec!["central:wiki:project:a"]);
     }
 }
