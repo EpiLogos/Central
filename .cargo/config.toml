@@ -1,0 +1,12 @@
+# Hard machine rule: no cargo-driven process may open the real GUI.
+#
+# [env] applies to every process cargo executes — tests, benches, build
+# scripts, `cargo run` — so tests can never open real Finder windows or run
+# real Shortcuts through the production connector defaults. The connectors
+# refuse while this variable is set and non-empty (see
+# connectors/macos/src/lib.rs and connectors/shortcuts/src/lib.rs); injected
+# test doubles are unaffected. Production binaries launched outside cargo do
+# not inherit this variable. `force = false` keeps an explicitly exported
+# empty value as a deliberate lift of the suppression.
+[env]
+CENTRAL_NO_REAL_OPEN = { value = "1", force = false }

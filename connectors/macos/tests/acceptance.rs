@@ -132,6 +132,38 @@ mod macos_acceptance {
     }
 
     #[test]
+    fn production_work_open_is_refused_under_the_no_real_gui_machine_rule() {
+        // Hard machine rule: tests never open real Finder. This arms the
+        // suppression in-process (IDEs and direct binary launches do not
+        // inherit .cargo/config.toml [env]) and proves the production
+        // default executable is refused end-to-end through the canonical
+        // Action. Other tests in this binary use injected doubles, which the
+        // guard never touches.
+        std::env::set_var("CENTRAL_NO_REAL_OPEN", "1");
+
+        let root = temporary_directory("actions-suppressed").join("Central");
+        initialize_central(&root).unwrap();
+        fs::create_dir(root.join("Work").join("native-project")).unwrap();
+
+        let mut connectors = ConnectorRegistry::default();
+        connectors.register(FilesystemWorkConnector::new()).unwrap();
+        connectors.register(MacOsNativeConnector::new()).unwrap();
+        let connector_context = ConnectorContext { platform: "macos".to_owned() };
+        let root_options = RootOptions { explicit_root: Some(root), ..RootOptions::default() };
+        let context = ActionExecutionContext {
+            root_options: &root_options,
+            connectors: &connectors,
+            connector_context: &connector_context,
+        };
+        let actions = create_core_action_registry();
+
+        let open = actions.execute("work.open", &json!({ "query": "native-project" }), &context);
+        assert_eq!(open.status, ResultStatus::ConnectorFailure, "{open:?}");
+        let message = open.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+        assert!(message.contains("suppressed"), "unexpected failure: {message}");
+    }
+
+    #[test]
     fn canonical_work_actions_invoke_the_macos_connector_through_native_ports() {
         let root = temporary_directory("actions").join("Central");
         initialize_central(&root).unwrap();

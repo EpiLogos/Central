@@ -8,6 +8,14 @@ use std::process::Command;
 
 pub const SHORTCUTS_CONNECTOR_ID: &str = "personal.macos-shortcuts";
 
+/// Same hard machine rule as the macOS native connector: cargo-driven
+/// processes must not reach real machine surfaces. The workspace
+/// `.cargo/config.toml` sets CENTRAL_NO_REAL_OPEN for every process cargo
+/// executes; an empty value means the suppression was deliberately lifted.
+fn native_surface_suppressed() -> bool {
+    std::env::var_os("CENTRAL_NO_REAL_OPEN").is_some_and(|value| !value.is_empty())
+}
+
 pub struct ShortcutsAutomationConnector {
     manifest: ConnectorManifest,
     executable: PathBuf,
@@ -65,6 +73,13 @@ impl Default for ShortcutsAutomationConnector {
 impl Automation for ShortcutsAutomationConnector {
     fn run(&self, input: &AutomationRunInput) -> Result<AutomationRunOutput, PortError> {
         let automation = Self::validate_name(&input.automation)?;
+        if self.executable == Path::new("/usr/bin/shortcuts") && native_surface_suppressed() {
+            return Err(PortError::provider(
+                "Automation run suppressed: CENTRAL_NO_REAL_OPEN is set, so this process (a \
+                 cargo-driven test or dev run) may not execute real Shortcuts. Unset the variable \
+                 or inject a test executable for an intentional run.",
+            ));
+        }
         let output = Command::new(&self.executable)
             .arg("run")
             .arg(automation)

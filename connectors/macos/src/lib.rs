@@ -16,6 +16,15 @@ use std::process::Command;
 const CONNECTOR_ID: &str = "personal.macos-native";
 const FINDER_TAGS_XATTR: &str = "com.apple.metadata:_kMDItemUserTags";
 
+/// Hard machine rule: no cargo-driven test or dev run may open the real GUI.
+/// The workspace `.cargo/config.toml` sets CENTRAL_NO_REAL_OPEN for every
+/// process cargo executes; the guard only bites when the production default
+/// executable is configured, so injected test doubles keep working. An empty
+/// value means the suppression was deliberately lifted.
+pub fn native_surface_suppressed() -> bool {
+    std::env::var_os("CENTRAL_NO_REAL_OPEN").is_some_and(|value| !value.is_empty())
+}
+
 pub struct MacOsNativeConnector {
     manifest: ConnectorManifest,
     brew_executable: PathBuf,
@@ -77,6 +86,10 @@ impl MacOsNativeConnector {
         self
     }
 
+    fn using_production_open(&self) -> bool {
+        self.open_executable == PathBuf::from("/usr/bin/open")
+    }
+
     fn ensure_target(target: &Path, operation: &str) -> Result<(), PortError> {
         if target.as_os_str().is_empty() {
             return Err(PortError::new(
@@ -95,6 +108,13 @@ impl MacOsNativeConnector {
 
     fn run_open(&self, arguments: &[&str], target: &Path, operation: &str) -> Result<(), PortError> {
         Self::ensure_target(target, operation)?;
+        if self.using_production_open() && native_surface_suppressed() {
+            return Err(PortError::provider(format!(
+                "macOS {operation} suppressed: CENTRAL_NO_REAL_OPEN is set, so this process \
+                 (a cargo-driven test or dev run) may not open the real GUI. Unset the variable \
+                 or inject a test executable for an intentional open."
+            )));
+        }
         let status = Command::new(&self.open_executable)
             .args(arguments)
             .arg(target)
@@ -330,5 +350,34 @@ impl Connector for MacOsNativeConnector {
 
     fn user_notification(&self) -> Option<&dyn central_connector_sdk::UserNotification> {
         Some(self)
+    }
+}
+
+#[cfg(test)]
+mod native_surface_suppression_tests {
+    use super::*;
+
+    #[test]
+    fn production_open_refuses_while_suppression_env_is_set() {
+        // One sequential test: the env var is process-global, so both
+        // behaviours are checked in order to avoid racing a parallel test.
+        std::env::set_var("CENTRAL_NO_REAL_OPEN", "1");
+        let connector = MacOsNativeConnector::new();
+        let target = std::env::temp_dir().join("central-open-guard-probe.txt");
+        std::fs::write(&target, "central").unwrap();
+        let error = connector
+            .open(&NativeOpenInput { target: target.clone() })
+            .expect_err("suppressed production open must fail");
+        assert!(error.to_string().contains("suppressed"), "unexpected error: {error:?}");
+
+        // An empty value is a deliberate lift of the suppression, and an
+        // injected executable is a test double, never the real GUI.
+        std::env::set_var("CENTRAL_NO_REAL_OPEN", "");
+        assert!(!native_surface_suppressed());
+        let stubbed = connector.with_open_executable(PathBuf::from("/bin/true"));
+        assert!(!stubbed.using_production_open());
+
+        std::env::remove_var("CENTRAL_NO_REAL_OPEN");
+        std::fs::remove_file(&target).unwrap();
     }
 }
