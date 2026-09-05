@@ -183,6 +183,7 @@ fn registry_has_stable_ids_and_complete_descriptors() {
         "central.recover",
         "central.recovery.plan",
         "central.root",
+        "central.world",
         "control.open",
         "control.search",
         "machine.account",
@@ -228,6 +229,7 @@ fn action_list_has_human_and_structured_cli_renderings() {
     assert_eq!(human.exit_code, 0);
     assert!(human.output.contains("action.list\tList Actions"));
     assert!(human.output.contains("central.recovery.plan\tPlan Central recovery"));
+    assert!(human.output.contains("central.world\tShow the world map"));
     assert!(human.output.contains("central.recover\tRecover Central machine state"));
     assert!(human.output.contains("machine.inspect\tInspect current machine"));
     assert!(human.output.contains("machine.plan\tPlan machine changes"));
@@ -267,7 +269,7 @@ fn action_list_has_human_and_structured_cli_renderings() {
     let value: serde_json::Value = serde_json::from_str(&structured.output).unwrap();
     assert_eq!(value["status"], "success");
     let actions = value["data"]["actions"].as_array().unwrap();
-    assert_eq!(actions.len(), 58);
+    assert_eq!(actions.len(), 59);
     let ids = actions.iter().filter_map(|action| action["id"].as_str()).collect::<Vec<_>>();
     for id in [
         "projectcentral.inspect",

@@ -56,7 +56,7 @@ mod unix_tests {
     #[test]
     fn macos_action_registry_extends_current_projectcentral_without_mutating_core_identity() {
         let core = create_core_action_registry();
-        assert_eq!(core.list().len(), 18);
+        assert_eq!(core.list().len(), 19);
         assert!(core.get("automation.run").is_none());
         let core_ids = core
             .list()
@@ -65,7 +65,7 @@ mod unix_tests {
             .collect::<Vec<_>>();
 
         let macos = create_macos_action_registry();
-        assert_eq!(macos.list().len(), 51);
+        assert_eq!(macos.list().len(), 52);
         for id in core_ids {
             assert!(macos.get(&id).is_some(), "macOS host lost core Action {id}");
         }

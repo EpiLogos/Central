@@ -20,6 +20,7 @@ pub mod source_horizon;
 pub mod source_history;
 pub mod template_stamp;
 pub mod world;
+pub mod world_map;
 pub mod world_source;
 #[path = "projectcentral_ops.rs"]
 mod projectcentral_ops_base;
@@ -208,6 +209,11 @@ pub use world::{
 pub use world_source::{
     read_world_source, register_world_source_actions, write_world_source, WorldSourceReading,
     WorldSourceWriteReceipt, WORLD_SOURCE_READING_SCHEMA, WORLD_SOURCE_WRITE_RECEIPT_SCHEMA,
+};
+pub use world_map::{
+    explain_world_map, map_world, register_world_map_actions, ControlMap, GroundState,
+    ProjectCentralMap, ProjectCentralState, ProjectMap, RelationsState, SourceArea, WikiArea,
+    WikiSpaceState, WorkMap, WorldMap, WORLD_MAP_SCHEMA,
 };
 pub use central_connector_sdk::{
     run_automation_conformance, run_configuration_manager_conformance,

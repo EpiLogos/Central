@@ -1,0 +1,335 @@
+use central_ctrl::{
+    explain_world_map, initialize_central, initialize_projectcentral, map_world, run_cli,
+    GroundState, ProjectCentralState, CliEnvironment, ResultStatus, ROOT_AGENT_GOVERNANCE_DIR,
+    ROOT_HUMAN_SOURCE_DIR, ROOT_WIKI_SOURCE, WORLD_MAP_SCHEMA,
+};
+use serde_json::{json, Value};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+static NEXT_TEMP_ROOT: AtomicU64 = AtomicU64::new(0);
+
+struct TempRoot(PathBuf);
+
+impl TempRoot {
+    fn new(label: &str) -> Self {
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let sequence = NEXT_TEMP_ROOT.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "central-world-map-{label}-{}-{nonce}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&path).unwrap();
+        Self(path.join("Central"))
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempRoot {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A healthy ground: required Control roots, an authored user source, the root
+/// Wiki, and one conformant ProjectCentral Project.
+fn healthy_ground(label: &str) -> TempRoot {
+    let temp = TempRoot::new(label);
+    let root = temp.path();
+    initialize_central(root).unwrap();
+    fs::create_dir_all(root.join(ROOT_HUMAN_SOURCE_DIR)).unwrap();
+    fs::write(root.join(ROOT_HUMAN_SOURCE_DIR).join("identity.md"), "who I am\n").unwrap();
+    fs::write(
+        root.join(ROOT_AGENT_GOVERNANCE_DIR).join("engineering.md"),
+        "You change the smallest thing that can work.\n",
+    )
+    .unwrap();
+
+    let project = root.join("Work/garden");
+    fs::create_dir_all(&project).unwrap();
+    fs::write(project.join("README.md"), "native project source\n").unwrap();
+    initialize_projectcentral(root, &project, "garden").unwrap();
+    temp
+}
+
+fn control_relations(root: &Path) -> PathBuf {
+    root.join("Control/relations/source-relations.json")
+}
+
+#[test]
+fn healthy_ground_maps_control_root_wiki_and_conformant_project() {
+    let temp = healthy_ground("healthy");
+    let root = temp.path();
+
+    let map = map_world(root).unwrap();
+
+    assert_eq!(map.schema, WORLD_MAP_SCHEMA);
+    assert_eq!(map.ground_state, GroundState::Healthy);
+    assert!(map.valid);
+    assert!(!map.mixed_root.detected);
+
+    // Control areas are counted without inventing new structure.
+    assert!(map.control.user.exists);
+    assert_eq!(map.control.user.sources, 1);
+    assert_eq!(map.control.agent_governance.sources, 1);
+    assert_eq!(map.control.agent_expressions.sources, 0);
+    assert_eq!(map.control.machines.sources, 0);
+
+    // The root Wiki is present with one federation ref, satisfied by the Project.
+    assert!(map.control.agent_wiki.wiki.present);
+    assert_eq!(map.control.agent_wiki.wiki.space_ref.as_deref(), Some("central:wiki:root"));
+    assert_eq!(map.control.agent_wiki.wiki.child_space_refs, vec!["central:wiki:project:garden"]);
+    assert!(map.control.agent_wiki.wiki.dangling_child_space_refs.is_empty());
+
+    // No declared Control relations yet. Three sources participate: the authored
+    // user source, the governance source, and the root Wiki, which carries
+    // agent-maintained provenance rather than the unresolved tree stamp.
+    assert!(!map.control.relations.present);
+    assert_eq!(map.control.relations.declared_overrides, 0);
+    assert_eq!(map.control.source_bindings, 3);
+    assert_eq!(map.control.unresolved_provenance_sources, 2);
+
+    let garden = map
+        .work
+        .projects
+        .iter()
+        .find(|project| project.name == "garden")
+        .expect("garden is mapped");
+    assert_eq!(garden.projectcentral.state, ProjectCentralState::Healthy);
+    assert_eq!(garden.projectcentral.human_source_files, 0);
+    assert!(garden.projectcentral.wiki.as_ref().expect("project wiki").present);
+    assert_eq!(
+        garden.projectcentral.wiki.as_ref().unwrap().space_ref.as_deref(),
+        Some("central:wiki:project:garden")
+    );
+    assert_eq!(garden.source_files, 1);
+}
+
+#[test]
+fn absent_and_partial_projectcentral_are_reported_as_data() {
+    let temp = healthy_ground("partial");
+    let root = temp.path();
+
+    // An ordinary native Project has no ProjectCentral at all.
+    let native = root.join("Work/native");
+    fs::create_dir_all(&native).unwrap();
+    fs::write(native.join("README.md"), "native\n").unwrap();
+
+    // A hand-made partial ProjectCentral: human source only, no manifest, no agents.
+    let partial = root.join("Work/partial");
+    fs::create_dir_all(partial.join("ProjectCentral/user")).unwrap();
+    fs::write(partial.join("ProjectCentral/user/learnings.md"), "learned\n").unwrap();
+
+    let map = map_world(root).unwrap();
+
+    let native = map
+        .work
+        .projects
+        .iter()
+        .find(|project| project.name == "native")
+        .unwrap();
+    assert_eq!(native.projectcentral.state, ProjectCentralState::Absent);
+    assert!(native.projectcentral.wiki.is_none());
+    assert_eq!(native.projectcentral.relations.path, "Work/native/ProjectCentral/relations/source-relations.json");
+
+    let partial = map
+        .work
+        .projects
+        .iter()
+        .find(|project| project.name == "partial")
+        .unwrap();
+    assert_eq!(partial.projectcentral.state, ProjectCentralState::Partial);
+    let missing = partial.projectcentral.missing.as_ref().expect("missing pieces");
+    assert_eq!(
+        missing,
+        &vec![
+            "ProjectCentral/project.json".to_owned(),
+            "ProjectCentral/agents/governance".to_owned(),
+            "ProjectCentral/agents/wiki".to_owned(),
+            "ProjectCentral/agents/wiki/wiki.json".to_owned(),
+        ]
+    );
+    assert_eq!(partial.projectcentral.human_source_files, 1);
+    assert!(!partial.projectcentral.wiki.as_ref().unwrap().present);
+}
+
+#[test]
+fn dangling_root_child_refs_are_faults_reported_as_data() {
+    let temp = healthy_ground("dangling");
+    let root = temp.path();
+
+    // Federate a child ref that no Project Wiki answers.
+    let wiki_path = root.join(ROOT_WIKI_SOURCE);
+    let mut wiki: Value =
+        serde_json::from_slice(&fs::read(&wiki_path).unwrap()).unwrap();
+    wiki["objects"][0]["child_space_refs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("central:wiki:project:ghost"));
+    fs::write(&wiki_path, serde_json::to_vec_pretty(&wiki).unwrap()).unwrap();
+
+    let map = map_world(root).unwrap();
+
+    // The map still succeeds: the fault is data, not a failure.
+    assert_eq!(map.ground_state, GroundState::Healthy);
+    assert_eq!(
+        map.control.agent_wiki.wiki.child_space_refs,
+        vec![
+            "central:wiki:project:garden".to_owned(),
+            "central:wiki:project:ghost".to_owned()
+        ]
+    );
+    assert_eq!(
+        map.control.agent_wiki.wiki.dangling_child_space_refs,
+        vec!["central:wiki:project:ghost".to_owned()]
+    );
+
+    let human = explain_world_map(&serde_json::to_value(&map).unwrap());
+    assert!(human.contains("2 child refs; 1 dangling"), "{human}");
+    assert!(human.contains("Central ground healthy"), "{human}");
+}
+
+#[test]
+fn declared_control_relations_override_unresolved_provenance() {
+    let temp = healthy_ground("relations");
+    let root = temp.path();
+    let before = map_world(root).unwrap();
+    let governed = before.control.source_bindings;
+    let unresolved_before = before.control.unresolved_provenance_sources;
+    assert_eq!(unresolved_before, governed - 1);
+
+    fs::create_dir_all(root.join("Control/relations")).unwrap();
+    fs::write(
+        control_relations(root),
+        serde_json::to_string_pretty(&json!({
+            "schema": "central.control.ground-relations/v1",
+            "project_id": "control:root",
+            "relations": [{
+                "ref": "central:source:control:root:Control/agents/governance/engineering.md",
+                "path": "Control/agents/governance/engineering.md",
+                "provenance": "generated-suggestion",
+                "standing": "draft-source",
+                "roles": ["agent-governance-source"],
+                "treatment": "control-governance-retained-in-place"
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let after = map_world(root).unwrap();
+
+    assert!(after.control.relations.present);
+    assert_eq!(after.control.relations.declared_overrides, 1);
+    assert_eq!(
+        after.control.relations.schema.as_deref(),
+        Some("central.control.ground-relations/v1")
+    );
+    assert_eq!(after.control.source_bindings, governed);
+    assert_eq!(
+        after.control.unresolved_provenance_sources,
+        unresolved_before - 1
+    );
+}
+
+#[test]
+fn control_relations_with_the_wrong_world_id_are_an_error_field_not_a_crash() {
+    let temp = healthy_ground("wrong-relations");
+    let root = temp.path();
+    fs::create_dir_all(root.join("Control/relations")).unwrap();
+    fs::write(
+        control_relations(root),
+        json!({
+            "schema": "central.project.ground-relations/v1",
+            "project_id": "some/project",
+            "relations": []
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let map = map_world(root).unwrap();
+
+    assert!(map.control.relations.present);
+    assert_eq!(map.control.relations.declared_overrides, 0);
+    assert!(map.control.relations.error.is_some());
+    assert!(map.control.bindings_error.is_some());
+}
+
+#[test]
+fn mixed_root_is_the_ground_state() {
+    let temp = TempRoot::new("mixed");
+    let root = temp.path();
+    initialize_central(root).unwrap();
+    // Product-specific signals, per the mixed-root diagnostic contract.
+    fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
+    fs::create_dir_all(root.join("ctrl/src")).unwrap();
+
+    let map = map_world(root).unwrap();
+
+    assert_eq!(map.ground_state, GroundState::MixedRoot);
+    assert!(map.mixed_root.detected);
+    let human = explain_world_map(&serde_json::to_value(&map).unwrap());
+    assert!(human.contains("Central ground mixed_root"), "{human}");
+}
+
+#[test]
+fn the_world_command_is_read_only_and_stable_in_json() {
+    let temp = healthy_ground("readonly");
+    let root = temp.path();
+
+    fn ground_fingerprint(root: &Path) -> Vec<(String, u64)> {
+        fn walk(dir: &Path, out: &mut Vec<(String, u64)>) {
+            for entry in fs::read_dir(dir).unwrap() {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else {
+                    let length = fs::metadata(&path).unwrap().len();
+                    out.push((path.to_string_lossy().into_owned(), length));
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(root, &mut out);
+        out.sort();
+        out
+    }
+
+    let before = ground_fingerprint(root);
+    let environment = CliEnvironment { configured_root: Some(root.to_path_buf()), home: None };
+
+    let structured = run_cli(&["--json".to_owned(), "world".to_owned()], &environment);
+    let structured_again = run_cli(&["--json".to_owned(), "world".to_owned()], &environment);
+    let human = run_cli(&["world".to_owned()], &environment);
+
+    assert_eq!(structured.result.status, ResultStatus::Success);
+    assert_eq!(structured.result.action.as_deref(), Some("central.world"));
+    assert_eq!(structured.exit_code, 0);
+
+    // The machine projection is schema-tagged and stable across runs.
+    let data = structured.result.data.clone().expect("world data");
+    assert_eq!(data["schema"], WORLD_MAP_SCHEMA);
+    assert_eq!(data["ground_state"], "healthy");
+    assert_eq!(data["control"]["agent_wiki"]["wiki"]["space_ref"], "central:wiki:root");
+    assert_eq!(data["work"]["projects"][0]["name"], "garden");
+    assert_eq!(
+        serde_json::to_string(&structured.result).unwrap(),
+        serde_json::to_string(&structured_again.result).unwrap()
+    );
+
+    // The human projection is the same world, readable.
+    assert_eq!(human.result.status, ResultStatus::Success);
+    assert!(human.output.contains("Central ground healthy"), "{}", human.output);
+    assert!(human.output.contains("garden — ProjectCentral healthy"), "{}", human.output);
+    assert!(human.output.contains("unresolved provenance —"), "{}", human.output);
+
+    // Read-only: nothing on the ground changed, not even a derived file.
+    assert_eq!(before, ground_fingerprint(root));
+}

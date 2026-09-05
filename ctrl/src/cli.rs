@@ -100,6 +100,7 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         [command] if command == "root" => ("central.root", json!({})),
         [command] if command == "init" => ("central.init", json!({})),
         [command] if command == "doctor" => ("central.doctor", json!({})),
+        [command] if command == "world" => ("central.world", json!({})),
         [command] if command == "actions" => ("action.list", json!({})),
         [domain, verb] if domain == "action" && verb == "list" => ("action.list", json!({})),
         [domain, verb, action] if domain == "action" && verb == "run" => {
@@ -215,7 +216,7 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         [canonical]
             if matches!(
                 canonical.as_str(),
-                "central.root" | "central.init" | "central.doctor" | "action.list" | "machine.inspect" | "machine.account" | "work.list"
+                "central.root" | "central.init" | "central.doctor" | "central.world" | "action.list" | "machine.inspect" | "machine.account" | "work.list"
             ) =>
         {
             (canonical.as_str(), json!({}))
@@ -273,6 +274,7 @@ fn human_output(result: &ActionResult) -> String {
             }
             lines.join("\n")
         }
+        Some("central.world") => crate::world_map::explain_world_map(data),
         Some("central.recovery.plan") => crate::recovery::explain_recovery_plan(data),
         Some("central.recover") => crate::recovery::explain_recovery(data),
         Some("action.list") => data
