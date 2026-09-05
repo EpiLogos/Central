@@ -7,6 +7,7 @@ pub mod automation;
 pub mod central_computer;
 pub mod cli;
 pub mod control;
+pub mod control_skills;
 pub mod engineering_ground;
 pub mod machine;
 pub mod machine_account;
@@ -117,6 +118,13 @@ pub use control::{
     locate_control_root, search_control, ControlSearchMatch, ControlSearchResult,
     ControlSkippedSource, ControlSourceRoot, SourceClass, AGENT_RETRIEVAL_DENY_MARKER,
     CONTROL_ROOTS,
+};
+pub use control_skills::{
+    inspect_control_skills, register_control_skills_actions, restore_skill, retire_skill,
+    read_skill_manifest, SkillManifest, SkillMutationReceipt, SkillProjectionPolicy,
+    SkillProvenance, SkillRecord, SkillRetirement, SkillScope, SkillScopeSurface,
+    SkillStanding, SkillsInspection, CONTROL_SKILL_TREATMENT, PERSONAL_SKILL_DIR,
+    PROJECT_SKILL_DIR, SKILL_BODY, SKILL_MANIFEST, SKILL_MANIFEST_SCHEMA,
 };
 pub use engineering_ground::{
     register_engineering_ground_actions, render_engineering_ground, write_engineering_ground,

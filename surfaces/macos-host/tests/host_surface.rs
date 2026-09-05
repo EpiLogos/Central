@@ -56,7 +56,7 @@ mod unix_tests {
     #[test]
     fn macos_action_registry_extends_current_projectcentral_without_mutating_core_identity() {
         let core = create_core_action_registry();
-        assert_eq!(core.list().len(), 22);
+        assert_eq!(core.list().len(), 25);
         assert!(core.get("automation.run").is_none());
         let core_ids = core
             .list()
@@ -65,7 +65,7 @@ mod unix_tests {
             .collect::<Vec<_>>();
 
         let macos = create_macos_action_registry();
-        assert_eq!(macos.list().len(), 55);
+        assert_eq!(macos.list().len(), 58);
         for id in core_ids {
             assert!(macos.get(&id).is_some(), "macOS host lost core Action {id}");
         }
@@ -74,6 +74,9 @@ mod unix_tests {
         assert!(macos.get("projectcentral.change.horizon").is_some());
         assert!(macos.get("projectcentral.source.read").is_some());
         assert!(macos.get("projectcentral.source.write").is_some());
+        assert!(macos.get("control.skills.inspect").is_some());
+        assert!(macos.get("control.skills.retire").is_some());
+        assert!(macos.get("control.skills.restore").is_some());
         let automation = macos.get("automation.run").unwrap();
         assert_eq!(automation.required_ports, vec!["Automation"]);
         assert_eq!(automation.mutation_class.as_str(), "externally-mutating");

@@ -573,6 +573,8 @@ pub fn create_core_action_registry() -> ActionRegistry {
     control_search.inputs = vec![string_input("query")];
     registry.register(control_search, control_search_action).expect("core Action ids are valid");
 
+    crate::control_skills::register_control_skills_actions(&mut registry);
+
     crate::machine::register_machine_actions(&mut registry);
     crate::recovery::register_recovery_actions(&mut registry);
 
