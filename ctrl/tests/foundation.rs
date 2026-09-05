@@ -267,7 +267,7 @@ fn action_list_has_human_and_structured_cli_renderings() {
     let value: serde_json::Value = serde_json::from_str(&structured.output).unwrap();
     assert_eq!(value["status"], "success");
     let actions = value["data"]["actions"].as_array().unwrap();
-    assert_eq!(actions.len(), 56);
+    assert_eq!(actions.len(), 58);
     let ids = actions.iter().filter_map(|action| action["id"].as_str()).collect::<Vec<_>>();
     for id in [
         "projectcentral.inspect",
@@ -307,6 +307,8 @@ fn action_list_has_human_and_structured_cli_renderings() {
         "agent-profile.remove",
         "central.template.preview",
         "central.template.stamp",
+        "control.engineering-ground.plan",
+        "control.engineering-ground.render",
     ] {
         assert!(ids.contains(&id), "missing Action {id}");
     }

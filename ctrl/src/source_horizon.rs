@@ -202,12 +202,12 @@ fn validate_project_member(raw: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn source_ref(world_ref: &str, path: &str) -> String {
+pub(crate) fn source_ref(world_ref: &str, path: &str) -> String {
     let escaped = path.replace('%', "%25").replace(':', "%3A").replace(' ', "%20");
     format!("central:source:{world_ref}:{escaped}")
 }
 
-pub(crate) fn content_revision(path: &Path) -> io::Result<SourceRevision> {
+pub fn content_revision(path: &Path) -> io::Result<SourceRevision> {
     let bytes = fs::read(path)?;
     // Versioned FNV-1a is deliberately implemented in-tree: a change horizon needs a stable
     // content revision, not a new crypto/package dependency or a platform-specific metadata id.

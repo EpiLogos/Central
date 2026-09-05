@@ -7,6 +7,7 @@ pub mod automation;
 pub mod central_computer;
 pub mod cli;
 pub mod control;
+pub mod engineering_ground;
 pub mod machine;
 pub mod machine_account;
 pub mod personal;
@@ -113,6 +114,11 @@ pub use control::{
     ControlSkippedSource, ControlSourceRoot, SourceClass, AGENT_RETRIEVAL_DENY_MARKER,
     CONTROL_ROOTS,
 };
+pub use engineering_ground::{
+    register_engineering_ground_actions, render_engineering_ground, write_engineering_ground,
+    EngineeringGroundRender, ENGINEERING_GROUND_DIR, ENGINEERING_GROUND_OUTPUT,
+    ENGINEERING_GROUND_STATEMENTS,
+};
 pub use machine::{
     explain_machine_apply, explain_machine_declaration, explain_machine_inspection,
     explain_machine_plan, explain_machine_verification, read_machine_declaration,
@@ -176,7 +182,7 @@ pub use recovery::{
     RECOVERY_DECLARATION_VERSION,
 };
 pub use source_horizon::{
-    acknowledge_project_cursor, compact_project_changes, control_source_bindings,
+    acknowledge_project_cursor, compact_project_changes, content_revision, control_source_bindings,
     project_source_bindings, read_project_change_horizon, reconcile_control_sources,
     reconcile_project_source_writes, reconcile_project_sources, CompactionReport, ObservedSource,
     ReconcileReport, SourceBinding, SourceChange, SourceChangeKind, SourceHorizon, SourceRevision,
