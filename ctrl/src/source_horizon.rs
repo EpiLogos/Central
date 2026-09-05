@@ -171,7 +171,7 @@ fn unix_seconds() -> u64 {
         .as_secs()
 }
 
-fn normalize_relative(path: &Path) -> String {
+pub(crate) fn normalize_relative(path: &Path) -> String {
     path.components()
         .filter_map(|component| match component {
             Component::Normal(value) => Some(value.to_string_lossy().into_owned()),
@@ -222,7 +222,7 @@ pub fn content_revision(path: &Path) -> io::Result<SourceRevision> {
     })
 }
 
-fn retrieval_allowed(world_root: &Path, source: &Path) -> bool {
+pub(crate) fn retrieval_allowed(world_root: &Path, source: &Path) -> bool {
     let mut cursor = source.parent();
     while let Some(dir) = cursor {
         if !dir.starts_with(world_root) {
@@ -257,7 +257,7 @@ fn should_skip_dir(name: &str) -> bool {
     matches!(name, ".git" | ".central" | "target" | "node_modules" | ".next" | "dist" | "build")
 }
 
-fn collect_files(root: &Path, world_root: &Path, depth: usize, files: &mut Vec<PathBuf>) -> io::Result<()> {
+pub(crate) fn collect_files(root: &Path, world_root: &Path, depth: usize, files: &mut Vec<PathBuf>) -> io::Result<()> {
     if depth > MAX_SCAN_DEPTH || !root.is_dir() {
         return Ok(());
     }
@@ -357,6 +357,16 @@ pub fn project_source_bindings(project_root: &Path) -> io::Result<Vec<SourceBind
     }
     let world_ref = format!("project:{}", manifest.project_id);
     let mut bindings = BTreeMap::<String, SourceBinding>::new();
+
+    // Skill ground participates first so a skill source keeps one logical
+    // binding under the control-skill treatment; the human-source aperture
+    // fallback below uses or_insert and therefore never overrides it.
+    crate::control_skills::insert_skill_bindings(
+        project_root,
+        &project_root.join(&manifest.human_source).join(crate::control_skills::SKILLS_SEGMENT),
+        &world_ref,
+        &mut bindings,
+    )?;
 
     insert_tree_bindings(
         project_root,
@@ -470,6 +480,27 @@ pub fn project_source_bindings(project_root: &Path) -> io::Result<Vec<SourceBind
 pub fn control_source_bindings(central_root: &Path) -> io::Result<Vec<SourceBinding>> {
     let world_ref = CONTROL_WORLD_REF;
     let mut bindings = BTreeMap::<String, SourceBinding>::new();
+    // Skill ground participates first (same law as the project side): skill
+    // sources bind under the control-skill treatment with standing/provenance
+    // from their manifests, and the Control/user aperture fallback below never
+    // overrides them. Machine skill scopes are Control ground the tree pass
+    // does not otherwise walk.
+    crate::control_skills::insert_skill_bindings(
+        central_root,
+        &central_root.join(crate::control_skills::PERSONAL_SKILL_DIR),
+        world_ref,
+        &mut bindings,
+    )?;
+    if let Ok(machines) = crate::control_skills::child_directories(&central_root.join("Control/machines")) {
+        for machine in machines {
+            crate::control_skills::insert_skill_bindings(
+                central_root,
+                &central_root.join("Control/machines").join(&machine).join(crate::control_skills::SKILLS_SEGMENT),
+                world_ref,
+                &mut bindings,
+            )?;
+        }
+    }
     insert_tree_bindings(
         central_root,
         &central_root.join(ROOT_HUMAN_SOURCE_DIR),

@@ -23,7 +23,7 @@ Root resolution is, in order:
 
 ## Canonical Actions
 
-The current composed registry exposes 62 Actions:
+The current composed registry exposes 65 Actions:
 
 | Action | Purpose | Common CLI projection |
 |---|---|---|
@@ -39,6 +39,9 @@ The current composed registry exposes 62 Actions:
 | `central.recover` | reconcile supported recovery for an authored machine role | `recover <role>` |
 | `control.open` | resolve one authored Control source root | `control open <user|agents|machines>` |
 | `control.search` | search readable authored Control source | `control search <query>` |
+| `control.skills.inspect` | disclose the authored skill surface at every Control scope with scope, standing, provenance and retirement records; empty scopes are disclosed honestly as absent | `action run control.skills.inspect` |
+| `control.skills.retire` | write standing retired into a skill's ground manifest with who/when/why provenance; the directory and body are never deleted | `action run control.skills.retire` |
+| `control.skills.restore` | reverse a retirement: return the manifest to standing active and clear the retirement record | `action run control.skills.restore` |
 | `machine.declaration` | read authored machine-role intent | `machine declaration <role>` |
 | `machine.inspect` | inspect current observed machine state | `machine inspect` |
 | `machine.account` | compose the current-machine account (identity, observed state, authored roles, drift) | `machine account` |
@@ -86,6 +89,8 @@ ctrl --json action run action.list
 ctrl --json action run work.search '{"query":"Central"}'
 ctrl --json action run machine.plan '{"role":"home-server"}'
 ctrl --json action run projectcentral.ground.inspect '{"project":"Central"}'
+ctrl --json action run control.skills.inspect
+ctrl --json action run control.skills.retire '{"scope":"control-user","name":"central-ground-keeping","retired_by":"owner-in-session","retirement_reason":"superseded"}'
 ctrl --json action run projectcentral.change.horizon '{"project":"Central"}'
 ctrl --json action run projectcentral.now.inspect '{"project":"Central"}'
 ctrl --json action run projectcentral.flow.create '{"project":"Central","actor":"human:local","actor_kind":"human","local_stamp":"2026-08-23-2310"}'

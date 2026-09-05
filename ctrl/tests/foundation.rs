@@ -189,6 +189,9 @@ fn registry_has_stable_ids_and_complete_descriptors() {
         "central.world.reproject.plan",
         "control.open",
         "control.search",
+        "control.skills.inspect",
+        "control.skills.restore",
+        "control.skills.retire",
         "machine.account",
         "machine.apply",
         "machine.declaration",
@@ -266,13 +269,16 @@ fn action_list_has_human_and_structured_cli_renderings() {
     assert!(human.output.contains("agent-profile.read\tRead Agent Profile"));
     assert!(human.output.contains("agent-profile.save\tSave Agent Profile"));
     assert!(human.output.contains("agent-profile.remove\tRemove Agent Profile"));
+    assert!(human.output.contains("control.skills.inspect\tInspect skill ground"));
+    assert!(human.output.contains("control.skills.retire\tRetire a skill"));
+    assert!(human.output.contains("control.skills.restore\tRestore a retired skill"));
 
     let structured = central_ctrl::run_cli(&["--json".to_owned(), "action.list".to_owned()], &environment);
     assert_eq!(structured.exit_code, 0);
     let value: serde_json::Value = serde_json::from_str(&structured.output).unwrap();
     assert_eq!(value["status"], "success");
     let actions = value["data"]["actions"].as_array().unwrap();
-    assert_eq!(actions.len(), 62);
+    assert_eq!(actions.len(), 65);
     let ids = actions.iter().filter_map(|action| action["id"].as_str()).collect::<Vec<_>>();
     for id in [
         "projectcentral.inspect",

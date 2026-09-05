@@ -311,7 +311,7 @@ Do not put these things in durable global human Control by default:
 - temporary requirements;
 - project-specific architecture that belongs in the Project;
 - project-specific CI workflows, test commands, gates, and verification procedures;
-- long reusable procedures that should be Skills;
+- long reusable procedures that should be Skills (§17: such procedure becomes Skill ground at the skill scopes, not a loose document under `Control/user/`);
 - raw current package inventories without authored intent;
 - raw conversation history;
 - repeated instructions that do not change behavior;
@@ -404,7 +404,7 @@ When a human statement becomes obsolete, the live source tree should make the cu
 
 ## 14. Control-maintenance Skills
 
-Skills provide procedure around Control. They do not become Control content.
+Skills provide procedure around Control. A Skill's master is authored ground at the skill scopes (§17); the procedure itself does not become persistent context or an ordinary `Control/user/` document.
 
 ### 14.1 Control audit Skill
 
@@ -482,8 +482,77 @@ A healthy Control tree has these properties:
 9. Sensitive material has an explicit safe treatment.
 10. The tree can grow without a universal personal schema.
 11. The same human-source ↔ Agent-Wiki relation is recognisable in ProjectCentral.
+12. Skills are authored ground at the three skill scopes (§17) with standing and provenance from their manifests; no skill master lives in a projection path.
 
-## 17. Summary
+## 17. Skills as authored ground
+
+A Skill is reusable Agent procedure, and its master is authored ground. Skills are not an exception to this protocol; they participate in it at the same three scopes the protocol already defines, repeating the recursive one-law shape:
+
+```text
+Control/user/skills/<name>/            personal skills (the human's own)
+Control/machines/<machine>/skills/<name>/   machine-generic skills (a machine role's)
+ProjectCentral/user/skills/<name>/     project-scoped skills (one project's)
+```
+
+The Project scope follows the same recursion as every other ProjectCentral directory: what `Control/user/skills/` is at the root register, `ProjectCentral/user/skills/` is at the project register. One filesystem law, no second layout.
+
+### 17.1 The durability test applies to Skills
+
+The persistence rule (§1) governs skills exactly as it governs every other Control item:
+
+> A Skill earns ground only if its absence would materially reduce future understanding, interaction quality, decision quality, or reproducibility.
+
+A procedure whose absence would degrade future operation is ground-worthy and lives at its scope. A one-off prompt, a scratch helper, or session-local technique is not; it stays at a narrower or temporary scope (§3) and must not be promoted into a skill directory merely because it was once useful.
+
+### 17.2 The ground manifest
+
+Each skill carries a small ground manifest at `<skill-dir>/skill.json` beside its body (normally `SKILL.md`):
+
+```text
+schema            central.skill/v1
+name              the skill name (the directory name)
+scope             control-user | control-machine | projectcentral-user
+standing          active | retired
+provenance        human-authored | adopted
+retirement        present only when standing is retired:
+  retired_by            declared by the caller, recorded verbatim
+  retired_at_unix_seconds
+  retirement_reason
+```
+
+The manifest is authored ground, not derived state. Central never infers standing or provenance from a directory name, a file's presence, or a model's judgement. A skill directory without a manifest is disclosed with standing and provenance unresolved; operations that change standing refuse rather than synthesise the missing record.
+
+Unknown manifest fields are preserved on standing changes. The manifest records provenance of authorship; the retirement block records provenance of the standing change.
+
+### 17.3 Retirement is a standing, not a folder
+
+A retired Skill remains ground:
+
+```text
+retirement = standing "retired" on the skill's manifest
+           + who, when, why (the retirement block)
+           + the skill directory unchanged
+```
+
+Retirement is therefore auditable (the record states who retired it, when, and why) and reversible (a restore returns standing to `active` and clears the retirement block; earlier states remain in source history). Retiring never deletes, moves, or archives the directory. A retired skill is still disclosed by inspection — as retired — and never projected: projection surfaces include only active standing.
+
+### 17.4 Ground relations participation
+
+Skills participate in the ground relations model with treatment `control-skill` and with standing and provenance from the manifest. Skill sources use the canonical source-ref grammar, so a skill file disclosed by ground inspection is addressable by the same ref every other ground source uses:
+
+```text
+central:source:control:root:Control/user/skills/<name>/SKILL.md
+central:source:control:root:Control/machines/<machine>/skills/<name>/SKILL.md
+central:source:project:{project-id}:ProjectCentral/user/skills/<name>/SKILL.md
+```
+
+An explicit, accepted ground relation remains the identity/standing authority for a skill path, exactly as for any other source.
+
+### 17.5 Masters, not projections
+
+No Skill's master lives in a projection path (`~/.agents/skills`, `~/.claude/skills`, `~/.codex/skills`, or any harness-local directory). Masters live at the three ground scopes above, or natively in the product repository that owns a product skill. Projection directories are derived surfaces: rebuildable from ground, never edited by hand, and never the authority for standing — a harness that mounts skills is a consumer of this ground, not a registry beside it. Central owns the ground and the standing operations on it (`control.skills.inspect`, `control.skills.retire`, `control.skills.restore`); it does not project.
+
+## 18. Summary
 
 Control is not a memory dump and the Wiki is not a replacement for authored source.
 
