@@ -7,8 +7,8 @@
 //! at the statement layer, never on the distillate.
 
 use crate::action::{
-    ActionAvailability, ActionDescriptor, ActionExecutionContext, ActionInputDefinition,
-    ActionOutputDefinition, ActionRegistry, MutationClass,
+    ActionAvailability, ActionDescriptor, ActionExecutionContext, ActionOutputDefinition,
+    ActionRegistry, MutationClass,
 };
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
@@ -160,13 +160,7 @@ fn descriptor(id: &str, title: &str, description: &str, mutation_class: Mutation
         id: id.to_owned(),
         title: title.to_owned(),
         description: description.to_owned(),
-        inputs: vec![ActionInputDefinition {
-            name: "project".to_owned(),
-            input_type: "string".to_owned(),
-            required: false,
-            choices: None,
-            selection: None,
-        }],
+        inputs: vec![],
         output: ActionOutputDefinition { output_type: output_type.to_owned() },
         mutation_class,
         preview_supported: mutation_class == MutationClass::ReadOnly,

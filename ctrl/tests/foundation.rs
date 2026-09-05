@@ -300,6 +300,8 @@ fn action_list_has_human_and_structured_cli_renderings() {
         "projectcentral.source.history",
         "projectcentral.source.compare",
         "projectcentral.source.recovery.preview",
+        "projectcentral.source.read",
+        "projectcentral.source.write",
         "machine.account",
         "agent-profile.list",
         "agent-profile.read",
