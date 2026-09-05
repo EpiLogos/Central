@@ -78,7 +78,7 @@ fn run_automation(
         Err(error) => ActionResult::failure(
             Some("automation.run"),
             ResultStatus::ConnectorFailure,
-            format!("Connector failed while executing {}.", AUTOMATION_PORT.id),
+            format!("Connector failed while executing {}: {error}", AUTOMATION_PORT.id),
             Some(json!({
                 "automation": automation,
                 "port": AUTOMATION_PORT.id,

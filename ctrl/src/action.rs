@@ -325,7 +325,7 @@ fn discover_work(action_id: &str, context: &ActionExecutionContext<'_>) -> Resul
         Err(error) => Err(ActionResult::failure(
             Some(action_id),
             ResultStatus::ConnectorFailure,
-            format!("Connector failed while executing {}.", WORK_DISCOVERY_PORT.id),
+            format!("Connector failed while executing {}: {error}", WORK_DISCOVERY_PORT.id),
             Some(json!({
                 "port": WORK_DISCOVERY_PORT.id,
                 "connector": connector.manifest().id,
@@ -407,7 +407,7 @@ fn invoke_native_open(action_id: &str, target: &Path, context: &ActionExecutionC
         Err(error) => Err(ActionResult::failure(
             Some(action_id),
             ResultStatus::ConnectorFailure,
-            format!("Connector failed while executing {}.", NATIVE_OPEN_PORT.id),
+            format!("Connector failed while executing {}: {error}", NATIVE_OPEN_PORT.id),
             Some(json!({
                 "port": NATIVE_OPEN_PORT.id,
                 "connector": connector.manifest().id,

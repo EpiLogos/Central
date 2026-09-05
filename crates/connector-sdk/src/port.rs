@@ -422,6 +422,14 @@ impl PortError {
     }
 }
 
+/// The message is the human-readable explanation of the port failure; `code`
+/// and `provider_detail` stay structured fields for machine consumers.
+impl std::fmt::Display for PortError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
 pub trait WorkDiscovery: Send + Sync {
     fn list(&self, input: &WorkDiscoveryInput) -> Result<WorkDiscoveryOutput, PortError>;
 }
