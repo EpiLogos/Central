@@ -44,11 +44,23 @@ fn statement_section(central_root: &Path, file: &str) -> io::Result<Option<(Stri
         return Ok(None);
     }
     let body = fs::read_to_string(&path)?;
-    let title = body
-        .lines()
-        .find(|line| line.starts_with("# "))
-        .map(|line| line.trim_start_matches("# ").trim().to_owned())
-        .unwrap_or_else(|| file.trim_end_matches(".md").to_owned());
+    // The statement's own `# Title` line is used as the section heading; carrying
+    // it inside the body as well would render every section's title twice.
+    let mut title = None;
+    let mut body_lines: Vec<&str> = Vec::new();
+    let mut title_consumed = false;
+    for line in body.lines() {
+        if !title_consumed && line.starts_with("# ") {
+            title = Some(line.trim_start_matches("# ").trim().to_owned());
+            title_consumed = true;
+        } else if title_consumed && body_lines.is_empty() && line.trim().is_empty() {
+            // Skip the blank line between the statement's own title and its body.
+        } else {
+            body_lines.push(line);
+        }
+    }
+    let title = title.unwrap_or_else(|| file.trim_end_matches(".md").to_owned());
+    let body = body_lines.join("\n");
     let reference = source_ref(CONTROL_WORLD_REF, &format!("{ENGINEERING_GROUND_DIR}/{file}"));
     Ok(Some((title, body, reference)))
 }

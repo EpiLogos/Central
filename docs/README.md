@@ -43,6 +43,10 @@ resembles the product checkout (`mixed_root` in the structured health report).
   Project-context movement (Ground → World → Praxis → Intent → Context Frame →
   Return), the context-source form, and the boundary between source standing,
   authority, disclosure/activation and runtime precedence.
+- [CAPABILITY-MATRIX-PROTOCOL.md](CAPABILITY-MATRIX-PROTOCOL.md) — the shared
+  product-account and capability-matrix contract (`ql-capability-matrix/1`):
+  seed-led HTML accounts, matrix manifests, CSV interchange, the
+  reviewed-basis reconciliation plan, and product-ground validation.
 - [CONTROL-RETRIEVAL-TREATMENT.md](CONTROL-RETRIEVAL-TREATMENT.md) — the
   executable `.no-agent-retrieval` treatment that implements the protocol's
   disclosure boundary (supporting the Content Protocol).

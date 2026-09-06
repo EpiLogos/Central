@@ -1,0 +1,1310 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<meta name="color-scheme" content="light dark" />
+<title>Central — a home for Human–Agent work</title>
+<meta name="description" content="Central: a minimal CLI for a shared, recursive filesystem home for Human–Agent work. The 0/1 overview opens into six linked questions." />
+<style>
+:root{
+  --left-w:286px;
+  --right-w:326px;
+  --top-h:56px;
+  --paper:#f5f8fb;
+  --sheet:#ffffff;
+  --sheet-2:#eef4f8;
+  --ink:#132235;
+  --muted:#5e6d7f;
+  --faint:#8c98a7;
+  --line:#d8e1e9;
+  --line-strong:#bdcad6;
+  --blue:#1f5f9d;
+  --blue-deep:#184c7c;
+  --blue-soft:#e7f0fa;
+  --teal:#197f82;
+  --teal-soft:#e6f4f3;
+  --orange:#a45c2e;
+  --orange-soft:#f5ece6;
+  --danger:#9b4e50;
+  --success:#477a5e;
+  --focus:#2a78c5;
+  --shadow:0 12px 34px rgba(22,43,68,.08);
+  --radius:14px;
+  --reading:78ch;
+  --wide:1120px;
+  --full:1400px;
+  --ui:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  --serif:Georgia,"Times New Roman",Times,serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+}
+html[data-theme="dark"]{
+  --paper:#071320;
+  --sheet:#0c1b2c;
+  --sheet-2:#10243a;
+  --ink:#e7edf5;
+  --muted:#a7b4c4;
+  --faint:#7c8ba0;
+  --line:#21364d;
+  --line-strong:#35536f;
+  --blue:#77abe5;
+  --blue-deep:#9bc5ef;
+  --blue-soft:#102e4d;
+  --teal:#5ab5b3;
+  --teal-soft:#103536;
+  --orange:#c57a45;
+  --orange-soft:#3b281d;
+  --danger:#ce8587;
+  --success:#80ad92;
+  --focus:#8ec3ff;
+  --shadow:0 18px 42px rgba(0,0,0,.3);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:auto;background:var(--paper)}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--serif);font-size:16.5px;line-height:1.7;text-rendering:optimizeLegibility}
+button,input,textarea,select{font:inherit}
+a{color:var(--blue);text-decoration-thickness:.08em;text-underline-offset:.16em}
+a:hover{color:var(--teal)}
+button{color:inherit}
+::selection{background:var(--blue-soft)}
+:focus-visible{outline:3px solid color-mix(in srgb,var(--focus) 65%,transparent);outline-offset:2px}
+.app{min-height:100vh;display:grid;grid-template-columns:var(--left-w) minmax(0,1fr) var(--right-w);grid-template-rows:var(--top-h) 1fr;grid-template-areas:"top top top" "left main right";transition:grid-template-columns .18s ease}
+body.left-closed .app{grid-template-columns:0 minmax(0,1fr) var(--right-w)}
+body.right-closed .app{grid-template-columns:var(--left-w) minmax(0,1fr) 0}
+body.left-closed.right-closed .app{grid-template-columns:0 minmax(0,1fr) 0}
+.topbar{grid-area:top;position:sticky;top:0;z-index:80;height:var(--top-h);display:flex;align-items:center;gap:9px;padding:0 12px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--sheet) 94%,transparent);backdrop-filter:blur(14px)}
+.brand{min-width:0;margin-right:auto;display:flex;align-items:baseline;gap:10px;font-family:var(--ui)}
+.brand strong{font-size:12px;letter-spacing:.05em;text-transform:uppercase;white-space:nowrap}
+.brand span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:11.5px}
+.icon-btn{width:34px;height:34px;display:grid;place-items:center;padding:0;border:1px solid var(--line);border-radius:9px;background:var(--sheet);cursor:pointer;font:700 13px/1 var(--ui)}
+.icon-btn:hover{background:var(--blue-soft);border-color:var(--line-strong)}
+.route-chip{max-width:230px;height:32px;display:flex;align-items:center;gap:7px;padding:0 10px;border:1px solid var(--line);border-radius:999px;background:var(--sheet);color:var(--muted);font:600 10.5px/1 var(--ui);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.route-chip code{color:var(--teal);font:800 10px/1 var(--mono)}
+.left-rail,.right-rail{position:sticky;top:var(--top-h);height:calc(100vh - var(--top-h));overflow:auto;background:var(--sheet);z-index:50;transition:transform .18s ease,opacity .18s ease}
+.left-rail{grid-area:left;border-right:1px solid var(--line);padding:18px 13px 34px}
+.right-rail{grid-area:right;border-left:1px solid var(--line);padding:18px 16px 34px}
+body.left-closed .left-rail{transform:translateX(-100%);opacity:0;pointer-events:none}
+body.right-closed .right-rail{transform:translateX(100%);opacity:0;pointer-events:none}
+.main{grid-area:main;min-width:0;background:var(--paper);container-type:inline-size;container-name:account-main}
+.rail-label{margin:4px 7px 10px;color:var(--faint);font:750 9.5px/1.2 var(--ui);letter-spacing:.12em;text-transform:uppercase}
+.surface-nav{display:grid;gap:5px}.nav-group{border-radius:10px}.nav-head{display:grid;grid-template-columns:minmax(0,1fr) 30px;align-items:stretch}.nav-select,.nav-toggle{border:0;background:transparent;cursor:pointer}.nav-select{display:grid;grid-template-columns:36px minmax(0,1fr);gap:7px;text-align:left;padding:9px 7px;border-radius:9px 0 0 9px}.nav-toggle{border-radius:0 9px 9px 0;font:800 11px/1 var(--ui);color:var(--muted)}.nav-head:hover .nav-select,.nav-head:hover .nav-toggle{background:var(--blue-soft)}.nav-group.active>.nav-head .nav-select,.nav-group.active>.nav-head .nav-toggle{background:var(--blue-soft)}.nav-group.active>.nav-head .nav-select{box-shadow:inset 3px 0 0 var(--blue)}.nav-q{font:800 10.5px/1.5 var(--mono);color:var(--blue)}.nav-name{font:700 11.5px/1.3 var(--ui);color:var(--ink)}.nav-gloss{display:block;margin-top:2px;color:var(--muted);font:400 10px/1.35 var(--ui)}.nav-toggle span{display:inline-block;transition:transform .15s ease}.nav-group.expanded .nav-toggle span{transform:rotate(90deg)}.subnav{display:none;margin:2px 0 5px 35px;padding:2px 0 5px 7px;border-left:1px solid var(--line)}.nav-group.expanded .subnav{display:grid;gap:1px}.subnav a{display:grid;grid-template-columns:32px minmax(0,1fr);gap:5px;padding:6px 8px;border-radius:7px;color:var(--muted);text-decoration:none;font:10.5px/1.35 var(--ui)}.subnav a:hover{background:var(--sheet-2);color:var(--ink)}.subnav a.active{background:var(--teal-soft);color:var(--ink)}.subnav code{font:800 9.5px/1.35 var(--mono);color:var(--teal)}
+.context-head{padding-bottom:15px;margin-bottom:14px;border-bottom:1px solid var(--line)}.context-kicker{margin-bottom:7px;color:var(--faint);font:750 9.5px/1 var(--ui);letter-spacing:.11em;text-transform:uppercase}.context-head h3{margin:0 0 5px;font:600 17px/1.25 var(--serif)}.context-head p{margin:0;color:var(--muted);font:11.5px/1.5 var(--ui)}.note-field{margin-top:15px}body[data-notes="false"] .note-field{display:none}.note-field label{display:block;margin-bottom:7px;color:var(--muted);font:700 10.5px/1.35 var(--ui)}.note-field textarea{width:100%;min-height:128px;resize:vertical;padding:10px 11px;border:1px solid var(--line);border-radius:10px;background:var(--paper);color:var(--ink);outline:none;font:12.5px/1.55 var(--ui)}.note-field textarea:focus{border-color:var(--blue)}.save-state{margin-top:5px;color:var(--faint);font:9.5px/1.3 var(--ui)}.context-slot{margin-top:16px;padding-top:16px;border-top:1px solid var(--line)}.context-slot:empty{display:none}.context-slot h4{margin:0 0 8px;font:750 10px/1.3 var(--ui);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}.right-details{margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}.right-details summary{cursor:pointer;color:var(--muted);font:700 10.5px/1.4 var(--ui)}.meta-list{display:grid;gap:7px;margin:10px 0 0}.meta-row{display:grid;grid-template-columns:72px 1fr;gap:8px;font:10px/1.45 var(--ui)}.meta-row dt{color:var(--faint)}.meta-row dd{margin:0;color:var(--muted);overflow-wrap:anywhere}.source-list{display:grid;gap:8px;margin-top:10px}.source-list a{display:block;padding:8px 9px;border:1px solid var(--line);border-radius:9px;background:var(--paper);text-decoration:none;color:var(--ink);font:10.5px/1.4 var(--ui)}.source-list a:hover{border-color:var(--blue)}.source-empty{margin-top:9px;color:var(--faint);font:10px/1.4 var(--ui)}
+.surface{display:none;min-height:calc(100vh - var(--top-h));padding:clamp(34px,4vw,68px) clamp(22px,5vw,84px) 112px}.surface.active{display:block}.surface-inner{width:min(100%,var(--surface-max,var(--full)));margin:0 auto}.hero{margin-bottom:clamp(70px,8vw,118px);padding-bottom:clamp(34px,5vw,58px);border-bottom:1px solid var(--line)}.hero-line{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:18px;font-family:var(--ui)}.ql-badge{display:inline-flex;align-items:center;height:27px;padding:0 9px;border-radius:999px;background:var(--blue-soft);color:var(--blue);font:800 10.5px/1 var(--mono)}.hero-label{color:var(--muted);font:750 10px/1 var(--ui);letter-spacing:.09em;text-transform:uppercase}h1{max-width:18ch;margin:0;font-family:var(--serif);font-size:clamp(40px,5vw,66px);font-weight:500;line-height:1.02;letter-spacing:-.03em}.hero-deck{max-width:var(--reading);margin:20px 0 0;color:var(--muted);font-size:clamp(18px,1.8vw,22px);line-height:1.5}.hero-meta{display:flex;gap:10px 16px;flex-wrap:wrap;margin-top:22px;color:var(--faint);font:10.5px/1.4 var(--ui)}.ql-node{scroll-margin-top:calc(var(--top-h) + 26px);margin:0 0 clamp(76px,9vw,126px)}.node-head{margin-bottom:clamp(28px,3.4vw,40px)}.node-eyebrow{margin-bottom:10px;color:var(--teal);font:750 9.5px/1.2 var(--ui);letter-spacing:.1em;text-transform:uppercase}.ql-node h2{max-width:25ch;margin:0;font-family:var(--serif);font-size:clamp(26px,3vw,40px);font-weight:500;line-height:1.12;letter-spacing:-.018em}.node-deck{max-width:var(--reading);margin:13px 0 0;color:var(--muted);font-size:17.5px;line-height:1.58}.prose{max-width:var(--reading);font-size:16.5px;line-height:1.72}.prose p{margin:0 0 1em}.prose p:last-child{margin-bottom:0}.prose h3{margin:2.2em 0 .7em;font:600 22px/1.25 var(--serif)}.prose h4{margin:1.8em 0 .55em;font:750 12px/1.35 var(--ui);letter-spacing:.03em}.prose ul,.prose ol{margin:.9em 0 1.2em;padding-left:1.35em}.prose li{margin:.32em 0}.prose blockquote{margin:28px 0;padding:0 0 0 18px;border-left:3px solid var(--teal);color:var(--muted);font-size:18px;line-height:1.6}.prose code{font:90%/1 var(--mono);background:var(--sheet-2);padding:.12em .28em;border-radius:4px}.reading{width:min(100%,var(--reading))}.wide{width:min(100%,var(--wide))}.full{width:min(100%,var(--full))}.centered{margin-left:auto;margin-right:auto}
+.definition,.claim,.note,.warning,.evidence{max-width:var(--reading);margin:28px 0;padding:18px 20px;border-radius:0 12px 12px 0;background:var(--sheet);border:1px solid var(--line);border-left:4px solid var(--blue)}.definition{background:var(--blue-soft)}.claim{border-left-color:var(--teal);background:var(--teal-soft)}.note{border-left-color:var(--line-strong)}.warning{border-left-color:var(--orange);background:var(--orange-soft)}.evidence{border-left-color:var(--success)}.block-label{margin-bottom:7px;color:var(--muted);font:800 9.5px/1.3 var(--ui);letter-spacing:.08em;text-transform:uppercase}.definition p,.claim p,.note p,.warning p,.evidence p{margin:0;font-size:15.5px;line-height:1.6}.figure{margin:34px 0;overflow:hidden;border:1px solid var(--line);border-radius:var(--radius);background:var(--sheet);box-shadow:var(--shadow)}.figure-head{display:flex;justify-content:space-between;gap:14px;align-items:start;padding:14px 16px;border-bottom:1px solid var(--line);font-family:var(--ui)}.figure-head strong{font-size:11.5px;line-height:1.35}.figure-head span{color:var(--muted);font-size:10px;line-height:1.4;text-align:right}.figure-body{padding:clamp(14px,2vw,24px);overflow:auto}.figure figcaption{padding:12px 16px 14px;border-top:1px solid var(--line);color:var(--muted);font:10.8px/1.55 var(--ui)}.svg-wrap svg{display:block;width:100%;height:auto}.svg-wrap.scroll-x svg{min-width:720px}.table-wrap{margin:28px 0;overflow:auto;border:1px solid var(--line);border-radius:12px;background:var(--sheet)}table{width:100%;border-collapse:collapse;font:12.5px/1.5 var(--ui)}th,td{padding:11px 13px;border-bottom:1px solid var(--line);vertical-align:top;text-align:left}th{background:var(--sheet-2);color:var(--muted);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase}tr:last-child td{border-bottom:0}.code-block,.equation{margin:28px 0;border:1px solid var(--line);border-radius:12px;background:var(--sheet);overflow:auto}.code-block pre{margin:0;padding:18px 20px;font:12.5px/1.6 var(--mono)}.equation{padding:20px 22px;font:500 clamp(20px,2.6vw,30px)/1.4 var(--serif)}.source-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:28px 0}.source-card{display:block;padding:14px 15px;border:1px solid var(--line);border-radius:12px;background:var(--sheet);text-decoration:none;color:var(--ink)}.source-card:hover{border-color:var(--blue);box-shadow:var(--shadow)}.source-card strong{display:block;font:700 11.5px/1.4 var(--ui)}.source-card span{display:block;margin-top:4px;color:var(--muted);font:10.5px/1.5 var(--ui)}.two-col{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:clamp(24px,4vw,54px);align-items:start}.three-col{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.mockup-frame{margin:32px 0;border:1px solid var(--line-strong);border-radius:16px;background:var(--sheet);overflow:hidden;box-shadow:var(--shadow)}.mockup-toolbar{height:38px;display:flex;align-items:center;gap:6px;padding:0 12px;border-bottom:1px solid var(--line);background:var(--sheet-2)}.mockup-dot{width:8px;height:8px;border-radius:50%;background:var(--line-strong)}.mockup-body{min-height:260px;padding:20px}.controls{display:grid;gap:18px;padding:18px;border:1px solid var(--line);border-radius:12px;background:var(--sheet)}.control-row{display:grid;grid-template-columns:minmax(150px,.5fr) minmax(0,1fr) auto;gap:14px;align-items:center;font-family:var(--ui)}.control-row label{font-size:11.5px;font-weight:700}.control-row output{min-width:64px;text-align:right;color:var(--teal);font:800 11px/1 var(--mono)}input[type="range"]{width:100%;accent-color:var(--teal)}.toggle-row{display:flex;gap:7px;flex-wrap:wrap}.toggle-row button{padding:8px 11px;border:1px solid var(--line);border-radius:9px;background:var(--paper);cursor:pointer;font:700 10.5px/1.2 var(--ui)}.toggle-row button[aria-pressed="true"]{border-color:var(--blue);background:var(--blue);color:#fff}.timeline{position:relative;display:grid;gap:18px;margin:28px 0;padding-left:26px}.timeline:before{content:"";position:absolute;left:7px;top:5px;bottom:5px;width:1px;background:var(--line-strong)}.timeline-item{position:relative}.timeline-item:before{content:"";position:absolute;left:-23px;top:.55em;width:8px;height:8px;border-radius:50%;background:var(--teal);box-shadow:0 0 0 4px var(--paper)}.timeline-item time{display:block;margin-bottom:3px;color:var(--faint);font:700 9.5px/1.3 var(--ui)}.timeline-item h4{margin:0 0 4px;font:650 16px/1.3 var(--serif)}.timeline-item p{margin:0;color:var(--muted);font:11.5px/1.5 var(--ui)}
+@media (max-width:1319px){.app{grid-template-columns:var(--left-w) minmax(0,1fr);grid-template-areas:"top top" "left main"}body.left-closed .app,body.left-closed.right-closed .app{grid-template-columns:0 minmax(0,1fr)}body.right-closed .app{grid-template-columns:var(--left-w) minmax(0,1fr)}.right-rail{position:fixed;top:var(--top-h);right:0;width:var(--right-w);height:calc(100vh - var(--top-h));border-left:1px solid var(--line);box-shadow:-18px 0 40px rgba(16,35,56,.14)}body.right-closed .right-rail{transform:translateX(100%);opacity:0;pointer-events:none}}
+@media (max-width:979px){.app{grid-template-columns:minmax(0,1fr);grid-template-areas:"top" "main"}body.left-closed .app,body.right-closed .app,body.left-closed.right-closed .app{grid-template-columns:minmax(0,1fr)}.left-rail{position:fixed;top:var(--top-h);left:0;width:min(var(--left-w),88vw);height:calc(100vh - var(--top-h));box-shadow:18px 0 40px rgba(16,35,56,.14)}.right-rail{width:min(var(--right-w),90vw)}.route-chip{display:none}.surface{padding-left:clamp(18px,5vw,42px);padding-right:clamp(18px,5vw,42px)}}
+@container account-main (max-width:880px){.two-col,.three-col,.source-grid{grid-template-columns:1fr}.control-row{grid-template-columns:1fr}.control-row output{text-align:left}}
+@container account-main (max-width:620px){.hero{margin-bottom:66px}.ql-node{margin-bottom:78px}.node-head{margin-bottom:26px}.figure-head{display:block}.figure-head span{display:block;margin-top:4px;text-align:left}}
+@media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
+@media print{:root{--paper:#fff;--sheet:#fff;--ink:#000;--muted:#444;--line:#bbb;--line-strong:#888}.topbar,.left-rail,.right-rail{display:none!important}.app{display:block}.main{display:block}.surface{display:block!important;padding:24mm 18mm;min-height:auto;break-before:page}.surface:first-child{break-before:auto}.hero{margin-bottom:18mm}.ql-node{break-inside:avoid-page}.figure,.table-wrap,.code-block,.equation{box-shadow:none;break-inside:avoid}a{color:#000;text-decoration:none}a[href^="http"]:after{content:" (" attr(href) ")";font-size:8pt;overflow-wrap:anywhere}}
+
+.right-closed .right-rail,.left-closed .left-rail{display:none}
+.svg-wrap{overflow-x:auto}.svg-wrap svg{min-width:640px}
+.unit-sources{display:flex;flex-wrap:wrap;gap:8px 20px;margin-top:22px;padding-top:14px;border-top:1px solid var(--line);font-size:12px}.unit-sources a{color:var(--muted)}
+.prose a[data-resource]{text-decoration:underline;text-underline-offset:3px}.source-unresolved{color:#a02d22}.surface-inner{max-width:1120px}.prose li{margin-bottom:.65em}
+@media print{.surface{display:block!important} .left-rail,.right-rail,.topbar{display:none!important} .main{margin:0!important}}
+.prose pre{max-width:100%;white-space:pre-wrap;overflow-wrap:anywhere;overflow-x:auto}.capability-links{font-size:.9em;color:var(--muted)}
+[data-surface="whole"] .hero{margin-bottom:40px;padding-bottom:30px}[data-surface="whole"] .ql-node{margin-bottom:42px}[data-surface="whole"] .node-head{margin-bottom:16px}[data-surface="whole"] .ql-node h2{max-width:36ch;font-size:clamp(25px,2.3vw,31px)}
+</style>
+</head>
+<body class="right-closed" data-notes="true">
+<script type="application/json" id="account-provenance">{
+  "uid": "central-product-ground",
+  "kind": "html-account",
+  "title": "Central — a home for Human–Agent work",
+  "project": "project:central",
+  "status": "draft",
+  "provenance": "generated-suggestion",
+  "standing": "agent-inference",
+  "ql": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "created": "2026-09-06",
+  "updated": "2026-09-06",
+  "source_basis": [
+    {
+      "ref": "source:central-vision",
+      "path": "docs/CENTRAL-VISION.md",
+      "sha256": "a7b680eb1f9464a5e5fb18070b7980173554b8ed5b02384495293caaadca1d20",
+      "role": "source basis; original standing retained"
+    },
+    {
+      "ref": "source:central-spec",
+      "path": "docs/CENTRAL-SYSTEM-SPEC.md",
+      "sha256": "6cd2d0a3787e3fd01998d3c058adc1298bc93e6c4bbc069ce9902c4ef14733cf",
+      "role": "source basis; original standing retained"
+    },
+    {
+      "ref": "source:control",
+      "path": "docs/CONTROL-CONTENT-PROTOCOL.md",
+      "sha256": "038ad9572c0c5af1dc6b5297d0faddc6b0444847296abcbd4f8853496ca2baa8",
+      "role": "source basis; original standing retained"
+    },
+    {
+      "ref": "source:ground",
+      "path": "docs/PROJECTCENTRAL-AUTHORED-GROUND.md",
+      "sha256": "cfeef78dce8c7d19d4543b4e0756cf6af68a25abe94e14145516662a4953181a",
+      "role": "source basis; original standing retained"
+    },
+    {
+      "ref": "source:projectcentral",
+      "path": "docs/PROJECTCENTRAL-CONTRACT.md",
+      "sha256": "6f990d712537dcbd073e332f2cd7865fd0c4753e034eaa3350f963b153eba21c",
+      "role": "source basis; original standing retained"
+    },
+    {
+      "ref": "source:context",
+      "path": "docs/PROJECT-CONTEXT-PROTOCOL.md",
+      "sha256": "f732128a9e5f03ba26d9bb66eeebfe2c50198463ecf6c37c4fd23ce813020976",
+      "role": "source basis; original standing retained"
+    },
+    {
+      "ref": "source:flow",
+      "path": "docs/PROJECTCENTRAL-FLOW.md",
+      "sha256": "df36e06466abdd838c89ef0d0e0974ed04e8f0d4bcd1143fcf0a930d2b610594",
+      "role": "source basis; original standing retained"
+    },
+    {
+      "ref": "source:machine",
+      "path": "docs/MACHINE-WORKCELL-RELATION.md",
+      "sha256": "6633b4596512e9426c80ea901bdfea1ac946ad456da746e0915234052a092253",
+      "role": "source basis; original standing retained"
+    },
+    {
+      "ref": "source:standing",
+      "path": "docs/documentation-standing.v1.json",
+      "sha256": "f5931d660ac2648670f071794b2351e9f818988a215a663ca5c42d984fb3c711",
+      "role": "source basis; original standing retained"
+    },
+    {
+      "ref": "source:method",
+      "path": "skills/docs-methodology/SKILL.md",
+      "sha256": "6b6774f8e93ad21c361b11c09bf56c05a543c20d85276b27cfd659bf76d717f0",
+      "role": "source basis; original standing retained"
+    },
+    {
+      "ref": "source:oi-foundations",
+      "path": "../O-I/docs/positions/FOUNDING-POSITIONS.md",
+      "sha256": "f41ed11c377133a579d1284d2366167298050c955dedbc61fb5971e3d523e490",
+      "role": "source basis; original standing retained"
+    },
+    {
+      "ref": "source:oi-covenant",
+      "path": "../O-I/docs/HUMAN-AGENT-COVENANT.md",
+      "sha256": "79dccdffee7cb340fddaf049a9d898cea3b99bfb577cbeec8b988cfc79c01ef5",
+      "role": "source basis; original standing retained"
+    },
+    {
+      "ref": "source:primitive-history",
+      "path": "../Software-Factory/docs/canon/QL-SOFTWARE-FACTORY-PRIMITIVE-RELATIONS.md",
+      "sha256": "171fc11e1fecc1ce20e9bcbef036fbce2aaa606208ab2ba6636707908358b773",
+      "role": "source basis; original standing retained"
+    },
+    {
+      "ref": "source:agency",
+      "path": "../Actuation/docs/ACTUATION-CONSTITUTION.md",
+      "sha256": "8124d313346c34333036d098a839de893956497f5163d512e31d969556d7ef1a",
+      "role": "source basis; original standing retained"
+    },
+    {
+      "ref": "source:ql",
+      "path": "../Quaternal-Logic/skills/ql-foundations/SKILL.md",
+      "sha256": "ebbd7008862e4f929e16b3bb9a391b6f474c2b1e9df70ee530e09de9d890af6b",
+      "role": "source basis; original standing retained"
+    },
+    {
+      "ref": "source:html-template",
+      "path": "../ai-kit/registry/capsules/skill/aikit/html-account/payload/full-account-template.html",
+      "sha256": "62e2d76a8d951efe1286ddc0d3892792710b64a91bfd22215aad796e92dccf35",
+      "role": "source basis; original standing retained"
+    },
+    {
+      "ref": "source:matrix-history",
+      "path": "../O-I/quarry/notes/agent-ql-relational-field.md",
+      "sha256": "436ce23e16211dba29e9f9d5d83361c76ec5b17e2198ba04cdcc175f38e414da",
+      "role": "source basis; original standing retained"
+    },
+    {
+      "ref": "ticket:1",
+      "path": "../github-recovery-mirror/mirror/Central/issues/1.json",
+      "sha256": "9fc94cd87dffd85110877dacb40f6819287a3b91d208fb0715947155b59ea891",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:1",
+      "path": "../github-recovery-mirror/mirror/Central/issues/1.comments.json",
+      "sha256": "b9d8f4ca4d110deee9d3357ed4582e9cc104a5d01e804cc3a5281eb1dfbeaef6",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:6",
+      "path": "../github-recovery-mirror/mirror/Central/issues/6.json",
+      "sha256": "48d34d4f33d55e32987de9dbbff6820481641e9b95d46314cee20a42105c0514",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:6",
+      "path": "../github-recovery-mirror/mirror/Central/issues/6.comments.json",
+      "sha256": "68972fcf66f4ea8c99a8eb762c1c928e87ab8a4fe4ec7550e4b1f496bb76e148",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:8",
+      "path": "../github-recovery-mirror/mirror/Central/issues/8.json",
+      "sha256": "e175c523dfb2cf59b9cbbaae99d46ad4e1cebf8e1a673886c16dbe46f0bf772f",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:8",
+      "path": "../github-recovery-mirror/mirror/Central/issues/8.comments.json",
+      "sha256": "ee5fbd5c6ed013910353c967e5c93f71501092ae675870816c508182cace4d52",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:9",
+      "path": "../github-recovery-mirror/mirror/Central/issues/9.json",
+      "sha256": "33d05ca56981db70a24340eea47bf8853a3d0e9681a6d750aca025f23f584b2d",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:9",
+      "path": "../github-recovery-mirror/mirror/Central/issues/9.comments.json",
+      "sha256": "aa3a33464cf2b1bc02a0a3c0d59288b447a34bd484c92d9ae58bbae8fc9eb08d",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:10",
+      "path": "../github-recovery-mirror/mirror/Central/issues/10.json",
+      "sha256": "a81d4155763bd451cd61f1bd50d32e8266bad499eade848ddcc8d03e05a19806",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:10",
+      "path": "../github-recovery-mirror/mirror/Central/issues/10.comments.json",
+      "sha256": "d1e4c8ecf5ee55523237821ea6efaa08a72cb296ad97ca815c5423f8aaca74d8",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:18",
+      "path": "../github-recovery-mirror/mirror/Central/issues/18.json",
+      "sha256": "ee671da332d066f5ef4580cc54c56f611384ebb47d76d8d8a61155a65209c444",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:18",
+      "path": "../github-recovery-mirror/mirror/Central/issues/18.comments.json",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:21",
+      "path": "../github-recovery-mirror/mirror/Central/issues/21.json",
+      "sha256": "ddfc20e2928b776f3eb5a12ff37c63c5411aedb616550a72f1555cabe458db67",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:21",
+      "path": "../github-recovery-mirror/mirror/Central/issues/21.comments.json",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:51",
+      "path": "../github-recovery-mirror/mirror/Central/issues/51.json",
+      "sha256": "1b1574a01ec1a1c7cc02ac33b41bb8610f468af00bcc204e6adb3ba3406ca248",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:51",
+      "path": "../github-recovery-mirror/mirror/Central/issues/51.comments.json",
+      "sha256": "5ed61074da21ad8f276a946415546212e2dda965393279dd86ee5846a67363f0",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:65",
+      "path": "../github-recovery-mirror/mirror/Central/issues/65.json",
+      "sha256": "5dec1ce77ab0b65d98284c9e25a4c3b1a53900a3a351d3a755abe7032ab2e2af",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:65",
+      "path": "../github-recovery-mirror/mirror/Central/issues/65.comments.json",
+      "sha256": "456c4f51230ccd7ce8daa9d9ecc92c36912f2c48dfc481c591debf16ff9d9a82",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:70",
+      "path": "../github-recovery-mirror/mirror/Central/issues/70.json",
+      "sha256": "efdafe2d27619ae7f1491f3b960778520e8029e1f971f21988dd5f30ee0d5c5a",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:70",
+      "path": "../github-recovery-mirror/mirror/Central/issues/70.comments.json",
+      "sha256": "f3cb617e57a67b50f9e9f09a37eb92681182c7e2e47b5e944b6bd209f7574dad",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:71",
+      "path": "../github-recovery-mirror/mirror/Central/issues/71.json",
+      "sha256": "8dd1d5d66e5c581ba1c9bded2018af7a87f47fb4987b0b7dd3d27beca976ff1e",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:71",
+      "path": "../github-recovery-mirror/mirror/Central/issues/71.comments.json",
+      "sha256": "711cb4419df31eaaf5016b37efe0c41008580fd6db53300191f55fecec9a4be2",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:72",
+      "path": "../github-recovery-mirror/mirror/Central/issues/72.json",
+      "sha256": "7544a82738e7892795664c4573abfc5fce49c58a679dc0eda73df65f09a715a7",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:72",
+      "path": "../github-recovery-mirror/mirror/Central/issues/72.comments.json",
+      "sha256": "402d5d1cac24d76cde793bc8e42ad944239f39e08fae794c3d4b08fd01ece30f",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:74",
+      "path": "../github-recovery-mirror/mirror/Central/issues/74.json",
+      "sha256": "d417929d23de5b08a03e5bff08c8f76243ae85ee9846c54ac8649572cea6c022",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:74",
+      "path": "../github-recovery-mirror/mirror/Central/issues/74.comments.json",
+      "sha256": "6468e40357af00319d1b93508e21be223456ae43dc701bc86712a8e50826d459",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:82",
+      "path": "../github-recovery-mirror/mirror/Central/issues/82.json",
+      "sha256": "7325129fe07a74aa88b37d28176b4fa17416b0c9dba0f407d3a7447103267c64",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:82",
+      "path": "../github-recovery-mirror/mirror/Central/issues/82.comments.json",
+      "sha256": "81cd302f039759fad89ec87d2352f36d7e660ece36a58e8abebf7fedf6242eac",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:87",
+      "path": "../github-recovery-mirror/mirror/Central/issues/87.json",
+      "sha256": "249282857d0815aec6a408d1ff2a0a306b9e8bbcf15166af551b806b2713db7e",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:87",
+      "path": "../github-recovery-mirror/mirror/Central/issues/87.comments.json",
+      "sha256": "60815d2ff09d8810c9912c0480e94cc2ffbd5382ffd6a3f1be0d00d25327f92d",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:89",
+      "path": "../github-recovery-mirror/mirror/Central/issues/89.json",
+      "sha256": "51cbb29463019001ab213dd86de5ce75bdc1463012ba771bd35b775c3bec2f85",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:89",
+      "path": "../github-recovery-mirror/mirror/Central/issues/89.comments.json",
+      "sha256": "31de9597c6eed27ca896a8af8b341f6264ec84e08823c5f36ef865b5ee919faf",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:93",
+      "path": "../github-recovery-mirror/mirror/Central/issues/93.json",
+      "sha256": "fe84e826c3929aaf86c6cc3dedbaf2da974113ad3914f34e9e031d2826233ab8",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:93",
+      "path": "../github-recovery-mirror/mirror/Central/issues/93.comments.json",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:97",
+      "path": "../github-recovery-mirror/mirror/Central/issues/97.json",
+      "sha256": "a18559425bc487e6cd8a1d6ea257af43b8a010c92b5db9ebb6207ba97df8f784",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:97",
+      "path": "../github-recovery-mirror/mirror/Central/issues/97.comments.json",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:100",
+      "path": "../github-recovery-mirror/mirror/Central/issues/100.json",
+      "sha256": "c0764f5df8aae21332cbb995825db2a13895d6cd28ac62d9c97c5fa3017680f4",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:100",
+      "path": "../github-recovery-mirror/mirror/Central/issues/100.comments.json",
+      "sha256": "bda14ebdff881e6b8fa1418b952e673abd2e38f32826f54ee518f2f068753ec1",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:104",
+      "path": "../github-recovery-mirror/mirror/Central/issues/104.json",
+      "sha256": "d5b0c1f1f9f6c8a002e23c6affa756f710567a9b8410b0619a87482c4513ce89",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:104",
+      "path": "../github-recovery-mirror/mirror/Central/issues/104.comments.json",
+      "sha256": "6eef18cd1517eee528687c72a2414aaa9f8575236a2d91a459ad96dec7328e4e",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:106",
+      "path": "../github-recovery-mirror/mirror/Central/issues/106.json",
+      "sha256": "a36ad0a09a817809b6dcfd88b85687b0abf4c1a3083bf1afb8a5f6c0ec24d8c6",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:106",
+      "path": "../github-recovery-mirror/mirror/Central/issues/106.comments.json",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:108",
+      "path": "../github-recovery-mirror/mirror/Central/issues/108.json",
+      "sha256": "212da0a9bea8742471f44546b177c02a48aacb6c425f82dff89f5f7eebc43a69",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:108",
+      "path": "../github-recovery-mirror/mirror/Central/issues/108.comments.json",
+      "sha256": "1f3b100c0dcf77217c98a7b1a684abec921ffbc7117c886254990a448d3f93c0",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:112",
+      "path": "../github-recovery-mirror/mirror/Central/issues/112.json",
+      "sha256": "3e1c3a897898e655ca96bd777775af940989bdf8d19f4f687d72b7e9b90781a9",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:112",
+      "path": "../github-recovery-mirror/mirror/Central/issues/112.comments.json",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:118",
+      "path": "../github-recovery-mirror/mirror/Central/issues/118.json",
+      "sha256": "dbd81a188c37d412ea78eb250d6a1daebf3d9397f9156b80f9e75f45677af8a7",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    },
+    {
+      "ref": "ticket:118",
+      "path": "../github-recovery-mirror/mirror/Central/issues/118.comments.json",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "role": "local issue snapshot; body and subsequent corrections read together"
+    }
+  ],
+  "relations": [
+    {
+      "relation": "informed-by",
+      "target": "source:oi-foundations"
+    },
+    {
+      "relation": "references",
+      "target": "central:matrix:md"
+    },
+    {
+      "relation": "expands",
+      "target": "central:doc:overview"
+    }
+  ],
+  "generator": "Human six-question seed, Agent editorial clarification and aligned expansion",
+  "template_sha256": "62e2d76a8d951efe1286ddc0d3892792710b64a91bfd22215aad796e92dccf35",
+  "source_policy": "This HTML is the candidate primary content, not a parallel prose export; generated consolidation awaits source recognition.",
+  "verification": {
+    "date": "2026-09-06",
+    "checkout": "eebdfdd9f84228ce502645e587215ca7aaf1de00",
+    "command": "cargo test -p ctrl --test work_entry --test control_source --test world_map --test projectcentral_ground_actions --test projectcentral_now --test projectcentral_flow --test world_source_actions --test source_change_horizon --test agent_governance --test control_skills",
+    "passed": 67,
+    "failed": 0,
+    "scope": "selected isolated native functionality; no physical desktop or owner-machine claim"
+  },
+  "seed_basis": {
+    "origin": "Human message in this task, 6 September 2026",
+    "standing": "authored-human-position",
+    "editorial_treatment": "Spelling and sentence structure clarified; supplied product intent preserved. Expanded prose remains generated interpretation.",
+    "whole_anchor": "0/1",
+    "question_labels": [
+      "Why?",
+      "What?",
+      "How?",
+      "Who / Whereby?",
+      "Where / When?",
+      "Why-For?"
+    ],
+    "lens": "Human-selected application of QL L0; not a revision of the shared lens registry."
+  },
+  "source_basis_path_base": "repository-root",
+  "reconciled_source_revisions": [
+    {
+      "path": "docs/PROJECT-CONTEXT-PROTOCOL.md",
+      "read_sha256": "274e8d5f70d455d3f02e9882048020e2f18a296b617d720de78f33ad6535102a",
+      "current_sha256": "6846212de82152cb82d13fb31b89ccc56882e56b5f71f3b6737a863fc8e3cc09",
+      "reason": "Reviewed protocol/skill refinements made during this consolidation: intended capability gaps and source-format/standing parity.",
+      "date": "2026-09-06"
+    },
+    {
+      "path": "skills/docs-methodology/SKILL.md",
+      "read_sha256": "6ad5aaa495461bea1ae96a05a3f7411cfb9316a61e0766ed8a5e8d2fc6271df9",
+      "current_sha256": "fd3771d457330cbf746780ece970f7b758b0232916918e7fc9963e8350d9f3dd",
+      "reason": "Reviewed protocol/skill refinements made during this consolidation: intended capability gaps and source-format/standing parity.",
+      "date": "2026-09-06"
+    },
+    {
+      "path": "docs/PROJECT-CONTEXT-PROTOCOL.md",
+      "previous_sha256": "6846212de82152cb82d13fb31b89ccc56882e56b5f71f3b6737a863fc8e3cc09",
+      "sha256": "f732128a9e5f03ba26d9bb66eeebfe2c50198463ecf6c37c4fd23ce813020976",
+      "reason": "Reconciled single matrix form, declared views and Central filesystem / AIKit operation ownership; source authority unchanged."
+    },
+    {
+      "path": "skills/docs-methodology/SKILL.md",
+      "previous_sha256": "fd3771d457330cbf746780ece970f7b758b0232916918e7fc9963e8350d9f3dd",
+      "sha256": "b59fa65ab39258f59e3911ceab235764e86e5d4adf7ab43645a7c4734a659a6c",
+      "reason": "Reconciled single matrix form, declared views and Central filesystem / AIKit operation ownership; source authority unchanged."
+    },
+    {
+      "path": "skills/docs-methodology/SKILL.md",
+      "previous_sha256": "b59fa65ab39258f59e3911ceab235764e86e5d4adf7ab43645a7c4734a659a6c",
+      "sha256": "6b6774f8e93ad21c361b11c09bf56c05a543c20d85276b27cfd659bf76d717f0",
+      "reason": "Reconciled CLI maintenance and bidirectional seed/question protocol against the source reviewed in this task."
+    }
+  ],
+  "matrix_basis": {
+    "protocol": "ql-capability-matrix/1",
+    "csv_sha256": "402db69811b6eef8e313819bc6331fbe4ba89c1a451536fac38b2ef7f870c0c6",
+    "manifest_sha256": "fd385de8d510d0abd4ef25c9f4951b79698fc164667e2e52907043884b617efd",
+    "record_sha256": {
+      "cap.central.root": "1f091f428f6f1033c2e336c7fb7b3d1ad897156834872f223701c6eae00d5c22",
+      "cap.central.action-discovery": "a1af9d5d5961b23a95304268edf660636afbb89027149448b70ee87c26695929",
+      "cap.central.work-entry": "0782e622f07b85026fc7bff657745b53b66bd733c44bf9bd1cfe7d3a9b211930",
+      "cap.central.control-reading": "462e7cd781ad3680ccc532a7508d176c5086d695fb6fd63ca3d008f77262a652",
+      "cap.central.machine-declaration": "e9cb60460ed27ec33ee7bb4ee0f320f9d78be7d2a76d77facfe641dc2b764c3e",
+      "cap.central.machine-reconciliation": "33cb91d3364c7927fc0f5d9a12cb860951af8eab94e49742c95cf9099a56e2d0",
+      "cap.central.machine-recovery": "26ac4e6976853d29637b1440e551fff86faf8d88d06445e2277cbb7bc6f42be8",
+      "cap.central.projectcentral-lifecycle": "a3e82dfd1a7811233e990e30eacc0a12ff33f28116175d6c6b363fb3cdcb6010",
+      "cap.central.authored-ground": "42ef06ee31da4ee10679c8693e86e915582b733b4acf103989fb88b14e7fd68b",
+      "cap.central.world-map": "8b2a995369bbc472c72604abd1933d8a2bdf60f6f2950962f21d9bb85077dbf3",
+      "cap.central.reproject": "7db6c0d2aeec6610b4e763193adc94afbf5c88ed0dba59ca98bc3ec22a5528d1",
+      "cap.central.source-reading": "5d821268f2ea92b4c76ed664013ea546ce6df8174ddc2838f198b77bf4c7b02e",
+      "cap.central.source-editing": "6dc7eecfefa3f08754a8d2d9436d1acf713f7df9e35c3b9bc119a9216b446787",
+      "cap.central.source-change": "85a30236694598f971a7bf1d031bf91af80d5d544e64907da150267ae7c2bde5",
+      "cap.central.source-history": "846893530b2e7605c3d60f8ab54385fec593f7ae683f29639bdaea23dbae9169",
+      "cap.central.now": "1216de5a59130d761e11c491922febee431618c00ca39306839d9e83be958c56",
+      "cap.central.day-rollover": "aa929ec036e1536188f4172af3d7a68437f582ac551cb38079b41d6b9758daca",
+      "cap.central.flow": "6de9550af34ddff72f4a79cee6eb0c0f7133ab4b4b4bad3e2b15a5b11a05e367",
+      "cap.central.governance": "5b3e4e5dd56900e52a64f643adb59d6c0bb234df2c38c77a9549cd6af025789f",
+      "cap.central.skills": "f6dddb919382175ede247a241d9cc2c64a9e340f8438527dd23ba9012fb37ed2",
+      "cap.central.agent-profiles": "f58b32f656587a55797c4e65e9dbbd6f8b2eef8e9924b4dc190674622ced9b91",
+      "cap.central.personal-surface": "6343b747b2b2aa55a4cc9d0d4cefe09e04aef65fc70d29611540b16b6997c879",
+      "cap.central.control-proposals": "71a557675d9c835dcd9d5c6707d0693b3905684bde646eece38fb7f70623a944",
+      "cap.central.notification": "c08548ad1a6043c5770fd3d74d427aae2f2d191ee2a7821e834e91f3e8a40f7c",
+      "cap.central.guided-ground-authoring": "c1a89c94b44f6533d6ee9652c267ffc3f8996e1dc5542cdfdb7c8f8d8a43848f",
+      "H0->H0": "0e3250e8d400c20d4eb217e7daf142a5c8210420a4f58965ec83bd4fc6e65e17",
+      "H0->H1": "416e699edb45904dadd240269cf9237b34227f23ff335ee40bb7424a0399b447",
+      "H0->H2": "7a4378027e64552436c45fd8b2c4ffa5bcf978278e8d45515090e88c44a20dd7",
+      "H0->H3": "a2a6ca135196101e3a2f16ac1619eeec837a8a19751f0b266e8d8340dd5f2a1c",
+      "H0->H4": "9bd6bf01bdfb3c9c25fe2816ef829d445215782fee15174a162e2af1b088c57d",
+      "H0->H5": "cc25c4c67c00ab2f262543f3ad3af2331b13512bab58d6509ef8123d145953dd",
+      "H0->A0": "a1297379372bc591f36f43dabab5f24fd55bfd00bef3cc6d4c7cd8c52bdcdfb7",
+      "H0->A1": "34ed36ca3f69f178974e8cd53c9df49525f41de9195110bd63f6c5b32e6f4197",
+      "H0->A2": "127f6c435c7ed71134fc4e641096bcad7da4fe4be50eff588e961b7ec935057f",
+      "H0->A3": "d74f3ab581b5af139469dbaa72617900c83e4e59aa5443afe1cdbd01e3385e62",
+      "H0->A4": "41cf6d14412c0099ca0f421241005bf35342d4cdac160ac9eede52131afb2748",
+      "H0->A5": "020de6243c7604ff41739ba95580272f16e8930602dd6baecd46bd843a6a324b",
+      "H1->H0": "7a9709948f550361498528ae2a223e99e0e51ba9402a607d6ce55dd5ccd3f83f",
+      "H1->A0": "d02d997a90084f9c970af4726e3395e7fd1bde67e5e2e1f86944c203f0a1d9d5",
+      "H2->H0": "5b0ca57102a299dcceb16f1264ad915c9232a9ffc1198acf6a2f52da614ea61b",
+      "H2->A0": "8b2fae3c9cf8f12165b5171ea12cd2233abb79cd917567f71f5f1d0973a97c66",
+      "H3->H0": "9f4ab8b1d9488ee0aaffd0d64ab4e960ebff40066c7a67064aaacdb6bda6c1b6",
+      "H3->A0": "220f519e4f5d25a8ae463db1cd7af0251f80ce78f3090780671183e836bd106b",
+      "H4->H0": "0a103d3c3286d0dc7735eb634527b30fe5f1fb63f263d52acd205d25efffb73c",
+      "H4->A0": "6e7df0f5f762babb734d2850997c94ae76b8e3783905ff5645eccd07653f0e4e",
+      "H5->H0": "0296f076e8388cb01ed9f742700838469f1da0ebd3643d29f3240a5e7970a7a2",
+      "H5->A0": "d1d08a43c872390481acfa8262000a53fa83184864a908015ec000da48e56be9",
+      "A0->H0": "236a95cbea1f57cd4a935736496cc8ece9398540a93eb5cc9afd16e0e3e05af8",
+      "A0->H1": "0bf17ae6fe5ad9a0e786b2409bdd6638d8108bd0f503fd14bac76b6cc497813a",
+      "A0->H2": "967f3e7cb35f79a11c190b42ef2c40f970dc858b97563438e1f375697f26824a",
+      "A0->H3": "4ff2ccb2db643ee97df341a79f4f55b355ab8ff4b214ac37e135c9ba62d14ca7",
+      "A0->H4": "fb08e76012910309b7ebf6c6abfdaa63bba648ad07cbcf5c8b0c03c9d204bb41",
+      "A0->H5": "4f68a5ec5703982492e7df60fe4095c1974cec182581806f5949e1dedc5fc797",
+      "A0->A0": "1905786d92433ed9a66fd4f9c006929241264ec1e07923867c9a748d0cbb72fe",
+      "A0->A1": "5827b5044592f85605cde7a0e4f9c49261998e13520d42acb1d457c0f4460fc7",
+      "A0->A2": "34272dc60a526e9f4ee1fec34266a118a545541e87429f1c13f9c20d7370e2cf",
+      "A0->A3": "d9485ff7880fc44b3f1463d15753d900451cb757c435a110e6828d132deca523",
+      "A0->A4": "31cd2437dfa5299082de077b962dd5c7c3be30e0f31a32a6e98225e5bbd8b1c4",
+      "A0->A5": "8c5c14d2a2c9daf4a4d9f4924f77e3d5117ef3e00b0f2a5f3c5b8aadf7c43cd9",
+      "A1->H0": "81c9bdbae032e3f65bc623369ac80709dd336ae74c3498ed205da70364378985",
+      "A1->A0": "eb452f0f946cff80f96717a14776ebfedd5eb83171f1f58d416a2edb0936a2db",
+      "A2->H0": "bfe57dc30558d78001af2bb50ebdecb38339fc91ba289c80e6702e002e0a903f",
+      "A2->A0": "295ecbd8178953f778638e2fe754b796939b924c4aecca7ac64acde86191d15c",
+      "A3->H0": "270f4f48851257b2d5cc776798c59b72e52bd703c92478a93ac791fe61577e50",
+      "A3->A0": "9b0cb71eb41e5f4ca15943be464f431d5eba38beb33ef860dc65283c9a10fd6d",
+      "A4->H0": "af124c8b998a42e06c0571bbcf6e119a220b454e3731401978b0653519e21c52",
+      "A4->A0": "e7489f0a325ac7b372dcccb8723abd94bbda749ac5c8ae829531f0ea57ba044b",
+      "A5->H0": "93a8c1743d7744d34f3fd1deb8b245a8a652dd584f7652e457d580052c510e09",
+      "A5->A0": "3ad246c30636c159541477d3562c426f34c0ffcde4ccb3ddfb0ebab053fe0674",
+      "rel.central.q0.S": "8fed1a02121254361b8dcdfa536c1152ff8536213507d11b8c0502952b5ee387",
+      "rel.central.q1.S": "13770e2c35c1bccf7e720937840078c264c175a38071120848006f0e0696bd32",
+      "rel.central.q2.S": "e1ad23a44e40655915bfbd2ec2ace302dcdf5af4b5c2064ffa089dad43107d37",
+      "rel.central.q3.S": "1c900f323841feb1c862a6c0a071dc67d1a0e28bc6a8186b6875be026334889a",
+      "rel.central.q4.S": "7a89b6e2b660ca378c6726ff60f2d5fd4a90d7ed2fe9f5a42582dd9a938cafc1",
+      "rel.central.q5.S": "f55d534126b11ba578356e413536bfef7251f962d206512a668866a9158b67e4",
+      "rel.central.q5.S2": "6343d67f55c28e3d6a64d9c351e9b63c64cb872dfc491728959b275a1951c086",
+      "rel.central.q4.S4": "0499fed2e8a4efe948f83d0aab3c5839045648b38582b7202526f8255fd2d802",
+      "cap.central.files": "fa08bd3e04d06b28dd5b7800552214fd36f8073aa8d7485709fd40fe0d00c041"
+    },
+    "change_ref": "codex:thread:01a07608-d2ec-7b10-9713-74c445adf8a5",
+    "reviewed_at": "2026-09-06T16:44:56.123904+00:00",
+    "reviewed_sections": [
+      "q1"
+    ]
+  }
+}</script>
+<script type="application/json" id="ground-resources">
+{
+  "source:central-vision": {
+    "title": "Central product vision",
+    "href": "../../docs/CENTRAL-VISION.md"
+  },
+  "source:central-spec": {
+    "title": "Central system specification",
+    "href": "../../docs/CENTRAL-SYSTEM-SPEC.md"
+  },
+  "source:control": {
+    "title": "Control content protocol",
+    "href": "../../docs/CONTROL-CONTENT-PROTOCOL.md"
+  },
+  "source:ground": {
+    "title": "ProjectCentral authored ground",
+    "href": "../../docs/PROJECTCENTRAL-AUTHORED-GROUND.md"
+  },
+  "source:projectcentral": {
+    "title": "ProjectCentral contract",
+    "href": "../../docs/PROJECTCENTRAL-CONTRACT.md"
+  },
+  "source:context": {
+    "title": "Project context protocol",
+    "href": "../../docs/PROJECT-CONTEXT-PROTOCOL.md"
+  },
+  "source:flow": {
+    "title": "ProjectCentral Flow",
+    "href": "../../docs/PROJECTCENTRAL-FLOW.md"
+  },
+  "source:machine": {
+    "title": "Machine and Workcell relation",
+    "href": "../../docs/MACHINE-WORKCELL-RELATION.md"
+  },
+  "source:standing": {
+    "title": "Canonical claim standings",
+    "href": "../../docs/documentation-standing.v1.json"
+  },
+  "source:method": {
+    "title": "Documentation authoring procedure",
+    "href": "../../skills/docs-methodology/SKILL.md"
+  },
+  "source:oi-foundations": {
+    "title": "O:I founding positions",
+    "href": "../../../O-I/docs/positions/FOUNDING-POSITIONS.md"
+  },
+  "source:oi-covenant": {
+    "title": "O:I human\u2013agent covenant",
+    "href": "../../../O-I/docs/HUMAN-AGENT-COVENANT.md"
+  },
+  "source:primitive-history": {
+    "title": "Original primitive relations \u2014 ratification draft",
+    "href": "../../../Software-Factory/docs/canon/QL-SOFTWARE-FACTORY-PRIMITIVE-RELATIONS.md"
+  },
+  "source:agency": {
+    "title": "Actuation constitution",
+    "href": "../../../Actuation/docs/ACTUATION-CONSTITUTION.md"
+  },
+  "source:ql": {
+    "title": "QL foundational meanings",
+    "href": "../../../Quaternal-Logic/skills/ql-foundations/SKILL.md"
+  },
+  "source:html-template": {
+    "title": "Recursive HTML account template",
+    "href": "../../../ai-kit/registry/capsules/skill/aikit/html-account/payload/full-account-template.html"
+  },
+  "source:matrix-history": {
+    "title": "Recovered relational-map provenance",
+    "href": "../../../O-I/quarry/notes/agent-ql-relational-field.md"
+  },
+  "central:matrix:md": {
+    "title": "Central capabilities and relational field",
+    "href": "capability-matrix.md"
+  },
+  "central:matrix:csv": {
+    "title": "Central capability and relation records \u00b7 CSV",
+    "href": "capability-matrix.csv"
+  },
+  "central:code:actions": {
+    "title": "Action registry source",
+    "href": "../../ctrl/src/action.rs"
+  },
+  "central:code:ground": {
+    "title": "Ground relation implementation",
+    "href": "../../ctrl/src/projectcentral_ground.rs"
+  },
+  "central:test:ground": {
+    "title": "Ground acceptance tests",
+    "href": "../../ctrl/tests/projectcentral_ground_actions.rs"
+  },
+  "ticket:1": {
+    "title": "Central #1 \u00b7 retained development intent",
+    "href": "../../../github-recovery-mirror/mirror/Central/issues/1.json"
+  },
+  "ticket:6": {
+    "title": "Central #6 \u00b7 retained development intent",
+    "href": "../../../github-recovery-mirror/mirror/Central/issues/6.json"
+  },
+  "ticket:8": {
+    "title": "Central #8 \u00b7 retained development intent",
+    "href": "../../../github-recovery-mirror/mirror/Central/issues/8.json"
+  },
+  "ticket:9": {
+    "title": "Central #9 \u00b7 retained development intent",
+    "href": "../../../github-recovery-mirror/mirror/Central/issues/9.json"
+  },
+  "ticket:10": {
+    "title": "Central #10 \u00b7 retained development intent",
+    "href": "../../../github-recovery-mirror/mirror/Central/issues/10.json"
+  },
+  "ticket:18": {
+    "title": "Central #18 \u00b7 retained development intent",
+    "href": "../../../github-recovery-mirror/mirror/Central/issues/18.json"
+  },
+  "ticket:21": {
+    "title": "Central #21 \u00b7 retained development intent",
+    "href": "../../../github-recovery-mirror/mirror/Central/issues/21.json"
+  },
+  "ticket:51": {
+    "title": "Central #51 \u00b7 retained development intent",
+    "href": "../../../github-recovery-mirror/mirror/Central/issues/51.json"
+  },
+  "ticket:65": {
+    "title": "Central #65 \u00b7 retained development intent",
+    "href": "../../../github-recovery-mirror/mirror/Central/issues/65.json"
+  },
+  "ticket:70": {
+    "title": "Central #70 \u00b7 retained development intent",
+    "href": "../../../github-recovery-mirror/mirror/Central/issues/70.json"
+  },
+  "ticket:71": {
+    "title": "Central #71 \u00b7 retained development intent",
+    "href": "../../../github-recovery-mirror/mirror/Central/issues/71.json"
+  },
+  "ticket:72": {
+    "title": "Central #72 \u00b7 retained development intent",
+    "href": "../../../github-recovery-mirror/mirror/Central/issues/72.json"
+  },
+  "ticket:74": {
+    "title": "Central #74 \u00b7 retained development intent",
+    "href": "../../../github-recovery-mirror/mirror/Central/issues/74.json"
+  },
+  "ticket:82": {
+    "title": "Central #82 \u00b7 retained development intent",
+    "href": "../../../github-recovery-mirror/mirror/Central/issues/82.json"
+  },
+  "ticket:87": {
+    "title": "Central #87 \u00b7 retained development intent",
+    "href": "../../../github-recovery-mirror/mirror/Central/issues/87.json"
+  },
+  "ticket:89": {
+    "title": "Central #89 \u00b7 retained development intent",
+    "href": "../../../github-recovery-mirror/mirror/Central/issues/89.json"
+  },
+  "ticket:93": {
+    "title": "Central #93 \u00b7 retained development intent",
+    "href": "../../../github-recovery-mirror/mirror/Central/issues/93.json"
+  },
+  "ticket:97": {
+    "title": "Central #97 \u00b7 retained development intent",
+    "href": "../../../github-recovery-mirror/mirror/Central/issues/97.json"
+  },
+  "ticket:100": {
+    "title": "Central #100 \u00b7 retained development intent",
+    "href": "../../../github-recovery-mirror/mirror/Central/issues/100.json"
+  },
+  "ticket:104": {
+    "title": "Central #104 \u00b7 retained development intent",
+    "href": "../../../github-recovery-mirror/mirror/Central/issues/104.json"
+  },
+  "ticket:106": {
+    "title": "Central #106 \u00b7 retained development intent",
+    "href": "../../../github-recovery-mirror/mirror/Central/issues/106.json"
+  },
+  "ticket:108": {
+    "title": "Central #108 \u00b7 retained development intent",
+    "href": "../../../github-recovery-mirror/mirror/Central/issues/108.json"
+  },
+  "ticket:112": {
+    "title": "Central #112 \u00b7 retained development intent",
+    "href": "../../../github-recovery-mirror/mirror/Central/issues/112.json"
+  },
+  "ticket:118": {
+    "title": "Central #118 \u00b7 retained development intent",
+    "href": "../../../github-recovery-mirror/mirror/Central/issues/118.json"
+  },
+  "central:doc:purpose": {
+    "title": "The World behind a session",
+    "href": "#q0/purpose"
+  },
+  "central:doc:continuity": {
+    "title": "Continuity at the scale of a day and a life",
+    "href": "#q0/continuity"
+  },
+  "central:doc:values": {
+    "title": "What the experience should preserve",
+    "href": "#q0/values"
+  },
+  "central:doc:shared-primitives": {
+    "title": "Central\u2019s place in the shared world",
+    "href": "#q0/shared-primitives"
+  },
+  "central:doc:capabilities": {
+    "title": "The CLI and its functional scope",
+    "href": "#q1/capabilities"
+  },
+  "central:doc:entry": {
+    "title": "Enter your world and find the work",
+    "href": "#q1/entry"
+  },
+  "central:doc:ground": {
+    "title": "Establish and maintain project meaning",
+    "href": "#q1/ground"
+  },
+  "central:doc:working-field": {
+    "title": "Keep current work and developing thought",
+    "href": "#q1/working-field"
+  },
+  "central:doc:practice": {
+    "title": "Keep useful practice and Agent configurations",
+    "href": "#q1/practice"
+  },
+  "central:doc:environment": {
+    "title": "Describe, operate and recover your environment",
+    "href": "#q1/environment"
+  },
+  "central:doc:starting": {
+    "title": "Bring an existing project into view",
+    "href": "#q2/starting"
+  },
+  "central:doc:recognised-ground": {
+    "title": "Refine intent as development reveals a difference",
+    "href": "#q2/recognised-ground"
+  },
+  "central:doc:resume": {
+    "title": "Resume a project after a session ends",
+    "href": "#q2/resume"
+  },
+  "central:doc:develop-thought": {
+    "title": "Let one thought develop over several days",
+    "href": "#q2/develop-thought"
+  },
+  "central:doc:reuse-practice": {
+    "title": "Carry a working relationship into another project",
+    "href": "#q2/reuse-practice"
+  },
+  "central:doc:restore": {
+    "title": "Recover a dependable working environment",
+    "href": "#q2/restore"
+  },
+  "central:doc:tree": {
+    "title": "A filesystem structure people can inhabit",
+    "href": "#q3/tree"
+  },
+  "central:doc:contracts": {
+    "title": "The contracts behind a source encounter",
+    "href": "#q3/contracts"
+  },
+  "central:doc:interaction": {
+    "title": "One operation, appropriate interfaces",
+    "href": "#q3/interaction"
+  },
+  "central:doc:account-form": {
+    "title": "A readable account with addressable parts",
+    "href": "#q3/account-form"
+  },
+  "central:doc:intent": {
+    "title": "Make the existing capabilities coherent in use",
+    "href": "#q4/intent"
+  },
+  "central:doc:contexts": {
+    "title": "Personal, project and machine contexts",
+    "href": "#q4/contexts"
+  },
+  "central:doc:source-drift": {
+    "title": "The current frontier and decisions to resolve",
+    "href": "#q4/source-drift"
+  },
+  "central:doc:coherence": {
+    "title": "Recognisable progress in the person\u2019s work",
+    "href": "#q5/coherence"
+  },
+  "central:doc:verification": {
+    "title": "What this revision has actually checked",
+    "href": "#q5/verification"
+  },
+  "central:doc:authoring-praxis": {
+    "title": "Recover, compose, test and return",
+    "href": "#q5/authoring-praxis"
+  },
+  "central:doc:vision": {
+    "title": "The World behind a session",
+    "href": "#q0/purpose"
+  },
+  "central:doc:scope": {
+    "title": "The CLI and its functional scope",
+    "href": "#q1/capabilities"
+  },
+  "central:doc:source-and-reading": {
+    "title": "Establish and maintain project meaning",
+    "href": "#q1/ground"
+  },
+  "central:doc:consequential-return": {
+    "title": "Refine intent as development reveals a difference",
+    "href": "#q2/recognised-ground"
+  },
+  "central:doc:stable-operation": {
+    "title": "One operation, appropriate interfaces",
+    "href": "#q3/interaction"
+  },
+  "central:doc:machine-intent": {
+    "title": "Describe, operate and recover your environment",
+    "href": "#q1/environment"
+  },
+  "central:doc:encounters": {
+    "title": "Bring an existing project into view",
+    "href": "#q2/starting"
+  },
+  "central:doc:relation-field": {
+    "title": "The CLI and its functional scope",
+    "href": "#q1/capabilities"
+  },
+  "central:doc:source-language": {
+    "title": "A readable account with addressable parts",
+    "href": "#q3/account-form"
+  },
+  "central:doc:recognition": {
+    "title": "Recover, compose, test and return",
+    "href": "#q5/authoring-praxis"
+  },
+  "central:doc:evidence-boundary": {
+    "title": "What this revision has actually checked",
+    "href": "#q5/verification"
+  },
+  "cap.central.root": {
+    "title": "Root",
+    "href": "capability-matrix.md#cap-central-root"
+  },
+  "cap.central.action-discovery": {
+    "title": "Action discovery",
+    "href": "capability-matrix.md#cap-central-action-discovery"
+  },
+  "cap.central.work-entry": {
+    "title": "Work entry",
+    "href": "capability-matrix.md#cap-central-work-entry"
+  },
+  "cap.central.files": {
+    "title": "Inspect ordinary Central files",
+    "href": "capability-matrix.md#cap-central-files"
+  },
+  "cap.central.control-reading": {
+    "title": "Control reading",
+    "href": "capability-matrix.md#cap-central-control-reading"
+  },
+  "cap.central.machine-declaration": {
+    "title": "Machine declaration",
+    "href": "capability-matrix.md#cap-central-machine-declaration"
+  },
+  "cap.central.machine-reconciliation": {
+    "title": "Machine reconciliation",
+    "href": "capability-matrix.md#cap-central-machine-reconciliation"
+  },
+  "cap.central.machine-recovery": {
+    "title": "Machine recovery",
+    "href": "capability-matrix.md#cap-central-machine-recovery"
+  },
+  "cap.central.projectcentral-lifecycle": {
+    "title": "Projectcentral lifecycle",
+    "href": "capability-matrix.md#cap-central-projectcentral-lifecycle"
+  },
+  "cap.central.authored-ground": {
+    "title": "Authored ground",
+    "href": "capability-matrix.md#cap-central-authored-ground"
+  },
+  "cap.central.world-map": {
+    "title": "World map",
+    "href": "capability-matrix.md#cap-central-world-map"
+  },
+  "cap.central.reproject": {
+    "title": "Reproject",
+    "href": "capability-matrix.md#cap-central-reproject"
+  },
+  "cap.central.source-reading": {
+    "title": "Source reading",
+    "href": "capability-matrix.md#cap-central-source-reading"
+  },
+  "cap.central.source-editing": {
+    "title": "Source editing",
+    "href": "capability-matrix.md#cap-central-source-editing"
+  },
+  "cap.central.source-change": {
+    "title": "Source change",
+    "href": "capability-matrix.md#cap-central-source-change"
+  },
+  "cap.central.source-history": {
+    "title": "Source history",
+    "href": "capability-matrix.md#cap-central-source-history"
+  },
+  "cap.central.now": {
+    "title": "Now",
+    "href": "capability-matrix.md#cap-central-now"
+  },
+  "cap.central.day-rollover": {
+    "title": "Day rollover",
+    "href": "capability-matrix.md#cap-central-day-rollover"
+  },
+  "cap.central.flow": {
+    "title": "Flow",
+    "href": "capability-matrix.md#cap-central-flow"
+  },
+  "cap.central.governance": {
+    "title": "Governance",
+    "href": "capability-matrix.md#cap-central-governance"
+  },
+  "cap.central.skills": {
+    "title": "Skills",
+    "href": "capability-matrix.md#cap-central-skills"
+  },
+  "cap.central.agent-profiles": {
+    "title": "Agent profiles",
+    "href": "capability-matrix.md#cap-central-agent-profiles"
+  },
+  "cap.central.personal-surface": {
+    "title": "Personal surface",
+    "href": "capability-matrix.md#cap-central-personal-surface"
+  },
+  "cap.central.control-proposals": {
+    "title": "Control proposals",
+    "href": "capability-matrix.md#cap-central-control-proposals"
+  },
+  "cap.central.notification": {
+    "title": "Notification",
+    "href": "capability-matrix.md#cap-central-notification"
+  },
+  "central:seed:q0": {
+    "title": "Why? The World behind the context",
+    "href": "#whole/why"
+  },
+  "central:seed:q1": {
+    "title": "What? A minimal CLI for a structured filesystem",
+    "href": "#whole/what"
+  },
+  "central:seed:q2": {
+    "title": "How? Project the structure; retain the work",
+    "href": "#whole/how"
+  },
+  "central:seed:q3": {
+    "title": "Who / Whereby? A foundation for the Human\u2013Agent relationship",
+    "href": "#whole/whereby"
+  },
+  "central:seed:q4": {
+    "title": "Where / When? Quiet ground across Humans, Agents, Machines and Work",
+    "href": "#whole/context"
+  },
+  "central:seed:q5": {
+    "title": "Why-For? The minimal foundation for an O:I World",
+    "href": "#whole/purpose"
+  },
+  "central:doc:overview": {
+    "title": "Central \u00b7 0/1 overview",
+    "href": "#whole"
+  },
+  "source:wiki-inhabitation": {
+    "title": "AIKit wiki write procedure",
+    "href": "../../../ai-kit/registry/capsules/skill/aikit/wiki-inhabitation/payload/SKILL.md"
+  },
+  "source:knowledge-navigation": {
+    "title": "AIKit knowledge read procedure",
+    "href": "../../../ai-kit/registry/capsules/skill/aikit/knowledge-navigation/payload/SKILL.md"
+  },
+  "cap.central.guided-ground-authoring": {
+    "title": "Guided ground authoring \u00b7 intended experience",
+    "href": "capability-matrix.md#cap-central-guided-ground-authoring"
+  },
+  "suite:account:actuation": {
+    "title": "Actuation \u00b7 candidate product account",
+    "href": "../../../Actuation/ProjectCentral/user/actuation.html#whole"
+  },
+  "suite:account:aikit": {
+    "title": "AIKit \u00b7 candidate product account",
+    "href": "../../../ai-kit/ProjectCentral/user/aikit.html#whole"
+  },
+  "suite:account:factory": {
+    "title": "Software Factory \u00b7 candidate product account",
+    "href": "../../../Software-Factory/ProjectCentral/user/factory.html#whole"
+  },
+  "suite:account:workcell": {
+    "title": "Workcell \u00b7 candidate product account",
+    "href": "../../../Workcell/ProjectCentral/user/workcell.html#whole"
+  },
+  "suite:account:ql": {
+    "title": "Quaternal Logic \u00b7 candidate product account",
+    "href": "../../../Quaternal-Logic/ProjectCentral/user/ql.html#whole"
+  }
+}
+</script>
+<div class="app">
+  <header class="topbar">
+    <button class="icon-btn" id="leftToggle" aria-label="Toggle contents" aria-controls="leftRail" aria-expanded="true">☰</button>
+    <div class="brand"><strong>Central</strong><span>Product ground · review draft</span></div>
+    <div class="route-chip" id="routeChip"><code>#0</code><span>Ground</span></div>
+    <button class="icon-btn" id="themeToggle" aria-label="Switch theme">◐</button>
+    <button class="icon-btn" id="rightToggle" aria-label="Toggle context" aria-controls="rightRail" aria-expanded="false">✎</button>
+  </header>
+  <nav class="left-rail" id="leftRail" aria-label="Account contents"><div class="rail-label">Account</div><div class="surface-nav" id="surfaceNav"></div></nav>
+  <main class="main" id="mainContent">
+<article class="surface active" data-surface="whole" data-whole-anchor="0/1" data-title="Central · overview" data-gloss="0/1 · The whole in six questions"><div class="surface-inner"><header class="hero"><div class="hero-line"><span class="ql-badge">0/1</span><span class="hero-label">Whole-account overview</span></div><h1>Central</h1><p class="hero-deck">A minimal CLI that gives Human–Agent work a shared, recursive home in the filesystem.</p><div class="hero-meta"><span>Human-authored foundation · editorially clarified</span><span>Six questions · one product</span></div></header>
+<section class="ql-node" id="whole-why" data-node=".0" data-route="why" data-nav="Why?" data-context="Human-supplied product position · wording clarified by the Agent" data-vessel="founding-position" data-standing="authored-human-position" data-tags="central seed overview l0 q0" data-resource="central:seed:q0"><header class="node-head"><div class="node-eyebrow">#0 · <span data-seed-question="central:seed:q0">Why?</span></div><h2>The World behind the context</h2></header><div class="prose"><div data-seed-content="central:seed:q0"><p>Central aims to fill a gap in agentic work: bringing together the agentic World born in the Human–Agent relationship. An Agent encounters a World through the context it receives. The context of that context is a filesystem. Central gives that filesystem a structure, relating each project’s own Central to common Central ground. Instances of agency on a machine can then be understood as nodes in a field of activity, whose context files and code carry the inputs and outputs of agentic work.</p></div><p><a href="#q0" data-expansion-link="q0">Read the expanded #0 — Why?</a></p></div></section>
+<section class="ql-node" id="whole-what" data-node=".1" data-route="what" data-nav="What?" data-context="Human-supplied product position · wording clarified by the Agent" data-vessel="founding-position" data-standing="authored-human-position" data-tags="central seed overview l0 q1" data-resource="central:seed:q1"><header class="node-head"><div class="node-eyebrow">#1 · <span data-seed-question="central:seed:q1">What?</span></div><h2>A minimal CLI for a structured filesystem</h2></header><div class="prose"><div data-seed-content="central:seed:q1"><p>Central is a CLI that safely and minimally structures a filesystem. It anchors relationships between projects, creates spaces for human- and Agent-developed artifacts, and provides a recursive home for AI work across the system.</p></div><p><a href="#q1" data-expansion-link="q1">Read the expanded #1 — What?</a></p></div></section>
+<section class="ql-node" id="whole-how" data-node=".2" data-route="how" data-nav="How?" data-context="Human-supplied product position · wording clarified by the Agent" data-vessel="founding-position" data-standing="authored-human-position" data-tags="central seed overview l0 q2" data-resource="central:seed:q2"><header class="node-head"><div class="node-eyebrow">#2 · <span data-seed-question="central:seed:q2">How?</span></div><h2>Project the structure; retain the work</h2></header><div class="prose"><div data-seed-content="central:seed:q2"><p>Central projects a filesystem structure, laying the infrastructure for Agent navigation and human clarity around work. The conditions that determine an Agent’s World live outside any particular harness session and remain available between its activities. Tending those conditions becomes a quiet starting point for developing one’s own relationship with AI Agents and their work.</p></div><p><a href="#q2" data-expansion-link="q2">Read the expanded #2 — How?</a></p></div></section>
+<section class="ql-node" id="whole-whereby" data-node=".3" data-route="whereby" data-nav="Who / Whereby?" data-context="Human-supplied product position · wording clarified by the Agent" data-vessel="founding-position" data-standing="authored-human-position" data-tags="central seed overview l0 q3" data-resource="central:seed:q3"><header class="node-head"><div class="node-eyebrow">#3 · <span data-seed-question="central:seed:q3">Who / Whereby?</span></div><h2>A foundation for the Human–Agent relationship</h2></header><div class="prose"><div data-seed-content="central:seed:q3"><p>For human users, Central is the means by which a simple foundation for organised work and a deliberate User–Agent relationship can be established. It also makes an O:I World—an Objective Internality constituting both Agent and user—available for inspection, sharing and research.</p></div><p><a href="#q3" data-expansion-link="q3">Read the expanded #3 — Who / Whereby?</a></p></div></section>
+<section class="ql-node" id="whole-context" data-node=".4" data-route="context" data-nav="Where / When?" data-context="Human-supplied product position · wording clarified by the Agent" data-vessel="founding-position" data-standing="authored-human-position" data-tags="central seed overview l0 q4" data-resource="central:seed:q4"><header class="node-head"><div class="node-eyebrow">#4 · <span data-seed-question="central:seed:q4">Where / When?</span></div><h2>Quiet ground across Humans, Agents, Machines and Work</h2></header><div class="prose"><div data-seed-content="central:seed:q4"><p>Central is consistent and quiet: the relatively immutable structured ground that gives space and form to the relationships involved in agentic work, between Humans, Agents, Machines and Work.</p></div><p><a href="#q4" data-expansion-link="q4">Read the expanded #4 — Where / When?</a></p></div></section>
+<section class="ql-node" id="whole-purpose" data-node=".5" data-route="purpose" data-nav="Why-For?" data-context="Human-supplied product position · wording clarified by the Agent" data-vessel="founding-position" data-standing="authored-human-position" data-tags="central seed overview l0 q5" data-resource="central:seed:q5"><header class="node-head"><div class="node-eyebrow">#5 · <span data-seed-question="central:seed:q5">Why-For?</span></div><h2>The minimal foundation for an O:I World</h2></header><div class="prose"><div data-seed-content="central:seed:q5"><p>Central provides the foundational bootstrap for the O:I paradigm. It is intended as the first install and the only necessary package for beginning to work in that paradigm. A person can keep their existing setup while Central gives it a more integrated, relationally aware structure.</p><p>This foundation supports the other O:I packages: it gives AIKit’s wiki functions a source home and receives projections from Workcell machine setups. Its first concern is the initial disclosure of a person’s World to an Agent: making the context being offered clear and worth tending.</p><p>Central gives durable principles, governance and user context a common home from which they can inform projects at the depth and scope the user chooses. The user determines how that material propagates and lives. Central gives the ratified basis a home.</p></div><p><a href="#q5" data-expansion-link="q5">Read the expanded #5 — Why-For?</a></p></div></section>
+</div></article>
+<article class="surface" data-surface="q0" data-title="Why a common ground is needed" data-gloss="Why?" data-seed-ref="central:seed:q0" data-seed-sha256="ddc584de51434211c77c553fc7dd55ac64b18878ed644e42751caa6249c1e232"><div class="surface-inner"><header class="hero"><div class="hero-line"><span class="ql-badge">#0</span><span class="hero-label">Why?</span></div><h1>Why a common ground is needed</h1><p class="hero-deck">The filesystem gives context its home. Central makes that home common, recursive and understandable.</p><div class="hero-meta"><a href="#whole/why">0/1 · Return to the Why? seed</a><span>Expanded account · review draft</span></div></header>
+<section class="ql-node" id="q0-purpose" data-node=".0" data-route="purpose" data-nav="The World behind a session" data-context="vision · agent-inference · review draft" data-vessel="vision" data-standing="agent-inference" data-tags="central vision purpose attention" data-resource="central:doc:purpose"><header class="node-head"><div class="node-eyebrow">vision</div><h2>The World behind a session</h2></header><div class="prose"><p>Agentic work begins in a relationship: a person offers an Agent context, intention and the means to act. Before a task can make sense, there is already a World around it—files, projects, practices, machines and the person’s reasons for doing the work.</p><p>Central addresses this prior condition. The filesystem holds the context from which a session begins and the artifacts it leaves behind. Giving it a common, recursive structure lets each project relate to durable ground that can be encountered across sessions and harnesses.</p><p>The practical gap appears when that relationship has to be reconstructed repeatedly. Personal guidance is copied between repositories. Project intent is stranded in a conversation. An Agent receives a task without the surrounding reasons and constraints. Central gives these materials a place in a connected World, so the initial disclosure to an Agent can be deliberate.</p><p>The aim is a foundation a person can tend: what should carry across projects, what belongs to this particular project, and what an Agent should encounter before beginning work. [[central:seed:q0|The overview’s Why]] is the human-authored starting point for this expanded reading.</p></div><footer class="unit-sources"><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/71.json">Central #71 · retained development intent</a><a data-source href="../../docs/CENTRAL-VISION.md">Central product vision</a><a data-source href="../../../O-I/docs/positions/FOUNDING-POSITIONS.md">O:I founding positions</a></footer></section>
+<section class="ql-node" id="q0-continuity" data-node=".1" data-route="continuity" data-nav="Continuity at the scale of a day and a life" data-context="founding-position · agent-inference · review draft" data-vessel="founding-position" data-standing="agent-inference" data-tags="central vision continuity now flow machine" data-resource="central:doc:continuity"><header class="node-head"><div class="node-eyebrow">founding position</div><h2>Continuity at the scale of a day and a life</h2></header><div class="prose"><p>A coherent working world needs both enduring intention and room for unfinished thought. Central gives current notes, open questions, useful references and attributed handoffs a shared NOW. A Flow lets one developing thought continue in an editable source over several days. DAY records preserve what happened and what remains live, allowing tomorrow’s work to resume with useful continuity.</p><p>Developed ways of working can be kept alongside the projects that use them. A person can maintain reusable Skills, compose Methods, establish common Agent guidance and refine that guidance for a particular project. They can save an Agent’s intended role, practices and access at personal or project scope, then reuse that configuration as tools and machines change.</p><p>The same principle extends to the working environment. A person can describe what a workstation or server should provide, inspect what is present, review the changes needed, apply them through available integrations and verify the result. Restoring an environment becomes a deliberate operation with a readable outcome.</p><p>Together, these capabilities allow useful practice to accumulate. Authored intention remains available; current work can be resumed; environments can be restored; and returned results have somewhere meaningful to go.</p></div><footer class="unit-sources"><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/74.json">Central #74 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/93.json">Central #93 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/108.json">Central #108 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/21.json">Central #21 · retained development intent</a></footer></section>
+<section class="ql-node" id="q0-values" data-node=".2" data-route="values" data-nav="What the experience should preserve" data-context="constitution-design-commitment · agent-inference · review draft" data-vessel="constitution-design-commitment" data-standing="agent-inference" data-tags="central values authorship review continuity" data-resource="central:doc:values"><header class="node-head"><div class="node-eyebrow">constitution design commitment</div><h2>What the experience should preserve</h2></header><div class="prose"><p><strong>Ownership through ordinary source.</strong> A person should be able to inspect the files carrying their preferences, project intent and ongoing thought with familiar tools. Existing useful source can remain in place. Identity and provenance allow the surrounding system to understand that source as it changes.</p><p><strong>Proportionate authorship.</strong> A small project may need one good note. A mature product may need a substantial account containing vision, stories, design and architecture. The amount of documentation should follow the meaning that needs to be held. Initialisation provides the available structure; authorship gives it substance.</p><p><strong>Consequence made legible.</strong> A proposed durable change should show the target, reason, relevant context and actual difference. The person can accept, revise or reject it. That review should be concentrated on choices that matter rather than continual supervision of context collection and bookkeeping.</p><p><strong>Continuity across interfaces.</strong> Finding a project, reading source or planning an environment change should preserve the same meaning when invoked by an Agent, CLI or desktop. Each interface can offer an appropriate experience around the same operation.</p></div><footer class="unit-sources"><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/51.json">Central #51 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/70.json">Central #70 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/1.json">Central #1 · retained development intent</a></footer></section>
+<section class="ql-node" id="q0-shared-primitives" data-node=".3" data-route="shared-primitives" data-nav="Central’s place in the shared world" data-context="surface-discovery · agent-inference · review draft" data-vessel="surface-discovery" data-standing="agent-inference" data-tags="central ontology primitives ownership" data-resource="central:doc:shared-primitives"><header class="node-head"><div class="node-eyebrow">surface discovery</div><h2>Central’s place in the shared world</h2></header><div class="prose"><p>The shared O:I language connects this product to the others. A <strong>World</strong> holds the sources, projects, powers and relationships through which work can happen. A <strong>Project</strong> gives enduring work a recognisable identity. <strong>Context</strong> is the relevant, situated availability of that world for an act. Central contributes durable source, filesystem structure and operations through which those relationships can be encountered.</p><p>An <strong>Agent</strong> has an identity; its situated agency involves authority and context beyond a saved configuration file. A <strong>Capability</strong> names an available power, and an <strong>Action</strong> is an operation owned by the product exercising it. A <strong>Return</strong> brings an attributable result or difference back into view; <strong>Recognition</strong> determines what follows from it. These distinctions matter when saving a profile, accepting a proposal or receiving an Agent handoff.</p><p>The [[source:oi-covenant|O:I covenant]] and [[source:oi-foundations|founding positions]] hold the shared account. The [[source:primitive-history|earlier primitive relations]] preserve the original conceptual lineage; later native-owner contracts refine it. Consolidating that ontology belongs in O:I’s foundational ground. Here the references connect Central’s actual behaviours to it.</p></div><footer class="unit-sources"><a data-source href="../../../O-I/docs/HUMAN-AGENT-COVENANT.md">O:I human–agent covenant</a><a data-source href="../../../Software-Factory/docs/canon/QL-SOFTWARE-FACTORY-PRIMITIVE-RELATIONS.md">Original primitive relations — ratification draft</a><a data-source href="../../../Actuation/docs/ACTUATION-CONSTITUTION.md">Actuation constitution</a></footer></section>
+</div></article>
+<article class="surface" data-surface="q1" data-title="What Central is" data-gloss="What?" data-seed-ref="central:seed:q1" data-seed-sha256="33d6b5c46c5c8abcbf22d5f477b4d101bc97ef868ba9af244b9f59e41b74c59d"><div class="surface-inner"><header class="hero"><div class="hero-line"><span class="ql-badge">#1</span><span class="hero-label">What?</span></div><h1>What Central is</h1><p class="hero-deck">A CLI that structures the filesystem into common ground, related projects and places for human and Agent artifacts.</p><div class="hero-meta"><a href="#whole/what">0/1 · Return to the What? seed</a><span>Expanded account · review draft</span></div></header>
+<section class="ql-node" id="q1-capabilities" data-node=".0" data-route="capabilities" data-nav="The CLI and its functional scope" data-context="surface-discovery · agent-inference · review draft" data-vessel="surface-discovery" data-standing="agent-inference" data-tags="central capabilities scope source" data-resource="central:doc:capabilities"><header class="node-head"><div class="node-eyebrow">surface discovery</div><h2>The CLI and its functional scope</h2></header><div class="prose"><p><strong>Central is a CLI for safely and minimally structuring a filesystem into a common home for Human–Agent work.</strong> It establishes common Central ground, relates project-level homes to that ground, and provides spaces for human source, Agent artifacts and ongoing work.</p><p>The CLI makes that structure inspectable and usable through native operations. A person can establish a root, locate a project, inspect its structure and sources, add missing facilities, and maintain the material through which collaboration continues. The files remain accessible through the person’s existing tools.</p><p>This recursive filesystem foundation is the product’s defining function. The capabilities below develop it: source identity makes the ground traceable; NOW and Flow carry ongoing activity; governance and profiles hold reusable relationships; machine operations connect the declared environment to the work. [[central:seed:q1|The overview’s What]] anchors this scope.</p><p>Central’s capabilities cluster around six recurring needs. The companion [[central:matrix:md|capability matrix]] gives each capability a stable identity, a user need, an operation, an outcome and a trace to development intent and implementation. Its [[central:matrix:csv|CSV records]] carry the same information for structured use.</p><div class="table-wrap"><table><thead><tr><th>Need</th><th>Available product operation</th><th>Result worth preserving</th></tr></thead><tbody><tr><td>Find and enter the work</td><td>Inspect the personal world; search, open and reveal projects and Control source.</td><td>A direct route to the actual files and project.</td></tr><tr><td>Keep meaningful source</td><td>Inspect and recognise project ground; read, propose and revision-check edits.</td><td>Current source with an identifiable origin and explicit treatment.</td></tr><tr><td>Continue unfinished work</td><td>Maintain NOW, roll a DAY, promote a useful item, continue a Flow.</td><td>Questions, handoffs and developing thought survive sessions.</td></tr><tr><td>Accumulate ways of working</td><td>Inspect governance, maintain Skills and save scoped Agent profiles.</td><td>Reusable guidance and configurations connected to their sources.</td></tr><tr><td>Understand change</td><td>Reconcile external edits; read a change horizon; compare history and preview recovery.</td><td>A traceable difference and a safe basis for the next edit.</td></tr><tr><td>Keep the environment usable</td><td>Declare, inspect, plan, apply, verify and recover through available providers.</td><td>A report of what changed, what works and what still needs attention.</td></tr></tbody></table></div><p>These are families of user outcomes. The following sections define their purpose and scope; [[central:doc:verification|verification]] records which behaviours this revision actually exercised.</p></div><footer class="unit-sources"><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/1.json">Central #1 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/51.json">Central #51 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/70.json">Central #70 · retained development intent</a></footer></section>
+<section class="ql-node" id="q1-entry" data-node=".1" data-route="entry" data-nav="Enter your world and find the work" data-context="surface-discovery · agent-inference · review draft" data-vessel="surface-discovery" data-standing="agent-inference" data-tags="central world navigation projects discovery" data-resource="central:doc:entry"><header class="node-head"><div class="node-eyebrow">surface discovery</div><h2>Enter your world and find the work</h2></header><div class="prose"><p>The personal view brings together You, Agents, Machines and Work. It projects actual filesystem locations, allowing the person to move from an understandable area of their world into its files. Work discovery begins with ordinary project directories: search a name, choose the project, open it in the configured surface or reveal its location.</p><p>The world map adds the structure needed for orientation. It shows the root, projects, available ProjectCentral facilities, relevant sources and ongoing work. Missing or malformed pieces appear as specific conditions, so an Agent or interface can explain what it found. A partially established project remains discoverable.</p><p>This gives the desktop a real basis for navigation. A meaningful project view can open the current source or live Flow using its identity rather than guessing from a cached summary. The CLI and guided picker offer other entry points into the same native operations.</p><p class="capability-links">Capabilities: [[cap.central.root|Root]] · [[cap.central.work-entry|Work entry]] · [[cap.central.control-reading|Control reading]] · [[cap.central.world-map|World map]] · [[cap.central.personal-surface|Personal surface]].</p></div><footer class="unit-sources"><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/6.json">Central #6 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/51.json">Central #51 · retained development intent</a><a data-source href="../../docs/PROJECTCENTRAL-CONTRACT.md">ProjectCentral contract</a></footer></section>
+<section class="ql-node" id="q1-ground" data-node=".2" data-route="ground" data-nav="Establish and maintain project meaning" data-context="architecture-contract · agent-inference · review draft" data-vessel="architecture-contract" data-standing="agent-inference" data-tags="central ground authorship source revisions" data-resource="central:doc:ground"><header class="node-head"><div class="node-eyebrow">architecture contract</div><h2>Establish and maintain project meaning</h2></header><div class="prose"><p>A project often already contains useful ground: a founding note, a README with the original purpose, a design sketch, a specification or accepted decisions embedded in a development issue. Ground inspection finds candidate material and its present source relations. Planning exposes the proposed treatment. Applying a selected relation records how that source participates, including provenance and standing, while retaining the source in place.</p><p>That machinery supports authorship; the authoring work still has to recover and express the product clearly. For an established project, the useful outcome is a coherent account of its need, intended experience and constraints, with references to the material it consolidates. For a new project, a small amount of well-chosen source may be sufficient.</p><p>Reading source returns current content with its revision and origin. A write is checked against the revision the caller read. A newer intervening edit produces a conflict that can be reviewed. Proposed changes to recognised human ground take a review path, preserving the person’s consequential choice over that source.</p><p class="capability-links">Capabilities: [[cap.central.authored-ground|Authored ground]] · [[cap.central.source-reading|Source reading]].</p></div><footer class="unit-sources"><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/70.json">Central #70 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/71.json">Central #71 · retained development intent</a><a data-source href="../../docs/PROJECTCENTRAL-AUTHORED-GROUND.md">ProjectCentral authored ground</a></footer></section>
+<section class="ql-node" id="q1-working-field" data-node=".3" data-route="working-field" data-nav="Keep current work and developing thought" data-context="surface-discovery · agent-inference · review draft" data-vessel="surface-discovery" data-standing="agent-inference" data-tags="central now day flow continuity" data-resource="central:doc:working-field"><header class="node-head"><div class="node-eyebrow">surface discovery</div><h2>Keep current work and developing thought</h2></header><div class="prose"><p><strong>NOW</strong> holds material that is useful because work is active: human scratch, Agent notes, questions waiting for an answer, handoffs and references to work or evidence. Items have enough attribution and lifecycle to make an incoming session intelligible. The person can see what needs attention and what has already been resolved.</p><p><strong>DAY</strong> records the selected civil day. Rollover preserves a snapshot, carries live work forward and clears eligible resolved or expired Agent clutter. Protected material and human scratch follow their explicit preservation rules. Promotion gives something worth retaining a durable destination and a recorded origin.</p><p><strong>Flow</strong> gives an ongoing thread of thought its own identity. A person can begin with a blank document, adopt an existing file, edit it with an ordinary editor, change its title and return to it tomorrow. Central maintains its reference, revisions and lifecycle as the thought develops. Whole-file revision checks allow human and Agent editing to share the same source safely.</p></div><footer class="unit-sources"><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/74.json">Central #74 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/93.json">Central #93 · retained development intent</a><a data-source href="../../docs/PROJECTCENTRAL-FLOW.md">ProjectCentral Flow</a></footer></section>
+<section class="ql-node" id="q1-practice" data-node=".4" data-route="practice" data-nav="Keep useful practice and Agent configurations" data-context="surface-discovery · agent-inference · review draft" data-vessel="surface-discovery" data-standing="agent-inference" data-tags="central praxis governance skills profiles" data-resource="central:doc:practice"><header class="node-head"><div class="node-eyebrow">surface discovery</div><h2>Keep useful practice and Agent configurations</h2></header><div class="prose"><p>Common collaboration guidance can live at personal scope, with project-specific guidance close to the work it governs. Existing native instruction files can be recognised in place. The source relationship gives a reader a way to inspect where a rule came from and why it is relevant to this project.</p><p>Skills retain reusable procedures as inspectable source. Central can disclose scoped Skills and record a reversible retirement or restoration with actor and reason. Methods and other practice references can be carried alongside them and used by the products responsible for composing and activating practice.</p><p>An Agent profile saves the intended configuration of an existing Agent: its role, relevant worlds and guidance, selected Skills, SkillSets, Methods and Routines, and access or placement intentions. Personal profiles can support project variants with provenance. Saving a profile gives later use a durable source; the execution products determine how that configuration becomes operative.</p><p class="capability-links">Capabilities: [[cap.central.governance|Governance]] · [[cap.central.skills|Skills]].</p></div><footer class="unit-sources"><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/72.json">Central #72 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/82.json">Central #82 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/108.json">Central #108 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/112.json">Central #112 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/118.json">Central #118 · retained development intent</a></footer></section>
+<section class="ql-node" id="q1-environment" data-node=".5" data-route="environment" data-nav="Describe, operate and recover your environment" data-context="surface-discovery · agent-inference · review draft" data-vessel="surface-discovery" data-standing="agent-inference" data-tags="central machine environment recovery operations" data-resource="central:doc:environment"><header class="node-head"><div class="node-eyebrow">surface discovery</div><h2>Describe, operate and recover your environment</h2></header><div class="prose"><p>A machine declaration expresses what an environment should provide through provider-neutral roles and requirements, including packages, configuration and services. Inspection supplies observations. Planning compares the declaration with those observations and explains the changes available through the installed capabilities.</p><p>Applying a plan delegates concrete operations through the appropriate providers. Verification checks the resulting state, including content-sensitive configuration where supported. A useful result distinguishes satisfied requirements, missing capabilities, changes made and failures that need attention. Repeating a successful reconciliation should settle into an unchanged result.</p><p>Recovery combines source synchronisation with environment reconciliation. The sequence first establishes the available source and then applies and verifies the declared environment. Personal machine operations—opening files, invoking supported automation and requesting attention—use the same native Action/Port structure. Their final effect depends on the installed integration and the machine’s actual permissions.</p><p class="capability-links">Capabilities: [[cap.central.machine-declaration|Machine declaration]] · [[cap.central.machine-reconciliation|Machine reconciliation]].</p></div><footer class="unit-sources"><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/8.json">Central #8 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/9.json">Central #9 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/10.json">Central #10 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/18.json">Central #18 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/21.json">Central #21 · retained development intent</a></footer></section>
+</div></article>
+<article class="surface" data-surface="q2" data-title="How the foundation works" data-gloss="How?" data-seed-ref="central:seed:q2" data-seed-sha256="527ba9b416d79fc3170742a6afd464800f3728613f326f0640f0cca90b3e4a03"><div class="surface-inner"><header class="hero"><div class="hero-line"><span class="ql-badge">#2</span><span class="hero-label">How?</span></div><h1>How the foundation works</h1><p class="hero-deck">Project the shared structure, preserve existing work and expose stable operations for entering, reading and tending it.</p><div class="hero-meta"><a href="#whole/how">0/1 · Return to the How? seed</a><span>Expanded account · review draft</span></div></header>
+<section class="ql-node" id="q2-starting" data-node=".0" data-route="starting" data-nav="Bring an existing project into view" data-context="protocol-method · agent-inference · review draft" data-vessel="protocol-method" data-standing="agent-inference" data-tags="central story adoption ground recovery" data-resource="central:doc:starting"><header class="node-head"><div class="node-eyebrow">protocol method</div><h2>Bring an existing project into view</h2></header><div class="prose"><p>Central begins by projecting the shared filesystem structure. At root scope there is common ground and Work; within a project there is a local home related to that ground. Initialisation establishes the available shape. Inspection shows what exists. Additive reprojection supplies missing pieces while retaining existing work.</p><p>These conditions persist outside the activity of any single harness session. An Agent can enter the project, inspect current source, do its work and leave a result in the same continuing World. The user can develop the ground with ordinary file tools between sessions. The amount of structure and context used follows the work.</p><p>The journeys below describe how that foundation is inhabited, beginning with an existing project. They expand [[central:seed:q2|the overview’s How]].</p><p><strong>Situation.</strong> A person asks an Agent to help with a project whose purpose is scattered across existing files and development conversations. They want to begin useful work without first reorganising the repository.</p><p><strong>Encounter.</strong> The Agent locates the project through Work, inspects its current structure and reads candidate sources. It follows wayfinder refinements and ticket comments where they change earlier scope. It presents a compact account of the need being met, the intended experience and material uncertainties, with the source behind each determination.</p><p>The person can recognise useful existing sources in place and choose a consolidated account where that improves clarity. A structural plan can supply missing ProjectCentral facilities. The authored account is composed around what the product means; source relations record its treatment.</p><p><strong>Successful result.</strong> The next Agent can find the project, recover the recognised purpose and distinguish current implementation from intended outcomes. The person has a readable place to improve the product’s direction. The remaining historical material stays available for review.</p><p class="capability-links">Capabilities: [[cap.central.projectcentral-lifecycle|Projectcentral lifecycle]].</p><p>The [[cap.central.guided-ground-authoring|integrated guided-authoring capability]] records this intended journey alongside the native operations already supporting it.</p></div><footer class="unit-sources"><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/65.json">Central #65 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/70.json">Central #70 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/71.json">Central #71 · retained development intent</a></footer></section>
+<section class="ql-node" id="q2-recognised-ground" data-node=".1" data-route="recognised-ground" data-nav="Refine intent as development reveals a difference" data-context="protocol-method · agent-inference · review draft" data-vessel="protocol-method" data-standing="agent-inference" data-tags="central story intent differences review" data-resource="central:doc:recognised-ground"><header class="node-head"><div class="node-eyebrow">protocol method</div><h2>Refine intent as development reveals a difference</h2></header><div class="prose"><p><strong>Situation.</strong> An Agent implementing a user journey discovers that the current source supports only part of the intended experience. For example, history and comparison exist, but the proposed desktop recovery flow needs a clear review and apply step.</p><p><strong>Encounter.</strong> The Agent identifies the affected intent and design unit, inspects the implementation and returns the concrete difference. It explains what a person can currently do, what remains in the intended workflow, and which decision or implementation change would close the gap.</p><p>If the intention itself should change, the person reviews a proposed revision with its reason and source basis. An accepted edit uses the current revision. When a concurrent edit has changed that basis, the proposal is reconciled with the newer source before application.</p><p><strong>Successful result.</strong> Implementation and intention become more closely aligned through an explicit decision. Useful findings strengthen the existing account and capability record. Each subsequent development task can point to the same intended outcome.</p><p class="capability-links">Capabilities: [[cap.central.source-editing|Source editing]] · [[cap.central.control-proposals|Control proposals]].</p></div><footer class="unit-sources"><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/70.json">Central #70 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/100.json">Central #100 · retained development intent</a><a data-source href="../../docs/PROJECTCENTRAL-AUTHORED-GROUND.md">ProjectCentral authored ground</a></footer></section>
+<section class="ql-node" id="q2-resume" data-node=".2" data-route="resume" data-nav="Resume a project after a session ends" data-context="protocol-method · agent-inference · review draft" data-vessel="protocol-method" data-standing="agent-inference" data-tags="central story now day handoff" data-resource="central:doc:resume"><header class="node-head"><div class="node-eyebrow">protocol method</div><h2>Resume a project after a session ends</h2></header><div class="prose"><p><strong>Situation.</strong> Yesterday’s Agent left a question waiting, completed an investigation and handed off an unfinished change. A new session begins today.</p><p><strong>Encounter.</strong> The incoming Agent inspects NOW, opens the referenced work and evidence, and reads the question in its original context. The person answers the decision that requires them; the Agent marks the relevant item’s new state and continues from the actual source. Human scratch remains available alongside attributed Agent items.</p><p>At day rollover, Central records the selected day and carries still-live items forward. A useful insight can be promoted to an authored destination or handed to the owner of durable Agent knowledge with its origin retained. The human can revisit the daily record without having to make every transient item permanent documentation.</p><p><strong>Successful result.</strong> Both participants understand what is live, what was decided and where the supporting material resides. Continuity depends on retained work and explicit references rather than the availability of the previous chat session.</p><p class="capability-links">Capabilities: [[cap.central.now|Now]] · [[cap.central.day-rollover|Day rollover]].</p></div><footer class="unit-sources"><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/74.json">Central #74 · retained development intent</a></footer></section>
+<section class="ql-node" id="q2-develop-thought" data-node=".3" data-route="develop-thought" data-nav="Let one thought develop over several days" data-context="protocol-method · agent-inference · review draft" data-vessel="protocol-method" data-standing="agent-inference" data-tags="central story flow revision identity" data-resource="central:doc:develop-thought"><header class="node-head"><div class="node-eyebrow">protocol method</div><h2>Let one thought develop over several days</h2></header><div class="prose"><p><strong>Situation.</strong> A person is exploring a product direction that is not ready to become settled ground. They want one place to think with an Agent, edit freely and return later.</p><p><strong>Encounter.</strong> They create a blank Flow or adopt a file already carrying that thought. The document can hold prose, questions, sketches and references suited to the work. The person edits it in an ordinary editor. An Agent reads the current revision and proposes or writes its contribution through the applicable source relation.</p><p>The person changes the title as the thought becomes clearer. The Flow keeps its identity and prior revisions. If the Agent’s write was based on an earlier version, it receives a conflict and must reconcile with the person’s intervening edit. Active, dormant and closed states express whether the thread still needs attention.</p><p><strong>Successful result.</strong> A developing thought has continuity across names, sessions and days. When it becomes a useful determination, it can inform the enduring account with its lineage still available.</p><p class="capability-links">Capabilities: [[cap.central.flow|Flow]].</p></div><footer class="unit-sources"><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/93.json">Central #93 · retained development intent</a><a data-source href="../../docs/PROJECTCENTRAL-FLOW.md">ProjectCentral Flow</a></footer></section>
+<section class="ql-node" id="q2-reuse-practice" data-node=".4" data-route="reuse-practice" data-nav="Carry a working relationship into another project" data-context="protocol-method · agent-inference · review draft" data-vessel="protocol-method" data-standing="agent-inference" data-tags="central story governance profile praxis" data-resource="central:doc:reuse-practice"><header class="node-head"><div class="node-eyebrow">protocol method</div><h2>Carry a working relationship into another project</h2></header><div class="prose"><p><strong>Situation.</strong> A person has developed a useful way of collaborating with an Agent. Another project needs much of the same practice, with a few local differences.</p><p><strong>Encounter.</strong> They inspect their saved Agent profile and referenced guidance, Skills, Methods and Routines. A project variant records its relationship to that source and the local choices: relevant worlds, particular engineering expectations and intended access or placement. Existing project instructions remain inspectable at their own source.</p><p>The consuming system resolves what is relevant and available for the actual session. If a referenced practice has been retired or the requested capability is unavailable, that condition should be made visible at use. Refinements arising from repeated friction can be proposed back to the appropriate personal or project source.</p><p><strong>Successful result.</strong> Reuse carries the developed practice and its provenance into a new context. Local variation has an explicit home, making later maintenance comprehensible.</p><p class="capability-links">Capabilities: [[cap.central.agent-profiles|Agent profiles]].</p></div><footer class="unit-sources"><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/72.json">Central #72 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/108.json">Central #108 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/112.json">Central #112 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/118.json">Central #118 · retained development intent</a></footer></section>
+<section class="ql-node" id="q2-restore" data-node=".5" data-route="restore" data-nav="Recover a dependable working environment" data-context="protocol-method · agent-inference · review draft" data-vessel="protocol-method" data-standing="agent-inference" data-tags="central story machine recovery verification" data-resource="central:doc:restore"><header class="node-head"><div class="node-eyebrow">protocol method</div><h2>Recover a dependable working environment</h2></header><div class="prose"><p><strong>Situation.</strong> A person is setting up a replacement workstation or bringing an existing machine back to its declared role.</p><p><strong>Encounter.</strong> Central identifies the relevant declaration and available synchronization and environment providers. Recovery first obtains the source required for the role. Planning then explains the differences between the declaration and the inspected machine: what is satisfied, what can change and what the available integrations cannot resolve.</p><p>The authorised apply performs the supported changes and returns per-operation outcomes. Verification inspects the resulting state. If synchronization is unavailable, recovery reports that before dependent machine changes begin. If a later operation fails, the result shows the completed and unresolved parts so the next attempt can proceed from reality.</p><p><strong>Successful result.</strong> The person has both a usable environment and an intelligible account of the recovery. A repeat plan and verification establish whether the declared state has stabilised. Platform-specific physical acceptance remains tied to the machine and provider actually exercised.</p><p class="capability-links">Capabilities: [[cap.central.machine-recovery|Machine recovery]].</p></div><footer class="unit-sources"><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/10.json">Central #10 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/18.json">Central #18 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/21.json">Central #21 · retained development intent</a></footer></section>
+</div></article>
+<article class="surface" data-surface="q3" data-title="Who it serves and what makes it possible" data-gloss="Who / Whereby?" data-seed-ref="central:seed:q3" data-seed-sha256="197ad399a15b4bf13300c58ec1f708042425b9081b105d900eb6b44f5a2b1ca5"><div class="surface-inner"><header class="hero"><div class="hero-line"><span class="ql-badge">#3</span><span class="hero-label">Who / Whereby?</span></div><h1>Who it serves and what makes it possible</h1><p class="hero-deck">A deliberate Human–Agent relationship, expressed in a World that can be inspected and understood.</p><div class="hero-meta"><a href="#whole/whereby">0/1 · Return to the Who / Whereby? seed</a><span>Expanded account · review draft</span></div></header>
+<section class="ql-node" id="q3-tree" data-node=".0" data-route="tree" data-nav="A filesystem structure people can inhabit" data-context="architecture-contract · agent-inference · review draft" data-vessel="architecture-contract" data-standing="agent-inference" data-tags="central architecture filesystem world" data-resource="central:doc:tree"><header class="node-head"><div class="node-eyebrow">architecture contract</div><h2>A filesystem structure people can inhabit</h2></header><div class="prose"><p>The human user establishes the purpose and scope of the working relationship; Agents encounter that relationship through its available sources and operations. Central supplies the common form in which it can become visible: a World with a personal ground, related projects and identifiable artifacts.</p><p>This is the sense in which Central makes an <strong>Objective Internality</strong> inspectable. The user and Agent participate in one organised field of work. Its sources, relationships and results can be opened, examined, deliberately shared and studied. Sharing is a user choice over relevant material.</p><p>[[central:seed:q3|The overview’s Who / Whereby]] is developed here through the filesystem form, source contracts and interfaces that make the relationship usable.</p><p>Central repeats a useful distinction at personal and project scope: human source, Agent material and the evolving knowledge related to that source. At personal scope, Control holds the person’s ground and working configuration. Work holds the projects. At project scope, ProjectCentral supplies local source relationships and facilities for ongoing collaboration.</p><pre>Central/
+  Control/                 personal source and configuration
+  Work/
+    Central/               this product’s repository
+      ProjectCentral/
+        user/              this account and its companion matrix
+        agents/            project Agent material
+        now/               optional current work and daily records
+        relations/         declared source relationships</pre><p>This is an explanation of the relevant shape; individual optional facilities are established when used. Existing sources elsewhere in a repository can participate through an explicit relation. A world view reads the actual structure and reports partial or malformed areas. Reprojection plans and creates missing scaffolding with a receipt.</p><p>The intended UX should make this tree meaningful: enter a project, see its ground and current work, open a source, understand its origin, and follow a relevant relationship. File location remains useful to the person while stable references allow the interface to preserve continuity.</p><p class="capability-links">Capabilities: [[cap.central.reproject|Reproject]].</p></div><footer class="unit-sources"><a data-source href="../../docs/PROJECTCENTRAL-CONTRACT.md">ProjectCentral contract</a><a data-source href="../../docs/PROJECTCENTRAL-AUTHORED-GROUND.md">ProjectCentral authored ground</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/65.json">Central #65 · retained development intent</a></footer></section>
+<section class="ql-node" id="q3-contracts" data-node=".1" data-route="contracts" data-nav="The contracts behind a source encounter" data-context="architecture-contract · agent-inference · review draft" data-vessel="architecture-contract" data-standing="agent-inference" data-tags="central architecture identity standing revision history" data-resource="central:doc:contracts"><header class="node-head"><div class="node-eyebrow">architecture contract</div><h2>The contracts behind a source encounter</h2></header><div class="prose"><p>Four distinctions support the workflows in this account.</p><ol><li><strong>Identity and location.</strong> A source or Flow needs a reference that can continue as its content changes. Where supported, renaming and retained-in-place adoption preserve that reference. The actual current location remains disclosed.</li><li><strong>Role and standing.</strong> A document’s use in a project and the authority of its claims are recorded separately. Generated synthesis remains attributable to its generation until the relevant recognition occurs. A source may contain several kinds of claim.</li><li><strong>Revision and mutation.</strong> A read provides the basis for a later change. Writes compare that expected revision with current source. The result either identifies the applied change or presents the conflict/proposal requiring reconciliation.</li><li><strong>Source and its readings.</strong> The human account, implementation, observed results and Agent interpretation retain their own identities. A reader can follow the relationship between them and inspect the underlying source.</li></ol><p>Change reconciliation extends this contract to ordinary editors. Central can detect an external edit on the next reconciliation, record a source change and expose it after a consumer’s cursor. When the actor is unknown, attribution stays unknown. Historical comparison uses the available provider; a recovery preview checks the current basis before returning historical content for review.</p><p class="capability-links">Capabilities: [[cap.central.source-change|Source change]] · [[cap.central.source-history|Source history]].</p></div><footer class="unit-sources"><a data-source href="../../docs/PROJECTCENTRAL-AUTHORED-GROUND.md">ProjectCentral authored ground</a><a data-source href="../../docs/documentation-standing.v1.json">Canonical claim standings</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/89.json">Central #89 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/100.json">Central #100 · retained development intent</a></footer></section>
+<section class="ql-node" id="q3-interaction" data-node=".2" data-route="interaction" data-nav="One operation, appropriate interfaces" data-context="constitution-design-commitment · agent-inference · review draft" data-vessel="constitution-design-commitment" data-standing="agent-inference" data-tags="central design ux actions ports connectors" data-resource="central:doc:interaction"><header class="node-head"><div class="node-eyebrow">constitution design commitment</div><h2>One operation, appropriate interfaces</h2></header><div class="prose"><p>A person navigating the desktop needs understandable choices and visible results. An Agent needs structured inputs, outputs and failures. A terminal user needs a direct command and useful diagnostics. Central’s native Actions let each surface address the same semantic operation while presenting it appropriately.</p><p>The intended review surface should bring together the current source, proposed difference, reason and relevant context. A conflict should show that the basis has changed and make the newer source reachable. Missing providers or permissions should appear at the operation that requires them, with enough detail to determine the next step.</p><p>Ports describe the required facility; Connectors provide concrete integrations. This supports different machine environments while keeping operation meaning stable. For package/configuration changes and notifications, an interface should distinguish a request being processed from the resulting state actually being verified.</p><p>O:I can compose these capabilities into the desktop. Central supplies the source and operation contracts; downstream products provide their own context resolution, execution and developmental processes around them.</p><p class="capability-links">Capabilities: [[cap.central.action-discovery|Action discovery]] · [[cap.central.notification|Notification]].</p></div><footer class="unit-sources"><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/1.json">Central #1 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/51.json">Central #51 · retained development intent</a><a data-source href="../../docs/MACHINE-WORKCELL-RELATION.md">Machine and Workcell relation</a></footer></section>
+<section class="ql-node" id="q3-account-form" data-node=".3" data-route="account-form" data-nav="A readable account with addressable parts" data-context="protocol-method · agent-inference · review draft" data-vessel="protocol-method" data-standing="agent-inference" data-tags="central protocol documentation links composition" data-resource="central:doc:account-form"><header class="node-head"><div class="node-eyebrow">protocol method</div><h2>A readable account with addressable parts</h2></header><div class="prose"><p>The [[central:doc:overview|0/1 overview]] holds the minimal human-authored account in six questions. Each answer opens into its corresponding expanded layer, #0 through #5. The whole remains a useful document by itself; the expanded material gives its intentions functional, experiential and architectural depth.</p><p>When the human edits a seed answer, review the corresponding layer first, then follow affected capabilities, contracts and other layers. Each expanded layer records the seed revision it was reconciled against. Validation detects a changed seed whose expansion has not been reviewed. A recorded match establishes that source relationship; human judgment establishes whether the expansion is faithful.</p><p>The thirteen document vessels describe what a unit contains. Claim standing records its authority. The six questions organise the account. Their wording here follows the human’s chosen application of the [[source:ql|L0 question lens]], including Who / Whereby and Why-For. The situated Project-act movement in [[source:context|the context protocol]] remains a separate relation.</p><p>Stable identities, double-bracket links and tags connect the seed, expanded units and companion capabilities. Future wiki disclosure can follow those existing relations and develop attributable interpretation around the sources.</p><p>The [[source:context|context protocol]] defines the seed, capability and source-format relationships. The current [[source:wiki-inhabitation|wiki write]] and [[source:knowledge-navigation|knowledge read]] procedures describe the available AIKit operations and the explicit HTML/matrix integration frontier.</p></div><footer class="unit-sources"><a data-source href="../../../ai-kit/registry/capsules/skill/aikit/html-account/payload/full-account-template.html">Recursive HTML account template</a><a data-source href="../../docs/PROJECT-CONTEXT-PROTOCOL.md">Project context protocol</a><a data-source href="../../skills/docs-methodology/SKILL.md">Documentation authoring procedure</a></footer></section>
+</div></article>
+<article class="surface" data-surface="q4" data-title="Where and when the ground holds" data-gloss="Where / When?" data-seed-ref="central:seed:q4" data-seed-sha256="7e3d0a0497328789aba959820948dfbcbfc2bdf91ce2173e4b95024a57ad7d6e"><div class="surface-inner"><header class="hero"><div class="hero-line"><span class="ql-badge">#4</span><span class="hero-label">Where / When?</span></div><h1>Where and when the ground holds</h1><p class="hero-deck">An enduring source structure across Humans, Agents, Machines and Work, available before, during and after a session.</p><div class="hero-meta"><a href="#whole/context">0/1 · Return to the Where / When? seed</a><span>Expanded account · review draft</span></div></header>
+<section class="ql-node" id="q4-intent" data-node=".0" data-route="intent" data-nav="Ground before, during and after a session" data-context="constitution-design-commitment · agent-inference · review draft" data-vessel="constitution-design-commitment" data-standing="agent-inference" data-tags="central intent current development" data-resource="central:doc:intent"><header class="node-head"><div class="node-eyebrow">constitution design commitment</div><h2>Ground before, during and after a session</h2></header><div class="prose"><p>Central is present at the boundary of the session: before the Agent receives its first context, while it works with files, and after it leaves a result. Its source structure gives those moments a continuing place in the same World.</p><p>At personal scope, the ground holds what should carry across projects. At project scope, local source expresses the work’s own purpose, context and practices. Machines provide the material settings in which those relationships become active. A session uses a selected part of that World; it can return to current source when its context needs to change.</p><p>“Relatively immutable” describes the organising ground. People can revise its contents, refine relationships and develop new projects as their work changes. Central should remain quiet enough that tending this foundation supports the work rather than becoming a separate administrative burden.</p><p>[[central:seed:q4|The overview’s Where / When]] anchors these conditions. The development frontier below records where implementation or source conventions still need to align with them.</p></div><footer class="unit-sources"><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/71.json">Central #71 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/51.json">Central #51 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/104.json">Central #104 · retained development intent</a></footer></section>
+<section class="ql-node" id="q4-contexts" data-node=".1" data-route="contexts" data-nav="Personal, project and machine contexts" data-context="surface-discovery · agent-inference · review draft" data-vessel="surface-discovery" data-standing="agent-inference" data-tags="central context worlds agents machine" data-resource="central:doc:contexts"><header class="node-head"><div class="node-eyebrow">surface discovery</div><h2>Personal, project and machine contexts</h2></header><div class="prose"><p>At personal scope, Central holds what should follow the person across projects: their authored ground, common guidance, reusable practice, Agents and machine declarations. At project scope, it holds the local purpose, relevant source relations, current work and project-specific refinements.</p><p>Nested Worlds and differentiated AgentSets extend that relationship. A project may have development contexts that need selected source from a parent world and additional local material. Source selection, exclusions and provenance should make the resulting context understandable. Agent profiles can state intended placement and access for that work.</p><p>The machine relation connects these intentions to a concrete working environment. Central preserves the declared source and native operations; Workcell and the other execution owners determine how work becomes operative on a machine. Tests of source structure establish one part of the experience. Installed desktop, permission and physical machine behaviour require their own end-to-end evidence.</p></div><footer class="unit-sources"><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/97.json">Central #97 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/87.json">Central #87 · retained development intent</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/106.json">Central #106 · retained development intent</a><a data-source href="../../docs/MACHINE-WORKCELL-RELATION.md">Machine and Workcell relation</a></footer></section>
+<section class="ql-node" id="q4-source-drift" data-node=".2" data-route="source-drift" data-nav="The current frontier and decisions to resolve" data-context="temporal-working-state · agent-inference · review draft" data-vessel="temporal-working-state" data-standing="agent-inference" data-tags="central review frontier drift development" data-resource="central:doc:source-drift"><header class="node-head"><div class="node-eyebrow">temporal working state</div><h2>The current frontier and decisions to resolve</h2></header><div class="prose"><p>This is the bounded review list for the recovered account, dated 6 September 2026.</p><ul><li><strong>Guided authorship.</strong> Ground inspection and relation planning exist. The fuller experience of recovering fragmented intention, composing a useful account and presenting consequential decisions is broader than applying source metadata.</li><li><strong>Recovery experience.</strong> Source history, comparison and recovery preview have implementation. The complete journey must connect preview to an authorised, revision-checked edit or proposal and make that sequence clear to the person.</li><li><strong>Desktop composition.</strong> World, source and personal operations provide native data and behaviour. Their integrated O:I experience needs its own acceptance against the journeys in this account.</li><li><strong>Environment proof.</strong> Provider and isolated filesystem proofs establish specific operations. Physical machine permissions, delivered notifications and owner-machine recovery need evidence for the actual environment.</li><li><strong>Shared source conventions.</strong> The context protocol now distinguishes the editable account from derived renderings and defines the seed/capability convention. Remaining work includes aligning older API standing vocabulary with the canonical six-standing protocol and recognising reviewed source at its actual scope.</li><li><strong>Structured source disclosure.</strong> AIKit currently compiles eligible Markdown links and Properties, including ordinary notes. Its HTML account-resource and CSV capability-row interpretation still needs an adapter. Preserve the same source identity, policy and standing across these formats; prove mixed-source retrieval, links, pending targets and change invalidation before claiming parity.</li><li><strong>Shared ontology and retirement.</strong> Consolidate the core primitive account at O:I’s ground during coordinated review. Review legacy documents and successor links across repositories before retiring any files.</li></ul><p>These items identify work or source decisions still needed. They keep the product’s intended destination visible alongside the implementation already present.</p></div><footer class="unit-sources"><a data-source href="../../docs/CENTRAL-SYSTEM-SPEC.md">Central system specification</a><a data-source href="../../docs/CONTROL-CONTENT-PROTOCOL.md">Control content protocol</a><a data-source href="../../docs/PROJECTCENTRAL-AUTHORED-GROUND.md">ProjectCentral authored ground</a><a data-source href="../../docs/documentation-standing.v1.json">Canonical claim standings</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/100.json">Central #100 · retained development intent</a></footer></section>
+</div></article>
+<article class="surface" data-surface="q5" data-title="What Central makes possible for the whole" data-gloss="Why-For?" data-seed-ref="central:seed:q5" data-seed-sha256="7fc462f4d49368faf273584a6e94c4ec4e7c22535f7d04be59c4439e47d650d1"><div class="surface-inner"><header class="hero"><div class="hero-line"><span class="ql-badge">#5</span><span class="hero-label">Why-For?</span></div><h1>What Central makes possible for the whole</h1><p class="hero-deck">The minimal bootstrap for an O:I World, with a home for ratified intention and connections to the rest of the suite.</p><div class="hero-meta"><a href="#whole/purpose">0/1 · Return to the Why-For? seed</a><span>Expanded account · review draft</span></div></header>
+<section class="ql-node" id="q5-coherence" data-node=".0" data-route="coherence" data-nav="The minimal foundation for an O:I World" data-context="vision · agent-inference · review draft" data-vessel="vision" data-standing="agent-inference" data-tags="central synthesis outcomes continuity" data-resource="central:doc:coherence"><header class="node-head"><div class="node-eyebrow">vision</div><h2>The minimal foundation for an O:I World</h2></header><div class="prose"><p>Central is intended to be the first install and the only package necessary to begin working with the O:I World paradigm. Its contribution is the minimal foundation: a filesystem home in which the Human–Agent relationship can be expressed, understood and developed while the person keeps their existing setup.</p><p>The other packages extend what can happen around that ground. AIKit’s wiki functions can develop and disclose knowledge relative to its sources. Workcell machine setups can project into the machine relationships it holds. O:I can make the World available through the desktop. Central supplies the home in which these relations meet.</p><p>For the person, the primary outcome is clarity about the World they first disclose to an Agent. Durable principles, governance and personal context have a common home; projects can receive the relevant material at the scope and depth the person chooses. Central gives that ratified basis a location and identifiable relations. The propagation and runtime use of the material remain deliberate choices.</p><p>For Agents, the outcome is a recoverable ground around their activity. Useful source and results can carry forward through projects and sessions. What is learned in use can return to [[central:seed:q5|the overview’s Why-For]] and, through the [[central:doc:overview|0/1 whole]], help the person refine the basis itself.</p></div><footer class="unit-sources"><a data-source href="../../docs/CENTRAL-VISION.md">Central product vision</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/71.json">Central #71 · retained development intent</a></footer></section>
+<section class="ql-node" id="q5-verification" data-node=".1" data-route="verification" data-nav="What this revision has actually checked" data-context="evidence · agent-inference · review draft" data-vessel="evidence" data-standing="agent-inference" data-tags="central evidence verification source" data-resource="central:doc:verification"><header class="node-head"><div class="node-eyebrow">evidence</div><h2>What this revision has actually checked</h2></header><div class="prose"><p>The capability inventory separates recovered intention from implementation found in the current checkout. Its source references include the retained wayfinders and subsequent issue comments, because several early scope statements were later corrected. A ticket’s open or closed state is insufficient evidence of present functionality.</p><p id="functional-verification"><strong>6 September 2026: 67 tests passed across ten selected native suites</strong> on Central checkout <code>eebdfdd9f842</code>. The selection exercised ordinary project discovery, current Control source, read-only world mapping and additive scaffolding, ground relation acceptance, NOW/DAY lifecycle, Flow identity and concurrent edits, source read/write conflicts, external/offline change recovery, governance adoption and reversible Skill retirement. These suites use temporary filesystem worlds; interface/provider fixtures in some tests do not establish physical app launch or delivery.</p><details><summary>Reproduce the selected functional checks</summary><pre>cargo test -p ctrl --test work_entry --test control_source --test world_map --test projectcentral_ground_actions --test projectcentral_now --test projectcentral_flow --test world_source_actions --test source_change_horizon --test agent_governance --test control_skills</pre></details><p>Those checks exercise specific native behaviours. The matrix keeps source-inspected status for capabilities beyond that selection. Desktop composition, physical delivery and owner-machine acceptance retain their own scope.</p><p>The document checks cover the 0/1 overview, six expanded layers, seed revision relationships, unit identities, source references, capability links and exact MD/CSV correspondence. Browser checks exercise navigation and the actual reading controls. These establish the integrity and usability of this candidate account; recognition of the product meaning remains a human judgment.</p></div><footer class="unit-sources"><a data-source href="../../docs/documentation-standing.v1.json">Canonical claim standings</a><a data-source href="../../skills/docs-methodology/SKILL.md">Documentation authoring procedure</a></footer></section>
+<section class="ql-node" id="q5-authoring-praxis" data-node=".2" data-route="authoring-praxis" data-nav="Recover, compose, test and return" data-context="skill-agent-operating-instruction · agent-inference · review draft" data-vessel="skill-agent-operating-instruction" data-standing="agent-inference" data-tags="central praxis authoring method review" data-resource="central:doc:authoring-praxis"><header class="node-head"><div class="node-eyebrow">skill agent operating instruction</div><h2>Recover, compose, test and return</h2></header><div class="prose"><p>Begin with the human-authored [[central:doc:overview|0/1 seed]]. Preserve its definition and purpose when expanding the account. A changed seed requires a fresh reading of its associated layer and the capability and contract relations affected by it. Resolve semantic differences before recording the expansion against the revised seed.</p><p>Begin each authoring pass with a concrete functional question. Recover the need and desired result from wayfinders and development tickets, including corrections in their comments. Inspect the corresponding native operation and meaningful tests to establish what exists. Record a gap where the intended journey extends beyond that behaviour.</p><p>Then write the product account at the appropriate level: vision explains the need and destination; journeys explain the intended encounter; design and architecture hold the consequential choices and contracts. Link implementation and observed results where they help assess a claim. Place the capability in the companion matrix with its identity and trace.</p><p>Write directly about what the person or Agent does, what changes and why it matters. Give a difficult idea enough space to become clear. Keep necessary refusals and uncertainties near their actual boundary or in the bounded review section. Read the opening as a product vision, rather than an explanation of the documentation system.</p><p>Review the resulting account and matrix together. This candidate remains a generated consolidation awaiting review of its meaning and standing. The existing sources are retained; the refined method can be applied across the other products after the Central form proves useful.</p><p>The same protocol now has source-recovered candidate accounts for [[suite:account:actuation|Actuation]], [[suite:account:aikit|AIKit]], [[suite:account:factory|Software Factory]], [[suite:account:workcell|Workcell]], [[suite:account:ql|Quaternal Logic]]. Review their compact definitions and intended experiences against this shared form before recognising the recovered seeds or retiring earlier documents.</p><p>The <a href="capability-matrix.md#seed--field-contribution">seed × field grid</a> opens the <a href="capability-matrix.json">declared matrix views</a>. Edit its <a href="capability-matrix.csv">CSV records</a> under the <a href="../../../Central/docs/CAPABILITY-MATRIX-PROTOCOL.md">shared capability protocol</a>, then reconcile affected passages in this account. Central owns retirement’s filesystem structure; AIKit owns its operations and the wiki population procedure.</p></div><footer class="unit-sources"><a data-source href="../../skills/docs-methodology/SKILL.md">Documentation authoring procedure</a><a data-source href="../../../github-recovery-mirror/mirror/Central/issues/71.json">Central #71 · retained development intent</a></footer></section>
+</div></article>
+</main>
+  <aside class="right-rail" id="rightRail" aria-label="Section context"><div class="context-head"><div class="context-kicker" id="contextCoord">#0 · .0</div><h3 id="contextTitle">Source context</h3><p id="contextSummary">Select a section to inspect its source and standing.</p></div><div class="note-field" id="noteField"><label for="sectionNote">Section notes</label><textarea id="sectionNote" placeholder="Write a note for this section…"></textarea><div class="save-state" id="saveState">Saved locally when available.</div></div><div class="context-slot" id="contextSlot"></div><details class="right-details" open><summary>Sources in this section</summary><div class="source-list" id="sectionSources"></div><div class="source-empty" id="sourceEmpty">No section sources listed.</div></details><details class="right-details"><summary>Provenance</summary><dl class="meta-list" id="metaList"></dl></details></aside>
+</div>
+
+<script>
+(() => {
+  const resources=JSON.parse(document.getElementById('ground-resources').textContent);
+  const walker=document.createTreeWalker(document.getElementById('mainContent'),NodeFilter.SHOW_TEXT,{acceptNode(node){return node.parentElement.closest('script,style,code,pre,a')?NodeFilter.FILTER_REJECT:NodeFilter.FILTER_ACCEPT;}});
+  const nodes=[];while(walker.nextNode())nodes.push(walker.currentNode);
+  for(const node of nodes){const raw=node.textContent;const pattern=/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;let match,last=0,changed=false;const fragment=document.createDocumentFragment();
+    while((match=pattern.exec(raw))){changed=true;fragment.append(document.createTextNode(raw.slice(last,match.index)));const ref=match[1].trim(),entry=resources[ref];const el=document.createElement(entry?'a':'span');el.textContent=match[2]||entry?.title||ref;if(entry){el.href=entry.href;el.dataset.resource=ref;}else{el.className='source-unresolved';el.title='Unresolved authored source: '+ref;}fragment.append(el);last=pattern.lastIndex;}
+    if(changed){fragment.append(document.createTextNode(raw.slice(last)));node.replaceWith(fragment);}
+  }
+})();
+</script>
+<script>
+(() => {
+  'use strict';
+  const body = document.body;
+  const root = document.documentElement;
+  const surfaces = [...document.querySelectorAll('.surface')];
+  const surfaceNav = document.getElementById('surfaceNav');
+  const leftToggle = document.getElementById('leftToggle');
+  const rightToggle = document.getElementById('rightToggle');
+  const themeToggle = document.getElementById('themeToggle');
+  const routeChip = document.getElementById('routeChip');
+  const contextCoord = document.getElementById('contextCoord');
+  const contextTitle = document.getElementById('contextTitle');
+  const contextSummary = document.getElementById('contextSummary');
+  const contextSlot = document.getElementById('contextSlot');
+  const sectionSources = document.getElementById('sectionSources');
+  const sourceEmpty = document.getElementById('sourceEmpty');
+  const sectionNote = document.getElementById('sectionNote');
+  const saveState = document.getElementById('saveState');
+  const metaList = document.getElementById('metaList');
+  const provenance = readProvenance();
+  let activeSurface = surfaces[0];
+  let activeNode = activeSurface.querySelector('.ql-node');
+  let scrollFrame = 0;
+  function safeGet(key){try{return localStorage.getItem(key)}catch(_){return null}}
+  function safeSet(key,value){try{localStorage.setItem(key,value);return true}catch(_){return false}}
+  function readProvenance(){try{return JSON.parse(document.getElementById('account-provenance').textContent)}catch(_){return {}}}
+  function buildMetadata(){const fields=[['UID',provenance.uid],['Project',provenance.project],['Session',provenance.session],['Status',provenance.status],['Created',provenance.created],['Updated',provenance.updated],['Generator',provenance.generator]];metaList.innerHTML='';for(const [label,value] of fields){if(!value)continue;const row=document.createElement('div');row.className='meta-row';row.innerHTML=`<dt>${escapeHTML(label)}</dt><dd>${escapeHTML(String(value))}</dd>`;metaList.appendChild(row)}}
+  function escapeHTML(value){return value.replace(/[&<>'"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]))}
+  function buildNav(){surfaceNav.innerHTML='';surfaces.forEach(surface=>{const q=surface.dataset.surface;const qNumber=q==='whole'?'0/1':q.replace(/^q/,'');const title=surface.dataset.title||q;const gloss=surface.dataset.gloss||'';const group=document.createElement('div');group.className='nav-group';group.dataset.surface=q;const head=document.createElement('div');head.className='nav-head';const select=document.createElement('button');select.type='button';select.className='nav-select';select.innerHTML=`<span class="nav-q">${q==='whole'?'':'#'}${qNumber}</span><span class="nav-name">${escapeHTML(title)}<span class="nav-gloss">${escapeHTML(gloss)}</span></span>`;select.addEventListener('click',()=>navigate(q,null,true));const toggle=document.createElement('button');toggle.type='button';toggle.className='nav-toggle';toggle.setAttribute('aria-label',`Toggle sections for ${title}`);toggle.setAttribute('aria-expanded','false');toggle.innerHTML='<span>›</span>';toggle.addEventListener('click',()=>{const open=group.classList.toggle('expanded');toggle.setAttribute('aria-expanded',String(open))});head.append(select,toggle);group.appendChild(head);const subnav=document.createElement('div');subnav.className='subnav';[...surface.querySelectorAll('.ql-node')].forEach(node=>{const a=document.createElement('a');const route=node.dataset.route||node.id;a.href=`#${q}/${encodeURIComponent(route)}`;a.dataset.nodeId=node.id;a.innerHTML=`<code>${escapeHTML(node.dataset.node||'')}</code><span>${escapeHTML(node.dataset.nav||node.querySelector('h2')?.textContent||route)}</span>`;a.addEventListener('click',event=>{event.preventDefault();navigate(q,route,true)});subnav.appendChild(a)});group.appendChild(subnav);surfaceNav.appendChild(group)})}
+  function parseHash(){let raw=location.hash.slice(1).trim();try{raw=decodeURIComponent(raw)}catch{}if(!raw)return{surface:surfaces[0]?.dataset.surface||'q0',route:null};const[surface,route]=raw.split('/');return{surface:surfaces.some(s=>s.dataset.surface===surface)?surface:(surfaces[0]?.dataset.surface||'q0'),route:route||null}}
+  function findNode(surface,route){const nodes=[...surface.querySelectorAll('.ql-node')];if(!route)return nodes[0]||null;return nodes.find(node=>node.dataset.route===route||node.id===route)||nodes[0]||null}
+  function navigate(surfaceId,route,push){const surface=surfaces.find(item=>item.dataset.surface===surfaceId)||surfaces[0];const node=findNode(surface,route);activateSurface(surface);activeNode=node;updateActiveUI();if(push){const hash=`#${surface.dataset.surface}${route?'/'+encodeURIComponent(route):''}`;history.pushState(null,'',hash)}requestAnimationFrame(()=>{if(route&&node)node.scrollIntoView({behavior:prefersReducedMotion()?'auto':'smooth',block:'start'});else window.scrollTo({top:0,behavior:'auto'})})}
+  function activateSurface(surface){if(activeSurface!==surface){activeSurface.classList.remove('active');surface.classList.add('active');activeSurface=surface;window.scrollTo({top:0,behavior:'auto'})}document.querySelectorAll('.nav-group').forEach(group=>{const isActive=group.dataset.surface===surface.dataset.surface;group.classList.toggle('active',isActive);if(isActive){group.classList.add('expanded');const toggle=group.querySelector('.nav-toggle');if(toggle)toggle.setAttribute('aria-expanded','true')}})}
+  function updateActiveUI(){if(!activeNode)return;document.querySelectorAll('.subnav a').forEach(a=>a.classList.toggle('active',a.dataset.nodeId===activeNode.id));const qNumber=activeSurface.dataset.surface==='whole'?'0/1':activeSurface.dataset.surface.replace(/^q/,'');routeChip.innerHTML=`<code>${qNumber==='0/1'?'':'#'}${qNumber} · ${escapeHTML(activeNode.dataset.node||'')}</code><span>${escapeHTML(activeNode.dataset.nav||'')}</span>`;updateContext(qNumber,activeNode)}
+  function updateContext(qNumber,node){contextCoord.textContent=`${qNumber==='0/1'?'':'#'}${qNumber} · ${node.dataset.node||''}`;contextTitle.textContent=node.dataset.nav||node.querySelector('h2')?.textContent||'Section';contextSummary.textContent=node.dataset.context||'Section-relative context.';const panel=node.querySelector('template[data-context-panel]');contextSlot.innerHTML='';if(panel)contextSlot.appendChild(panel.content.cloneNode(true));const sources=[...node.querySelectorAll('a[data-source]')];sectionSources.innerHTML='';sourceEmpty.hidden=sources.length>0;sources.forEach(source=>{const clone=document.createElement('a');clone.href=source.href;clone.target='_blank';clone.rel='noopener noreferrer';clone.textContent=source.textContent.trim()||source.href;sectionSources.appendChild(clone)});const noteKey=noteStorageKey(activeSurface.dataset.surface,node.dataset.route||node.id);sectionNote.value=safeGet(noteKey)||'';sectionNote.dataset.storageKey=noteKey}
+  function noteStorageKey(surface,route){return`ql-html-account:${provenance.uid||'anonymous'}:${surface}:${route}:note`}
+  function updateFromScroll(){scrollFrame=0;if(!activeSurface)return;const nodes=[...activeSurface.querySelectorAll('.ql-node')];if(!nodes.length)return;let current=nodes[0];const offset=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--top-h'))+34;const atBottom=window.innerHeight+window.scrollY>=document.documentElement.scrollHeight-4;if(atBottom){current=nodes[nodes.length-1]}else{for(const node of nodes){if(node.getBoundingClientRect().top<=offset)current=node;else break}}if(current!==activeNode){activeNode=current;updateActiveUI();const route=current.dataset.route||current.id;const nextHash=`#${activeSurface.dataset.surface}/${encodeURIComponent(route)}`;history.replaceState(null,'',nextHash)}}
+  function scheduleScrollUpdate(){if(scrollFrame)return;scrollFrame=requestAnimationFrame(updateFromScroll)}
+  function routeFromLocation(){const{surface,route}=parseHash();const targetSurface=surfaces.find(s=>s.dataset.surface===surface)||surfaces[0];const node=findNode(targetSurface,route);activateSurface(targetSurface);activeNode=node;updateActiveUI();requestAnimationFrame(()=>{if(route&&node)node.scrollIntoView({behavior:'auto',block:'start'});else window.scrollTo({top:0,behavior:'auto'})})}
+  function prefersReducedMotion(){return window.matchMedia('(prefers-reduced-motion: reduce)').matches}
+  function setTheme(theme){root.dataset.theme=theme;safeSet('ql-html-account:theme',theme)}
+  function applyResponsiveRailDefaults(){const width=window.innerWidth;if(width<980){body.classList.add('left-closed','right-closed')}else if(width<1320){if(!body.dataset.userLeft)body.classList.remove('left-closed');if(!body.dataset.userRight)body.classList.add('right-closed')}syncRailAria()}
+  function syncRailAria(){leftToggle.setAttribute('aria-expanded',String(!body.classList.contains('left-closed')));rightToggle.setAttribute('aria-expanded',String(!body.classList.contains('right-closed')))}
+  leftToggle.addEventListener('click',()=>{body.dataset.userLeft='1';body.classList.toggle('left-closed');syncRailAria()});rightToggle.addEventListener('click',()=>{body.dataset.userRight='1';body.classList.toggle('right-closed');syncRailAria()});themeToggle.addEventListener('click',()=>{setTheme(root.dataset.theme==='dark'?'light':'dark')});sectionNote.addEventListener('input',()=>{const ok=safeSet(sectionNote.dataset.storageKey||'',sectionNote.value);saveState.textContent=ok?'Saved locally.':'Local persistence is unavailable. The note remains in this page until it closes.'});window.addEventListener('scroll',scheduleScrollUpdate,{passive:true});window.addEventListener('popstate',routeFromLocation);window.addEventListener('hashchange',routeFromLocation);window.addEventListener('resize',applyResponsiveRailDefaults,{passive:true});buildMetadata();buildNav();setTheme(safeGet('ql-html-account:theme')||'light');applyResponsiveRailDefaults();routeFromLocation();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+{
+  "schema": "central.project-now.handoff/v1",
+  "id": "handoff-1788719453578381000",
+  "provenance": "agent-authored-bounded-return",
+  "actor": "zcode-session-2026-09-06-rootnow",
+  "kind": "handoff",
+  "recorded_at_unix_seconds": 1788719453,
+  "subject": "Default tree stamps root NOW field + field-and-now governance (commit 74258b3)",
+  "result": "Owner-authorized change (no-theatre directive, 2026-09-06): central.template.stamp extended so a fresh Central init ships what was hand-stamped on the live ground 2026-09-06. ctrl/defaults/ gains three field-and-now governance statements (live text verbatim + distributed-default standing line, per module law), control-now-policy.json / control-now-promotions.json (byte-identical to live schemas), and a template control-now-readme.md (dated establishment section stripped, fragile Work/Central relative link replaced, honest that the stamp ships the field but the executor arrives via the O:I guardian projection). template_stamp.rs ROOT_DEFAULTS grew to 7; tests prove stamping, skip_existing, and the Control/user never-stamped constraint. Commit 74258b3 on main, not pushed. Tests: template_stamp 9/9, foundation 12/12, ctrl build green.",
+  "status": "active"
+}

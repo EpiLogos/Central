@@ -75,6 +75,24 @@ fn render_emits_derived_prompt_with_pinned_provenance() {
 }
 
 #[test]
+fn render_uses_statement_title_once_not_twice() {
+    let temp = TempRoot::new("title-dedup");
+    let dir = temp.path().join("Control/agents/governance/engineering");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("agent-operations.md"),
+        "# Agent operations\n\nYou branch small and commit honestly.\n",
+    )
+    .unwrap();
+
+    let rendered = render_engineering_ground(temp.path()).unwrap();
+
+    // The title renders once as the section heading, with the body beneath it.
+    assert!(rendered.contains("## Agent operations\n\nYou branch small and commit honestly."));
+    assert!(!rendered.contains("# Agent operations\n\n# Agent operations"));
+}
+
+#[test]
 fn render_errors_not_found_when_no_statements_exist() {
     let temp = TempRoot::new("no-statements");
     fs::create_dir_all(temp.path().join("Control/agents/governance/engineering")).unwrap();

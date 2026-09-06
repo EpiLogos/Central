@@ -623,6 +623,44 @@ HTML / desktop / Explore / another Surface
 
 A `.html` or `.htm` path is a role hint. Explicit provenance and recognition determine whether its claims are authored position, design commitment, implementation, generated presentation or something else.
 
+### 10.1 Seed-led product accounts
+
+For the suite product-document consolidation selected by the human, the primary editable account is an HTML collection in `ProjectCentral/user`, with a companion capability matrix in Markdown and CSV. Other projects may continue to use ordinary source files.
+
+The **0/1 whole overview** is the compact account. It holds six answers: Why, What, How, Who/Whereby, Where/When and Why-For. These labels are the human-selected application of the L0 question lens. The six expanded #0–#5 layers develop the corresponding answers. Document vessels classify a unit's content; claim standing establishes its authority. The Project-act movement remains a separate contextual relation.
+
+A supplied human seed retains human-source attribution; editorial clarification is disclosed. A seed recovered by an Agent from existing sources is an attributed candidate until recognised. Human ownership of the destination directory does not change that distinction. The seed's What defines the product in concrete terms before listing its facilities. The Why states the need and experiential basis. Expanded accounts develop those meanings through actual journeys, choices, contracts and evidence.
+
+Each answer and expanded unit has a stable identity, tags and resolvable links. Each expanded layer records the seed revision against which it was reconciled. A changed answer prompts review of that layer and affected capability/contract links; a hash match is an integrity check, not a proof of semantic fidelity. Revise the existing unit before creating another account.
+
+### 10.2 Capabilities alongside the account
+
+A capability matrix connects intended meaning to a concrete power the product may offer. It answers: who needs what, which operation realises it, what result should follow, what exists now, and which source or observation supports that reading. The account explains the purpose, encounter and constraints; the matrix provides stable capability addresses for those passages and their evidence.
+
+The traversal is bidirectional: an overview answer develops into a journey or contract that references capabilities; a capability returns to its governing account unit and points to native operations, code and bounded tests/evidence. An implementation limitation can pressure a capability or design commitment without rewriting the human's purpose. One capability may serve several journeys; one journey may require several capabilities or products.
+
+The [capability matrix protocol](CAPABILITY-MATRIX-PROTOCOL.md) defines one CSV contract with explicit view and axis declarations. The product default crosses its six seed answers with S and the five other products. A capability retains its identity across placements; a cell can hold several determinations or remain unassessed. QL-MEF matrices use this same form with their actual axes and source annotations. Relational coverage, standing and implementation status retain their distinct meanings.
+
+The companion JSON declares the whole and views; CSV carries capabilities and their relational placements; Markdown supplies readable entries and an exact CSV appendix. Source and evidence references remain attached to actual claims. Intended capabilities may lack code or test references when the gap is explicit. The documentation convention uses the native QL shapes only where their semantics are established.
+
+### 10.2a Wiki disclosure across structured and ordinary sources
+
+The same source policy applies to the product account, capability matrix and ad hoc material. Preserve source identity, exact revision, provenance/standing and eligibility first. Where an explicit account structure exists, retain its whole anchor, unit identities, seed/expansion relations and capability locators. Where it does not, retain the ordinary source and its actual links without requiring invented QL positions. Unit-level standing annotations remain declarations to reconcile with owner-issued provenance; an HTML attribute cannot promote its own authority or broaden source access.
+
+AIKit owns the source interpretation and knowledge operations. Its current native Markdown relation reader accepts ordinary files and optional OKF Properties, preserves authored membership and explicit references, exposes incoming/outgoing relations, and keeps unresolved targets pending. Its `wiki stage` command is a distinct optional path for declared Markdown `ql:` alignment. A position is local to a named unit. Neither mechanism makes Agent-generated content human-authored.
+
+As checked against AIKit `5cbb1e59b4a2acc1060728e376449e5fd3199d8f` and matching remote HEAD on 6 September 2026, that authored-relation adapter selects `.md` files. It does not yet extract this HTML account's resource map or individual capability CSV rows as semantic subjects. This is an explicit integration frontier, not a reason to copy every source into Markdown. The current native procedures are [wiki inhabitation](../../ai-kit/registry/capsules/skill/aikit/wiki-inhabitation/payload/SKILL.md) and [knowledge navigation](../../ai-kit/registry/capsules/skill/aikit/knowledge-navigation/payload/SKILL.md).
+
+The same checkout passed 13 `aikit-cli` `wiki_commands` tests, 21 `aikit-adapters` tests selected by `authored_wiki`, and the core `space_membership_is_native_bounded_revision_bearing_relation` test on 6 September 2026. These checks establish the selected current write/read behaviours, not HTML/CSV projection parity. Reproduce with `cargo test -p aikit-cli --test wiki_commands`, `cargo test -p aikit-adapters authored_wiki`, and `cargo test -p aikit-core --lib space_membership_is_native_bounded_revision_bearing_relation` from AIKit.
+
+Acceptance for the next adapter should exercise one structured account, its MD/CSV companion and ordinary nested notes together. Check exact source/unit/row retrieval; preserved authored alignment; unstructured and partial-source usability; reciprocal explicit links; pending and ambiguous targets; source-standing preservation; revision invalidation after direct edits; and privacy exclusions. Rebuild must preserve source identity and must not mutate source or invoke a model. The Agent may then create attributable readings through AIKit's existing write surface as an explicit act.
+
+### 10.3 Writing and review
+
+Recover intention from wayfinders, development tickets and subsequent corrections, then inspect current native functionality. Use code and meaningful tests to determine what exists; use the human source to determine what is wanted. Write the user's action, visible result and reason in direct language. Keep required boundaries near the affected contract and unresolved differences in one bounded review section. Give complex workflows enough explanation to guide development.
+
+For each new product, reconcile the minimal seed before expanding its details. Preserve gaps as gaps. Keep sources in place and make new accounts additive until coordinated review establishes successors. The native procedure is [docs-methodology](../skills/docs-methodology/SKILL.md#opt-in-sixfold-product-ground-authoring).
+
 ## 11. Ownership across O:I
 
 ### Central
