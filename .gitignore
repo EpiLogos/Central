@@ -11,3 +11,6 @@
 
 # Local platform noise
 .DS_Store
+
+# Local recovery receipts for reviewed documentation changes.
+/.central/documentation-transactions/

@@ -1,0 +1,270 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QL capability matrix manifest",
+  "type": "object",
+  "required": [
+    "protocol",
+    "matrix_id",
+    "anchor_ref",
+    "default_view",
+    "views"
+  ],
+  "properties": {
+    "protocol": {
+      "const": "ql-capability-matrix/1"
+    },
+    "matrix_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "anchor_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "default_view": {
+      "type": "string",
+      "minLength": 1
+    },
+    "views": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "semantics",
+          "row_axis",
+          "column_axis"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "semantics": {
+            "type": "string",
+            "minLength": 1
+          },
+          "row_axis": {
+            "type": "object",
+            "required": [
+              "id",
+              "label",
+              "members"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1
+              },
+              "members": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "label"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "label": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "source_ref": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "ql_coordinate": {
+                      "type": "object",
+                      "required": [
+                        "position",
+                        "face"
+                      ],
+                      "properties": {
+                        "position": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 5
+                        },
+                        "face": {
+                          "enum": [
+                            "direct",
+                            "conjugate"
+                          ]
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            },
+            "additionalProperties": true
+          },
+          "column_axis": {
+            "type": "object",
+            "required": [
+              "id",
+              "label",
+              "members"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1
+              },
+              "members": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "label"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "label": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "source_ref": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "ql_coordinate": {
+                      "type": "object",
+                      "required": [
+                        "position",
+                        "face"
+                      ],
+                      "properties": {
+                        "position": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 5
+                        },
+                        "face": {
+                          "enum": [
+                            "direct",
+                            "conjugate"
+                          ]
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            },
+            "additionalProperties": true
+          },
+          "shape_ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "lens_ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "derivation_ref": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": true,
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "shape_ref"
+              ],
+              "properties": {
+                "shape_ref": {
+                  "const": "ql:shape:1.0.0:6x6:direct-conjugate"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "derivation_ref"
+              ],
+              "properties": {
+                "row_axis": {
+                  "properties": {
+                    "members": {
+                      "minItems": 6,
+                      "maxItems": 6,
+                      "items": {
+                        "required": [
+                          "source_ref",
+                          "ql_coordinate"
+                        ],
+                        "properties": {
+                          "ql_coordinate": {
+                            "properties": {
+                              "face": {
+                                "const": "direct"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "column_axis": {
+                  "properties": {
+                    "members": {
+                      "minItems": 6,
+                      "maxItems": 6,
+                      "items": {
+                        "required": [
+                          "source_ref",
+                          "ql_coordinate"
+                        ],
+                        "properties": {
+                          "ql_coordinate": {
+                            "properties": {
+                              "face": {
+                                "const": "conjugate"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "additionalProperties": true
+}

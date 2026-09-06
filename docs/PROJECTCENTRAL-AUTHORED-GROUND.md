@@ -365,6 +365,14 @@ projection_is_source  false
 
 That is sufficient for AIKit's accepted `product-understanding` and `structured-account-authoring` procedures to form a provenance-aware reading without prompt-specific path folklore. `html-account` remains a renderer. O:I `WorldPresentation`/`Projection` remains presentation/selection authority.
 
+### Editable authored accounts and derived readings
+
+The `account_handoff` flags above describe the derived reading offered by that handoff. They do not prohibit an independently authored or explicitly adopted HTML document from being source. An editable product account can live in `ProjectCentral/user` with its actual provenance and claim standing; generated previews and exports reference that source. Initialisation still imposes no document.
+
+The chosen product-account convention is the [0/1 seed, six expansions and companion capabilities](PROJECT-CONTEXT-PROTOCOL.md#101-seed-led-product-accounts). Central owns source identity, revision and recognition. It does not infer adoption from an HTML extension, a QL coordinate or an attractive rendering.
+
+Wiki disclosure is a reading across existing sources and their relations. A structured HTML account, a matrix entry and an ordinary note can each be a source for Agent knowledge at their actual standing. Source metadata can preserve an authored QL alignment; a file without that metadata remains eligible for ordinary reading under the same source policy. Reading and maintaining Agent interpretation does not require converting every source to the account format.
+
 ## 11. Personal-world Projection recovered onto current semantics
 
 The valid architecture previously explored in closed PR #60 is retained through the current ProjectCentral world:
