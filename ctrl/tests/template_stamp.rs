@@ -8,6 +8,21 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const ROOT_PROTOCOL_DEFAULT: &str = "Control/agents/governance/repos/repo-content-and-structure.md";
+const ROOT_PLACEMENT_STATEMENT: &str = "Control/agents/governance/field-and-now/session-work-placement.md";
+const ROOT_DAY_CLOSE_STATEMENT: &str = "Control/agents/governance/field-and-now/day-close.md";
+const ROOT_WIKI_LAW_STATEMENT: &str = "Control/agents/governance/field-and-now/wiki-field-law.md";
+const ROOT_NOW_POLICY: &str = "Control/agents/now/policy.json";
+const ROOT_NOW_PROMOTIONS: &str = "Control/agents/now/promotions.json";
+const ROOT_NOW_README: &str = "Control/agents/now/README.md";
+const ROOT_DEFAULT_PATHS: &[&str] = &[
+    ROOT_PROTOCOL_DEFAULT,
+    ROOT_PLACEMENT_STATEMENT,
+    ROOT_DAY_CLOSE_STATEMENT,
+    ROOT_WIKI_LAW_STATEMENT,
+    ROOT_NOW_POLICY,
+    ROOT_NOW_PROMOTIONS,
+    ROOT_NOW_README,
+];
 const PROJECT_STRUCTURE_STARTER: &str = "ProjectCentral/agents/governance/repo-structure.md";
 const PROJECT_CONTENT_STARTER: &str = "ProjectCentral/agents/governance/repo-content.md";
 
@@ -44,17 +59,17 @@ fn root_scope_creates_protocol_default_and_is_idempotent() {
     let central = initialized_central("root-creates");
 
     let plan = stamp_plan_for_root(&central).unwrap();
-    assert_eq!(plan.files.len(), 1);
-    assert_eq!(plan.files[0].path, ROOT_PROTOCOL_DEFAULT);
+    let planned: Vec<String> = plan.files.iter().map(|file| file.path.clone()).collect();
+    assert_eq!(planned, ROOT_DEFAULT_PATHS.to_vec());
 
     let result = stamp_root(&central).unwrap();
-    assert_eq!(result.created, vec![ROOT_PROTOCOL_DEFAULT.to_owned()]);
+    assert_eq!(result.created, ROOT_DEFAULT_PATHS.to_vec());
     assert!(result.skipped_existing.is_empty());
     assert_marked_draft(&central.join(ROOT_PROTOCOL_DEFAULT));
 
     let second = stamp_root(&central).unwrap();
     assert!(second.created.is_empty());
-    assert_eq!(second.skipped_existing, vec![ROOT_PROTOCOL_DEFAULT.to_owned()]);
+    assert_eq!(second.skipped_existing, ROOT_DEFAULT_PATHS.to_vec());
 }
 
 #[test]
@@ -67,14 +82,72 @@ fn root_scope_requires_an_initialized_control_root() {
 #[test]
 fn root_scope_never_overwrites_human_source() {
     let central = initialized_central("root-no-clobber");
-    let live = central.join(ROOT_PROTOCOL_DEFAULT);
-    fs::create_dir_all(live.parent().unwrap()).unwrap();
-    fs::write(&live, "human-authored words\n").unwrap();
+    for relative in ROOT_DEFAULT_PATHS {
+        let live = central.join(relative);
+        fs::create_dir_all(live.parent().unwrap()).unwrap();
+        fs::write(&live, "human-authored words\n").unwrap();
+    }
 
     let result = stamp_root(&central).unwrap();
     assert!(result.created.is_empty());
-    assert_eq!(result.skipped_existing, vec![ROOT_PROTOCOL_DEFAULT.to_owned()]);
-    assert_eq!(fs::read_to_string(&live).unwrap(), "human-authored words\n");
+    assert_eq!(result.skipped_existing, ROOT_DEFAULT_PATHS.to_vec());
+    for relative in ROOT_DEFAULT_PATHS {
+        assert_eq!(
+            fs::read_to_string(central.join(relative)).unwrap(),
+            "human-authored words\n"
+        );
+    }
+}
+
+#[test]
+fn root_scope_stamps_now_field_and_field_and_now_governance() {
+    let central = initialized_central("root-now-field");
+    let result = stamp_root(&central).unwrap();
+
+    for relative in [
+        ROOT_PLACEMENT_STATEMENT,
+        ROOT_DAY_CLOSE_STATEMENT,
+        ROOT_WIKI_LAW_STATEMENT,
+        ROOT_NOW_README,
+    ] {
+        assert!(result.created.contains(&relative.to_owned()));
+        assert_marked_draft(&central.join(relative));
+    }
+
+    let placement = fs::read_to_string(central.join(ROOT_PLACEMENT_STATEMENT)).unwrap();
+    assert!(placement.contains("Work that has nowhere to land lands everywhere."));
+
+    let day_close = fs::read_to_string(central.join(ROOT_DAY_CLOSE_STATEMENT)).unwrap();
+    assert!(day_close.contains(
+        "a partial close that names its failure beats a clean claim that lied"
+    ));
+
+    let wiki_law = fs::read_to_string(central.join(ROOT_WIKI_LAW_STATEMENT)).unwrap();
+    assert!(wiki_law.contains("A wiki is agent-maintained knowledge, never source."));
+
+    let policy = fs::read_to_string(central.join(ROOT_NOW_POLICY)).unwrap();
+    assert!(policy.contains("\"schema\": \"central.project-now.policy/v1\""));
+    assert!(policy.contains("\"human_scratch_cleanup\": \"human-owned-manual\""));
+
+    let promotions = fs::read_to_string(central.join(ROOT_NOW_PROMOTIONS)).unwrap();
+    assert!(promotions.contains("\"schema\": \"central.project-now.promotions/v1\""));
+    assert!(promotions.contains("\"entries\": []"));
+
+    let readme = fs::read_to_string(central.join(ROOT_NOW_README)).unwrap();
+    assert!(readme.contains("Control/agents/now/"));
+    assert!(readme.contains("O:I guardian projection"));
+    // Dated session content never rides the template.
+    assert!(!readme.contains("Current field state at establishment"));
+}
+
+#[test]
+fn root_scope_stamps_nothing_under_control_user() {
+    let central = initialized_central("root-user-aperture");
+
+    stamp_root(&central).unwrap();
+
+    // Control/user/** is human-authored ground; the stamp adds nothing there.
+    assert!(!central.join("Control").join("user").exists());
 }
 
 #[test]

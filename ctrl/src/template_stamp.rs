@@ -21,10 +21,36 @@ use std::path::{Path, PathBuf};
 
 const CONTROL_ROOT_MARKER: &str = "Control";
 
-const ROOT_DEFAULTS: &[(&str, &str)] = &[(
-    "Control/agents/governance/repos/repo-content-and-structure.md",
-    include_str!("../defaults/control-governance-repo-content-and-structure.md"),
-)];
+const ROOT_DEFAULTS: &[(&str, &str)] = &[
+    (
+        "Control/agents/governance/repos/repo-content-and-structure.md",
+        include_str!("../defaults/control-governance-repo-content-and-structure.md"),
+    ),
+    (
+        "Control/agents/governance/field-and-now/session-work-placement.md",
+        include_str!("../defaults/control-governance-field-and-now-session-work-placement.md"),
+    ),
+    (
+        "Control/agents/governance/field-and-now/day-close.md",
+        include_str!("../defaults/control-governance-field-and-now-day-close.md"),
+    ),
+    (
+        "Control/agents/governance/field-and-now/wiki-field-law.md",
+        include_str!("../defaults/control-governance-field-and-now-wiki-field-law.md"),
+    ),
+    (
+        "Control/agents/now/policy.json",
+        include_str!("../defaults/control-now-policy.json"),
+    ),
+    (
+        "Control/agents/now/promotions.json",
+        include_str!("../defaults/control-now-promotions.json"),
+    ),
+    (
+        "Control/agents/now/README.md",
+        include_str!("../defaults/control-now-readme.md"),
+    ),
+];
 
 const PROJECT_DEFAULTS: &[(&str, &str)] = &[
     (
@@ -330,7 +356,7 @@ pub fn register_template_stamp_actions(registry: &mut ActionRegistry) {
             descriptor(
                 "central.template.stamp",
                 "Stamp default tree",
-                "Create missing Central-owned default sources as marked distributed drafts: the repo guidance protocol at Control scope, repo-structure/repo-content starters at ProjectCentral scope. Never overwrites, moves or deletes existing source; a repeated stamp is stable.",
+                "Create missing Central-owned default sources as marked distributed drafts: the repo guidance protocol, the field-and-now governance statements and the root NOW/DAY field skeleton at Control scope; repo-structure/repo-content starters at ProjectCentral scope. Never overwrites, moves or deletes existing source; a repeated stamp is stable.",
                 MutationClass::LocallyMutating,
                 "central-template-stamp",
                 true,
