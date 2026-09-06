@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# The repository-owned verification operation, in two grades.
+#
+#   scripts/verify           full gate — workspace tests (what CI runs).
+#   scripts/verify quick     targeted gate — the crates you touched.
+#
+# `quick` serves the inner development loop; it never replaces the full gate
+# before landing, and CI runs the full gate on every PR.
+if [ "${1:-}" = "quick" ]; then
+  shift
+  if [ "$#" -eq 0 ]; then
+    echo "usage: scripts/verify quick [-p <crate>]..." >&2
+    exit 2
+  fi
+  cargo test "$@"
+  exit 0
+fi
+
+cargo test --workspace
