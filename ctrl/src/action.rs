@@ -527,6 +527,7 @@ fn work_reveal_action(_registry: &ActionRegistry, input: &Value, context: &Actio
 
 pub fn create_core_action_registry() -> ActionRegistry {
     let mut registry = ActionRegistry::default();
+    crate::recognition::register(&mut registry);
     registry.register(
         descriptor("central.root", "Show Central root", "Resolve the active Central root.", MutationClass::ReadOnly, "central-root"),
         root_action,

@@ -133,3 +133,5 @@ dependency rule; this index carries the corpus.
 - [Native ordinary-file recovery](NATIVE-ORDINARY-FILE-RECOVERY.md): filesystem CAS, history, authority refusal and interruption recovery.
 
 - [Source Return](SOURCE-RETURN.md): native proposal/CAS acceptance, provenance, and explicit human-authority availability.
+
+- [Chosen root recognition](ROOT-RECOGNITION.md): bounded metadata-only recognition before explicit desktop binding.

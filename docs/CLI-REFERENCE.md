@@ -172,3 +172,5 @@ Returned work and Flow provider inspection:
 - `projectcentral.source.return_reject`: retain rejection without source mutation.
 
 See [Source Return contract](SOURCE-RETURN.md). Flow read accepts optional `expected_revision`; source bodies are bounded to 4 MiB UTF-8 without NUL and retrieval-excluded material is refused.
+
+`central.recognize` takes an explicit absolute `path` and returns bounded structural recognition, canonical directory identity and read-only OS access observations without initialization/adoption or changing the active root. See [Chosen root recognition](ROOT-RECOGNITION.md).
