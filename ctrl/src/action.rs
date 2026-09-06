@@ -546,6 +546,7 @@ pub fn create_core_action_registry() -> ActionRegistry {
         doctor_action,
     ).expect("core Action ids are valid");
     crate::world_map::register_world_map_actions(&mut registry);
+    crate::files::register_file_actions(&mut registry);
     registry.register(
         descriptor("action.list", "List Actions", "List canonical Action descriptors.", MutationClass::ReadOnly, "action-descriptor-list"),
         list_actions,

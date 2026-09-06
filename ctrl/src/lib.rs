@@ -268,3 +268,5 @@ pub use root::{
     inspect_central, initialize_central, resolve_central_root, MixedRootDiagnostic,
     MixedRootSignal, ResolvedRoot, RootOptions,
 };
+
+pub mod files;

@@ -128,3 +128,4 @@ resembles the product checkout (`mixed_root` in the structured health report).
 
 The root [README](../README.md) carries product meaning and the compact
 dependency rule; this index carries the corpus.
+- [NATIVE-FILESYSTEM-READING.md](NATIVE-FILESYSTEM-READING.md) — owner-resolved directory and text readings over the actual Central tree.

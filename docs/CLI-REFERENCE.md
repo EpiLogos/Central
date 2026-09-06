@@ -23,10 +23,12 @@ Root resolution is, in order:
 
 ## Canonical Actions
 
-The current composed registry exposes 66 Actions:
+The current composed registry exposes 68 Actions:
 
 | Action | Purpose | Common CLI projection |
 |---|---|---|
+| `central.files.list` | list actual Central directories without adoption | `action run central.files.list` |
+| `central.files.read` | read a validated owner location as bounded UTF-8 text | `action run central.files.read` |
 | `action.list` | discover Action descriptors | `capabilities`, `actions`, `action list` |
 | `central.root` | resolve the active Central root | `root` |
 | `central.init` | initialise the required Central root shape | `init` |
