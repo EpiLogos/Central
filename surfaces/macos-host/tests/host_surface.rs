@@ -56,10 +56,13 @@ mod unix_tests {
     #[test]
     fn macos_action_registry_extends_current_projectcentral_without_mutating_core_identity() {
         let core = create_core_action_registry();
-        assert_eq!(core.list().len(), 28);
+        assert_eq!(core.list().len(), 32);
         assert!(core.get("automation.run").is_none());
         assert!(core.get("central.files.list").is_some());
         assert!(core.get("central.files.read").is_some());
+        for id in ["central.files.write","central.files.history","central.files.recovery_preview","central.files.restore"] {
+            assert!(core.get(id).is_some(), "Core lost ordinary-file Action {id}");
+        }
         let core_ids = core
             .list()
             .into_iter()
@@ -67,7 +70,7 @@ mod unix_tests {
             .collect::<Vec<_>>();
 
         let macos = create_macos_action_registry();
-        assert_eq!(macos.list().len(), 61);
+        assert_eq!(macos.list().len(), 65);
         for id in core_ids {
             assert!(macos.get(&id).is_some(), "macOS host lost core Action {id}");
         }
