@@ -23,7 +23,7 @@ Root resolution is, in order:
 
 ## Canonical Actions
 
-The current composed registry exposes 65 Actions:
+The current composed registry exposes 66 Actions:
 
 | Action | Purpose | Common CLI projection |
 |---|---|---|
@@ -45,6 +45,7 @@ The current composed registry exposes 65 Actions:
 | `machine.declaration` | read authored machine-role intent | `machine declaration <role>` |
 | `machine.inspect` | inspect current observed machine state | `machine inspect` |
 | `machine.account` | compose the current-machine account (identity, observed state, authored roles, drift) | `machine account` |
+| `machine.adopt-current` | adopt the current machine into an authored role declaration under `Control/machines/<role>.json`, seeding observed capabilities and recording the Workcell reference as an opaque binding; idempotent, conflict-surfacing | `machine adopt-current [<role>]` |
 | `machine.plan` | compare authored intent with observed state | `machine plan <role>` |
 | `machine.apply` | apply the planned portable reconciliation | `machine apply <role>` |
 | `machine.verify` | verify authored intent against fresh observation | `machine verify <role>` |
@@ -88,6 +89,7 @@ Every row is invokable through `action run`. Examples:
 ctrl --json action run action.list
 ctrl --json action run work.search '{"query":"Central"}'
 ctrl --json action run machine.plan '{"role":"home-server"}'
+ctrl --json action run machine.adopt-current '{"role":"current","workcell_ref":"workcell:local"}'
 ctrl --json action run projectcentral.ground.inspect '{"project":"Central"}'
 ctrl --json action run control.skills.inspect
 ctrl --json action run control.skills.retire '{"scope":"control-user","name":"central-ground-keeping","retired_by":"owner-in-session","retirement_reason":"superseded"}'

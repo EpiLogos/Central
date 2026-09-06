@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 pub const MACHINE_DECLARATION_SCHEMA: &str = "central.machine";
 pub const MACHINE_DECLARATION_VERSION: u32 = 1;
+pub const MACHINE_ADOPTION_SCHEMA: &str = "central.machine-adoption/v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -32,6 +33,22 @@ pub struct MachineSourceReference {
     pub kind: String,
     pub reference: String,
 }
+
+/// One opaque external relation retained on the declaration, e.g. the
+/// Workcell that owns the machine's material actuality. The shape mirrors
+/// `MachineSourceReference`, but the two concepts stay distinct: a binding
+/// names an accepted external relation, not a reconciliation source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MachineBinding {
+    pub kind: String,
+    pub reference: String,
+}
+
+/// The binding kind that retains the Workcell relation. The reference stays
+/// opaque to Central (initially `workcell:local`).
+pub const WORKCELL_BINDING_KIND: &str = "workcell";
+pub const DEFAULT_ADOPTION_ROLE: &str = "current";
+pub const DEFAULT_WORKCELL_REF: &str = "workcell:local";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackageRequirement {
@@ -79,6 +96,11 @@ pub struct MachineDeclaration {
     pub capabilities: Vec<String>,
     #[serde(default)]
     pub requirements: MachineRequirements,
+    /// Explicit opaque external bindings (e.g. the Workcell relation).
+    /// Additive: declarations authored before bindings existed parse and
+    /// serialise identically because an empty list is skipped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bindings: Vec<MachineBinding>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -208,6 +230,38 @@ pub struct MachineApplyReport {
     pub operations: Vec<MachineApplyOperation>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verification: Option<MachineVerification>,
+}
+
+/// Result of adopting the current machine into an authored role declaration.
+/// `Created` writes a fresh declaration; `Bound` adds the Workcell binding to
+/// an existing declaration; `Unchanged` is the idempotent repeat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MachineAdoptionOutcome {
+    Created,
+    Bound,
+    Unchanged,
+}
+
+impl MachineAdoptionOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::Bound => "bound",
+            Self::Unchanged => "unchanged",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MachineAdoption {
+    pub schema: String,
+    pub outcome: MachineAdoptionOutcome,
+    pub role: String,
+    pub workcell_ref: String,
+    pub declaration: MachineDeclaration,
+    pub source: MachineDeclarationSource,
+    pub observed: ObservedMachine,
 }
 
 fn validate_role_name(role: &str) -> Result<&str, MachineDeclarationError> {
@@ -349,6 +403,26 @@ fn validate_declaration(
         ));
     }
     validate_capabilities(declaration, path)?;
+    let mut bindings = BTreeSet::new();
+    for (index, binding) in declaration.bindings.iter().enumerate() {
+        validate_nonempty(&binding.kind, &format!("bindings[{index}].kind"), path)?;
+        validate_nonempty(
+            &binding.reference,
+            &format!("bindings[{index}].reference"),
+            path,
+        )?;
+        if !bindings.insert((binding.kind.as_str(), binding.reference.as_str())) {
+            return Err(MachineDeclarationError::new(
+                "duplicate_binding",
+                format!(
+                    "Duplicate machine binding: {}: {}",
+                    binding.kind, binding.reference
+                ),
+                Some(path.to_path_buf()),
+                Some("bindings"),
+            ));
+        }
+    }
     validate_presence_requirements(
         "packages",
         &declaration.requirements.packages,
@@ -502,6 +576,239 @@ fn declaration_action(
         ),
         Err(error) => declaration_failure("machine.declaration", error),
     }
+}
+
+enum WorkcellBindingMatch {
+    Exact,
+    Absent,
+    Conflict(Vec<String>),
+}
+
+/// Inspect the raw authored declaration JSON for Workcell-kind bindings
+/// relative to the requested reference. Other binding kinds are ignored:
+/// the Workcell relation is single, every other binding is opaque.
+fn workcell_binding_match(declaration: &Value, workcell_ref: &str) -> WorkcellBindingMatch {
+    let mut exact = false;
+    let mut conflicting = Vec::new();
+    for binding in declaration
+        .get("bindings")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if binding.get("kind").and_then(Value::as_str) != Some(WORKCELL_BINDING_KIND) {
+            continue;
+        }
+        match binding.get("reference").and_then(Value::as_str) {
+            Some(reference) if reference == workcell_ref => exact = true,
+            Some(reference) => conflicting.push(reference.to_owned()),
+            None => conflicting.push("<missing reference>".to_owned()),
+        }
+    }
+    if !conflicting.is_empty() {
+        WorkcellBindingMatch::Conflict(conflicting)
+    } else if exact {
+        WorkcellBindingMatch::Exact
+    } else {
+        WorkcellBindingMatch::Absent
+    }
+}
+
+fn optional_input(input: &Value, field: &str) -> Option<String> {
+    input
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn write_machine_declaration_value(
+    action: &str,
+    path: &Path,
+    value: &Value,
+) -> Result<(), ActionResult> {
+    let write_failure = |error: String| {
+        ActionResult::failure(
+            Some(action),
+            ResultStatus::InternalFailure,
+            format!("Cannot write machine declaration {}: {error}", path.display()),
+            None,
+        )
+    };
+    let mut text =
+        serde_json::to_string_pretty(value).map_err(|error| write_failure(error.to_string()))?;
+    text.push('\n');
+    fs::write(path, text).map_err(|error| write_failure(error.to_string()))
+}
+
+/// Adopt the current machine into an authored machine-role declaration:
+/// observe through the public MachineInspector Port, write the role
+/// declaration when absent (seeding observed capabilities as the initial
+/// intent), record the supplied Workcell reference as an opaque binding, and
+/// return the authored declaration with the observed evidence. Idempotent
+/// for the same role/binding; a different existing Workcell binding is
+/// surfaced as an explicit conflict for resolution.
+fn adopt_current_action(
+    _registry: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    const ACTION: &str = "machine.adopt-current";
+    let requested_role =
+        optional_input(input, "role").unwrap_or_else(|| DEFAULT_ADOPTION_ROLE.to_owned());
+    let role = match validate_role_name(&requested_role) {
+        Ok(role) => role.to_owned(),
+        Err(error) => return declaration_failure(ACTION, error),
+    };
+    let workcell_ref =
+        optional_input(input, "workcell_ref").unwrap_or_else(|| DEFAULT_WORKCELL_REF.to_owned());
+    let root = match resolve_central_root(context.root_options) {
+        Ok(root) => root,
+        Err(message) => {
+            return ActionResult::failure(Some(ACTION), ResultStatus::InvalidInput, message, None);
+        }
+    };
+    let machines_root = root.path.join("Control").join("machines");
+    if !machines_root.is_dir() {
+        return ActionResult::failure(
+            Some(ACTION),
+            ResultStatus::InvalidCentralStructure,
+            format!(
+                "Central machine source root is missing: {}; initialise Central first.",
+                machines_root.display()
+            ),
+            None,
+        );
+    }
+    let observed =
+        match inspect_current_machine(context, ACTION, &MachineInspectionInput::default()) {
+            Ok(observed) => observed,
+            Err(result) => return result,
+        };
+    let relative = PathBuf::from("Control")
+        .join("machines")
+        .join(format!("{role}.json"));
+    let path = root.path.join(&relative);
+
+    let outcome = if path.is_file() {
+        // The existing authored declaration must already satisfy the
+        // canonical reader before adoption touches anything.
+        if let Err(error) = read_machine_declaration(&root.path, &role) {
+            return declaration_failure(ACTION, error);
+        }
+        // Mutate the authored JSON value rather than the typed struct so
+        // unknown authored fields survive the binding write.
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) => {
+                return ActionResult::failure(
+                    Some(ACTION),
+                    ResultStatus::InternalFailure,
+                    format!("Cannot read machine declaration {}: {error}", path.display()),
+                    None,
+                );
+            }
+        };
+        let mut value: Value = match serde_json::from_str(&text) {
+            Ok(value) => value,
+            Err(error) => {
+                return declaration_failure(
+                    ACTION,
+                    MachineDeclarationError::new(
+                        "invalid_json",
+                        format!("Machine declaration for {role} is not valid JSON: {error}"),
+                        Some(relative.clone()),
+                        None,
+                    ),
+                );
+            }
+        };
+        match workcell_binding_match(&value, &workcell_ref) {
+            WorkcellBindingMatch::Exact => MachineAdoptionOutcome::Unchanged,
+            WorkcellBindingMatch::Conflict(existing) => {
+                return ActionResult::failure(
+                    Some(ACTION),
+                    ResultStatus::InvalidInput,
+                    format!(
+                        "Machine declaration for {role} already binds a different Workcell: {}. Resolve the authored binding before adopting '{workcell_ref}'.",
+                        existing.join(", ")
+                    ),
+                    Some(json!({
+                        "code": "workcell_binding_conflict",
+                        "role": role,
+                        "requested_workcell_ref": workcell_ref,
+                        "existing_workcell_refs": existing,
+                        "path": relative,
+                    })),
+                );
+            }
+            WorkcellBindingMatch::Absent => {
+                let binding = json!({
+                    "kind": WORKCELL_BINDING_KIND,
+                    "reference": workcell_ref,
+                });
+                match value.get_mut("bindings").and_then(Value::as_array_mut) {
+                    Some(bindings) => bindings.push(binding),
+                    None => {
+                        value
+                            .as_object_mut()
+                            .expect("validated declaration is a JSON object")
+                            .insert("bindings".to_owned(), Value::Array(vec![binding]));
+                    }
+                }
+                if let Err(result) = write_machine_declaration_value(ACTION, &path, &value) {
+                    return result;
+                }
+                MachineAdoptionOutcome::Bound
+            }
+        }
+    } else {
+        // Seed observed capabilities (first occurrence wins) as the initial
+        // accepted capability intent; observation evidence stays in the result.
+        let mut capabilities = Vec::new();
+        for capability in &observed.observation.capabilities {
+            if !capabilities.contains(capability) {
+                capabilities.push(capability.clone());
+            }
+        }
+        let declaration = MachineDeclaration {
+            schema: MACHINE_DECLARATION_SCHEMA.to_owned(),
+            version: MACHINE_DECLARATION_VERSION,
+            role: role.clone(),
+            capabilities,
+            requirements: MachineRequirements::default(),
+            bindings: vec![MachineBinding {
+                kind: WORKCELL_BINDING_KIND.to_owned(),
+                reference: workcell_ref.clone(),
+            }],
+        };
+        let value = to_value(&declaration).expect("machine declaration serializes");
+        if let Err(result) = write_machine_declaration_value(ACTION, &path, &value) {
+            return result;
+        }
+        MachineAdoptionOutcome::Created
+    };
+
+    // Reading the ground back through the canonical reader proves the
+    // declaration (including the binding) round-trips unchanged.
+    let authored = match read_machine_declaration(&root.path, &role) {
+        Ok(authored) => authored,
+        Err(error) => return declaration_failure(ACTION, error),
+    };
+    ActionResult::success(
+        ACTION,
+        to_value(MachineAdoption {
+            schema: MACHINE_ADOPTION_SCHEMA.to_owned(),
+            outcome,
+            role,
+            workcell_ref,
+            declaration: authored.declaration,
+            source: authored.source,
+            observed,
+        })
+        .expect("machine adoption serializes"),
+    )
 }
 
 fn inspect_current_machine(
@@ -1569,6 +1876,35 @@ pub(crate) fn register_machine_actions(registry: &mut ActionRegistry) {
         inspect_action,
     ).expect("machine Action id is valid");
 
+    let optional_role = ActionInputDefinition {
+        name: "role".to_owned(),
+        input_type: "string".to_owned(),
+        required: false,
+        choices: None,
+        selection: None,
+    };
+    let workcell_ref_input = ActionInputDefinition {
+        name: "workcell_ref".to_owned(),
+        input_type: "string".to_owned(),
+        required: false,
+        choices: None,
+        selection: None,
+    };
+    registry.register(
+        ActionDescriptor {
+            id: "machine.adopt-current".to_owned(),
+            title: "Adopt current machine".to_owned(),
+            description: "Observe the current machine through MachineInspector and adopt it as an authored machine-role declaration under Control/machines, seeding observed capabilities as the initial intent and recording the Workcell reference as an opaque external binding; idempotent for the same role and binding, with a different existing Workcell binding surfaced as an explicit conflict.".to_owned(),
+            inputs: vec![optional_role, workcell_ref_input],
+            output: ActionOutputDefinition { output_type: "machine-adoption".to_owned() },
+            mutation_class: MutationClass::LocallyMutating,
+            preview_supported: false,
+            required_ports: vec![MACHINE_INSPECTOR_PORT.id.to_owned()],
+            availability: ActionAvailability { available: true, reason: None },
+        },
+        adopt_current_action,
+    ).expect("machine Action id is valid");
+
     registry.register(
         ActionDescriptor {
             id: "machine.plan".to_owned(),
@@ -1675,6 +2011,23 @@ pub fn explain_machine_declaration(data: &Value) -> String {
         }
     }
 
+    let bindings = declaration
+        .get("bindings")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if !bindings.is_empty() {
+        lines.push("Bindings:".to_owned());
+        for binding in bindings {
+            let kind = binding.get("kind").and_then(Value::as_str).unwrap_or_default();
+            let reference = binding
+                .get("reference")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            lines.push(format!("  - {kind}: {reference}"));
+        }
+    }
+
     let requirements = declaration.get("requirements").unwrap_or(&Value::Null);
     for (label, key) in [
         ("Packages", "packages"),
@@ -1756,6 +2109,43 @@ pub fn explain_machine_inspection(data: &Value) -> String {
         observation.get("packages").and_then(Value::as_array).map_or(0, Vec::len),
         observation.get("configurations").and_then(Value::as_array).map_or(0, Vec::len),
         observation.get("services").and_then(Value::as_array).map_or(0, Vec::len),
+    )
+}
+
+pub fn explain_machine_adoption(data: &Value) -> String {
+    let outcome = data
+        .get("outcome")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let role = data.get("role").and_then(Value::as_str).unwrap_or_default();
+    let workcell_ref = data
+        .get("workcell_ref")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let path = data
+        .get("source")
+        .and_then(|value| value.get("path"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let observation = data
+        .get("observed")
+        .and_then(|value| value.get("observation"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    format!(
+        "Machine adoption: {outcome}\nRole: {role}\nWorkcell binding: {workcell_ref}\nSource: {path} [authored]\nObserved host: {platform}/{architecture}\nObserved capabilities: {capabilities}",
+        platform = observation
+            .get("platform")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        architecture = observation
+            .get("architecture")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        capabilities = observation
+            .get("capabilities")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len),
     )
 }
 

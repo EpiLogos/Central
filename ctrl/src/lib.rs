@@ -132,14 +132,16 @@ pub use engineering_ground::{
     ENGINEERING_GROUND_STATEMENTS,
 };
 pub use machine::{
-    explain_machine_apply, explain_machine_declaration, explain_machine_inspection,
-    explain_machine_plan, explain_machine_verification, read_machine_declaration,
-    AuthoredMachineDeclaration, ConfigurationRequirement, MachineApplyOperation,
-    MachineApplyOutcome, MachineApplyReport, MachineDeclaration, MachineDeclarationError,
+    explain_machine_adoption, explain_machine_apply, explain_machine_declaration,
+    explain_machine_inspection, explain_machine_plan, explain_machine_verification,
+    read_machine_declaration, AuthoredMachineDeclaration, ConfigurationRequirement,
+    MachineAdoption, MachineAdoptionOutcome, MachineApplyOperation, MachineApplyOutcome,
+    MachineApplyReport, MachineBinding, MachineDeclaration, MachineDeclarationError,
     MachineDeclarationSource, MachineObservationSource, MachinePlan, MachinePlanEntry,
     MachinePlanStatus, MachinePlanSummary, MachineRequirements, MachineSourceReference,
     MachineVerification, ObservedMachine, PackageRequirement, PresenceState, ServiceRequirement,
-    MACHINE_DECLARATION_SCHEMA, MACHINE_DECLARATION_VERSION,
+    MACHINE_ADOPTION_SCHEMA, MACHINE_DECLARATION_SCHEMA, MACHINE_DECLARATION_VERSION,
+    WORKCELL_BINDING_KIND,
 };
 pub use machine_account::{
     explain_account, AuthoredRoleSummary, DriftStatus, MachineAccount, MachineDriftEntry,

@@ -163,19 +163,26 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         [domain, verb] if domain == "control" && verb == "search" => {
             return Err((structured, "control search requires a query.".to_owned()));
         }
-        [domain, verb] if domain == "machine" && matches!(verb.as_str(), "inspect" | "account") => {
-            let action = if verb == "inspect" { "machine.inspect" } else { "machine.account" };
+        [domain, verb]
+            if domain == "machine" && matches!(verb.as_str(), "inspect" | "account" | "adopt-current") =>
+        {
+            let action = match verb.as_str() {
+                "inspect" => "machine.inspect",
+                "account" => "machine.account",
+                _ => "machine.adopt-current",
+            };
             (action, json!({}))
         },
         [domain, verb, role]
-            if domain == "machine" && matches!(verb.as_str(), "declaration" | "plan" | "apply" | "verify") =>
+            if domain == "machine"
+                && matches!(verb.as_str(), "declaration" | "plan" | "apply" | "verify" | "adopt-current") =>
         {
             let action = match verb.as_str() {
                 "declaration" => "machine.declaration",
                 "plan" => "machine.plan",
                 "apply" => "machine.apply",
                 "verify" => "machine.verify",
-                _ => unreachable!(),
+                _ => "machine.adopt-current",
             };
             (action, json!({ "role": role }))
         }
@@ -240,7 +247,7 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
                 "central.root" | "central.init" | "central.doctor" | "central.world"
                 | "central.world.project" | "central.world.reproject.plan"
                 | "central.world.reproject.apply" | "action.list" | "machine.inspect"
-                | "machine.account" | "work.list"
+                | "machine.account" | "machine.adopt-current" | "work.list"
             ) =>
         {
             (canonical.as_str(), json!({}))
@@ -331,6 +338,7 @@ fn human_output(result: &ActionResult) -> String {
         Some("machine.declaration") => crate::machine::explain_machine_declaration(data),
         Some("machine.inspect") => crate::machine::explain_machine_inspection(data),
         Some("machine.account") => crate::machine_account::explain_account(data),
+        Some("machine.adopt-current") => crate::machine::explain_machine_adoption(data),
         Some("machine.plan") => crate::machine::explain_machine_plan(data),
         Some("machine.apply") => crate::machine::explain_machine_apply(data),
         Some("machine.verify") => crate::machine::explain_machine_verification(data),

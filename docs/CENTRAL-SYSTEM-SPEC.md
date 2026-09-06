@@ -479,6 +479,7 @@ Expected Actions include:
 
 - inspect current machine state;
 - resolve the relevant machine declaration;
+- adopt the current machine into an authored role declaration with an opaque Workcell binding;
 - plan a state change;
 - apply a supported state change;
 - verify the result.
@@ -652,6 +653,14 @@ The Action must not embed package-manager or configuration-manager implementatio
 ### 12.5 Verify
 
 `machine.verify` must observe the relevant state after application and report whether the intended state is satisfied.
+
+### 12.6 Adoption
+
+`machine.adopt-current` observes the current machine through the MachineInspector Port and adopts it into an authored machine-role declaration under `Control/machines/<role>.json`, seeding observed capabilities as the initial accepted intent and recording the supplied Workcell reference as an opaque external binding on the declaration.
+
+Adoption is idempotent for the same role and binding. An existing declaration that names a different Workcell binding is surfaced as an explicit conflict for resolution; adoption never rewrites it.
+
+The declaration layout and the Central-machine ↔ Workcell relation are documented in `MACHINE-WORKCELL-RELATION.md`.
 
 ## 13. Connector SDK
 

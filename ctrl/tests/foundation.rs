@@ -193,6 +193,7 @@ fn registry_has_stable_ids_and_complete_descriptors() {
         "control.skills.restore",
         "control.skills.retire",
         "machine.account",
+        "machine.adopt-current",
         "machine.apply",
         "machine.declaration",
         "machine.inspect",
@@ -241,6 +242,7 @@ fn action_list_has_human_and_structured_cli_renderings() {
     assert!(human.output.contains("machine.plan\tPlan machine changes"));
     assert!(human.output.contains("machine.apply\tApply machine plan"));
     assert!(human.output.contains("machine.verify\tVerify machine declaration"));
+    assert!(human.output.contains("machine.adopt-current\tAdopt current machine"));
     assert!(human.output.contains("work.open\tOpen Work item"));
     assert!(human.output.contains("work.reveal\tReveal Work item"));
     assert!(human.output.contains("projectcentral.inspect\tInspect ProjectCentral"));
@@ -278,7 +280,7 @@ fn action_list_has_human_and_structured_cli_renderings() {
     let value: serde_json::Value = serde_json::from_str(&structured.output).unwrap();
     assert_eq!(value["status"], "success");
     let actions = value["data"]["actions"].as_array().unwrap();
-    assert_eq!(actions.len(), 65);
+    assert_eq!(actions.len(), 66);
     let ids = actions.iter().filter_map(|action| action["id"].as_str()).collect::<Vec<_>>();
     for id in [
         "projectcentral.inspect",
