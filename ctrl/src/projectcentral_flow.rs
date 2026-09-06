@@ -9,7 +9,7 @@ use crate::source_horizon::reconcile_project_sources;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -127,14 +127,20 @@ pub(crate) fn reject_symlink_components(project_root: &Path, relative: &Path) ->
     let mut current = project_root.to_path_buf();
     for component in relative.components() {
         let Component::Normal(component) = component else {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "non-normal Flow path"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "non-normal Flow path",
+            ));
         };
         current.push(component);
         match fs::symlink_metadata(&current) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    format!("refusing symlink Flow path component: {}", current.display()),
+                    format!(
+                        "refusing symlink Flow path component: {}",
+                        current.display()
+                    ),
                 ));
             }
             Ok(_) => {}
@@ -145,19 +151,29 @@ pub(crate) fn reject_symlink_components(project_root: &Path, relative: &Path) ->
     Ok(())
 }
 
-pub(crate) fn safe_source_member_path(project_root: &Path, raw: &str, must_exist: bool) -> io::Result<PathBuf> {
+pub(crate) fn safe_source_member_path(
+    project_root: &Path,
+    raw: &str,
+    must_exist: bool,
+) -> io::Result<PathBuf> {
     let relative = relative_member(raw)?;
     reject_symlink_components(project_root, &relative)?;
     let path = project_root.join(&relative);
     if must_exist {
         let metadata = fs::symlink_metadata(&path)?;
         if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "Flow source must be an ordinary file"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Flow source must be an ordinary file",
+            ));
         }
         let root = fs::canonicalize(project_root)?;
         let source = fs::canonicalize(&path)?;
         if !source.starts_with(root) {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "Flow source escaped its Project world"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Flow source escaped its Project world",
+            ));
         }
     } else if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -179,7 +195,10 @@ pub(crate) fn content_revision_bytes(bytes: &[u8]) -> String {
 }
 
 fn escaped_source_ref(project_id: &str, path: &str) -> String {
-    let escaped = path.replace('%', "%25").replace(':', "%3A").replace(' ', "%20");
+    let escaped = path
+        .replace('%', "%25")
+        .replace(':', "%3A")
+        .replace(' ', "%20");
     format!("central:source:project:{project_id}:{escaped}")
 }
 
@@ -204,7 +223,10 @@ fn load_registry(project_root: &Path) -> io::Result<FlowRegistry> {
     let manifest = read_project_manifest(project_root)?;
     let validation = manifest.validate();
     if !validation.valid {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, validation.errors.join("; ")));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            validation.errors.join("; "),
+        ));
     }
     let path = registry_path(project_root);
     if !path.is_file() {
@@ -320,10 +342,96 @@ fn seed_revision(
     Ok(())
 }
 
+pub const MAX_FLOW_TEXT_BYTES: usize = 4 * 1024 * 1024;
+fn require_flow_retrieval(_project_root: &Path, path: &Path) -> io::Result<()> {
+    if !crate::source_horizon::retrieval_allowed(Path::new("/"), path) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Flow source is excluded by .no-agent-retrieval",
+        ));
+    }
+    Ok(())
+}
+fn flow_bytes(project_root: &Path, relative: &str) -> io::Result<Vec<u8>> {
+    let path = safe_source_member_path(project_root, relative, true)?;
+    require_flow_retrieval(project_root, &path)?;
+    let file = crate::file_mutation::open_native_file(project_root, relative)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Flow requires a regular file",
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.take((MAX_FLOW_TEXT_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_FLOW_TEXT_BYTES
+        || bytes.contains(&0)
+        || std::str::from_utf8(&bytes).is_err()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Flow requires bounded UTF-8 text without NUL (maximum 4 MiB)",
+        ));
+    }
+    Ok(bytes)
+}
+pub fn inspect_flow(project_root: &Path, flow_ref: &str) -> io::Result<Value> {
+    let record = load_registry(project_root)?
+        .flows
+        .into_iter()
+        .find(|f| f.flow_ref == flow_ref)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "FlowRef is not registered in this Project",
+            )
+        })?;
+    let check = safe_source_member_path(project_root, &record.path, true).and_then(|p| {
+        require_flow_retrieval(project_root, &p)?;
+        let m = crate::file_mutation::open_native_file(project_root, &record.path)?.metadata()?;
+        if !m.is_file() || m.len() > MAX_FLOW_TEXT_BYTES as u64 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Flow source is not bounded regular text",
+            ));
+        }
+        Ok(())
+    });
+    let reason = check.err().map(|e| e.to_string());
+    let capability = json!({"available":reason.is_none(),"reason":reason});
+    let write_reason = reason.or_else(|| {
+        crate::source_horizon::project_source_bindings(project_root)
+            .and_then(|bindings| {
+                let binding = bindings
+                    .into_iter()
+                    .find(|b| b.source_ref == record.source_ref)
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::NotFound,
+                            "Flow source is not in its native horizon",
+                        )
+                    })?;
+                crate::world_source::enforce_write_authority(&binding, "agent", None)
+            })
+            .err()
+            .map(|e| e.to_string())
+    });
+    let write = json!({"available":write_reason.is_none(),"reason":write_reason});
+    Ok(
+        json!({"schema":"central.project-flow-inspection/v1","flow":record,"revision_observation":"last-observed","capabilities":{"read":capability,"write":write,"history":capability},"automatic_agent_or_model_invocation":false}),
+    )
+}
 fn reconcile_record(project_root: &Path, record: &mut FlowRecord) -> io::Result<bool> {
-    let path = safe_source_member_path(project_root, &record.path, true)?;
-    let bytes = fs::read(path)?;
-    store_revision(project_root, record, &bytes, "unknown", "unknown-external", None)
+    let bytes = flow_bytes(project_root, &record.path)?;
+    store_revision(
+        project_root,
+        record,
+        &bytes,
+        "unknown",
+        "unknown-external",
+        None,
+    )
 }
 
 pub(crate) fn validate_actor_kind(kind: &str) -> io::Result<()> {
@@ -358,7 +466,10 @@ fn validate_flow_placement(project_root: &Path, path: &str) -> io::Result<()> {
         "ProjectCentral/now/user",
         "ProjectCentral/now/agents",
     ];
-    if reserved.iter().any(|root| candidate.starts_with(Path::new(root))) {
+    if reserved
+        .iter()
+        .any(|root| candidate.starts_with(Path::new(root)))
+    {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "Flow source placement would overlap an existing Central authority container; retain Flow in its own or a neutral provider/domain-local source container",
@@ -391,13 +502,20 @@ fn default_path(local_stamp: Option<&str>) -> io::Result<String> {
     Ok(format!("{DEFAULT_FLOW_DIR}/{filename}"))
 }
 
-fn ensure_unique_path(registry: &FlowRegistry, path: &str, except_flow: Option<&str>) -> io::Result<()> {
+fn ensure_unique_path(
+    registry: &FlowRegistry,
+    path: &str,
+    except_flow: Option<&str>,
+) -> io::Result<()> {
     if registry
         .flows
         .iter()
         .any(|flow| flow.path == path && Some(flow.flow_ref.as_str()) != except_flow)
     {
-        return Err(io::Error::new(io::ErrorKind::AlreadyExists, "another Flow already owns that path"));
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "another Flow already owns that path",
+        ));
     }
     Ok(())
 }
@@ -407,10 +525,14 @@ pub fn registered_flow_records(project_root: &Path) -> io::Result<Vec<FlowRecord
 }
 
 pub fn list_flows(project_root: &Path) -> io::Result<FlowList> {
+    let _source_lock=crate::source_safety::lock(project_root,"source-mutation.lock")?;
     let mut registry = load_registry(project_root)?;
     let mut changed = false;
     for flow in &mut registry.flows {
-        changed |= reconcile_record(project_root, flow)?;
+        let path = safe_source_member_path(project_root, &flow.path, true)?;
+        if require_flow_retrieval(project_root, &path).is_ok() {
+            changed |= reconcile_record(project_root, flow)?;
+        }
     }
     if changed {
         write_registry(project_root, &registry)?;
@@ -433,6 +555,7 @@ pub fn create_flow(
     actor_kind: &str,
     agent_session_ref: Option<String>,
 ) -> io::Result<FlowRecord> {
+    let _source_lock=crate::source_safety::lock(project_root,"source-mutation.lock")?;
     validate_actor_kind(actor_kind)?;
     let mut registry = load_registry(project_root)?;
     let path = match explicit_path {
@@ -443,10 +566,17 @@ pub fn create_flow(
     validate_flow_placement(project_root, &path)?;
     let source = safe_source_member_path(project_root, &path, false)?;
     if source.exists() {
-        return Err(io::Error::new(io::ErrorKind::AlreadyExists, "Flow source already exists; use adopt for retained source"));
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "Flow source already exists; use adopt for retained source",
+        ));
     }
     fs::write(&source, b"")?;
-    let flow_ref = format!("central:flow:project:{}:{}", registry.project_id, unique_nanos());
+    let flow_ref = format!(
+        "central:flow:project:{}:{}",
+        registry.project_id,
+        unique_nanos()
+    );
     let mut record = FlowRecord {
         flow_ref: flow_ref.clone(),
         source_ref: escaped_source_ref(&registry.project_id, &path),
@@ -459,9 +589,18 @@ pub fn create_flow(
         privacy: "inherits-source-authority".into(),
         revisions: vec![],
     };
-    seed_revision(project_root, &mut record, b"", actor, actor_kind, agent_session_ref)?;
+    seed_revision(
+        project_root,
+        &mut record,
+        b"",
+        actor,
+        actor_kind,
+        agent_session_ref,
+    )?;
     registry.flows.push(record.clone());
-    registry.flows.sort_by(|left, right| left.flow_ref.cmp(&right.flow_ref));
+    registry
+        .flows
+        .sort_by(|left, right| left.flow_ref.cmp(&right.flow_ref));
     write_registry(project_root, &registry)?;
     let _ = reconcile_project_sources(project_root)?;
     Ok(record)
@@ -475,14 +614,20 @@ pub fn adopt_flow(
     actor_kind: &str,
     agent_session_ref: Option<String>,
 ) -> io::Result<FlowRecord> {
+    let _source_lock=crate::source_safety::lock(project_root,"source-mutation.lock")?;
     validate_actor_kind(actor_kind)?;
     let mut registry = load_registry(project_root)?;
-    let path = relative_member(raw_path)?.to_string_lossy().replace('\\', "/");
+    let path = relative_member(raw_path)?
+        .to_string_lossy()
+        .replace('\\', "/");
     ensure_unique_path(&registry, &path, None)?;
     validate_flow_placement(project_root, &path)?;
-    let source = safe_source_member_path(project_root, &path, true)?;
-    let bytes = fs::read(source)?;
-    let flow_ref = format!("central:flow:project:{}:{}", registry.project_id, unique_nanos());
+    let bytes = flow_bytes(project_root, &path)?;
+    let flow_ref = format!(
+        "central:flow:project:{}:{}",
+        registry.project_id,
+        unique_nanos()
+    );
     let mut record = FlowRecord {
         flow_ref,
         source_ref: escaped_source_ref(&registry.project_id, &path),
@@ -495,25 +640,40 @@ pub fn adopt_flow(
         privacy: "inherits-source-authority".into(),
         revisions: vec![],
     };
-    seed_revision(project_root, &mut record, &bytes, actor, actor_kind, agent_session_ref)?;
+    seed_revision(
+        project_root,
+        &mut record,
+        &bytes,
+        actor,
+        actor_kind,
+        agent_session_ref,
+    )?;
     registry.flows.push(record.clone());
-    registry.flows.sort_by(|left, right| left.flow_ref.cmp(&right.flow_ref));
+    registry
+        .flows
+        .sort_by(|left, right| left.flow_ref.cmp(&right.flow_ref));
     write_registry(project_root, &registry)?;
     let _ = reconcile_project_sources(project_root)?;
     Ok(record)
 }
 
 pub fn read_flow(project_root: &Path, flow_ref: &str) -> io::Result<FlowReading> {
+    let _source_lock=crate::source_safety::lock(project_root,"source-mutation.lock")?;
     let mut registry = load_registry(project_root)?;
     let flow = registry
         .flows
         .iter_mut()
         .find(|flow| flow.flow_ref == flow_ref)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "FlowRef is not registered in this Project"))?;
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "FlowRef is not registered in this Project",
+            )
+        })?;
     let reconciled = reconcile_record(project_root, flow)?;
-    let source = safe_source_member_path(project_root, &flow.path, true)?;
-    let content = String::from_utf8(fs::read(source)?)
+    let content = String::from_utf8(flow_bytes(project_root, &flow.path)?)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Flow source is not UTF-8 text"))?;
+    if content_revision_bytes(content.as_bytes())!=flow.current_revision {return Err(io::Error::new(io::ErrorKind::AlreadyExists,"Flow changed while reading its revision"));}
     let record = flow.clone();
     if reconciled {
         write_registry(project_root, &registry)?;
@@ -537,13 +697,25 @@ pub fn write_flow(
     actor_kind: &str,
     agent_session_ref: Option<String>,
 ) -> io::Result<FlowRecord> {
+    let _source_lock=crate::source_safety::lock(project_root,"source-mutation.lock")?;
     validate_actor_kind(actor_kind)?;
+    if content.len() > MAX_FLOW_TEXT_BYTES || content.contains('\0') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Flow content must be bounded text without NUL",
+        ));
+    }
     let mut registry = load_registry(project_root)?;
     let index = registry
         .flows
         .iter()
         .position(|flow| flow.flow_ref == flow_ref)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "FlowRef is not registered in this Project"))?;
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "FlowRef is not registered in this Project",
+            )
+        })?;
     let reconciled = reconcile_record(project_root, &mut registry.flows[index])?;
     if reconciled {
         write_registry(project_root, &registry)?;
@@ -557,8 +729,23 @@ pub fn write_flow(
             ),
         ));
     }
-    let source = safe_source_member_path(project_root, &registry.flows[index].path, true)?;
-    fs::write(&source, content.as_bytes())?;
+    crate::world_source::validate_attribution(actor_kind, agent_session_ref.as_deref())?;
+    let binding = crate::source_horizon::project_source_bindings(project_root)?
+        .into_iter()
+        .find(|b| b.source_ref == registry.flows[index].source_ref)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "Flow is not in its native source horizon",
+            )
+        })?;
+    crate::world_source::enforce_write_authority(
+        &binding,
+        actor_kind,
+        agent_session_ref.as_deref(),
+    )?;
+    let _source = safe_source_member_path(project_root, &registry.flows[index].path, true)?;
+    crate::source_safety::replace(project_root,&registry.flows[index].path,expected_revision,content)?;
     let changed = store_revision(
         project_root,
         &mut registry.flows[index],
@@ -581,24 +768,38 @@ pub fn rename_flow(
     expected_revision: &str,
     new_path: &str,
 ) -> io::Result<FlowRecord> {
+    let _source_lock=crate::source_safety::lock(project_root,"source-mutation.lock")?;
     let mut registry = load_registry(project_root)?;
     let index = registry
         .flows
         .iter()
         .position(|flow| flow.flow_ref == flow_ref)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "FlowRef is not registered in this Project"))?;
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "FlowRef is not registered in this Project",
+            )
+        })?;
     if reconcile_record(project_root, &mut registry.flows[index])? {
         write_registry(project_root, &registry)?;
     }
     if registry.flows[index].current_revision != expected_revision {
-        return Err(io::Error::new(io::ErrorKind::AlreadyExists, "Flow revision conflict before rename"));
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "Flow revision conflict before rename",
+        ));
     }
-    let normalized = relative_member(new_path)?.to_string_lossy().replace('\\', "/");
+    let normalized = relative_member(new_path)?
+        .to_string_lossy()
+        .replace('\\', "/");
     ensure_unique_path(&registry, &normalized, Some(flow_ref))?;
     validate_flow_placement(project_root, &normalized)?;
     let destination = safe_source_member_path(project_root, &normalized, false)?;
     if destination.exists() {
-        return Err(io::Error::new(io::ErrorKind::AlreadyExists, "rename destination already exists"));
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "rename destination already exists",
+        ));
     }
     let old = safe_source_member_path(project_root, &registry.flows[index].path, true)?;
     fs::rename(old, &destination)?;
@@ -616,18 +817,27 @@ pub fn set_flow_lifecycle(
     expected_revision: &str,
     lifecycle: &str,
 ) -> io::Result<FlowRecord> {
+    let _source_lock=crate::source_safety::lock(project_root,"source-mutation.lock")?;
     validate_lifecycle(lifecycle)?;
     let mut registry = load_registry(project_root)?;
     let index = registry
         .flows
         .iter()
         .position(|flow| flow.flow_ref == flow_ref)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "FlowRef is not registered in this Project"))?;
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "FlowRef is not registered in this Project",
+            )
+        })?;
     if reconcile_record(project_root, &mut registry.flows[index])? {
         write_registry(project_root, &registry)?;
     }
     if registry.flows[index].current_revision != expected_revision {
-        return Err(io::Error::new(io::ErrorKind::AlreadyExists, "Flow revision conflict before lifecycle change"));
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "Flow revision conflict before lifecycle change",
+        ));
     }
     registry.flows[index].lifecycle = lifecycle.to_owned();
     write_registry(project_root, &registry)?;
@@ -639,10 +849,14 @@ pub fn snapshot_flows_for_day(
     snapshot_root: &Path,
     day: &str,
 ) -> io::Result<Vec<FlowDaySnapshot>> {
+    let _source_lock=crate::source_safety::lock(project_root,"source-mutation.lock")?;
     let mut registry = load_registry(project_root)?;
     let mut changed = false;
     for flow in &mut registry.flows {
-        changed |= reconcile_record(project_root, flow)?;
+        let path = safe_source_member_path(project_root, &flow.path, true)?;
+        if require_flow_retrieval(project_root, &path).is_ok() {
+            changed |= reconcile_record(project_root, flow)?;
+        }
     }
     if changed {
         write_registry(project_root, &registry)?;
@@ -683,12 +897,14 @@ fn required(input: &Value, field: &str, action: &str) -> Result<String, ActionRe
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
-        .ok_or_else(|| ActionResult::failure(
-            Some(action),
-            ResultStatus::InvalidInput,
-            format!("{action} requires {field}."),
-            None,
-        ))
+        .ok_or_else(|| {
+            ActionResult::failure(
+                Some(action),
+                ResultStatus::InvalidInput,
+                format!("{action} requires {field}."),
+                None,
+            )
+        })
 }
 
 fn optional(input: &Value, field: &str) -> Option<String> {
@@ -700,14 +916,26 @@ fn optional(input: &Value, field: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn project_context(action: &str, input: &Value, context: &ActionExecutionContext<'_>) -> Result<PathBuf, ActionResult> {
+fn project_context(
+    action: &str,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> Result<PathBuf, ActionResult> {
     let project = required(input, "project", action)?;
-    let project = relative_member(&project).map_err(|error| ActionResult::failure(
-        Some(action), ResultStatus::InvalidInput, error.to_string(), None,
-    ))?;
-    let root = resolve_central_root(context.root_options).map_err(|message| ActionResult::failure(
-        Some(action), ResultStatus::InvalidInput, message, None,
-    ))?.path;
+    let project = relative_member(&project).map_err(|error| {
+        ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            error.to_string(),
+            None,
+        )
+    })?;
+    let root = resolve_central_root(context.root_options)
+        .map_err(|message| {
+            ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None)
+        })?
+        .path;
+    crate::projectcentral_flow::reject_symlink_components(&root,&Path::new("Work").join(&project)).map_err(|e|ActionResult::failure(Some(action),ResultStatus::InvalidInput,e.to_string(),None))?;
     let project_root = root.join("Work").join(project);
     if !project_root.is_dir() {
         return Err(ActionResult::failure(
@@ -717,16 +945,22 @@ fn project_context(action: &str, input: &Value, context: &ActionExecutionContext
             None,
         ));
     }
-    read_project_manifest(&project_root).map_err(|error| ActionResult::failure(
-        Some(action), ResultStatus::InvalidCentralStructure, error.to_string(), None,
-    ))?;
+    read_project_manifest(&project_root).map_err(|error| {
+        ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidCentralStructure,
+            error.to_string(),
+            None,
+        )
+    })?;
     Ok(project_root)
 }
 
 fn io_failure(action: &str, error: io::Error) -> ActionResult {
     let status = match error.kind() {
         io::ErrorKind::InvalidInput | io::ErrorKind::NotFound => ResultStatus::InvalidInput,
-        io::ErrorKind::AlreadyExists => ResultStatus::InvalidInput,
+        io::ErrorKind::AlreadyExists => ResultStatus::VerificationFailure,
+        io::ErrorKind::PermissionDenied => ResultStatus::UnavailableCapability,
         io::ErrorKind::InvalidData => ResultStatus::VerificationFailure,
         _ => ResultStatus::InternalFailure,
     };
@@ -755,37 +989,115 @@ fn descriptor(
         id: id.into(),
         title: title.into(),
         description: description.into(),
-        inputs: inputs.iter().map(|(name, required)| input(name, *required)).collect(),
-        output: ActionOutputDefinition { output_type: output_type.into() },
+        inputs: inputs
+            .iter()
+            .map(|(name, required)| input(name, *required))
+            .collect(),
+        output: ActionOutputDefinition {
+            output_type: output_type.into(),
+        },
         mutation_class,
         preview_supported: false,
         required_ports: vec![],
-        availability: ActionAvailability { available: true, reason: None },
+        availability: ActionAvailability {
+            available: true,
+            reason: None,
+        },
     }
 }
 
-fn list_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn inspect_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    let action = "projectcentral.flow.inspect";
+    let root = match project_context(action, input, context) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let flow = match required(input, "flow_ref", action) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    inspect_flow(&root, &flow)
+        .map(|v| ActionResult::success(action, v))
+        .unwrap_or_else(|e| io_failure(action, e))
+}
+fn list_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.flow.list";
-    let root = match project_context(action, input, context) { Ok(root) => root, Err(result) => return result };
+    let root = match project_context(action, input, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
     list_flows(&root)
-        .map(|value| ActionResult::success(action, serde_json::to_value(value).expect("Flow list serializes")))
+        .map(|value| {
+            ActionResult::success(
+                action,
+                serde_json::to_value(value).expect("Flow list serializes"),
+            )
+        })
         .unwrap_or_else(|error| io_failure(action, error))
 }
 
-fn read_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn read_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.flow.read";
-    let root = match project_context(action, input, context) { Ok(root) => root, Err(result) => return result };
-    let flow_ref = match required(input, "flow_ref", action) { Ok(value) => value, Err(result) => return result };
+    let root = match project_context(action, input, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
+    let flow_ref = match required(input, "flow_ref", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
     read_flow(&root, &flow_ref)
-        .map(|value| ActionResult::success(action, serde_json::to_value(value).expect("Flow reading serializes")))
+        .and_then(|reading| {
+            if input
+                .get("expected_revision")
+                .is_some_and(|v| v.as_str() != Some(reading.flow.current_revision.as_str()))
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "Flow read revision conflict",
+                ));
+            }
+            Ok(reading)
+        })
+        .map(|value| {
+            ActionResult::success(
+                action,
+                serde_json::to_value(value).expect("Flow reading serializes"),
+            )
+        })
         .unwrap_or_else(|error| io_failure(action, error))
 }
 
-fn create_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn create_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.flow.create";
-    let root = match project_context(action, input, context) { Ok(root) => root, Err(result) => return result };
-    let actor = match required(input, "actor", action) { Ok(value) => value, Err(result) => return result };
-    let actor_kind = match required(input, "actor_kind", action) { Ok(value) => value, Err(result) => return result };
+    let root = match project_context(action, input, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
+    let actor = match required(input, "actor", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let actor_kind = match required(input, "actor_kind", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
     create_flow(
         &root,
         optional(input, "local_stamp").as_deref(),
@@ -795,75 +1107,200 @@ fn create_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionCon
         &actor_kind,
         optional(input, "agent_session_ref"),
     )
-    .map(|flow| ActionResult::success(action, json!({"flow": flow, "automatic_agent_or_model_invocation": false})))
+    .map(|flow| {
+        ActionResult::success(
+            action,
+            json!({"flow": flow, "automatic_agent_or_model_invocation": false}),
+        )
+    })
     .unwrap_or_else(|error| io_failure(action, error))
 }
 
-fn adopt_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn adopt_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.flow.adopt";
-    let root = match project_context(action, input, context) { Ok(root) => root, Err(result) => return result };
-    let path = match required(input, "path", action) { Ok(value) => value, Err(result) => return result };
-    let actor = match required(input, "actor", action) { Ok(value) => value, Err(result) => return result };
-    let actor_kind = match required(input, "actor_kind", action) { Ok(value) => value, Err(result) => return result };
-    adopt_flow(&root, &path, optional(input, "title"), &actor, &actor_kind, optional(input, "agent_session_ref"))
-        .map(|flow| ActionResult::success(action, json!({"flow": flow, "automatic_agent_or_model_invocation": false})))
-        .unwrap_or_else(|error| io_failure(action, error))
+    let root = match project_context(action, input, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
+    let path = match required(input, "path", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let actor = match required(input, "actor", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let actor_kind = match required(input, "actor_kind", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    adopt_flow(
+        &root,
+        &path,
+        optional(input, "title"),
+        &actor,
+        &actor_kind,
+        optional(input, "agent_session_ref"),
+    )
+    .map(|flow| {
+        ActionResult::success(
+            action,
+            json!({"flow": flow, "automatic_agent_or_model_invocation": false}),
+        )
+    })
+    .unwrap_or_else(|error| io_failure(action, error))
 }
 
-fn write_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn write_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.flow.write";
-    let root = match project_context(action, input, context) { Ok(root) => root, Err(result) => return result };
-    let flow_ref = match required(input, "flow_ref", action) { Ok(value) => value, Err(result) => return result };
-    let expected_revision = match required(input, "expected_revision", action) { Ok(value) => value, Err(result) => return result };
-    let content = input.get("content").and_then(Value::as_str).unwrap_or("").to_owned();
-    let actor = match required(input, "actor", action) { Ok(value) => value, Err(result) => return result };
-    let actor_kind = match required(input, "actor_kind", action) { Ok(value) => value, Err(result) => return result };
-    write_flow(&root, &flow_ref, &expected_revision, &content, &actor, &actor_kind, optional(input, "agent_session_ref"))
-        .map(|flow| ActionResult::success(action, json!({"flow": flow, "automatic_agent_or_model_invocation": false})))
-        .unwrap_or_else(|error| io_failure(action, error))
+    let root = match project_context(action, input, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
+    let flow_ref = match required(input, "flow_ref", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let expected_revision = match required(input, "expected_revision", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let content = input
+        .get("content")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned();
+    let actor = match required(input, "actor", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let actor_kind = match required(input, "actor_kind", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    write_flow(
+        &root,
+        &flow_ref,
+        &expected_revision,
+        &content,
+        &actor,
+        &actor_kind,
+        optional(input, "agent_session_ref"),
+    )
+    .map(|flow| {
+        ActionResult::success(
+            action,
+            json!({"flow": flow, "automatic_agent_or_model_invocation": false}),
+        )
+    })
+    .unwrap_or_else(|error| io_failure(action, error))
 }
 
-fn rename_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn rename_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.flow.rename";
-    let root = match project_context(action, input, context) { Ok(root) => root, Err(result) => return result };
-    let flow_ref = match required(input, "flow_ref", action) { Ok(value) => value, Err(result) => return result };
-    let expected_revision = match required(input, "expected_revision", action) { Ok(value) => value, Err(result) => return result };
-    let new_path = match required(input, "new_path", action) { Ok(value) => value, Err(result) => return result };
+    let root = match project_context(action, input, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
+    let flow_ref = match required(input, "flow_ref", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let expected_revision = match required(input, "expected_revision", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let new_path = match required(input, "new_path", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
     rename_flow(&root, &flow_ref, &expected_revision, &new_path)
-        .map(|flow| ActionResult::success(action, json!({"flow": flow, "automatic_agent_or_model_invocation": false})))
+        .map(|flow| {
+            ActionResult::success(
+                action,
+                json!({"flow": flow, "automatic_agent_or_model_invocation": false}),
+            )
+        })
         .unwrap_or_else(|error| io_failure(action, error))
 }
 
-fn lifecycle_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn lifecycle_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.flow.lifecycle";
-    let root = match project_context(action, input, context) { Ok(root) => root, Err(result) => return result };
-    let flow_ref = match required(input, "flow_ref", action) { Ok(value) => value, Err(result) => return result };
-    let expected_revision = match required(input, "expected_revision", action) { Ok(value) => value, Err(result) => return result };
-    let lifecycle = match required(input, "lifecycle", action) { Ok(value) => value, Err(result) => return result };
+    let root = match project_context(action, input, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
+    let flow_ref = match required(input, "flow_ref", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let expected_revision = match required(input, "expected_revision", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let lifecycle = match required(input, "lifecycle", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
     set_flow_lifecycle(&root, &flow_ref, &expected_revision, &lifecycle)
-        .map(|flow| ActionResult::success(action, json!({"flow": flow, "automatic_agent_or_model_invocation": false})))
+        .map(|flow| {
+            ActionResult::success(
+                action,
+                json!({"flow": flow, "automatic_agent_or_model_invocation": false}),
+            )
+        })
         .unwrap_or_else(|error| io_failure(action, error))
 }
 
-fn history_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn history_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.flow.history";
-    let root = match project_context(action, input, context) { Ok(root) => root, Err(result) => return result };
-    let flow_ref = match required(input, "flow_ref", action) { Ok(value) => value, Err(result) => return result };
+    let root = match project_context(action, input, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
+    let flow_ref = match required(input, "flow_ref", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
     match read_flow(&root, &flow_ref) {
-        Ok(reading) => ActionResult::success(action, json!({
-            "flow_ref": reading.flow.flow_ref,
-            "current_revision": reading.flow.current_revision,
-            "revisions": reading.flow.revisions,
-            "automatic_agent_or_model_invocation": false,
-        })),
+        Ok(reading) => ActionResult::success(
+            action,
+            json!({
+                "flow_ref": reading.flow.flow_ref,
+                "current_revision": reading.flow.current_revision,
+                "revisions": reading.flow.revisions,
+                "automatic_agent_or_model_invocation": false,
+            }),
+        ),
         Err(error) => io_failure(action, error),
     }
 }
 
 pub fn register_projectcentral_flow_actions(registry: &mut ActionRegistry) {
     let actions = [
+        (descriptor("projectcentral.flow.inspect","Inspect Project Flow","Read native Flow descriptor and last-observed revision with retrieval availability; no source body is returned.",MutationClass::ReadOnly,"projectcentral-flow-inspection",&[("project",true),("flow_ref",true)]),inspect_action as fn(&ActionRegistry,&Value,&ActionExecutionContext<'_>)->ActionResult),
         (descriptor("projectcentral.flow.list", "List Project Flows", "List stable Flow identities and current source/revision/lifecycle state. Reconciles external file edits into revision provenance and Source Change Horizon without invoking an Agent/model.", MutationClass::LocallyMutating, "projectcentral-flow-list", &[("project", true)]), list_action as fn(&ActionRegistry, &Value, &ActionExecutionContext<'_>) -> ActionResult),
-        (descriptor("projectcentral.flow.read", "Read Project Flow", "Read the current ordinary Flow source by stable FlowRef and reconcile any external editor revision with actor unknown.", MutationClass::LocallyMutating, "projectcentral-flow-reading", &[("project", true), ("flow_ref", true)]), read_action),
+        (descriptor("projectcentral.flow.read", "Read Project Flow", "Read the current ordinary Flow source by stable FlowRef and reconcile any external editor revision with actor unknown.", MutationClass::LocallyMutating, "projectcentral-flow-reading", &[("project", true), ("flow_ref", true),("expected_revision",false)]), read_action),
         (descriptor("projectcentral.flow.create", "Create Project Flow", "Create a blank ordinary-file Flow with stable FlowRef. ProjectCentral/now/flows/YYYY-MM-DD-HHMM.md is the default convention when local_stamp is supplied; path is not identity.", MutationClass::LocallyMutating, "projectcentral-flow", &[("project", true), ("actor", true), ("actor_kind", true), ("local_stamp", false), ("path", false), ("title", false), ("agent_session_ref", false)]), create_action),
         (descriptor("projectcentral.flow.adopt", "Adopt retained source as Flow", "Give an existing ordinary Project file a stable FlowRef without moving it, preserving provider/domain-local placement.", MutationClass::LocallyMutating, "projectcentral-flow", &[("project", true), ("path", true), ("actor", true), ("actor_kind", true), ("title", false), ("agent_session_ref", false)]), adopt_action),
         (descriptor("projectcentral.flow.write", "Write Project Flow revision", "Revision-safe canonical whole-file write shared by human and Agent callers. A stale expected_revision returns an explicit conflict.", MutationClass::LocallyMutating, "projectcentral-flow", &[("project", true), ("flow_ref", true), ("expected_revision", true), ("content", false), ("actor", true), ("actor_kind", true), ("agent_session_ref", false)]), write_action),
@@ -872,6 +1309,8 @@ pub fn register_projectcentral_flow_actions(registry: &mut ActionRegistry) {
         (descriptor("projectcentral.flow.history", "Read Project Flow history", "Read exact stored revision receipts for one FlowRef. Current Flow remains refinable while prior bytes remain under derived owner history.", MutationClass::LocallyMutating, "projectcentral-flow-history", &[("project", true), ("flow_ref", true)]), history_action),
     ];
     for (descriptor, handler) in actions {
-        registry.register(descriptor, handler).expect("Project Flow Action ids are valid");
+        registry
+            .register(descriptor, handler)
+            .expect("Project Flow Action ids are valid");
     }
 }

@@ -161,3 +161,14 @@ Provider failures remain typed Connector/Port failures inside the result detail.
 Optional host/launcher Surfaces may add Actions or Connector composition while preserving this protocol. In particular, the macOS host line uses descriptor-driven `action list` and `action run` for Raycast/Shortcuts integration. Those personal extensions remain outside stock `ctrl`; their provider-specific behavior is not required by core Actions.
 
 Ordinary file authority, conflict, bounded history and interruption semantics: [Native ordinary-file recovery](NATIVE-ORDINARY-FILE-RECOVERY.md).
+
+Returned work and Flow provider inspection:
+
+- `projectcentral.flow.inspect`: native descriptor, last-observed revision, and retrieval/write/history availability without source body.
+- `projectcentral.source.return`: persist exact-basis returned work as a proposal.
+- `projectcentral.source.returns`: bounded metadata pages of native returns.
+- `projectcentral.source.return_read`: proposal, current source, conflict and native acceptance availability.
+- `projectcentral.source.return_accept`: explicitly apply a collaborative-source proposal through its existing native authority/CAS route; acceptance strings do not grant human authority.
+- `projectcentral.source.return_reject`: retain rejection without source mutation.
+
+See [Source Return contract](SOURCE-RETURN.md). Flow read accepts optional `expected_revision`; source bodies are bounded to 4 MiB UTF-8 without NUL and retrieval-excluded material is refused.

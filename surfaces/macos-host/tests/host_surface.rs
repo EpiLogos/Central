@@ -70,7 +70,7 @@ mod unix_tests {
             .collect::<Vec<_>>();
 
         let macos = create_macos_action_registry();
-        assert_eq!(macos.list().len(), 65);
+        assert_eq!(macos.list().len(), 71);
         for id in core_ids {
             assert!(macos.get(&id).is_some(), "macOS host lost core Action {id}");
         }

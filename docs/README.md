@@ -131,3 +131,5 @@ dependency rule; this index carries the corpus.
 - [NATIVE-FILESYSTEM-READING.md](NATIVE-FILESYSTEM-READING.md) — owner-resolved directory and text readings over the actual Central tree.
 
 - [Native ordinary-file recovery](NATIVE-ORDINARY-FILE-RECOVERY.md): filesystem CAS, history, authority refusal and interruption recovery.
+
+- [Source Return](SOURCE-RETURN.md): native proposal/CAS acceptance, provenance, and explicit human-authority availability.

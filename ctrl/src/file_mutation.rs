@@ -44,7 +44,7 @@ fn bytes(file: &mut File) -> io::Result<Vec<u8>> {
     }
     Ok(b)
 }
-fn directory(root: &Path, relative: &Path) -> io::Result<File> {
+pub(crate) fn directory(root: &Path, relative: &Path) -> io::Result<File> {
     let mut file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY)
@@ -93,7 +93,7 @@ pub(crate) fn open_native_file(root: &Path, relative: &str) -> io::Result<File> 
     }
     Ok(unsafe { File::from_raw_fd(fd) })
 }
-fn rename_in(parent: &File, from: &str, to: &str) -> io::Result<()> {
+pub(crate) fn rename_in(parent: &File, from: &str, to: &str) -> io::Result<()> {
     let from = std::ffi::CString::new(from).map_err(io::Error::other)?;
     let to = std::ffi::CString::new(to).map_err(io::Error::other)?;
     if unsafe {
@@ -109,7 +109,7 @@ fn rename_in(parent: &File, from: &str, to: &str) -> io::Result<()> {
     }
     Ok(())
 }
-fn create_in(parent: &File, name: &str, mode: u32) -> io::Result<File> {
+pub(crate) fn create_in(parent: &File, name: &str, mode: u32) -> io::Result<File> {
     let name = std::ffi::CString::new(name).map_err(io::Error::other)?;
     let fd = unsafe {
         libc::openat(
@@ -203,7 +203,7 @@ fn key(text: &[u8]) -> String {
 }
 // The owner lock serializes this directory. Only a fully fsynced record becomes
 // visible under its durable name, so process death never leaves partial JSON.
-fn atomic_record(path: &Path, data: &[u8]) -> io::Result<()> {
+pub(crate) fn atomic_record(path: &Path, data: &[u8]) -> io::Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| invalid("Record has no parent"))?;

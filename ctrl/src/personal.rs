@@ -25,6 +25,8 @@ struct ControlProposal {
     classification: String,
     proposed_content: String,
     #[serde(default)]
+    basis_revision: Option<String>,
+    #[serde(default)]
     evidence_refs: Vec<String>,
     status: String,
     accepted_by_ref: Option<String>,
@@ -251,6 +253,7 @@ fn safe_control_target(root: &Path, target: &str) -> Result<PathBuf, String> {
     if components.any(|component| !matches!(component, Component::Normal(_))) {
         return Err("Control proposal target must not contain traversal or platform-root components.".to_owned());
     }
+    crate::projectcentral_flow::reject_symlink_components(root,&Path::new("Control").join(relative)).map_err(|e|e.to_string())?;
     Ok(root.join("Control").join(relative))
 }
 
@@ -278,7 +281,7 @@ fn write_proposal(path: &Path, proposal: &ControlProposal) -> Result<(), io::Err
         fs::create_dir_all(parent)?;
     }
     let bytes = serde_json::to_vec_pretty(proposal).map_err(io::Error::other)?;
-    fs::write(path, bytes)
+    crate::file_mutation::atomic_record(path,&bytes)
 }
 
 fn read_proposal(path: &Path) -> Result<ControlProposal, io::Error> {
@@ -325,6 +328,8 @@ fn control_propose_action(
         Ok(id) => id,
         Err(error) => return ActionResult::failure(Some("control.propose-change"), ResultStatus::InternalFailure, error.to_string(), None),
     };
+    if proposed_content.len()>crate::source_safety::MAX_SOURCE || proposed_content.contains('\0') {return ActionResult::failure(Some("control.propose-change"),ResultStatus::InvalidInput,"Control proposal must be bounded UTF-8 text",None);}
+    let basis_revision=match crate::source_safety::read(&root.path.join("Control"),&target) {Ok(content)=>crate::projectcentral_flow::content_revision_bytes(content.as_bytes()),Err(e) if e.kind()==io::ErrorKind::NotFound=>"central.absent/v1".into(),Err(e)=>return ActionResult::failure(Some("control.propose-change"),ResultStatus::InvalidInput,e.to_string(),None)};
     let proposal = ControlProposal {
         schema: PROPOSAL_SCHEMA.to_owned(),
         id: id.clone(),
@@ -332,6 +337,7 @@ fn control_propose_action(
         reason,
         classification: optional_text(input, "classification").unwrap_or_else(|| "authored-context".to_owned()),
         proposed_content,
+        basis_revision:Some(basis_revision),
         evidence_refs,
         status: "proposed".to_owned(),
         accepted_by_ref: None,
@@ -393,7 +399,7 @@ fn control_apply_proposal_action(
         Ok(path) => path,
         Err(message) => return ActionResult::failure(Some("control.apply-proposal"), ResultStatus::InvalidInput, message, None),
     };
-    let mut proposal = match read_proposal(&proposal_file) {
+    let proposal = match read_proposal(&proposal_file) {
         Ok(proposal) => proposal,
         Err(error) => return ActionResult::failure(Some("control.apply-proposal"), ResultStatus::InvalidInput, error.to_string(), None),
     };
@@ -403,33 +409,13 @@ fn control_apply_proposal_action(
             format!("Proposal {} is not pending.", proposal.id), None,
         );
     }
-    let target = match safe_control_target(&root.path, &proposal.target) {
-        Ok(target) => target,
-        Err(message) => return ActionResult::failure(Some("control.apply-proposal"), ResultStatus::InvalidInput, message, None),
-    };
-    if let Some(parent) = target.parent() {
-        if let Err(error) = fs::create_dir_all(parent) {
-            return ActionResult::failure(Some("control.apply-proposal"), ResultStatus::InternalFailure, error.to_string(), None);
-        }
-    }
-    if let Err(error) = fs::write(&target, proposal.proposed_content.as_bytes()) {
-        return ActionResult::failure(Some("control.apply-proposal"), ResultStatus::InternalFailure, error.to_string(), None);
-    }
-    proposal.status = "applied".to_owned();
-    proposal.accepted_by_ref = Some(accepted_by_ref.clone());
-    if let Err(error) = write_proposal(&proposal_file, &proposal) {
-        return ActionResult::failure(Some("control.apply-proposal"), ResultStatus::PartialCompletion, error.to_string(), Some(json!({ "target": target })));
-    }
-    ActionResult::success(
-        "control.apply-proposal",
-        json!({
-            "proposal": proposal,
-            "target": target,
-            "accepted_by_ref": accepted_by_ref,
-            "authored_source_mutated": true,
-            "silent_learning": false,
-        }),
-    )
+    if let Err(message)=safe_control_target(&root.path,&proposal.target) {return ActionResult::failure(Some("control.apply-proposal"),ResultStatus::InvalidInput,message,None);}
+    let Some(basis)=proposal.basis_revision.as_deref() else {return ActionResult::failure(Some("control.apply-proposal"),ResultStatus::UnavailableCapability,"Legacy Control proposal has no source basis; create a fresh native proposal before review",Some(json!({"authored_source_mutated":false})));};
+    let current=match crate::source_safety::read(&root.path.join("Control"),&proposal.target){Ok(content)=>crate::projectcentral_flow::content_revision_bytes(content.as_bytes()),Err(e) if e.kind()==io::ErrorKind::NotFound=>"central.absent/v1".into(),Err(e)=>return ActionResult::failure(Some("control.apply-proposal"),ResultStatus::VerificationFailure,e.to_string(),None)};
+    if current!=basis {return ActionResult::failure(Some("control.apply-proposal"),ResultStatus::VerificationFailure,"Control proposal source basis changed; concurrent source is preserved",Some(json!({"outcome":"conflict","expected_revision":basis,"current_revision":current,"authored_source_mutated":false})));}
+    // This extension has no native attested human principal. A string naming a
+    // person cannot turn a proposal into authority over Control source.
+    ActionResult::failure(Some("control.apply-proposal"),ResultStatus::UnavailableCapability,"Control acceptance requires a native human authority route; accepted_by_ref is attribution, not that authority",Some(json!({"accepted_by_ref":accepted_by_ref,"authored_source_mutated":false})))
 }
 
 pub fn register_personal_actions(registry: &mut ActionRegistry) {
@@ -598,7 +584,7 @@ mod tests {
     }
 
     #[test]
-    fn proposal_does_not_mutate_authored_source_until_explicit_apply() {
+    fn proposal_acceptance_text_does_not_grant_control_source_authority() {
         let root = root();
         let options = RootOptions { explicit_root: Some(root.clone()), configured_root: None, home: None };
         let connectors = central_connector_sdk::ConnectorRegistry::default();
@@ -618,9 +604,21 @@ mod tests {
             "proposal_id": id,
             "accepted_by_ref": "human:local-author"
         }), &context);
-        assert!(applied.ok);
-        assert_eq!(fs::read_to_string(root.join("Control/agents/collaboration.md")).unwrap(), "Prefer evidence-backed changes.\n");
+        assert!(!applied.ok);
+        assert_eq!(applied.status,ResultStatus::UnavailableCapability);
+        assert!(!root.join("Control/agents/collaboration.md").exists());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn control_proposals_keep_basis_and_refuse_stale_or_legacy_application() {
+        let root=root(); let options=RootOptions{explicit_root:Some(root.clone()),configured_root:None,home:None};
+        let connectors=central_connector_sdk::ConnectorRegistry::default();let connector_context=ConnectorContext{platform:"test".into()};let context=ActionExecutionContext{root_options:&options,connectors:&connectors,connector_context:&connector_context};let registry=create_personal_action_registry();
+        let source=root.join("Control/user/intent.md");fs::write(&source,"basis").unwrap();
+        let proposal=registry.execute("control.propose-change",&json!({"target":"user/intent.md","reason":"return test","proposed_content":"proposal"}),&context);assert!(proposal.ok,"{proposal:?}");let id=proposal.data.unwrap()["proposal"]["id"].as_str().unwrap().to_owned();
+        fs::write(&source,"concurrent human text").unwrap();let stale=registry.execute("control.apply-proposal",&json!({"proposal_id":id,"accepted_by_ref":"human:claimed"}),&context);assert_eq!(stale.status,ResultStatus::VerificationFailure);assert_eq!(fs::read_to_string(&source).unwrap(),"concurrent human text");
+        let file=proposal_path(&root,&id).unwrap();let mut legacy:Value=serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();legacy.as_object_mut().unwrap().remove("basis_revision");fs::write(&file,serde_json::to_vec(&legacy).unwrap()).unwrap();
+        let legacy=registry.execute("control.apply-proposal",&json!({"proposal_id":id,"accepted_by_ref":"human:claimed"}),&context);assert_eq!(legacy.status,ResultStatus::UnavailableCapability);assert_eq!(fs::read_to_string(&source).unwrap(),"concurrent human text");let _=fs::remove_dir_all(root);
     }
 
     #[test]

@@ -25,7 +25,6 @@ use crate::source_horizon::{
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -84,7 +83,7 @@ fn authored_human_ground(binding: &SourceBinding) -> bool {
 /// Attribution is declared by the caller, and a declaration has to be coherent:
 /// human authorship does not happen inside an agent session, so a write that
 /// declares both is refusing to say what it is and is recorded as nothing.
-fn validate_attribution(actor_kind: &str, agent_session_ref: Option<&str>) -> io::Result<()> {
+pub(crate) fn validate_attribution(actor_kind: &str, agent_session_ref: Option<&str>) -> io::Result<()> {
     if actor_kind == "human" && agent_session_ref.is_some() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -100,7 +99,7 @@ fn validate_attribution(actor_kind: &str, agent_session_ref: Option<&str>) -> io
 /// recognisers are machine-checked from the Project's ground relations; what
 /// this gate guarantees is the refusal of declared agents and agent sessions,
 /// not of an unattested bare self-declaration of human authorship.
-fn enforce_write_authority(
+pub(crate) fn enforce_write_authority(
     binding: &SourceBinding,
     actor_kind: &str,
     agent_session_ref: Option<&str>,
@@ -131,14 +130,9 @@ pub fn read_world_source(project_root: &Path, source_ref: &str) -> io::Result<Wo
             )
         })?;
     require_retrieval(&observed.binding)?;
-    let path = safe_source_member_path(project_root, &observed.binding.path, true)?;
-    let bytes = fs::read(path)?;
-    let content = String::from_utf8(bytes).map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "World source is not UTF-8 text and is not disclosed as content by this Action",
-        )
-    })?;
+    let _path = safe_source_member_path(project_root, &observed.binding.path, true)?;
+    let content=crate::source_safety::read(project_root,&observed.binding.path)?;
+    if crate::projectcentral_flow::content_revision_bytes(content.as_bytes())!=observed.revision.revision {return Err(io::Error::new(io::ErrorKind::AlreadyExists,"Source changed while reading its revision"));}
     Ok(WorldSourceReading {
         schema: WORLD_SOURCE_READING_SCHEMA.to_owned(),
         world_ref: horizon.world_ref,
@@ -159,6 +153,7 @@ pub fn write_world_source(
     actor_kind: &str,
     agent_session_ref: Option<String>,
 ) -> io::Result<WorldSourceWriteReceipt> {
+    let _lock=crate::source_safety::lock(project_root,"source-mutation.lock")?;
     validate_actor_kind(actor_kind)?;
     validate_attribution(actor_kind, agent_session_ref.as_deref())?;
     if expected_revision.trim().is_empty() {
@@ -194,8 +189,8 @@ pub fn write_world_source(
         ));
     }
 
-    let path = safe_source_member_path(project_root, &binding.path, true)?;
-    fs::write(&path, content.as_bytes())?;
+    let _path = safe_source_member_path(project_root, &binding.path, true)?;
+    crate::source_safety::replace(project_root,&binding.path,expected_revision,content)?;
 
     let mut attributions = BTreeMap::new();
     attributions.insert(
@@ -273,6 +268,7 @@ fn project_root(action: &str, input: &Value, context: &ActionExecutionContext<'_
             ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None)
         })?
         .path;
+    crate::projectcentral_flow::reject_symlink_components(&root,&Path::new("Work").join(&project)).map_err(|e|ActionResult::failure(Some(action),ResultStatus::InvalidInput,e.to_string(),None))?;
     let project_root = root.join("Work").join(project);
     if !project_root.is_dir() {
         return Err(ActionResult::failure(
@@ -398,6 +394,7 @@ fn descriptor(
 }
 
 pub fn register_world_source_actions(registry: &mut ActionRegistry) {
+    crate::source_return::register(registry);
     let actions = [
         (
             descriptor(
