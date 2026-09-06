@@ -17,3 +17,4 @@ central-connector-sdk = { path = "../crates/connector-sdk" }
 central-reference-connectors = { path = "../connectors/reference" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+libc = "0.2"

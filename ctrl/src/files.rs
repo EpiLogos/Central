@@ -11,6 +11,7 @@ use crate::root::resolve_central_root;
 use crate::source_horizon::retrieval_allowed;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::os::unix::fs::MetadataExt;
 use std::{
     fs,
     io::{self, Read},
@@ -29,7 +30,7 @@ pub struct CentralPathRef {
     pub path: String,
 }
 impl CentralPathRef {
-    fn new(root: &Path, path: String) -> io::Result<Self> {
+    pub(crate) fn new(root: &Path, path: String) -> io::Result<Self> {
         Ok(Self {
             schema: "central.path-ref/v1".into(),
             ref_id: format!("central:path:{}:{}", escape(utf8(root)?), escape(&path)),
@@ -37,7 +38,7 @@ impl CentralPathRef {
             path,
         })
     }
-    fn resolve(&self, configured: &Path) -> io::Result<PathBuf> {
+    pub(crate) fn resolve(&self, configured: &Path) -> io::Result<PathBuf> {
         let root = configured.canonicalize()?;
         if *self != Self::new(&root, self.path.clone())? {
             return Err(io::Error::new(
@@ -87,6 +88,7 @@ pub struct DirectoryReading {
 }
 #[derive(Debug, Serialize)]
 pub struct FileReading {
+    pub operations: FileOperations,
     pub schema: String,
     pub location: CentralPathRef,
     pub revision: String,
@@ -96,6 +98,17 @@ pub struct FileReading {
     pub project: Option<FileProject>,
     pub source: Option<crate::source_horizon::SourceBinding>,
     pub automatic_agent_or_model_invocation: bool,
+}
+#[derive(Debug, Serialize)]
+pub struct FileOperationAvailability {
+    pub available: bool,
+    pub reason: Option<String>,
+}
+#[derive(Debug, Serialize)]
+pub struct FileOperations {
+    pub write: FileOperationAvailability,
+    pub history: FileOperationAvailability,
+    pub restore: FileOperationAvailability,
 }
 #[derive(Debug, Serialize)]
 pub struct FileProject {
@@ -135,7 +148,7 @@ fn file_project(root: &Path, relative: &str) -> Option<FileProject> {
         project_ref,
     })
 }
-fn participating_source(
+pub(crate) fn participating_source(
     root: &Path,
     relative: &str,
 ) -> Option<crate::source_horizon::SourceBinding> {
@@ -233,9 +246,15 @@ pub fn read_file(configured: &Path, location: &CentralPathRef) -> io::Result<Fil
             "Central text reading requires a regular file",
         ));
     }
-    let file = fs::File::open(path)?;
+    let file = crate::file_mutation::open_native_file(&root, &location.path)?;
+    if !file.metadata()?.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Central text reading requires a regular file",
+        ));
+    }
     let mut bytes = Vec::new();
-    file.take(MAX_TEXT_BYTES + 1).read_to_end(&mut bytes)?;
+    (&file).take(MAX_TEXT_BYTES + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > MAX_TEXT_BYTES {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -252,7 +271,35 @@ pub fn read_file(configured: &Path, location: &CentralPathRef) -> io::Result<Fil
             "File contains binary data",
         ));
     }
+    let unavailable = crate::file_mutation::ordinary_address(&root, location)
+        .err()
+        .map(|e| e.to_string());
+    let history = FileOperationAvailability {
+        available: unavailable.is_none(),
+        reason: unavailable.clone(),
+    };
+    let metadata = file.metadata()?;
+    let write_reason = unavailable.or_else(|| {
+        if metadata.nlink() != 1 {
+            Some("Files with multiple hard links require an explicit native operation".into())
+        } else if metadata.permissions().readonly() {
+            Some("File permissions are read-only".into())
+        } else {
+            None
+        }
+    });
     Ok(FileReading {
+        operations: FileOperations {
+            write: FileOperationAvailability {
+                available: write_reason.is_none(),
+                reason: write_reason.clone(),
+            },
+            history,
+            restore: FileOperationAvailability {
+                available: write_reason.is_none(),
+                reason: write_reason,
+            },
+        },
         schema: "central.file-reading/v1".into(),
         location: location.clone(),
         revision,
@@ -309,6 +356,7 @@ fn result(input: &Value, context: &ActionExecutionContext<'_>, read: bool) -> Ac
     }
 }
 pub fn register_file_actions(registry: &mut ActionRegistry) {
+    crate::file_mutation::register(registry);
     for (id, title, read) in [
         ("central.files.list", "List native Central directory", false),
         ("central.files.read", "Read native Central file", true),

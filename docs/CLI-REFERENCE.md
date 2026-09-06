@@ -29,6 +29,10 @@ The current composed registry exposes 68 Actions:
 |---|---|---|
 | `central.files.list` | list actual Central directories without adoption | `action run central.files.list` |
 | `central.files.read` | read a validated owner location as bounded UTF-8 text | `action run central.files.read` |
+| `central.files.write` | atomically replace ordinary text under owner CAS | `action run central.files.write` |
+| `central.files.history` | page native ordinary-file revision history | `action run central.files.history` |
+| `central.files.recovery_preview` | preview exact historical bytes against current basis | `action run central.files.recovery_preview` |
+| `central.files.restore` | restore an ordinary-file revision through the same CAS | `action run central.files.restore` |
 | `action.list` | discover Action descriptors | `capabilities`, `actions`, `action list` |
 | `central.root` | resolve the active Central root | `root` |
 | `central.init` | initialise the required Central root shape | `init` |
@@ -155,3 +159,5 @@ Provider failures remain typed Connector/Port failures inside the result detail.
 ## Personal host Surfaces
 
 Optional host/launcher Surfaces may add Actions or Connector composition while preserving this protocol. In particular, the macOS host line uses descriptor-driven `action list` and `action run` for Raycast/Shortcuts integration. Those personal extensions remain outside stock `ctrl`; their provider-specific behavior is not required by core Actions.
+
+Ordinary file authority, conflict, bounded history and interruption semantics: [Native ordinary-file recovery](NATIVE-ORDINARY-FILE-RECOVERY.md).
