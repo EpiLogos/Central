@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_INCREMENTAL: "0"
+
 jobs:
   product-ground:
     runs-on: ubuntu-latest
@@ -20,6 +23,9 @@ jobs:
         with:
           python-version: '3.12'
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - name: Build the actual product CLI
         run: cargo build --package ctrl --bin ctrl
       - name: Exercise documentation maintenance against real files and CLI
