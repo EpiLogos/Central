@@ -595,7 +595,7 @@ body.right-closed .right-rail{transform:translateX(100%);opacity:0;pointer-event
   ],
   "matrix_basis": {
     "protocol": "ql-capability-matrix/1",
-    "csv_sha256": "402db69811b6eef8e313819bc6331fbe4ba89c1a451536fac38b2ef7f870c0c6",
+    "csv_sha256": "4587ff3216f0b8e7410c8a5731cc2daa1966668f04891fc16a541e9b11d9a8dd",
     "manifest_sha256": "fd385de8d510d0abd4ef25c9f4951b79698fc164667e2e52907043884b617efd",
     "record_sha256": {
       "cap.central.root": "1f091f428f6f1033c2e336c7fb7b3d1ad897156834872f223701c6eae00d5c22",
@@ -607,18 +607,18 @@ body.right-closed .right-rail{transform:translateX(100%);opacity:0;pointer-event
       "cap.central.machine-recovery": "26ac4e6976853d29637b1440e551fff86faf8d88d06445e2277cbb7bc6f42be8",
       "cap.central.projectcentral-lifecycle": "a3e82dfd1a7811233e990e30eacc0a12ff33f28116175d6c6b363fb3cdcb6010",
       "cap.central.authored-ground": "42ef06ee31da4ee10679c8693e86e915582b733b4acf103989fb88b14e7fd68b",
-      "cap.central.world-map": "8b2a995369bbc472c72604abd1933d8a2bdf60f6f2950962f21d9bb85077dbf3",
-      "cap.central.reproject": "7db6c0d2aeec6610b4e763193adc94afbf5c88ed0dba59ca98bc3ec22a5528d1",
+      "cap.central.world-map": "aebe9de56a3a26b3d6cd7a3e7b002fc2885dc4d3911c93083e75366c0a89f36e",
+      "cap.central.reproject": "1debb641de1be04e1bc9afa11f251ba6b60679b96e2a22dd8a0dcf3e6dc8140f",
       "cap.central.source-reading": "5d821268f2ea92b4c76ed664013ea546ce6df8174ddc2838f198b77bf4c7b02e",
       "cap.central.source-editing": "6dc7eecfefa3f08754a8d2d9436d1acf713f7df9e35c3b9bc119a9216b446787",
-      "cap.central.source-change": "85a30236694598f971a7bf1d031bf91af80d5d544e64907da150267ae7c2bde5",
+      "cap.central.source-change": "6cb7059cd1aa39e511dd54ac382da44f101ef29a42149a0f2d16109d4052656c",
       "cap.central.source-history": "846893530b2e7605c3d60f8ab54385fec593f7ae683f29639bdaea23dbae9169",
       "cap.central.now": "1216de5a59130d761e11c491922febee431618c00ca39306839d9e83be958c56",
       "cap.central.day-rollover": "aa929ec036e1536188f4172af3d7a68437f582ac551cb38079b41d6b9758daca",
       "cap.central.flow": "6de9550af34ddff72f4a79cee6eb0c0f7133ab4b4b4bad3e2b15a5b11a05e367",
       "cap.central.governance": "5b3e4e5dd56900e52a64f643adb59d6c0bb234df2c38c77a9549cd6af025789f",
       "cap.central.skills": "f6dddb919382175ede247a241d9cc2c64a9e340f8438527dd23ba9012fb37ed2",
-      "cap.central.agent-profiles": "f58b32f656587a55797c4e65e9dbbd6f8b2eef8e9924b4dc190674622ced9b91",
+      "cap.central.agent-profiles": "f539f8d044e9be4d58c08f237a002bcdaa06c4e27ae05c98aec4c723dbdbc952",
       "cap.central.personal-surface": "6343b747b2b2aa55a4cc9d0d4cefe09e04aef65fc70d29611540b16b6997c879",
       "cap.central.control-proposals": "71a557675d9c835dcd9d5c6707d0693b3905684bde646eece38fb7f70623a944",
       "cap.central.notification": "c08548ad1a6043c5770fd3d74d427aae2f2d191ee2a7821e834e91f3e8a40f7c",
@@ -675,12 +675,15 @@ body.right-closed .right-rail{transform:translateX(100%);opacity:0;pointer-event
       "rel.central.q5.S": "f55d534126b11ba578356e413536bfef7251f962d206512a668866a9158b67e4",
       "rel.central.q5.S2": "6343d67f55c28e3d6a64d9c351e9b63c64cb872dfc491728959b275a1951c086",
       "rel.central.q4.S4": "0499fed2e8a4efe948f83d0aab3c5839045648b38582b7202526f8255fd2d802",
-      "cap.central.files": "fa08bd3e04d06b28dd5b7800552214fd36f8073aa8d7485709fd40fe0d00c041"
+      "cap.central.files": "fa08bd3e04d06b28dd5b7800552214fd36f8073aa8d7485709fd40fe0d00c041",
+      "cap.central.pasu-identity": "856e099f32b924f226b05e2a22789ca2bf67ff4e8aac7f22132b2bc4b2ac744c"
     },
-    "change_ref": "codex:thread:01a07608-d2ec-7b10-9713-74c445adf8a5",
-    "reviewed_at": "2026-09-06T16:44:56.123904+00:00",
+    "change_ref": "EpiLogos/Central#126 (W10 V1: central.pasu/v1 identity grammar; world-map/source-change/agent-profile carriers moved — code bases re-reviewed at this revision)",
+    "reviewed_at": "2026-09-07T19:40:40.923760+00:00",
     "reviewed_sections": [
-      "q1"
+      "q1",
+      "q2",
+      "q3"
     ]
   }
 }</script>
@@ -1105,6 +1108,10 @@ body.right-closed .right-rail{transform:translateX(100%);opacity:0;pointer-event
   "cap.central.agent-profiles": {
     "title": "Agent profiles",
     "href": "capability-matrix.md#cap-central-agent-profiles"
+  },
+  "cap.central.pasu-identity": {
+    "title": "Pasu identity",
+    "href": "capability-matrix.md#cap-central-pasu-identity"
   },
   "cap.central.personal-surface": {
     "title": "Personal surface",
