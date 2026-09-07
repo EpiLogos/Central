@@ -65,6 +65,12 @@ pub struct NowHandoff {
     pub session_ref: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focus_ref: Option<String>,
+    /// The bounded-entity subject (central.pasu/v1) this return attributes
+    /// to — the recognition-path seam W10 V2 adds. Declared by the caller
+    /// and recorded verbatim; never inferred. Learned-origin wiki edges
+    /// resolve to this entity (CASE 16).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attributed_to: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_refs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -678,6 +684,18 @@ fn create_handoff(input: &Value, project_root: &Path, action: &str) -> Result<No
         ));
     }
 
+    let attributed_to = optional(input, "attributed_to");
+    if let Some(reference) = &attributed_to {
+        if let Err(error) = crate::pasu::PasuRef::parse(reference) {
+            return Err(ActionResult::failure(
+                Some(action),
+                ResultStatus::InvalidInput,
+                format!("attributed_to is not a valid central.pasu/v1 ref: {error}"),
+                None,
+            ));
+        }
+    }
+
     Ok(NowHandoff {
         schema: HANDOFF_SCHEMA.into(),
         id,
@@ -691,6 +709,7 @@ fn create_handoff(input: &Value, project_root: &Path, action: &str) -> Result<No
         run_ref: optional(input, "run_ref"),
         session_ref: optional(input, "session_ref"),
         focus_ref: optional(input, "focus_ref"),
+        attributed_to,
         source_refs: string_array(input, "source_refs", action)?,
         evidence_refs: string_array(input, "evidence_refs", action)?,
         preserve_refs: string_array(input, "preserve_refs", action)?,
@@ -1490,6 +1509,7 @@ pub fn register_projectcentral_now_actions(registry: &mut ActionRegistry) {
                     ("run_ref", false),
                     ("session_ref", false),
                     ("focus_ref", false),
+                    ("attributed_to", false),
                     ("source_refs", false),
                     ("evidence_refs", false),
                     ("preserve_refs", false),
@@ -1569,6 +1589,7 @@ mod tests {
             run_ref: None,
             session_ref: None,
             focus_ref: None,
+            attributed_to: None,
             source_refs: vec![],
             evidence_refs: vec![],
             preserve_refs: vec![],
@@ -1664,5 +1685,128 @@ mod tests {
         let returned = read_handoff(&project.join(&promotion.destination)).unwrap();
         assert_eq!(returned.status, "promoted");
         assert_eq!(returned.promoted_to, vec![promotion.destination]);
+    }
+}
+
+#[cfg(test)]
+mod attribution_tests {
+    use super::*;
+    use crate::action::{create_core_action_registry, ActionExecutionContext, ActionRegistry};
+    use crate::projectcentral_ops::initialize_projectcentral;
+    use crate::tempdir;
+    use central_connector_sdk::{ConnectorContext, ConnectorRegistry};
+    use serde_json::json;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn drive_return(central: &Path, input: serde_json::Value) -> ActionResult {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let _ = NEXT.fetch_add(1, Ordering::Relaxed);
+        let mut registry = create_core_action_registry();
+        register_projectcentral_now_actions(&mut registry);
+        let options = crate::root::RootOptions {
+            explicit_root: Some(central.to_path_buf()),
+            configured_root: None,
+            home: None,
+        };
+        let connectors = ConnectorRegistry::default();
+        let connector_context = ConnectorContext {
+            platform: "test".into(),
+        };
+        let context = ActionExecutionContext {
+            root_options: &options,
+            connectors: &connectors,
+            connector_context: &connector_context,
+        };
+        let mut input = input;
+        input["project"] = json!("example");
+        registry.execute("projectcentral.now.return", &input, &context)
+    }
+
+    /// W10 V2 extension: a now.return can attribute itself to its bounded
+    /// entity (central.pasu/v1). CASE 16 style: the attribution is recorded
+    /// verbatim, refuses non-grammar refs, and stays stable across lifecycle
+    /// updates so learned-origin wiki edges resolve to one entity later.
+    #[test]
+    fn return_attribution_records_verbatim_and_survives_lifecycle_updates() {
+        let temp = tempdir().unwrap();
+        let central = temp.path().join("Central");
+        let project = central.join("Work/example");
+        fs::create_dir_all(&project).unwrap();
+        initialize_projectcentral(&central, &project, "example/project").unwrap();
+        initialize_now(&project).unwrap();
+
+        let recorded = drive_return(
+            &central,
+            json!({
+                "actor": "aikit-session-2026-09-07",
+                "kind": "learning",
+                "subject": "wiki rebuild determinism",
+                "result": "Entity refs survive rebuilds; recorded for CASE 16.",
+                "status": "active",
+                "attributed_to": "central:pasu:agent:aikit-session-2026-09-07"
+            }),
+        );
+        assert!(recorded.ok, "{recorded:?}");
+        let handoff = &recorded.data.as_ref().unwrap()["handoff"];
+        assert_eq!(
+            handoff["attributed_to"],
+            "central:pasu:agent:aikit-session-2026-09-07"
+        );
+
+        // A ref outside the grammar is refused before anything is written.
+        let refused = drive_return(
+            &central,
+            json!({
+                "actor": "aikit-session-2026-09-07",
+                "kind": "note",
+                "subject": "bad attribution",
+                "result": "must not record",
+                "status": "active",
+                "attributed_to": "central:user"
+            }),
+        );
+        assert!(!refused.ok);
+        assert!(refused
+            .error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("not a valid central.pasu/v1 ref"));
+        assert!(!project
+            .join(NOW_AGENT_DIR)
+            .join("bad-attribution.json")
+            .exists());
+
+        // The attribution survives the lifecycle update (status change).
+        let id = handoff["id"].as_str().unwrap().to_owned();
+        let stored = read_handoff(&project.join(NOW_AGENT_DIR).join(format!("{id}.json"))).unwrap();
+        assert_eq!(
+            stored.attributed_to.as_deref(),
+            Some("central:pasu:agent:aikit-session-2026-09-07")
+        );
+        let mut updated = stored.clone();
+        updated.status = "resolved".into();
+        write_handoff(&project, &updated).unwrap();
+        let after = read_handoff(&project.join(NOW_AGENT_DIR).join(format!("{id}.json"))).unwrap();
+        assert_eq!(after.status, "resolved");
+        assert_eq!(
+            after.attributed_to.as_deref(),
+            Some("central:pasu:agent:aikit-session-2026-09-07"),
+            "the attribution is part of the record's identity, not its state"
+        );
+
+        // Absent attribution stays absent (optionality is honest).
+        let plain = drive_return(
+            &central,
+            json!({
+                "actor": "zcode-session",
+                "kind": "note",
+                "subject": "no attribution",
+                "result": "recorded without an entity",
+                "status": "active"
+            }),
+        );
+        assert!(plain.ok, "{plain:?}");
+        assert!(plain.data.as_ref().unwrap()["handoff"]["attributed_to"].is_null());
     }
 }

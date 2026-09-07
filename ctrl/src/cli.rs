@@ -421,6 +421,7 @@ pub fn run_cli_with_runtime(
     crate::template_stamp::register_template_stamp_actions(&mut registry);
     crate::engineering_ground::register_engineering_ground_actions(&mut registry);
     register_agent_profile_actions(&mut registry);
+    crate::agent_set_actions::register_agent_set_actions(&mut registry);
     let result = match parsed.target {
         CommandTarget::Direct { action_id, input } => registry.execute(&action_id, &input, &context),
         CommandTarget::Guided => run_guided_action_picker(&registry, &context, surface),
