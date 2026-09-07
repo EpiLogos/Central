@@ -458,12 +458,15 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn fixture_root() -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
+        let sequence = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
-            "central-agent-profile-actions-{}-{nonce}",
+            "central-agent-profile-actions-{}-{nonce}-{sequence}",
             std::process::id()
         ));
         initialize_central(&root).unwrap();

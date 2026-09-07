@@ -150,6 +150,11 @@ struct GroundRelationsFile {
     project_id: String,
     #[serde(default)]
     relations: Vec<GroundRelation>,
+    /// The bounded-entity subject ref declared at this register, in the
+    /// central.pasu/v1 grammar; present only where the ground names its
+    /// subject. Absence is data.
+    #[serde(default)]
+    subject_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -326,6 +331,14 @@ fn read_relations_file(path: &Path, schema: &str, expected_id: &str) -> io::Resu
             "ground relations have an unsupported schema or world id",
         ));
     }
+    if let Some(subject_ref) = &relations.subject_ref {
+        crate::pasu::PasuRef::parse(subject_ref).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("ground relations subject ref is invalid: {error}"),
+            )
+        })?;
+    }
     Ok(relations.relations)
 }
 
@@ -347,6 +360,33 @@ fn read_control_ground_relations(central_root: &Path) -> io::Result<Vec<GroundRe
         CONTROL_GROUND_RELATIONS_SCHEMA,
         CONTROL_WORLD_REF,
     )
+}
+
+/// The subject ref declared by the Control ground relations, in the
+/// central.pasu/v1 grammar. Read for the `central.world` identity exposure;
+/// a malformed ref is an error, an absent one is None.
+pub fn control_ground_relations_subject_ref(central_root: &Path) -> io::Result<Option<String>> {
+    let path = central_root.join(CONTROL_GROUND_RELATIONS_SOURCE);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let file: GroundRelationsFile = serde_json::from_slice(&fs::read(&path)?)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    if file.schema != CONTROL_GROUND_RELATIONS_SCHEMA || file.project_id != CONTROL_WORLD_REF {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "ground relations have an unsupported schema or world id",
+        ));
+    }
+    if let Some(subject_ref) = &file.subject_ref {
+        crate::pasu::PasuRef::parse(subject_ref).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("ground relations subject ref is invalid: {error}"),
+            )
+        })?;
+    }
+    Ok(file.subject_ref)
 }
 
 pub fn project_source_bindings(project_root: &Path) -> io::Result<Vec<SourceBinding>> {
