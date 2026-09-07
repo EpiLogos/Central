@@ -282,9 +282,19 @@ fn action_list_has_human_and_structured_cli_renderings() {
     let value: serde_json::Value = serde_json::from_str(&structured.output).unwrap();
     assert_eq!(value["status"], "success");
     let actions = value["data"]["actions"].as_array().unwrap();
-    assert_eq!(actions.len(), 68);
+    assert_eq!(actions.len(), 78);
     let ids = actions.iter().filter_map(|action| action["id"].as_str()).collect::<Vec<_>>();
     for id in [
+        "central.agent-set.save",
+        "central.agent-set.list",
+        "central.agent-set.read",
+        "central.agent-set.remove",
+        "central.agent-set.resolve",
+        "central.world-relations.save",
+        "central.world-relations.list",
+        "central.world-relations.read",
+        "central.world-relations.remove",
+        "central.world.effective-sources",
         "projectcentral.inspect",
         "projectcentral.doctor",
         "projectcentral.init",
