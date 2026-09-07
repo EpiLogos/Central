@@ -174,6 +174,8 @@ pub struct ControlMap {
     pub unresolved_provenance_sources: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bindings_error: Option<String>,
+    /// The bounded-entity identity anchor of this Control (central.pasu/v1).
+    pub identity: crate::pasu::PasuIdentityState,
 }
 
 /// One registered Flow, read from the Flow registry without reconciling it.
@@ -753,6 +755,14 @@ fn map_control(central_root: &Path) -> ControlMap {
         CONTROL_GROUND_RELATIONS_SCHEMA,
         Some(CONTROL_WORLD_REF),
     );
+    // A malformed subject ref in ground relations already fails the bindings
+    // read above; here absence or a read failure simply leaves the declared
+    // side of the identity agreement unset.
+    let ground_relations_subject_ref =
+        crate::source_horizon::control_ground_relations_subject_ref(central_root)
+            .ok()
+            .flatten();
+    let identity = crate::pasu::PasuIdentityState::read(central_root, ground_relations_subject_ref);
 
     // The Control tree walk is the same one the Source Change Horizon uses: the
     // tree stamps every source `unresolved`, and declared relations override it.
@@ -783,6 +793,7 @@ fn map_control(central_root: &Path) -> ControlMap {
         source_bindings,
         unresolved_provenance_sources,
         bindings_error,
+        identity,
     }
 }
 

@@ -815,3 +815,93 @@ fn reproject_with_an_unreadable_manifest_stamps_directories_only_and_never_rewri
     );
     assert!(!broken.join("ProjectCentral/agents/wiki/wiki.json").exists());
 }
+
+/// W10 V1: the identity anchor (central.pasu/v1) is exposed by the world map,
+/// the ground-relations subject ref validates against the grammar, and the
+/// two sides of the subject-ref agreement are reported as data.
+#[test]
+fn world_map_exposes_the_pasu_identity_anchor_and_validates_the_subject_ref() {
+    let temp = healthy_ground("pasu-identity");
+    let root = temp.path();
+
+    // Absence is data: no manifest, no declared subject ref.
+    let map = map_world(root).unwrap();
+    assert!(!map.control.identity.present);
+    assert_eq!(map.control.identity.subject_ref_consistent, None);
+
+    // The authored identity source stays as-is; the manifest is a new carrier.
+    fs::create_dir_all(root.join("Control/user/identity/sources")).unwrap();
+    fs::write(root.join("Control/user/identity/present.md"), "who I am now\n").unwrap();
+    fs::write(
+        root.join("Control/user/identity/sources/natal-chart.md"),
+        "promoted copy\n",
+    )
+    .unwrap();
+    let manifest = json!({
+        "schema": "central.pasu.identity-manifest/v1",
+        "revision": "1",
+        "subject": {"ref": "central:pasu:nara:local"},
+        "identity_source": {
+            "path": "Control/user/identity",
+            "provenance_law": "vault-first; promote by recognised promotion",
+            "sources": [
+                {"path": "Control/user/identity/present.md", "standing": "authored-ground"},
+                {"path": "Control/user/identity/sources/natal-chart.md",
+                 "standing": "promoted-source", "promoted": "2026-09-03", "revision": "1"}
+            ]
+        }
+    });
+    fs::write(
+        root.join("Control/user/identity/manifest.json"),
+        serde_json::to_string_pretty(&manifest).unwrap() + "\n",
+    )
+    .unwrap();
+
+    fs::create_dir_all(root.join("Control/relations")).unwrap();
+    let relations = json!({
+        "schema": "central.control.ground-relations/v1",
+        "project_id": "control:root",
+        "subject_ref": "central:pasu:nara:local",
+        "relations": []
+    });
+    fs::write(
+        control_relations(root),
+        serde_json::to_string_pretty(&relations).unwrap() + "\n",
+    )
+    .unwrap();
+
+    let map = map_world(root).unwrap();
+    let identity = &map.control.identity;
+    assert!(identity.present);
+    assert_eq!(identity.subject_ref.as_deref(), Some("central:pasu:nara:local"));
+    assert_eq!(identity.form.as_deref(), Some("nara"));
+    assert_eq!(identity.ground_relations_subject_ref.as_deref(), Some("central:pasu:nara:local"));
+    assert_eq!(identity.subject_ref_consistent, Some(true));
+    assert_eq!(identity.sourced_files.len(), 2);
+    assert!(identity.sourced_files.iter().all(|file| file.present));
+    assert!(identity.sourced_files.iter().all(|file| file.content_revision.is_some()));
+    assert!(identity.error.is_none());
+
+    // A subject ref outside the grammar is an invalid ground-relations file.
+    let bad = json!({
+        "schema": "central.control.ground-relations/v1",
+        "project_id": "control:root",
+        "subject_ref": "central:user",
+        "relations": []
+    });
+    fs::write(
+        control_relations(root),
+        serde_json::to_string_pretty(&bad).unwrap() + "\n",
+    )
+    .unwrap();
+    let map = map_world(root).unwrap();
+    assert!(map
+        .control
+        .bindings_error
+        .as_deref()
+        .unwrap_or_default()
+        .contains("subject ref is invalid"));
+    // The identity side still reads; only the declared side is unavailable.
+    assert!(map.control.identity.present);
+    assert_eq!(map.control.identity.ground_relations_subject_ref, None);
+}
