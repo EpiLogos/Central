@@ -12,12 +12,18 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_INCREMENTAL: "0"
+
 jobs:
   core-and-public-contracts:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - name: Core, SDK, Skills, fresh Connector proof, and product regressions
         run: cargo test --workspace
       - name: Core remains independent of the fresh proving Connector
@@ -37,6 +43,9 @@ jobs:
         with:
           ref: build/central-ticket-16
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - name: macOS native, Homebrew, chezmoi, and canonical recovery
         run: cargo test --workspace
       - name: Core remains independent of macOS provider crates
@@ -56,6 +65,9 @@ jobs:
         with:
           ref: build/central-ticket-15
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -77,6 +89,9 @@ jobs:
         with:
           ref: build/central-ticket-17
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - name: Ubuntu public Port conformance and hosted provider acceptance
         run: cargo test --workspace
       - name: Headless Ubuntu host compiles
