@@ -156,7 +156,7 @@ pub(crate) fn ordinary_address(root: &Path, loc: &CentralPathRef) -> io::Result<
 }
 fn ordinary(root: &Path, loc: &CentralPathRef) -> io::Result<PathBuf> {
     let path = ordinary_address(root, loc)?;
-    let reading = read_file(root, loc)?;
+    let reading = read_file(root, loc, crate::files::FileEncoding::Utf8)?;
     if reading.source.is_some() {
         return Err(denied("Participating source requires source authority"));
     }
@@ -363,7 +363,7 @@ fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
             .exists()
     {
         return Ok(
-            json!({"schema":"central.file-history/v1","location":loc,"current_revision":read_file(&root,&loc)?.revision,"entries":[],"next_before":null,"more":false,"automatic_agent_or_model_invocation":false}),
+            json!({"schema":"central.file-history/v1","location":loc,"current_revision":read_file(&root,&loc,crate::files::FileEncoding::Utf8)?.revision,"entries":[],"next_before":null,"more":false,"automatic_agent_or_model_invocation":false}),
         );
     }
     if op == "recovery_preview"
@@ -382,7 +382,7 @@ fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
     // Revalidate after the cross-process owner lock: another writer may have
     // changed the source or introduced authored participation while waiting.
     ordinary(&root, &loc)?;
-    let current = read_file(&root, &loc)?;
+    let current = read_file(&root, &loc, crate::files::FileEncoding::Utf8)?;
     let pending = area.join("pending.json");
     if pending.exists() {
         let event: Change = serde_json::from_reader(open(&pending, false)?.take(65536))?;
@@ -532,7 +532,7 @@ fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
         let now = open_native_file(&root, &loc.path)?.metadata()?;
         if now.dev() != meta.dev()
             || now.ino() != meta.ino()
-            || read_file(&root, &loc)?.revision != basis
+            || read_file(&root, &loc, crate::files::FileEncoding::Utf8)?.revision != basis
         {
             return Err(conflict("File changed during commit"));
         }
@@ -547,7 +547,7 @@ fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
         let final_meta = open_native_file(&root, &loc.path)?.metadata()?;
         if final_meta.dev() != meta.dev()
             || final_meta.ino() != meta.ino()
-            || read_file(&root, &loc)?.revision != basis
+            || read_file(&root, &loc, crate::files::FileEncoding::Utf8)?.revision != basis
         {
             fs::remove_file(&pending)?;
             return Err(conflict("File changed while preparing durable receipt"));
