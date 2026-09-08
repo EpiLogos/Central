@@ -112,6 +112,7 @@ dependencies = [
 name = "ctrl"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "central-connector-sdk",
  "central-reference-connectors",
  "serde",
