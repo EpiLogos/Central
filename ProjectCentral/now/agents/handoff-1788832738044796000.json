@@ -1,0 +1,11 @@
+{
+  "schema": "central.project-now.handoff/v1",
+  "id": "handoff-1788832738044796000",
+  "provenance": "agent-authored-bounded-return",
+  "actor": "zcode-session-2026-09-08-governance-proposals",
+  "kind": "note",
+  "recorded_at_unix_seconds": 1788832738,
+  "subject": "Renderer statement list extended: ci-speed.md joined the engineering-ground distillate",
+  "result": "ENGINEERING_GROUND_STATEMENTS in ctrl/src/engineering_ground.rs grew from four statements to five so the adopted CI-speed governance statement renders into the foundational prompt. Renderer tests 6/6 pass, ctrl reinstalled, prompt re-rendered (revision 462fa34ef862bc22). Change uncommitted here; full lineage in the root register proposal record governance-proposals-ci-speed-and-plain-language-2026-09-08.md.",
+  "status": "active"
+}

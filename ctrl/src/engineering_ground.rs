@@ -22,10 +22,11 @@ use std::io;
 use std::path::Path;
 
 pub const ENGINEERING_GROUND_DIR: &str = "Control/agents/governance/engineering";
-pub const ENGINEERING_GROUND_STATEMENTS: [&str; 4] = [
+pub const ENGINEERING_GROUND_STATEMENTS: [&str; 5] = [
     "agent-operations.md",
     "coding-approach.md",
     "verification.md",
+    "ci-speed.md",
     "base-skillset.md",
 ];
 pub const ENGINEERING_GROUND_OUTPUT: &str =
