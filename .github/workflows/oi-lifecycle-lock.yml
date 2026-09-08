@@ -17,11 +17,15 @@ jobs:
   lock:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
           ref: converge/oi-017-lifecycle
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          cache-on-failure: true
       - name: Generate exact workspace lock
         run: cargo generate-lockfile
       - name: Commit lock if newly materialised

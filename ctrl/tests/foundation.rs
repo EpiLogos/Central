@@ -179,9 +179,14 @@ fn registry_has_stable_ids_and_complete_descriptors() {
     assert_eq!(ids, vec![
         "action.list",
         "central.doctor",
+        "central.files.history",
         "central.files.list",
         "central.files.read",
+        "central.files.recovery_preview",
+        "central.files.restore",
+        "central.files.write",
         "central.init",
+        "central.recognize",
         "central.recover",
         "central.recovery.plan",
         "central.root",
@@ -282,7 +287,7 @@ fn action_list_has_human_and_structured_cli_renderings() {
     let value: serde_json::Value = serde_json::from_str(&structured.output).unwrap();
     assert_eq!(value["status"], "success");
     let actions = value["data"]["actions"].as_array().unwrap();
-    assert_eq!(actions.len(), 78);
+    assert_eq!(actions.len(), 89);
     let ids = actions.iter().filter_map(|action| action["id"].as_str()).collect::<Vec<_>>();
     for id in [
         "central.agent-set.save",

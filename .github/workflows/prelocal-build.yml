@@ -27,13 +27,18 @@ permissions:
 env:
   CARGO_INCREMENTAL: "0"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.2
         with:
           cache-on-failure: true
       - run: cargo test --workspace --locked
@@ -54,12 +59,13 @@ jobs:
           - os: macos-15
             target: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.2
         with:
           cache-on-failure: true
       - name: Build locked native artifact

@@ -1,0 +1,7 @@
+{
+  "parent": "control:root",
+  "ref": "project:central",
+  "revision": "w1",
+  "schema": "central.world-relations/v1",
+  "sources": []
+}
