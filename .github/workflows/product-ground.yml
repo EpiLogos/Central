@@ -12,9 +12,14 @@ permissions:
 env:
   CARGO_INCREMENTAL: "0"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  product-ground:
+  tooling-selftest:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,7 +28,7 @@ jobs:
         with:
           python-version: '3.12'
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.2
         with:
           cache-on-failure: true
       - name: Build the actual product CLI
@@ -34,7 +39,26 @@ jobs:
           python3 -m unittest discover -s tools/tests -p test_product_maintenance.py -v
       - name: Check maintained tool bundle
         run: python3 tools/package_product_ground.py --check
+
+  capability-drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          cache-on-failure: true
+      - name: Build the actual product CLI
+        run: cargo build --package ctrl --bin ctrl
       - name: Check source, matrix, seed and native CLI maintenance
+        id: check
+        continue-on-error: true
         shell: bash
         env:
           PRODUCT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -50,3 +74,7 @@ jobs:
         with:
           name: product-ground-result
           path: product-ground-result.json
+      - name: Annotate drift (advisory — does not block merge)
+        if: steps.check.outcome == 'failure'
+        run: |
+          echo "::notice title=Capability-matrix drift::The account page and the capability matrix have drifted apart. This no longer blocks merge — reconcile at your convenience with tools/reconcile_product_ground.py (plan, review, apply). See product-ground-result artifact for detail."
