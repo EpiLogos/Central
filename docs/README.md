@@ -133,3 +133,9 @@ resembles the product checkout (`mixed_root` in the structured health report).
 The root [README](../README.md) carries product meaning and the compact
 dependency rule; this index carries the corpus.
 - [NATIVE-FILESYSTEM-READING.md](NATIVE-FILESYSTEM-READING.md) — owner-resolved directory and text readings over the actual Central tree.
+
+- [Native ordinary-file recovery](NATIVE-ORDINARY-FILE-RECOVERY.md): filesystem CAS, history, authority refusal and interruption recovery.
+
+- [Source Return](SOURCE-RETURN.md): native proposal/CAS acceptance, provenance, and explicit human-authority availability.
+
+- [Chosen root recognition](ROOT-RECOGNITION.md): bounded metadata-only recognition before explicit desktop binding.

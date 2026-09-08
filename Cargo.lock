@@ -115,6 +115,7 @@ dependencies = [
  "base64",
  "central-connector-sdk",
  "central-reference-connectors",
+ "libc",
  "serde",
  "serde_json",
 ]
