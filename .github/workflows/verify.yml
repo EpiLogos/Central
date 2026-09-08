@@ -7,26 +7,32 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.2
         with:
           cache-on-failure: true
       - run: cargo test --workspace
 
   core-without-macos:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.2
         with:
           cache-on-failure: true
       - run: cargo test -p central-connector-sdk -p central-reference-connectors -p central-connector-template -p central-git-sync-connector -p ctrl
@@ -40,22 +46,23 @@ jobs:
 
   macos-native:
     runs-on: macos-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.2
         with:
           cache-on-failure: true
-      - run: cargo test --workspace
       - name: Explicit macOS extension acceptance
-        run: cargo test -p central-macos-connectors
+        run: cargo test -p central-macos-connectors -p central-shortcuts-connector
 
   source-install:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.2
         with:
           cache-on-failure: true
       - name: Install base ctrl from a clean checkout
@@ -116,10 +123,11 @@ jobs:
 
   git-sync-extension:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.2
         with:
           cache-on-failure: true
       - name: Public Synchronizer conformance and real Git target acceptance

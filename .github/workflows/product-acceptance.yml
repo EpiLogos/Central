@@ -15,13 +15,18 @@ permissions:
 env:
   CARGO_INCREMENTAL: "0"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   core-and-public-contracts:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.2
         with:
           cache-on-failure: true
       - name: Core, SDK, Skills, fresh Connector proof, and product regressions
@@ -38,12 +43,13 @@ jobs:
 
   macos-machine-and-recovery:
     runs-on: macos-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
           ref: build/central-ticket-16
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.2
         with:
           cache-on-failure: true
       - name: macOS native, Homebrew, chezmoi, and canonical recovery
@@ -60,12 +66,13 @@ jobs:
 
   macos-surface-and-automation:
     runs-on: macos-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
           ref: build/central-ticket-15
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.2
         with:
           cache-on-failure: true
       - uses: actions/setup-node@v4
@@ -84,12 +91,13 @@ jobs:
 
   ubuntu-machine-and-recovery:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
           ref: build/central-ticket-17
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.2
         with:
           cache-on-failure: true
       - name: Ubuntu public Port conformance and hosted provider acceptance
