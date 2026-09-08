@@ -1,0 +1,64 @@
+name: Branch hygiene
+
+on:
+  workflow_call:
+    inputs:
+      delete_merged:
+        required: false
+        type: boolean
+        default: true
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      delete_merged:
+        description: Delete source branches whose pull requests are merged
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: branch-hygiene
+  cancel-in-progress: false
+
+jobs:
+  classify-and-retire:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: EpiLogos/Central
+          ref: main
+          path: central-ci
+      - name: Classify branches from pull-request state
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DELETE_MERGED: ${{ github.event_name == 'schedule' || inputs.delete_merged }}
+        run: |
+          args=(branches --repository "$GITHUB_REPOSITORY" --json-output branch-hygiene.json --markdown-output branch-hygiene.md)
+          if [[ "$DELETE_MERGED" == "true" ]]; then args+=(--delete-merged); fi
+          python3 central-ci/tools/suite_git.py "${args[@]}"
+          cat branch-hygiene.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Maintain durable report issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Branch hygiene report"
+          issue="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$title in:title" --json number,title --jq '.[] | select(.title == "Branch hygiene report") | .number' | head -n1)"
+          if [[ -n "$issue" ]]; then
+            gh issue edit --repo "$GITHUB_REPOSITORY" "$issue" --body-file branch-hygiene.md
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file branch-hygiene.md --label maintenance 2>/dev/null || \
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file branch-hygiene.md
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: branch-hygiene-report
+          path: |
+            branch-hygiene.json
+            branch-hygiene.md
