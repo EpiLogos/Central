@@ -392,6 +392,26 @@ fn unique_id(prefix: &str) -> String {
     format!("{prefix}-{nanos}")
 }
 
+/// Default handoff id per the naming law: slug of the subject + local civil
+/// date, counter-disambiguated against ids already present in the field.
+fn default_handoff_id(project_root: &Path, subject: &str, kind: &str) -> String {
+    let existing: std::collections::HashSet<String> = fs::read_dir(project_root.join(NOW_AGENT_DIR))
+        .map(|entries| {
+            entries
+                .filter_map(|entry| entry.ok())
+                .filter_map(|entry| {
+                    entry
+                        .path()
+                        .file_stem()
+                        .map(|stem| stem.to_string_lossy().into_owned())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let taken = |candidate: &str| existing.contains(candidate);
+    crate::names::descriptive_id(&crate::names::slugify(subject, 6), kind, &taken)
+}
+
 fn relative(project_root: &Path, path: &Path) -> String {
     path.strip_prefix(project_root)
         .unwrap_or(path)
@@ -663,7 +683,8 @@ fn create_handoff(input: &Value, project_root: &Path, action: &str) -> Result<No
         )
     })?;
 
-    let id = optional(input, "id").unwrap_or_else(|| unique_id("handoff"));
+    let id = optional(input, "id")
+        .unwrap_or_else(|| default_handoff_id(project_root, &subject, &kind));
     validate_id(&id).map_err(|error| {
         ActionResult::failure(
             Some(action),

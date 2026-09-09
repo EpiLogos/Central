@@ -829,3 +829,68 @@ fn w13_now_view_never_guesses_the_civil_date() {
     let value: serde_json::Value = serde_json::from_str(&execution.output).unwrap();
     assert_eq!(value["status"], "invalid_input", "{}", execution.output);
 }
+
+/// Central root is the meta-project: a Flow that belongs to no one project
+/// lives in the root register's own NOW field, names the root in its refs, and
+/// reads, writes and keeps history like any other Flow.
+#[test]
+fn the_central_root_register_holds_a_flow_of_its_own() {
+    use central_ctrl::projectcentral_flow::ROOT_FLOW_DIR;
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let central = std::env::temp_dir().join(format!(
+        "central-root-flow-{}-{nonce}",
+        std::process::id()
+    ));
+    fs::create_dir_all(central.join("Control/agents/now/flows")).unwrap();
+    fs::create_dir_all(central.join("Control/user")).unwrap();
+    fs::create_dir_all(central.join("Work")).unwrap();
+
+    let record = create_flow(
+        &central,
+        Some("2026-09-09-1400"),
+        None,
+        Some("A loose thought".into()),
+        "frank",
+        "human",
+        None,
+    )
+    .expect("the root register accepts a Flow");
+
+    assert!(
+        record.path.starts_with(&format!("{ROOT_FLOW_DIR}/")),
+        "the Flow lands in the root NOW field: {}",
+        record.path
+    );
+    assert_eq!(record.scope_ref, "control:root");
+    assert!(
+        record.flow_ref.starts_with("central:flow:control:root:"),
+        "the Flow names the root register: {}",
+        record.flow_ref
+    );
+    assert!(
+        record.source_ref.starts_with("central:source:control:root:"),
+        "the source names the root register: {}",
+        record.source_ref
+    );
+    assert!(central.join(&record.path).is_file());
+
+    let written = write_flow(
+        &central,
+        &record.flow_ref,
+        &record.current_revision,
+        "A thought that belongs to no one project.\n",
+        "frank",
+        "human",
+        None,
+    )
+    .expect("the root register accepts a revision");
+    let reading = read_flow(&central, &record.flow_ref).expect("the root Flow reads back");
+    assert_eq!(reading.content, "A thought that belongs to no one project.\n");
+    assert_ne!(written.current_revision, record.current_revision);
+    assert!(written.revisions.len() >= 2, "history accrues at the root");
+
+    let _ = fs::remove_dir_all(&central);
+}
