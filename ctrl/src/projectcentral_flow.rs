@@ -7,7 +7,7 @@ use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
 use crate::source_horizon::reconcile_project_sources;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
@@ -87,6 +87,98 @@ pub struct FlowDaySnapshot {
     pub title: Option<String>,
     pub snapshot_source: String,
 }
+
+/// W1.3 owner read model — one Flow as the NOW field presents it.
+///
+/// The only civil-date evidence Central owns is the local stamp embedded in
+/// the source filename (`YYYY-MM-DD-HHMM`, supplied by the creating caller).
+/// Unix timestamps are never converted to civil dates here: that would be a
+/// timezone guess, which the DAY law forbids.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FlowNowEntry {
+    pub flow: FlowRecord,
+    /// Local civil date embedded in the filename stamp, when present.
+    /// `None` is an explicit unavailable state (adopted or unconventionally
+    /// named sources), never a guess.
+    pub local_stamp_date: Option<String>,
+    /// `live` (active), `held` (dormant) or `closed` — derived from the
+    /// lifecycle the owner already records.
+    pub currentness: String,
+}
+
+/// W1.3 owner read model — Flows grouped by embedded local civil date.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FlowDayGroup {
+    pub day: String,
+    pub flows: Vec<FlowNowEntry>,
+}
+
+/// W1.3 owner read model — deterministic DAY facts (#138 §10).
+///
+/// Only facts the owner can establish without a timezone guess are reported.
+/// Closure dates are not derivable (lifecycle changes carry unix provenance
+/// only), so closed Flows are reported without a day claim.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FlowDayFacts {
+    pub current_day: String,
+    pub begun_today: Vec<FlowNowEntry>,
+    pub continuing: Vec<FlowNowEntry>,
+    pub closed: Vec<FlowNowEntry>,
+    pub undated_live: Vec<FlowNowEntry>,
+}
+
+/// W1.3 owner read model — what a Flow page can disclose at rest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FlowAtRestDisclosure {
+    pub disclosed_by: String,
+    pub available: bool,
+    pub shows: Vec<String>,
+}
+
+/// W1.3 owner read model — the "while thinking" state. Central does not own
+/// AgentSession binding (AIKit #122 does), so this state is an explicit
+/// unavailable disclosure rather than a fabricated signal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FlowThinkingDisclosure {
+    pub available: bool,
+    pub owner: String,
+    pub reason: String,
+}
+
+/// W1.3 owner read model — the NOW presentation of a Project's Flows.
+///
+/// Several Flows may be live in one NOW; a date boundary does not close a
+/// Flow; grouping by day is presentation, never semantic identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FlowNowView {
+    pub schema: String,
+    pub project_id: String,
+    /// `caller-supplied` when `current_day` was given, `unavailable`
+    /// otherwise. Central never derives the current civil date itself.
+    pub current_day_source: String,
+    pub live_flows: Vec<FlowNowEntry>,
+    pub held_flows: Vec<FlowNowEntry>,
+    pub closed_flows: Vec<FlowNowEntry>,
+    pub day_groups: Vec<FlowDayGroup>,
+    /// Flows with no embedded local civil date: an explicit ungrouped state.
+    pub undated_flows: Vec<FlowNowEntry>,
+    pub day_facts: Option<FlowDayFacts>,
+    pub date_boundary_law: String,
+    pub engagement: FlowEngagement,
+    pub automatic_agent_or_model_invocation: bool,
+}
+
+/// W1.3 owner read model — rest-vs-thinking disclosure for the whole NOW
+/// field. Rest state is disclosed from owner data; thinking state belongs to
+/// the Agency owner and is disclosed as unavailable here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FlowEngagement {
+    pub disclosure_ladder: Vec<String>,
+    pub at_rest: FlowAtRestDisclosure,
+    pub while_thinking: FlowThinkingDisclosure,
+}
+
+pub const FLOW_DATE_BOUNDARY_LAW: &str = "A local civil date boundary does not close a Flow and does not create a new identity; day grouping is presentation only. The current civil date is supplied by the caller or read from the field — never guessed from a timezone.";
 
 fn unix_seconds() -> u64 {
     SystemTime::now()
@@ -524,8 +616,171 @@ pub fn registered_flow_records(project_root: &Path) -> io::Result<Vec<FlowRecord
     Ok(load_registry(project_root)?.flows)
 }
 
+/// Extract the local civil date (`YYYY-MM-DD`) from a Flow source filename
+/// stamp. Returns `None` when the filename carries no stamp — an explicit
+/// unavailable state, never a guess.
+pub(crate) fn embedded_local_stamp_date(path: &str) -> Option<String> {
+    let stem = Path::new(path)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())?;
+    let bytes = stem.as_bytes();
+    let dated = bytes.len() >= 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes[..10]
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit());
+    if !dated {
+        return None;
+    }
+    let (year, _rest) = stem.split_at(4);
+    let Ok(year) = year.parse::<u32>() else {
+        return None;
+    };
+    if !(1..=9999).contains(&year) {
+        return None;
+    }
+    Some(stem[..10].to_owned())
+}
+
+fn validate_civil_day(day: &str) -> io::Result<()> {
+    let bytes = day.as_bytes();
+    let valid = bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit());
+    if !valid {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "current_day must use YYYY-MM-DD; Central never derives the civil date from a timezone",
+        ));
+    }
+    Ok(())
+}
+
+fn currentness(lifecycle: &str) -> &'static str {
+    match lifecycle {
+        "active" => "live",
+        "dormant" => "held",
+        _ => "closed",
+    }
+}
+
+fn now_entry(flow: &FlowRecord) -> FlowNowEntry {
+    FlowNowEntry {
+        local_stamp_date: embedded_local_stamp_date(&flow.path),
+        currentness: currentness(&flow.lifecycle).to_owned(),
+        flow: flow.clone(),
+    }
+}
+
+/// W1.3 owner read model — the NOW presentation of a Project's Flows.
+///
+/// `current_day` is the local civil date the caller supplies (or `None`, in
+/// which case day facts are an explicit unavailable state). Several Flows may
+/// be live in one NOW; crossing a date boundary does not close a Flow.
+pub fn flow_now_view(project_root: &Path, current_day: Option<&str>) -> io::Result<FlowNowView> {
+    if let Some(day) = current_day {
+        validate_civil_day(day)?;
+    }
+    let list = list_flows(project_root)?;
+    let mut live_flows = Vec::new();
+    let mut held_flows = Vec::new();
+    let mut closed_flows = Vec::new();
+    let mut undated_flows = Vec::new();
+    let mut groups: std::collections::BTreeMap<String, Vec<FlowNowEntry>> =
+        std::collections::BTreeMap::new();
+    let mut begun_today = Vec::new();
+    let mut continuing = Vec::new();
+    let mut undated_live = Vec::new();
+    for flow in &list.flows {
+        let entry = now_entry(flow);
+        match entry.currentness.as_str() {
+            "live" => live_flows.push(entry.clone()),
+            "held" => held_flows.push(entry.clone()),
+            _ => closed_flows.push(entry.clone()),
+        }
+        match entry.local_stamp_date.clone() {
+            Some(day) => {
+                groups.entry(day.clone()).or_default().push(entry.clone());
+                if current_day == Some(day.as_str()) {
+                    begun_today.push(entry.clone());
+                } else if entry.currentness == "live" && current_day.is_some() {
+                    continuing.push(entry.clone());
+                }
+            }
+            None => {
+                undated_flows.push(entry.clone());
+                if entry.currentness == "live" && current_day.is_some() {
+                    undated_live.push(entry.clone());
+                }
+            }
+        }
+    }
+    live_flows.sort_by(|left, right| left.flow.flow_ref.cmp(&right.flow.flow_ref));
+    let day_groups: Vec<FlowDayGroup> = groups
+        .into_iter()
+        .rev()
+        .map(|(day, mut flows)| {
+            flows.sort_by(|left, right| left.flow.flow_ref.cmp(&right.flow.flow_ref));
+            FlowDayGroup { day, flows }
+        })
+        .collect();
+    let day_facts = current_day.map(|day| FlowDayFacts {
+        current_day: day.to_owned(),
+        begun_today,
+        continuing,
+        closed: closed_flows.clone(),
+        undated_live,
+    });
+    Ok(FlowNowView {
+        schema: "central.project-flow-now/v1".into(),
+        project_id: list.project_id,
+        current_day_source: if current_day.is_some() {
+            "caller-supplied".into()
+        } else {
+            "unavailable".into()
+        },
+        live_flows,
+        held_flows,
+        closed_flows,
+        day_groups,
+        undated_flows,
+        day_facts,
+        date_boundary_law: FLOW_DATE_BOUNDARY_LAW.into(),
+        engagement: FlowEngagement {
+            disclosure_ladder: vec![
+                "available".into(),
+                "retrieved".into(),
+                "loaded".into(),
+                "disclosed".into(),
+            ],
+            at_rest: FlowAtRestDisclosure {
+                disclosed_by: "central:projectcentral.flow".into(),
+                available: true,
+                shows: vec![
+                    "lifecycle".into(),
+                    "current_revision".into(),
+                    "retrieval_availability".into(),
+                    "revision_history".into(),
+                ],
+            },
+            while_thinking: FlowThinkingDisclosure {
+                available: false,
+                owner: "aikit:agent-session".into(),
+                reason: "Central does not own AgentSession binding; the thinking state of a Flow is disclosed by AIKit #122, never inferred by Central".into(),
+            },
+        },
+        automatic_agent_or_model_invocation: false,
+    })
+}
+
 pub fn list_flows(project_root: &Path) -> io::Result<FlowList> {
-    let _source_lock=crate::source_safety::lock(project_root,"source-mutation.lock")?;
+    let _source_lock = crate::source_safety::lock(project_root, "source-mutation.lock")?;
     let mut registry = load_registry(project_root)?;
     let mut changed = false;
     for flow in &mut registry.flows {
@@ -555,7 +810,7 @@ pub fn create_flow(
     actor_kind: &str,
     agent_session_ref: Option<String>,
 ) -> io::Result<FlowRecord> {
-    let _source_lock=crate::source_safety::lock(project_root,"source-mutation.lock")?;
+    let _source_lock = crate::source_safety::lock(project_root, "source-mutation.lock")?;
     validate_actor_kind(actor_kind)?;
     let mut registry = load_registry(project_root)?;
     let path = match explicit_path {
@@ -614,7 +869,7 @@ pub fn adopt_flow(
     actor_kind: &str,
     agent_session_ref: Option<String>,
 ) -> io::Result<FlowRecord> {
-    let _source_lock=crate::source_safety::lock(project_root,"source-mutation.lock")?;
+    let _source_lock = crate::source_safety::lock(project_root, "source-mutation.lock")?;
     validate_actor_kind(actor_kind)?;
     let mut registry = load_registry(project_root)?;
     let path = relative_member(raw_path)?
@@ -658,7 +913,7 @@ pub fn adopt_flow(
 }
 
 pub fn read_flow(project_root: &Path, flow_ref: &str) -> io::Result<FlowReading> {
-    let _source_lock=crate::source_safety::lock(project_root,"source-mutation.lock")?;
+    let _source_lock = crate::source_safety::lock(project_root, "source-mutation.lock")?;
     let mut registry = load_registry(project_root)?;
     let flow = registry
         .flows
@@ -673,7 +928,12 @@ pub fn read_flow(project_root: &Path, flow_ref: &str) -> io::Result<FlowReading>
     let reconciled = reconcile_record(project_root, flow)?;
     let content = String::from_utf8(flow_bytes(project_root, &flow.path)?)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Flow source is not UTF-8 text"))?;
-    if content_revision_bytes(content.as_bytes())!=flow.current_revision {return Err(io::Error::new(io::ErrorKind::AlreadyExists,"Flow changed while reading its revision"));}
+    if content_revision_bytes(content.as_bytes()) != flow.current_revision {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "Flow changed while reading its revision",
+        ));
+    }
     let record = flow.clone();
     if reconciled {
         write_registry(project_root, &registry)?;
@@ -697,7 +957,7 @@ pub fn write_flow(
     actor_kind: &str,
     agent_session_ref: Option<String>,
 ) -> io::Result<FlowRecord> {
-    let _source_lock=crate::source_safety::lock(project_root,"source-mutation.lock")?;
+    let _source_lock = crate::source_safety::lock(project_root, "source-mutation.lock")?;
     validate_actor_kind(actor_kind)?;
     if content.len() > MAX_FLOW_TEXT_BYTES || content.contains('\0') {
         return Err(io::Error::new(
@@ -745,7 +1005,12 @@ pub fn write_flow(
         agent_session_ref.as_deref(),
     )?;
     let _source = safe_source_member_path(project_root, &registry.flows[index].path, true)?;
-    crate::source_safety::replace(project_root,&registry.flows[index].path,expected_revision,content)?;
+    crate::source_safety::replace(
+        project_root,
+        &registry.flows[index].path,
+        expected_revision,
+        content,
+    )?;
     let changed = store_revision(
         project_root,
         &mut registry.flows[index],
@@ -768,7 +1033,7 @@ pub fn rename_flow(
     expected_revision: &str,
     new_path: &str,
 ) -> io::Result<FlowRecord> {
-    let _source_lock=crate::source_safety::lock(project_root,"source-mutation.lock")?;
+    let _source_lock = crate::source_safety::lock(project_root, "source-mutation.lock")?;
     let mut registry = load_registry(project_root)?;
     let index = registry
         .flows
@@ -817,7 +1082,7 @@ pub fn set_flow_lifecycle(
     expected_revision: &str,
     lifecycle: &str,
 ) -> io::Result<FlowRecord> {
-    let _source_lock=crate::source_safety::lock(project_root,"source-mutation.lock")?;
+    let _source_lock = crate::source_safety::lock(project_root, "source-mutation.lock")?;
     validate_lifecycle(lifecycle)?;
     let mut registry = load_registry(project_root)?;
     let index = registry
@@ -849,7 +1114,7 @@ pub fn snapshot_flows_for_day(
     snapshot_root: &Path,
     day: &str,
 ) -> io::Result<Vec<FlowDaySnapshot>> {
-    let _source_lock=crate::source_safety::lock(project_root,"source-mutation.lock")?;
+    let _source_lock = crate::source_safety::lock(project_root, "source-mutation.lock")?;
     let mut registry = load_registry(project_root)?;
     let mut changed = false;
     for flow in &mut registry.flows {
@@ -935,7 +1200,15 @@ fn project_context(
             ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None)
         })?
         .path;
-    crate::projectcentral_flow::reject_symlink_components(&root,&Path::new("Work").join(&project)).map_err(|e|ActionResult::failure(Some(action),ResultStatus::InvalidInput,e.to_string(),None))?;
+    crate::projectcentral_flow::reject_symlink_components(&root, &Path::new("Work").join(&project))
+        .map_err(|e| {
+            ActionResult::failure(
+                Some(action),
+                ResultStatus::InvalidInput,
+                e.to_string(),
+                None,
+            )
+        })?;
     let project_root = root.join("Work").join(project);
     if !project_root.is_dir() {
         return Err(ActionResult::failure(
@@ -1268,6 +1541,32 @@ fn lifecycle_action(
         .unwrap_or_else(|error| io_failure(action, error))
 }
 
+fn now_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    let action = "projectcentral.flow.now";
+    let root = match project_context(action, input, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
+    let current_day = optional(input, "current_day");
+    if let Some(day) = current_day.as_deref() {
+        if let Err(error) = validate_civil_day(day) {
+            return io_failure(action, error);
+        }
+    }
+    flow_now_view(&root, current_day.as_deref())
+        .map(|value| {
+            ActionResult::success(
+                action,
+                serde_json::to_value(value).expect("Flow NOW view serializes"),
+            )
+        })
+        .unwrap_or_else(|error| io_failure(action, error))
+}
+
 fn history_action(
     _: &ActionRegistry,
     input: &Value,
@@ -1298,15 +1597,154 @@ fn history_action(
 
 pub fn register_projectcentral_flow_actions(registry: &mut ActionRegistry) {
     let actions = [
-        (descriptor("projectcentral.flow.inspect","Inspect Project Flow","Read native Flow descriptor and last-observed revision with retrieval availability; no source body is returned.",MutationClass::ReadOnly,"projectcentral-flow-inspection",&[("project",true),("flow_ref",true)]),inspect_action as fn(&ActionRegistry,&Value,&ActionExecutionContext<'_>)->ActionResult),
-        (descriptor("projectcentral.flow.list", "List Project Flows", "List stable Flow identities and current source/revision/lifecycle state. Reconciles external file edits into revision provenance and Source Change Horizon without invoking an Agent/model.", MutationClass::LocallyMutating, "projectcentral-flow-list", &[("project", true)]), list_action as fn(&ActionRegistry, &Value, &ActionExecutionContext<'_>) -> ActionResult),
-        (descriptor("projectcentral.flow.read", "Read Project Flow", "Read the current ordinary Flow source by stable FlowRef and reconcile any external editor revision with actor unknown.", MutationClass::LocallyMutating, "projectcentral-flow-reading", &[("project", true), ("flow_ref", true),("expected_revision",false)]), read_action),
-        (descriptor("projectcentral.flow.create", "Create Project Flow", "Create a blank ordinary-file Flow with stable FlowRef. ProjectCentral/now/flows/YYYY-MM-DD-HHMM.md is the default convention when local_stamp is supplied; path is not identity.", MutationClass::LocallyMutating, "projectcentral-flow", &[("project", true), ("actor", true), ("actor_kind", true), ("local_stamp", false), ("path", false), ("title", false), ("agent_session_ref", false)]), create_action),
-        (descriptor("projectcentral.flow.adopt", "Adopt retained source as Flow", "Give an existing ordinary Project file a stable FlowRef without moving it, preserving provider/domain-local placement.", MutationClass::LocallyMutating, "projectcentral-flow", &[("project", true), ("path", true), ("actor", true), ("actor_kind", true), ("title", false), ("agent_session_ref", false)]), adopt_action),
-        (descriptor("projectcentral.flow.write", "Write Project Flow revision", "Revision-safe canonical whole-file write shared by human and Agent callers. A stale expected_revision returns an explicit conflict.", MutationClass::LocallyMutating, "projectcentral-flow", &[("project", true), ("flow_ref", true), ("expected_revision", true), ("content", false), ("actor", true), ("actor_kind", true), ("agent_session_ref", false)]), write_action),
-        (descriptor("projectcentral.flow.rename", "Rename Project Flow source", "Move the retained ordinary file within the Project while preserving FlowRef continuity and changing only the current SourceRef/path relation.", MutationClass::LocallyMutating, "projectcentral-flow", &[("project", true), ("flow_ref", true), ("expected_revision", true), ("new_path", true)]), rename_action),
-        (descriptor("projectcentral.flow.lifecycle", "Set Project Flow lifecycle", "Set active, dormant, or closed lifecycle on the stable Flow identity without changing its source revision.", MutationClass::LocallyMutating, "projectcentral-flow", &[("project", true), ("flow_ref", true), ("expected_revision", true), ("lifecycle", true)]), lifecycle_action),
-        (descriptor("projectcentral.flow.history", "Read Project Flow history", "Read exact stored revision receipts for one FlowRef. Current Flow remains refinable while prior bytes remain under derived owner history.", MutationClass::LocallyMutating, "projectcentral-flow-history", &[("project", true), ("flow_ref", true)]), history_action),
+        (
+            descriptor(
+                "projectcentral.flow.inspect",
+                "Inspect Project Flow",
+                "Read native Flow descriptor and last-observed revision with retrieval availability; no source body is returned.",
+                MutationClass::ReadOnly,
+                "projectcentral-flow-inspection",
+                &[("project", true), ("flow_ref", true)],
+            ),
+            inspect_action
+                as fn(&ActionRegistry, &Value, &ActionExecutionContext<'_>) -> ActionResult,
+        ),
+        (
+            descriptor(
+                "projectcentral.flow.list",
+                "List Project Flows",
+                "List stable Flow identities and current source/revision/lifecycle state. Reconciles external file edits into revision provenance and Source Change Horizon without invoking an Agent/model.",
+                MutationClass::LocallyMutating,
+                "projectcentral-flow-list",
+                &[("project", true)],
+            ),
+            list_action as fn(&ActionRegistry, &Value, &ActionExecutionContext<'_>) -> ActionResult,
+        ),
+        (
+            descriptor(
+                "projectcentral.flow.read",
+                "Read Project Flow",
+                "Read the current ordinary Flow source by stable FlowRef and reconcile any external editor revision with actor unknown.",
+                MutationClass::LocallyMutating,
+                "projectcentral-flow-reading",
+                &[
+                    ("project", true),
+                    ("flow_ref", true),
+                    ("expected_revision", false),
+                ],
+            ),
+            read_action,
+        ),
+        (
+            descriptor(
+                "projectcentral.flow.create",
+                "Create Project Flow",
+                "Create a blank ordinary-file Flow with stable FlowRef. ProjectCentral/now/flows/YYYY-MM-DD-HHMM.md is the default convention when local_stamp is supplied; path is not identity.",
+                MutationClass::LocallyMutating,
+                "projectcentral-flow",
+                &[
+                    ("project", true),
+                    ("actor", true),
+                    ("actor_kind", true),
+                    ("local_stamp", false),
+                    ("path", false),
+                    ("title", false),
+                    ("agent_session_ref", false),
+                ],
+            ),
+            create_action,
+        ),
+        (
+            descriptor(
+                "projectcentral.flow.adopt",
+                "Adopt retained source as Flow",
+                "Give an existing ordinary Project file a stable FlowRef without moving it, preserving provider/domain-local placement.",
+                MutationClass::LocallyMutating,
+                "projectcentral-flow",
+                &[
+                    ("project", true),
+                    ("path", true),
+                    ("actor", true),
+                    ("actor_kind", true),
+                    ("title", false),
+                    ("agent_session_ref", false),
+                ],
+            ),
+            adopt_action,
+        ),
+        (
+            descriptor(
+                "projectcentral.flow.write",
+                "Write Project Flow revision",
+                "Revision-safe canonical whole-file write shared by human and Agent callers. A stale expected_revision returns an explicit conflict.",
+                MutationClass::LocallyMutating,
+                "projectcentral-flow",
+                &[
+                    ("project", true),
+                    ("flow_ref", true),
+                    ("expected_revision", true),
+                    ("content", false),
+                    ("actor", true),
+                    ("actor_kind", true),
+                    ("agent_session_ref", false),
+                ],
+            ),
+            write_action,
+        ),
+        (
+            descriptor(
+                "projectcentral.flow.rename",
+                "Rename Project Flow source",
+                "Move the retained ordinary file within the Project while preserving FlowRef continuity and changing only the current SourceRef/path relation.",
+                MutationClass::LocallyMutating,
+                "projectcentral-flow",
+                &[
+                    ("project", true),
+                    ("flow_ref", true),
+                    ("expected_revision", true),
+                    ("new_path", true),
+                ],
+            ),
+            rename_action,
+        ),
+        (
+            descriptor(
+                "projectcentral.flow.lifecycle",
+                "Set Project Flow lifecycle",
+                "Set active, dormant, or closed lifecycle on the stable Flow identity without changing its source revision.",
+                MutationClass::LocallyMutating,
+                "projectcentral-flow",
+                &[
+                    ("project", true),
+                    ("flow_ref", true),
+                    ("expected_revision", true),
+                    ("lifecycle", true),
+                ],
+            ),
+            lifecycle_action,
+        ),
+        (
+            descriptor(
+                "projectcentral.flow.history",
+                "Read Project Flow history",
+                "Read exact stored revision receipts for one FlowRef. Current Flow remains refinable while prior bytes remain under derived owner history.",
+                MutationClass::LocallyMutating,
+                "projectcentral-flow-history",
+                &[("project", true), ("flow_ref", true)],
+            ),
+            history_action,
+        ),
+        (
+            descriptor(
+                "projectcentral.flow.now",
+                "Read Project Flow NOW view",
+                "W1.3 owner read model: live/held/closed Flows, day grouping by embedded local civil filename stamp, caller-supplied current_day DAY facts, and rest-vs-thinking disclosure. A date boundary does not close a Flow; the civil date is caller-supplied, never timezone-derived. No Agent/model invocation.",
+                MutationClass::LocallyMutating,
+                "projectcentral-flow-now",
+                &[("project", true), ("current_day", false)],
+            ),
+            now_action,
+        ),
     ];
     for (descriptor, handler) in actions {
         registry

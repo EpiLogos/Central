@@ -3,11 +3,11 @@ use crate::action::{
     ActionOutputDefinition, ActionRegistry, MutationClass,
 };
 use crate::control::AGENT_RETRIEVAL_DENY_MARKER;
-use crate::projectcentral_flow::registered_flow_records;
 use crate::projectcentral::{
-    read_project_manifest, AGENT_GOVERNANCE_DIR, ROOT_AGENT_GOVERNANCE_DIR,
-    ROOT_HUMAN_SOURCE_DIR, ROOT_WIKI_DIR, WIKI_DIR,
+    AGENT_GOVERNANCE_DIR, ROOT_AGENT_GOVERNANCE_DIR, ROOT_HUMAN_SOURCE_DIR, ROOT_WIKI_DIR,
+    WIKI_DIR, read_project_manifest,
 };
+use crate::projectcentral_flow::registered_flow_records;
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
 use serde::{Deserialize, Serialize};
@@ -208,7 +208,10 @@ fn validate_project_member(raw: &str) -> io::Result<()> {
 }
 
 pub(crate) fn source_ref(world_ref: &str, path: &str) -> String {
-    let escaped = path.replace('%', "%25").replace(':', "%3A").replace(' ', "%20");
+    let escaped = path
+        .replace('%', "%25")
+        .replace(':', "%3A")
+        .replace(' ', "%20");
     format!("central:source:{world_ref}:{escaped}")
 }
 
@@ -259,10 +262,18 @@ fn safe_regular_file(world_root: &Path, path: &Path) -> io::Result<bool> {
 }
 
 fn should_skip_dir(name: &str) -> bool {
-    matches!(name, ".git" | ".central" | "target" | "node_modules" | ".next" | "dist" | "build")
+    matches!(
+        name,
+        ".git" | ".central" | "target" | "node_modules" | ".next" | "dist" | "build"
+    )
 }
 
-pub(crate) fn collect_files(root: &Path, world_root: &Path, depth: usize, files: &mut Vec<PathBuf>) -> io::Result<()> {
+pub(crate) fn collect_files(
+    root: &Path,
+    world_root: &Path,
+    depth: usize,
+    files: &mut Vec<PathBuf>,
+) -> io::Result<()> {
     if depth > MAX_SCAN_DEPTH || !root.is_dir() {
         return Ok(());
     }
@@ -319,7 +330,11 @@ fn insert_tree_bindings(
     Ok(())
 }
 
-fn read_relations_file(path: &Path, schema: &str, expected_id: &str) -> io::Result<Vec<GroundRelation>> {
+fn read_relations_file(
+    path: &Path,
+    schema: &str,
+    expected_id: &str,
+) -> io::Result<Vec<GroundRelation>> {
     if !path.is_file() {
         return Ok(Vec::new());
     }
@@ -342,7 +357,10 @@ fn read_relations_file(path: &Path, schema: &str, expected_id: &str) -> io::Resu
     Ok(relations.relations)
 }
 
-fn read_ground_relations(project_root: &Path, expected_project_id: &str) -> io::Result<Vec<GroundRelation>> {
+fn read_ground_relations(
+    project_root: &Path,
+    expected_project_id: &str,
+) -> io::Result<Vec<GroundRelation>> {
     let relations = read_relations_file(
         &project_root.join(GROUND_RELATIONS_SOURCE),
         GROUND_RELATIONS_SCHEMA,
@@ -393,7 +411,10 @@ pub fn project_source_bindings(project_root: &Path) -> io::Result<Vec<SourceBind
     let manifest = read_project_manifest(project_root)?;
     let validation = manifest.validate();
     if !validation.valid {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, validation.errors.join("; ")));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            validation.errors.join("; "),
+        ));
     }
     let world_ref = format!("project:{}", manifest.project_id);
     let mut bindings = BTreeMap::<String, SourceBinding>::new();
@@ -403,7 +424,9 @@ pub fn project_source_bindings(project_root: &Path) -> io::Result<Vec<SourceBind
     // fallback below uses or_insert and therefore never overrides it.
     crate::control_skills::insert_skill_bindings(
         project_root,
-        &project_root.join(&manifest.human_source).join(crate::control_skills::SKILLS_SEGMENT),
+        &project_root
+            .join(&manifest.human_source)
+            .join(crate::control_skills::SKILLS_SEGMENT),
         &world_ref,
         &mut bindings,
     )?;
@@ -492,7 +515,10 @@ pub fn project_source_bindings(project_root: &Path) -> io::Result<Vec<SourceBind
         // retained file already participates through another explicit source relation (for
         // example an adopted Wiki source), Flow is an additional role on that source rather
         // than a replacement for the existing authority relation.
-        if let Some(existing) = bindings.values_mut().find(|binding| binding.path == flow.path) {
+        if let Some(existing) = bindings
+            .values_mut()
+            .find(|binding| binding.path == flow.path)
+        {
             if !existing.roles.iter().any(|role| role == "flow-source") {
                 existing.roles.push("flow-source".to_owned());
                 existing.roles.sort();
@@ -531,11 +557,16 @@ pub fn control_source_bindings(central_root: &Path) -> io::Result<Vec<SourceBind
         world_ref,
         &mut bindings,
     )?;
-    if let Ok(machines) = crate::control_skills::child_directories(&central_root.join("Control/machines")) {
+    if let Ok(machines) =
+        crate::control_skills::child_directories(&central_root.join("Control/machines"))
+    {
         for machine in machines {
             crate::control_skills::insert_skill_bindings(
                 central_root,
-                &central_root.join("Control/machines").join(&machine).join(crate::control_skills::SKILLS_SEGMENT),
+                &central_root
+                    .join("Control/machines")
+                    .join(&machine)
+                    .join(crate::control_skills::SKILLS_SEGMENT),
                 world_ref,
                 &mut bindings,
             )?;
@@ -598,7 +629,10 @@ pub fn control_source_bindings(central_root: &Path) -> io::Result<Vec<SourceBind
     Ok(bindings.into_values().collect())
 }
 
-fn observe_bindings(world_root: &Path, bindings: Vec<SourceBinding>) -> io::Result<BTreeMap<String, ObservedSource>> {
+fn observe_bindings(
+    world_root: &Path,
+    bindings: Vec<SourceBinding>,
+) -> io::Result<BTreeMap<String, ObservedSource>> {
     let mut observed = BTreeMap::new();
     for binding in bindings {
         validate_project_member(&binding.path)?;
@@ -607,7 +641,10 @@ fn observe_bindings(world_root: &Path, bindings: Vec<SourceBinding>) -> io::Resu
             continue;
         }
         let revision = content_revision(&path)?;
-        observed.insert(binding.source_ref.clone(), ObservedSource { binding, revision });
+        observed.insert(
+            binding.source_ref.clone(),
+            ObservedSource { binding, revision },
+        );
     }
     Ok(observed)
 }
@@ -692,7 +729,10 @@ fn reconcile(
     if !initialized {
         let previous_refs = state.sources.keys().cloned().collect::<BTreeSet<_>>();
         let current_refs = current.keys().cloned().collect::<BTreeSet<_>>();
-        let all_refs = previous_refs.union(&current_refs).cloned().collect::<Vec<_>>();
+        let all_refs = previous_refs
+            .union(&current_refs)
+            .cloned()
+            .collect::<Vec<_>>();
         for reference in all_refs {
             let before = state.sources.get(&reference);
             let after = current.get(&reference);
@@ -706,7 +746,9 @@ fn reconcile(
             };
             let Some(kind) = kind else { continue };
             state.cursor = state.cursor.saturating_add(1);
-            let basis = after.or(before).expect("change has a before or after source");
+            let basis = after
+                .or(before)
+                .expect("change has a before or after source");
             let attribution = attributions.get(&reference);
             let change = SourceChange {
                 schema: SOURCE_CHANGE_SCHEMA.to_owned(),
@@ -737,7 +779,11 @@ fn reconcile(
     state.reconciled_at_unix_seconds = now;
     write_state(state_path, &state)?;
     let horizon = public_horizon(&state, None);
-    Ok(ReconcileReport { initialized, new_changes, horizon })
+    Ok(ReconcileReport {
+        initialized,
+        new_changes,
+        horizon,
+    })
 }
 
 pub fn reconcile_project_sources(project_root: &Path) -> io::Result<ReconcileReport> {
@@ -773,31 +819,55 @@ pub fn reconcile_control_sources(central_root: &Path) -> io::Result<ReconcileRep
     )
 }
 
-pub fn read_project_change_horizon(project_root: &Path, since: Option<u64>) -> io::Result<SourceHorizon> {
+pub fn read_project_change_horizon(
+    project_root: &Path,
+    since: Option<u64>,
+) -> io::Result<SourceHorizon> {
     // Reading the current horizon is also the correctness reconciliation path. This makes direct
     // external edits available without a manual sync command while keeping all mutation under
     // derived .central state and never invoking an Agent/model.
     let report = reconcile_project_sources(project_root)?;
-    let state = load_state(&project_root.join(PROJECT_HORIZON_STATE))?
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "source horizon state was not created"))?;
+    let state = load_state(&project_root.join(PROJECT_HORIZON_STATE))?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "source horizon state was not created",
+        )
+    })?;
     let _ = report;
     Ok(public_horizon(&state, since))
 }
 
-pub fn acknowledge_project_cursor(project_root: &Path, consumer: &str, cursor: u64) -> io::Result<SourceHorizon> {
+pub fn acknowledge_project_cursor(
+    project_root: &Path,
+    consumer: &str,
+    cursor: u64,
+) -> io::Result<SourceHorizon> {
     if consumer.trim().is_empty() || consumer != consumer.trim() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "consumer must be non-empty"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "consumer must be non-empty",
+        ));
     }
     let path = project_root.join(PROJECT_HORIZON_STATE);
-    let mut state = load_state(&path)?
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "source horizon must be reconciled before acknowledgement"))?;
+    let mut state = load_state(&path)?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "source horizon must be reconciled before acknowledgement",
+        )
+    })?;
     if cursor > state.cursor {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("cannot acknowledge cursor {cursor} beyond current cursor {}", state.cursor),
+            format!(
+                "cannot acknowledge cursor {cursor} beyond current cursor {}",
+                state.cursor
+            ),
         ));
     }
-    let entry = state.consumer_cursors.entry(consumer.to_owned()).or_insert(0);
+    let entry = state
+        .consumer_cursors
+        .entry(consumer.to_owned())
+        .or_insert(0);
     *entry = (*entry).max(cursor);
     write_state(&path, &state)?;
     Ok(public_horizon(&state, None))
@@ -805,8 +875,12 @@ pub fn acknowledge_project_cursor(project_root: &Path, consumer: &str, cursor: u
 
 pub fn compact_project_changes(project_root: &Path) -> io::Result<CompactionReport> {
     let path = project_root.join(PROJECT_HORIZON_STATE);
-    let mut state = load_state(&path)?
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "source horizon must be reconciled before compaction"))?;
+    let mut state = load_state(&path)?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "source horizon must be reconciled before compaction",
+        )
+    })?;
     let before_changes = state.changes.len();
     let minimum_active_cursor = state.consumer_cursors.values().copied().min();
     if let Some(cursor) = minimum_active_cursor {
@@ -843,11 +917,16 @@ fn descriptor(
         title: title.to_owned(),
         description: description.to_owned(),
         inputs,
-        output: ActionOutputDefinition { output_type: output_type.to_owned() },
+        output: ActionOutputDefinition {
+            output_type: output_type.to_owned(),
+        },
         mutation_class,
         preview_supported: false,
         required_ports: Vec::new(),
-        availability: ActionAvailability { available: true, reason: None },
+        availability: ActionAvailability {
+            available: true,
+            reason: None,
+        },
     }
 }
 
@@ -858,22 +937,35 @@ fn required(input: &Value, field: &str, action: &str) -> Result<String, ActionRe
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
-        .ok_or_else(|| ActionResult::failure(
-            Some(action),
-            ResultStatus::InvalidInput,
-            format!("{action} requires {field}."),
-            None,
-        ))
+        .ok_or_else(|| {
+            ActionResult::failure(
+                Some(action),
+                ResultStatus::InvalidInput,
+                format!("{action} requires {field}."),
+                None,
+            )
+        })
 }
 
-fn project_root(action: &str, input: &Value, context: &ActionExecutionContext<'_>) -> Result<PathBuf, ActionResult> {
+fn project_root(
+    action: &str,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> Result<PathBuf, ActionResult> {
     let project = required(input, "project", action)?;
     validate_project_member(&project).map_err(|error| {
-        ActionResult::failure(Some(action), ResultStatus::InvalidInput, error.to_string(), None)
+        ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            error.to_string(),
+            None,
+        )
     })?;
-    let central = resolve_central_root(context.root_options).map_err(|message| {
-        ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None)
-    })?.path;
+    let central = resolve_central_root(context.root_options)
+        .map_err(|message| {
+            ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None)
+        })?
+        .path;
     let root = central.join("Work").join(project);
     if !root.is_dir() {
         return Err(ActionResult::failure(
@@ -895,7 +987,11 @@ fn io_failure(action: &str, error: io::Error) -> ActionResult {
     ActionResult::failure(Some(action), status, error.to_string(), None)
 }
 
-fn horizon_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn horizon_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.change.horizon";
     let root = match project_root(action, input, context) {
         Ok(root) => root,
@@ -903,22 +999,40 @@ fn horizon_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionCo
     };
     let since = input.get("cursor").and_then(Value::as_u64);
     read_project_change_horizon(&root, since)
-        .map(|value| ActionResult::success(action, serde_json::to_value(value).expect("horizon serializes")))
+        .map(|value| {
+            ActionResult::success(
+                action,
+                serde_json::to_value(value).expect("horizon serializes"),
+            )
+        })
         .unwrap_or_else(|error| io_failure(action, error))
 }
 
-fn reconcile_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn reconcile_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.change.reconcile";
     let root = match project_root(action, input, context) {
         Ok(root) => root,
         Err(result) => return result,
     };
     reconcile_project_sources(&root)
-        .map(|value| ActionResult::success(action, serde_json::to_value(value).expect("reconcile serializes")))
+        .map(|value| {
+            ActionResult::success(
+                action,
+                serde_json::to_value(value).expect("reconcile serializes"),
+            )
+        })
         .unwrap_or_else(|error| io_failure(action, error))
 }
 
-fn acknowledge_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn acknowledge_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.change.ack";
     let root = match project_root(action, input, context) {
         Ok(root) => root,
@@ -936,11 +1050,16 @@ fn acknowledge_action(_: &ActionRegistry, input: &Value, context: &ActionExecuti
                 ResultStatus::InvalidInput,
                 format!("{action} requires numeric cursor."),
                 None,
-            )
+            );
         }
     };
     acknowledge_project_cursor(&root, &consumer, cursor)
-        .map(|value| ActionResult::success(action, serde_json::to_value(value).expect("horizon serializes")))
+        .map(|value| {
+            ActionResult::success(
+                action,
+                serde_json::to_value(value).expect("horizon serializes"),
+            )
+        })
         .unwrap_or_else(|error| io_failure(action, error))
 }
 
@@ -955,7 +1074,8 @@ pub fn register_source_horizon_actions(registry: &mut ActionRegistry) {
                 vec![action_input("project", true), action_input("cursor", false)],
                 "central-source-change-horizon",
             ),
-            horizon_action as fn(&ActionRegistry, &Value, &ActionExecutionContext<'_>) -> ActionResult,
+            horizon_action
+                as fn(&ActionRegistry, &Value, &ActionExecutionContext<'_>) -> ActionResult,
         ),
         (
             descriptor(

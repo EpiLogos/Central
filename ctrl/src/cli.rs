@@ -1,12 +1,12 @@
-use crate::action::{create_core_action_registry, ActionExecutionContext};
+use crate::action::{ActionExecutionContext, create_core_action_registry};
 use crate::agent_profile_actions::register_agent_profile_actions;
-use crate::picker::{run_guided_action_picker, NullTerminalSurface, TerminalSurface};
+use crate::picker::{NullTerminalSurface, TerminalSurface, run_guided_action_picker};
 use crate::projectcentral_ops::register_projectcentral_actions;
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::RootOptions;
 use central_connector_sdk::{ConnectorContext, ConnectorRegistry};
 use central_reference_connectors::create_default_connector_registry;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::env;
 use std::path::PathBuf;
 
@@ -18,12 +18,17 @@ pub struct CliEnvironment {
 
 impl CliEnvironment {
     pub fn from_process() -> Self {
-        let configured_root = env::var_os("CENTRAL_ROOT").filter(|value| !value.is_empty()).map(PathBuf::from);
+        let configured_root = env::var_os("CENTRAL_ROOT")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from);
         let home = env::var_os("HOME")
             .filter(|value| !value.is_empty())
             .or_else(|| env::var_os("USERPROFILE").filter(|value| !value.is_empty()))
             .map(PathBuf::from);
-        Self { configured_root, home }
+        Self {
+            configured_root,
+            home,
+        }
     }
 }
 
@@ -45,11 +50,22 @@ struct ParsedCommand {
     target: CommandTarget,
 }
 
-fn parse_action_input(structured: bool, action_id: &str, raw: &str) -> Result<Value, (bool, String)> {
-    let value: Value = serde_json::from_str(raw)
-        .map_err(|error| (structured, format!("action run input must be a JSON object: {error}")))?;
+fn parse_action_input(
+    structured: bool,
+    action_id: &str,
+    raw: &str,
+) -> Result<Value, (bool, String)> {
+    let value: Value = serde_json::from_str(raw).map_err(|error| {
+        (
+            structured,
+            format!("action run input must be a JSON object: {error}"),
+        )
+    })?;
     if !value.is_object() {
-        return Err((structured, format!("action run input for {action_id} must be a JSON object.")));
+        return Err((
+            structured,
+            format!("action run input for {action_id} must be a JSON object."),
+        ));
     }
     Ok(value)
 }
@@ -90,7 +106,11 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         return Err((structured, "An Action or command is required.".to_owned()));
     }
     if positional.as_slice() == ["pick"] {
-        return Ok(ParsedCommand { structured, explicit_root, target: CommandTarget::Guided });
+        return Ok(ParsedCommand {
+            structured,
+            explicit_root,
+            target: CommandTarget::Guided,
+        });
     }
     if positional.first().map(String::as_str) == Some("pick") {
         return Err((structured, "pick takes no positional input.".to_owned()));
@@ -105,19 +125,30 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
             return Err((structured, "world plan requires a Project name.".to_owned()));
         }
         [command, rest @ ..] if command == "world" && rest.len() == 1 && rest[0] == "apply" => {
-            return Err((structured, "world apply requires a Project name.".to_owned()));
+            return Err((
+                structured,
+                "world apply requires a Project name.".to_owned(),
+            ));
         }
-        [command, rest @ ..] if command == "world"
-            && rest.first().map(String::as_str) == Some("plan")
-            && rest.len() == 2 =>
+        [command, rest @ ..]
+            if command == "world"
+                && rest.first().map(String::as_str) == Some("plan")
+                && rest.len() == 2 =>
         {
-            ("central.world.reproject.plan", json!({ "project": rest[1] }))
+            (
+                "central.world.reproject.plan",
+                json!({ "project": rest[1] }),
+            )
         }
-        [command, rest @ ..] if command == "world"
-            && rest.first().map(String::as_str) == Some("apply")
-            && rest.len() == 2 =>
+        [command, rest @ ..]
+            if command == "world"
+                && rest.first().map(String::as_str) == Some("apply")
+                && rest.len() == 2 =>
         {
-            ("central.world.reproject.apply", json!({ "project": rest[1] }))
+            (
+                "central.world.reproject.apply",
+                json!({ "project": rest[1] }),
+            )
         }
         [command, rest @ ..] if command == "world" && rest.len() == 1 => {
             ("central.world.project", json!({ "project": rest[0] }))
@@ -127,14 +158,18 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         [domain, verb, action] if domain == "action" && verb == "run" => {
             (action.as_str(), json!({}))
         }
-        [domain, verb, action, raw] if domain == "action" && verb == "run" => {
-            (action.as_str(), parse_action_input(structured, action, raw)?)
-        }
+        [domain, verb, action, raw] if domain == "action" && verb == "run" => (
+            action.as_str(),
+            parse_action_input(structured, action, raw)?,
+        ),
         [domain, verb] if domain == "action" && verb == "run" => {
             return Err((structured, "action run requires an Action id.".to_owned()));
         }
         [domain, verb, ..] if domain == "action" && verb == "run" => {
-            return Err((structured, "action run accepts one Action id and at most one JSON object argument.".to_owned()));
+            return Err((
+                structured,
+                "action run accepts one Action id and at most one JSON object argument.".to_owned(),
+            ));
         }
         [domain, verb] if domain == "work" && verb == "list" => ("work.list", json!({})),
         [domain, verb, rest @ ..] if domain == "work" && verb == "search" && !rest.is_empty() => {
@@ -149,22 +184,37 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         [command, rest @ ..] if command == "open" && !rest.is_empty() => {
             ("work.open", json!({ "query": rest.join(" ") }))
         }
-        [domain, verb] if domain == "work" && matches!(verb.as_str(), "search" | "open" | "reveal") => {
+        [domain, verb]
+            if domain == "work" && matches!(verb.as_str(), "search" | "open" | "reveal") =>
+        {
             return Err((structured, format!("work {verb} requires a query.")));
         }
-        [command] if command == "open" => return Err((structured, "open requires a Work name or search.".to_owned())),
-        [domain, verb, target] if domain == "control" && verb == "open" => ("control.open", json!({ "target": target })),
-        [domain, verb, rest @ ..] if domain == "control" && verb == "search" && !rest.is_empty() => {
+        [command] if command == "open" => {
+            return Err((
+                structured,
+                "open requires a Work name or search.".to_owned(),
+            ));
+        }
+        [domain, verb, target] if domain == "control" && verb == "open" => {
+            ("control.open", json!({ "target": target }))
+        }
+        [domain, verb, rest @ ..]
+            if domain == "control" && verb == "search" && !rest.is_empty() =>
+        {
             ("control.search", json!({ "query": rest.join(" ") }))
         }
         [domain, verb] if domain == "control" && verb == "open" => {
-            return Err((structured, "control open requires one Control root.".to_owned()));
+            return Err((
+                structured,
+                "control open requires one Control root.".to_owned(),
+            ));
         }
         [domain, verb] if domain == "control" && verb == "search" => {
             return Err((structured, "control search requires a query.".to_owned()));
         }
         [domain, verb]
-            if domain == "machine" && matches!(verb.as_str(), "inspect" | "account" | "adopt-current") =>
+            if domain == "machine"
+                && matches!(verb.as_str(), "inspect" | "account" | "adopt-current") =>
         {
             let action = match verb.as_str() {
                 "inspect" => "machine.inspect",
@@ -172,10 +222,13 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
                 _ => "machine.adopt-current",
             };
             (action, json!({}))
-        },
+        }
         [domain, verb, role]
             if domain == "machine"
-                && matches!(verb.as_str(), "declaration" | "plan" | "apply" | "verify" | "adopt-current") =>
+                && matches!(
+                    verb.as_str(),
+                    "declaration" | "plan" | "apply" | "verify" | "adopt-current"
+                ) =>
         {
             let action = match verb.as_str() {
                 "declaration" => "machine.declaration",
@@ -187,7 +240,8 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
             (action, json!({ "role": role }))
         }
         [domain, verb]
-            if domain == "machine" && matches!(verb.as_str(), "declaration" | "plan" | "apply" | "verify") =>
+            if domain == "machine"
+                && matches!(verb.as_str(), "declaration" | "plan" | "apply" | "verify") =>
         {
             return Err((structured, format!("machine {verb} requires a role.")));
         }
@@ -197,9 +251,7 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         [domain, verb] if domain == "recovery" && verb == "plan" => {
             return Err((structured, "recovery plan requires a role.".to_owned()));
         }
-        [command, role] if command == "recover" => {
-            ("central.recover", json!({ "role": role }))
-        }
+        [command, role] if command == "recover" => ("central.recover", json!({ "role": role })),
         [command] if command == "recover" => {
             return Err((structured, "recover requires a role.".to_owned()));
         }
@@ -212,15 +264,25 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         [canonical, rest @ ..] if canonical == "work.reveal" && !rest.is_empty() => {
             ("work.reveal", json!({ "query": rest.join(" ") }))
         }
-        [canonical] if matches!(canonical.as_str(), "work.search" | "work.open" | "work.reveal") => {
+        [canonical]
+            if matches!(
+                canonical.as_str(),
+                "work.search" | "work.open" | "work.reveal"
+            ) =>
+        {
             return Err((structured, format!("{canonical} requires a query.")));
         }
-        [canonical, target] if canonical == "control.open" => ("control.open", json!({ "target": target })),
+        [canonical, target] if canonical == "control.open" => {
+            ("control.open", json!({ "target": target }))
+        }
         [canonical, rest @ ..] if canonical == "control.search" && !rest.is_empty() => {
             ("control.search", json!({ "query": rest.join(" ") }))
         }
         [canonical] if canonical == "control.open" => {
-            return Err((structured, "control.open requires one Control root.".to_owned()));
+            return Err((
+                structured,
+                "control.open requires one Control root.".to_owned(),
+            ));
         }
         [canonical] if canonical == "control.search" => {
             return Err((structured, "control.search requires a query.".to_owned()));
@@ -228,7 +290,12 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         [canonical, role]
             if matches!(
                 canonical.as_str(),
-                "machine.declaration" | "machine.plan" | "machine.apply" | "machine.verify" | "central.recovery.plan" | "central.recover"
+                "machine.declaration"
+                    | "machine.plan"
+                    | "machine.apply"
+                    | "machine.verify"
+                    | "central.recovery.plan"
+                    | "central.recover"
             ) =>
         {
             (canonical.as_str(), json!({ "role": role }))
@@ -236,7 +303,12 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         [canonical]
             if matches!(
                 canonical.as_str(),
-                "machine.declaration" | "machine.plan" | "machine.apply" | "machine.verify" | "central.recovery.plan" | "central.recover"
+                "machine.declaration"
+                    | "machine.plan"
+                    | "machine.apply"
+                    | "machine.verify"
+                    | "central.recovery.plan"
+                    | "central.recover"
             ) =>
         {
             return Err((structured, format!("{canonical} requires a role.")));
@@ -244,22 +316,38 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         [canonical]
             if matches!(
                 canonical.as_str(),
-                "central.root" | "central.init" | "central.doctor" | "central.world"
-                | "central.world.project" | "central.world.reproject.plan"
-                | "central.world.reproject.apply" | "action.list" | "machine.inspect"
-                | "machine.account" | "machine.adopt-current" | "work.list"
+                "central.root"
+                    | "central.init"
+                    | "central.doctor"
+                    | "central.world"
+                    | "central.world.project"
+                    | "central.world.reproject.plan"
+                    | "central.world.reproject.apply"
+                    | "action.list"
+                    | "machine.inspect"
+                    | "machine.account"
+                    | "machine.adopt-current"
+                    | "work.list"
             ) =>
         {
             (canonical.as_str(), json!({}))
         }
         [unknown] => return Err((structured, format!("Unknown command: {unknown}"))),
-        _ => return Err((structured, format!("Unexpected arguments: {}", positional[1..].join(" ")))),
+        _ => {
+            return Err((
+                structured,
+                format!("Unexpected arguments: {}", positional[1..].join(" ")),
+            ));
+        }
     };
 
     Ok(ParsedCommand {
         structured,
         explicit_root,
-        target: CommandTarget::Direct { action_id: action_id.to_owned(), input },
+        target: CommandTarget::Direct {
+            action_id: action_id.to_owned(),
+            input,
+        },
     })
 }
 
@@ -279,7 +367,10 @@ fn human_output(result: &ActionResult) -> String {
     match result.action.as_deref() {
         Some("central.root") => {
             let path = data.get("path").and_then(Value::as_str).unwrap_or_default();
-            let source = data.get("source").and_then(Value::as_str).unwrap_or("unknown");
+            let source = data
+                .get("source")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
             format!("{path} ({source})")
         }
         Some("central.init") => {
@@ -289,17 +380,29 @@ fn human_output(result: &ActionResult) -> String {
         Some("central.doctor") => {
             let root = data.get("root").and_then(Value::as_str).unwrap_or_default();
             let valid = data.get("valid").and_then(Value::as_bool).unwrap_or(false);
-            let mut lines = vec![format!("Central root: {root}"), format!("Valid: {}", if valid { "yes" } else { "no" })];
+            let mut lines = vec![
+                format!("Central root: {root}"),
+                format!("Valid: {}", if valid { "yes" } else { "no" }),
+            ];
             if let Some(checks) = data.get("checks").and_then(Value::as_array) {
                 for check in checks {
-                    let path = check.get("path").and_then(Value::as_str).unwrap_or_default();
+                    let path = check
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
                     let ok = check.get("valid").and_then(Value::as_bool).unwrap_or(false);
                     lines.push(format!("{}  {path}", if ok { "ok" } else { "missing" }));
                 }
             }
             if let Some(mixed) = data.get("mixed_root") {
-                if mixed.get("detected").and_then(Value::as_bool).unwrap_or(false) {
-                    let message = mixed.get("message").and_then(Value::as_str).unwrap_or("Central personal root is also the Central product source checkout.");
+                if mixed
+                    .get("detected")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    let message = mixed.get("message").and_then(Value::as_str).unwrap_or(
+                        "Central personal root is also the Central product source checkout.",
+                    );
                     lines.push(format!("warning: {message}"));
                 }
             }
@@ -314,26 +417,47 @@ fn human_output(result: &ActionResult) -> String {
         Some("action.list") => data
             .get("actions")
             .and_then(Value::as_array)
-            .map(|actions| actions.iter().map(|action| {
-                let id = action.get("id").and_then(Value::as_str).unwrap_or_default();
-                let title = action.get("title").and_then(Value::as_str).unwrap_or_default();
-                format!("{id}\t{title}")
-            }).collect::<Vec<_>>().join("\n"))
+            .map(|actions| {
+                actions
+                    .iter()
+                    .map(|action| {
+                        let id = action.get("id").and_then(Value::as_str).unwrap_or_default();
+                        let title = action
+                            .get("title")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        format!("{id}\t{title}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
             .unwrap_or_default(),
         Some("control.open") => {
-            let target = data.get("target").and_then(Value::as_str).unwrap_or_default();
+            let target = data
+                .get("target")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             let path = data.get("path").and_then(Value::as_str).unwrap_or_default();
             format!("{target}\t{path}")
         }
         Some("control.search") => data
             .get("matches")
             .and_then(Value::as_array)
-            .map(|matches| matches.iter().map(|item| {
-                let path = item.get("source_path").and_then(Value::as_str).unwrap_or_default();
-                let line = item.get("line").and_then(Value::as_u64).unwrap_or_default();
-                let text = item.get("text").and_then(Value::as_str).unwrap_or_default();
-                format!("{path}:{line}\t{text}")
-            }).collect::<Vec<_>>().join("\n"))
+            .map(|matches| {
+                matches
+                    .iter()
+                    .map(|item| {
+                        let path = item
+                            .get("source_path")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        let line = item.get("line").and_then(Value::as_u64).unwrap_or_default();
+                        let text = item.get("text").and_then(Value::as_str).unwrap_or_default();
+                        format!("{path}:{line}\t{text}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
             .unwrap_or_default(),
         Some("machine.declaration") => crate::machine::explain_machine_declaration(data),
         Some("machine.inspect") => crate::machine::explain_machine_inspection(data),
@@ -362,15 +486,29 @@ fn human_output(result: &ActionResult) -> String {
         Some("work.search") => data
             .get("matches")
             .and_then(Value::as_array)
-            .map(|matches| matches.iter().map(|item| {
-                let name = item.get("name").and_then(Value::as_str).unwrap_or_default();
-                let path = item.get("path").and_then(Value::as_str).unwrap_or_default();
-                format!("{name}\t{path}")
-            }).collect::<Vec<_>>().join("\n"))
+            .map(|matches| {
+                matches
+                    .iter()
+                    .map(|item| {
+                        let name = item.get("name").and_then(Value::as_str).unwrap_or_default();
+                        let path = item.get("path").and_then(Value::as_str).unwrap_or_default();
+                        format!("{name}\t{path}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
             .unwrap_or_default(),
         Some("work.open") | Some("work.reveal") => {
-            let name = data.get("item").and_then(|item| item.get("name")).and_then(Value::as_str).unwrap_or_default();
-            let path = data.get("item").and_then(|item| item.get("path")).and_then(Value::as_str).unwrap_or_default();
+            let name = data
+                .get("item")
+                .and_then(|item| item.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let path = data
+                .get("item")
+                .and_then(|item| item.get("path"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             format!("{name}\t{path}")
         }
         _ => data.to_string(),
@@ -401,8 +539,16 @@ pub fn run_cli_with_runtime(
         Ok(parsed) => parsed,
         Err((structured, message)) => {
             let result = ActionResult::failure(None, ResultStatus::InvalidInput, message, None);
-            let output = if structured { serde_json::to_string(&result).expect("ActionResult serializes") } else { human_output(&result) };
-            return CliExecution { exit_code: exit_code(&result), result, output };
+            let output = if structured {
+                serde_json::to_string(&result).expect("ActionResult serializes")
+            } else {
+                human_output(&result)
+            };
+            return CliExecution {
+                exit_code: exit_code(&result),
+                result,
+                output,
+            };
         }
     };
 
@@ -422,8 +568,11 @@ pub fn run_cli_with_runtime(
     crate::engineering_ground::register_engineering_ground_actions(&mut registry);
     register_agent_profile_actions(&mut registry);
     crate::agent_set_actions::register_agent_set_actions(&mut registry);
+    crate::remember_actions::register_remember_actions(&mut registry);
     let result = match parsed.target {
-        CommandTarget::Direct { action_id, input } => registry.execute(&action_id, &input, &context),
+        CommandTarget::Direct { action_id, input } => {
+            registry.execute(&action_id, &input, &context)
+        }
         CommandTarget::Guided => run_guided_action_picker(&registry, &context, surface),
     };
     let output = if parsed.structured {
@@ -431,7 +580,11 @@ pub fn run_cli_with_runtime(
     } else {
         human_output(&result)
     };
-    CliExecution { exit_code: exit_code(&result), result, output }
+    CliExecution {
+        exit_code: exit_code(&result),
+        result,
+        output,
+    }
 }
 
 pub fn run_cli_with_surface(

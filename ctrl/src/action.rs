@@ -1,15 +1,16 @@
-use crate::control::{locate_control_root, search_control, CONTROL_ROOTS};
+use crate::control::{CONTROL_ROOTS, locate_control_root, search_control};
 use crate::result::{ActionResult, ResultStatus};
-use crate::root::{inspect_central, initialize_central, resolve_central_root, RootOptions};
+use crate::root::{RootOptions, initialize_central, inspect_central, resolve_central_root};
 use central_connector_sdk::{
-    ConnectorContext, ConnectorDiagnostics, ConnectorRegistry, NativeOpenInput, NativeRevealInput,
-    WorkDiscoveryInput, WorkItem, NATIVE_OPEN_PORT, NATIVE_REVEAL_PORT, WORK_DISCOVERY_PORT,
+    ConnectorContext, ConnectorDiagnostics, ConnectorRegistry, NATIVE_OPEN_PORT,
+    NATIVE_REVEAL_PORT, NativeOpenInput, NativeRevealInput, WORK_DISCOVERY_PORT,
+    WorkDiscoveryInput, WorkItem,
 };
 use serde::Serialize;
-use serde_json::{json, to_value, Value};
+use serde_json::{Value, json, to_value};
 use std::collections::BTreeMap;
 use std::io;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -82,7 +83,8 @@ pub struct ActionExecutionContext<'a> {
     pub connector_context: &'a ConnectorContext,
 }
 
-pub type ActionHandler = for<'a> fn(&ActionRegistry, &Value, &ActionExecutionContext<'a>) -> ActionResult;
+pub type ActionHandler =
+    for<'a> fn(&ActionRegistry, &Value, &ActionExecutionContext<'a>) -> ActionResult;
 
 struct RegisteredAction {
     descriptor: ActionDescriptor,
@@ -95,14 +97,24 @@ pub struct ActionRegistry {
 }
 
 impl ActionRegistry {
-    pub fn register(&mut self, descriptor: ActionDescriptor, handler: ActionHandler) -> Result<(), String> {
+    pub fn register(
+        &mut self,
+        descriptor: ActionDescriptor,
+        handler: ActionHandler,
+    ) -> Result<(), String> {
         if descriptor.id.trim().is_empty() || !descriptor.id.contains('.') {
             return Err(format!("Invalid Action id: {}", descriptor.id));
         }
         if self.actions.contains_key(&descriptor.id) {
             return Err(format!("Action already registered: {}", descriptor.id));
         }
-        self.actions.insert(descriptor.id.clone(), RegisteredAction { descriptor, handler });
+        self.actions.insert(
+            descriptor.id.clone(),
+            RegisteredAction {
+                descriptor,
+                handler,
+            },
+        );
         Ok(())
     }
 
@@ -111,12 +123,25 @@ impl ActionRegistry {
     }
 
     pub fn list(&self) -> Vec<ActionDescriptor> {
-        self.actions.values().map(|entry| entry.descriptor.clone()).collect()
+        self.actions
+            .values()
+            .map(|entry| entry.descriptor.clone())
+            .collect()
     }
 
-    pub fn execute(&self, id: &str, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+    pub fn execute(
+        &self,
+        id: &str,
+        input: &Value,
+        context: &ActionExecutionContext<'_>,
+    ) -> ActionResult {
         let Some(action) = self.actions.get(id) else {
-            return ActionResult::failure(Some(id), ResultStatus::InvalidInput, format!("Unknown Action: {id}"), None);
+            return ActionResult::failure(
+                Some(id),
+                ResultStatus::InvalidInput,
+                format!("Unknown Action: {id}"),
+                None,
+            );
         };
         match catch_unwind(AssertUnwindSafe(|| (action.handler)(self, input, context))) {
             Ok(result) => result,
@@ -146,17 +171,28 @@ struct SelectedWork {
     diagnostics: ConnectorDiagnostics,
 }
 
-fn descriptor(id: &str, title: &str, description: &str, mutation_class: MutationClass, output_type: &str) -> ActionDescriptor {
+fn descriptor(
+    id: &str,
+    title: &str,
+    description: &str,
+    mutation_class: MutationClass,
+    output_type: &str,
+) -> ActionDescriptor {
     ActionDescriptor {
         id: id.to_owned(),
         title: title.to_owned(),
         description: description.to_owned(),
         inputs: Vec::new(),
-        output: ActionOutputDefinition { output_type: output_type.to_owned() },
+        output: ActionOutputDefinition {
+            output_type: output_type.to_owned(),
+        },
         mutation_class,
         preview_supported: false,
         required_ports: Vec::new(),
-        availability: ActionAvailability { available: true, reason: None },
+        availability: ActionAvailability {
+            available: true,
+            reason: None,
+        },
     }
 }
 
@@ -181,7 +217,12 @@ fn work_query_input() -> ActionInputDefinition {
 }
 
 fn required_text(input: &Value, field: &str, action: &str) -> Result<String, ActionResult> {
-    let Some(value) = input.get(field).and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty()) else {
+    let Some(value) = input
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
         return Err(ActionResult::failure(
             Some(action),
             ResultStatus::InvalidInput,
@@ -192,17 +233,40 @@ fn required_text(input: &Value, field: &str, action: &str) -> Result<String, Act
     Ok(value.to_owned())
 }
 
-fn root_action(_registry: &ActionRegistry, _input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn root_action(
+    _registry: &ActionRegistry,
+    _input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     match resolve_central_root(context.root_options) {
-        Ok(resolved) => ActionResult::success("central.root", to_value(resolved).expect("resolved root serializes")),
-        Err(message) => ActionResult::failure(Some("central.root"), ResultStatus::InvalidInput, message, None),
+        Ok(resolved) => ActionResult::success(
+            "central.root",
+            to_value(resolved).expect("resolved root serializes"),
+        ),
+        Err(message) => ActionResult::failure(
+            Some("central.root"),
+            ResultStatus::InvalidInput,
+            message,
+            None,
+        ),
     }
 }
 
-fn init_action(_registry: &ActionRegistry, _input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn init_action(
+    _registry: &ActionRegistry,
+    _input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let resolved = match resolve_central_root(context.root_options) {
         Ok(resolved) => resolved,
-        Err(message) => return ActionResult::failure(Some("central.init"), ResultStatus::InvalidInput, message, None),
+        Err(message) => {
+            return ActionResult::failure(
+                Some("central.init"),
+                ResultStatus::InvalidInput,
+                message,
+                None,
+            );
+        }
     };
 
     match inspect_central(&resolved.path) {
@@ -216,49 +280,103 @@ fn init_action(_registry: &ActionRegistry, _input: &Value, context: &ActionExecu
         }
         Ok(_) => {}
         Err(error) => {
-            return ActionResult::failure(Some("central.init"), ResultStatus::InternalFailure, error.to_string(), None);
+            return ActionResult::failure(
+                Some("central.init"),
+                ResultStatus::InternalFailure,
+                error.to_string(),
+                None,
+            );
         }
     }
 
     match initialize_central(&resolved.path) {
-        Ok(initialized) => ActionResult::success("central.init", to_value(initialized).expect("initialization serializes")),
-        Err(error) => ActionResult::failure(Some("central.init"), ResultStatus::InternalFailure, error.to_string(), None),
+        Ok(initialized) => ActionResult::success(
+            "central.init",
+            to_value(initialized).expect("initialization serializes"),
+        ),
+        Err(error) => ActionResult::failure(
+            Some("central.init"),
+            ResultStatus::InternalFailure,
+            error.to_string(),
+            None,
+        ),
     }
 }
 
-fn doctor_action(_registry: &ActionRegistry, _input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn doctor_action(
+    _registry: &ActionRegistry,
+    _input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let resolved = match resolve_central_root(context.root_options) {
         Ok(resolved) => resolved,
-        Err(message) => return ActionResult::failure(Some("central.doctor"), ResultStatus::InvalidInput, message, None),
+        Err(message) => {
+            return ActionResult::failure(
+                Some("central.doctor"),
+                ResultStatus::InvalidInput,
+                message,
+                None,
+            );
+        }
     };
     match inspect_central(&resolved.path) {
-        Ok(report) if report.valid => ActionResult::success("central.doctor", to_value(report).expect("health report serializes")),
+        Ok(report) if report.valid => ActionResult::success(
+            "central.doctor",
+            to_value(report).expect("health report serializes"),
+        ),
         Ok(report) => ActionResult::failure(
             Some("central.doctor"),
             ResultStatus::InvalidCentralStructure,
             "Central structure is incomplete or invalid.",
             Some(to_value(report).expect("health report serializes")),
         ),
-        Err(error) => ActionResult::failure(Some("central.doctor"), ResultStatus::InternalFailure, error.to_string(), None),
+        Err(error) => ActionResult::failure(
+            Some("central.doctor"),
+            ResultStatus::InternalFailure,
+            error.to_string(),
+            None,
+        ),
     }
 }
 
-fn list_actions(registry: &ActionRegistry, _input: &Value, _context: &ActionExecutionContext<'_>) -> ActionResult {
+fn list_actions(
+    registry: &ActionRegistry,
+    _input: &Value,
+    _context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     ActionResult::success("action.list", json!({ "actions": registry.list() }))
 }
 
-fn control_open_action(_registry: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn control_open_action(
+    _registry: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let target = match required_text(input, "target", "control.open") {
         Ok(target) => target,
         Err(result) => return result,
     };
     let root = match resolve_central_root(context.root_options) {
         Ok(root) => root,
-        Err(message) => return ActionResult::failure(Some("control.open"), ResultStatus::InvalidInput, message, None),
+        Err(message) => {
+            return ActionResult::failure(
+                Some("control.open"),
+                ResultStatus::InvalidInput,
+                message,
+                None,
+            );
+        }
     };
     let source = match locate_control_root(&root.path, &target) {
         Ok(source) => source,
-        Err(message) => return ActionResult::failure(Some("control.open"), ResultStatus::InvalidInput, message, None),
+        Err(message) => {
+            return ActionResult::failure(
+                Some("control.open"),
+                ResultStatus::InvalidInput,
+                message,
+                None,
+            );
+        }
     };
     if !source.exists {
         return ActionResult::failure(
@@ -268,20 +386,37 @@ fn control_open_action(_registry: &ActionRegistry, input: &Value, context: &Acti
             Some(to_value(source).expect("Control source root serializes")),
         );
     }
-    ActionResult::success("control.open", to_value(source).expect("Control source root serializes"))
+    ActionResult::success(
+        "control.open",
+        to_value(source).expect("Control source root serializes"),
+    )
 }
 
-fn control_search_action(_registry: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn control_search_action(
+    _registry: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let query = match required_text(input, "query", "control.search") {
         Ok(query) => query,
         Err(result) => return result,
     };
     let root = match resolve_central_root(context.root_options) {
         Ok(root) => root,
-        Err(message) => return ActionResult::failure(Some("control.search"), ResultStatus::InvalidInput, message, None),
+        Err(message) => {
+            return ActionResult::failure(
+                Some("control.search"),
+                ResultStatus::InvalidInput,
+                message,
+                None,
+            );
+        }
     };
     match search_control(&root.path, &query) {
-        Ok(result) => ActionResult::success("control.search", to_value(result).expect("Control search serializes")),
+        Ok(result) => ActionResult::success(
+            "control.search",
+            to_value(result).expect("Control search serializes"),
+        ),
         Err(error) if error.kind() == io::ErrorKind::NotFound => ActionResult::failure(
             Some("control.search"),
             ResultStatus::InvalidCentralStructure,
@@ -294,20 +429,34 @@ fn control_search_action(_registry: &ActionRegistry, input: &Value, context: &Ac
             error.to_string(),
             None,
         ),
-        Err(error) => ActionResult::failure(Some("control.search"), ResultStatus::InternalFailure, error.to_string(), None),
+        Err(error) => ActionResult::failure(
+            Some("control.search"),
+            ResultStatus::InternalFailure,
+            error.to_string(),
+            None,
+        ),
     }
 }
 
-fn discover_work(action_id: &str, context: &ActionExecutionContext<'_>) -> Result<DiscoveredWork, ActionResult> {
-    let root = resolve_central_root(context.root_options)
-        .map_err(|message| ActionResult::failure(Some(action_id), ResultStatus::InvalidInput, message, None))?;
-    let resolution = context.connectors.resolve(&WORK_DISCOVERY_PORT, context.connector_context);
+fn discover_work(
+    action_id: &str,
+    context: &ActionExecutionContext<'_>,
+) -> Result<DiscoveredWork, ActionResult> {
+    let root = resolve_central_root(context.root_options).map_err(|message| {
+        ActionResult::failure(Some(action_id), ResultStatus::InvalidInput, message, None)
+    })?;
+    let resolution = context
+        .connectors
+        .resolve(&WORK_DISCOVERY_PORT, context.connector_context);
     let diagnostics = resolution.diagnostics.clone();
     let Some(connector) = resolution.connector else {
         return Err(ActionResult::failure(
             Some(action_id),
             ResultStatus::UnavailableCapability,
-            format!("No eligible Connector implements {}.", WORK_DISCOVERY_PORT.id),
+            format!(
+                "No eligible Connector implements {}.",
+                WORK_DISCOVERY_PORT.id
+            ),
             Some(json!({ "port": WORK_DISCOVERY_PORT.id, "diagnostics": diagnostics })),
         ));
     };
@@ -315,17 +464,31 @@ fn discover_work(action_id: &str, context: &ActionExecutionContext<'_>) -> Resul
         return Err(ActionResult::failure(
             Some(action_id),
             ResultStatus::ConnectorFailure,
-            format!("Selected Connector does not expose {} implementation.", WORK_DISCOVERY_PORT.id),
-            Some(json!({ "port": WORK_DISCOVERY_PORT.id, "connector": connector.manifest().id, "diagnostics": diagnostics })),
+            format!(
+                "Selected Connector does not expose {} implementation.",
+                WORK_DISCOVERY_PORT.id
+            ),
+            Some(
+                json!({ "port": WORK_DISCOVERY_PORT.id, "connector": connector.manifest().id, "diagnostics": diagnostics }),
+            ),
         ));
     };
-    let input = WorkDiscoveryInput { work_root: root.path.join("Work") };
+    let input = WorkDiscoveryInput {
+        work_root: root.path.join("Work"),
+    };
     match implementation.list(&input) {
-        Ok(output) => Ok(DiscoveredWork { items: output.items, root: root.path, diagnostics }),
+        Ok(output) => Ok(DiscoveredWork {
+            items: output.items,
+            root: root.path,
+            diagnostics,
+        }),
         Err(error) => Err(ActionResult::failure(
             Some(action_id),
             ResultStatus::ConnectorFailure,
-            format!("Connector failed while executing {}: {error}", WORK_DISCOVERY_PORT.id),
+            format!(
+                "Connector failed while executing {}: {error}",
+                WORK_DISCOVERY_PORT.id
+            ),
             Some(json!({
                 "port": WORK_DISCOVERY_PORT.id,
                 "connector": connector.manifest().id,
@@ -338,14 +501,24 @@ fn discover_work(action_id: &str, context: &ActionExecutionContext<'_>) -> Resul
 
 fn work_matches<'a>(items: &'a [WorkItem], query: &str) -> Vec<&'a WorkItem> {
     let needle = query.to_lowercase();
-    items.iter().filter(|item| item.name.to_lowercase().contains(&needle)).collect()
+    items
+        .iter()
+        .filter(|item| item.name.to_lowercase().contains(&needle))
+        .collect()
 }
 
-fn select_work(action_id: &str, input: &Value, context: &ActionExecutionContext<'_>) -> Result<SelectedWork, ActionResult> {
+fn select_work(
+    action_id: &str,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> Result<SelectedWork, ActionResult> {
     let query = required_text(input, "query", action_id)?;
     let discovered = discover_work(action_id, context)?;
     let normalized = query.to_lowercase();
-    let exact = discovered.items.iter().find(|item| item.name.to_lowercase() == normalized);
+    let exact = discovered
+        .items
+        .iter()
+        .find(|item| item.name.to_lowercase() == normalized);
     if let Some(item) = exact {
         return Ok(SelectedWork {
             query,
@@ -383,8 +556,14 @@ fn select_work(action_id: &str, input: &Value, context: &ActionExecutionContext<
     })
 }
 
-fn invoke_native_open(action_id: &str, target: &Path, context: &ActionExecutionContext<'_>) -> Result<ConnectorDiagnostics, ActionResult> {
-    let resolution = context.connectors.resolve(&NATIVE_OPEN_PORT, context.connector_context);
+fn invoke_native_open(
+    action_id: &str,
+    target: &Path,
+    context: &ActionExecutionContext<'_>,
+) -> Result<ConnectorDiagnostics, ActionResult> {
+    let resolution = context
+        .connectors
+        .resolve(&NATIVE_OPEN_PORT, context.connector_context);
     let diagnostics = resolution.diagnostics.clone();
     let Some(connector) = resolution.connector else {
         return Err(ActionResult::failure(
@@ -398,16 +577,26 @@ fn invoke_native_open(action_id: &str, target: &Path, context: &ActionExecutionC
         return Err(ActionResult::failure(
             Some(action_id),
             ResultStatus::ConnectorFailure,
-            format!("Selected Connector does not expose {} implementation.", NATIVE_OPEN_PORT.id),
-            Some(json!({ "port": NATIVE_OPEN_PORT.id, "connector": connector.manifest().id, "diagnostics": diagnostics })),
+            format!(
+                "Selected Connector does not expose {} implementation.",
+                NATIVE_OPEN_PORT.id
+            ),
+            Some(
+                json!({ "port": NATIVE_OPEN_PORT.id, "connector": connector.manifest().id, "diagnostics": diagnostics }),
+            ),
         ));
     };
-    match implementation.open(&NativeOpenInput { target: target.to_path_buf() }) {
+    match implementation.open(&NativeOpenInput {
+        target: target.to_path_buf(),
+    }) {
         Ok(_) => Ok(diagnostics),
         Err(error) => Err(ActionResult::failure(
             Some(action_id),
             ResultStatus::ConnectorFailure,
-            format!("Connector failed while executing {}: {error}", NATIVE_OPEN_PORT.id),
+            format!(
+                "Connector failed while executing {}: {error}",
+                NATIVE_OPEN_PORT.id
+            ),
             Some(json!({
                 "port": NATIVE_OPEN_PORT.id,
                 "connector": connector.manifest().id,
@@ -418,14 +607,23 @@ fn invoke_native_open(action_id: &str, target: &Path, context: &ActionExecutionC
     }
 }
 
-fn invoke_native_reveal(action_id: &str, target: &Path, context: &ActionExecutionContext<'_>) -> Result<ConnectorDiagnostics, ActionResult> {
-    let resolution = context.connectors.resolve(&NATIVE_REVEAL_PORT, context.connector_context);
+fn invoke_native_reveal(
+    action_id: &str,
+    target: &Path,
+    context: &ActionExecutionContext<'_>,
+) -> Result<ConnectorDiagnostics, ActionResult> {
+    let resolution = context
+        .connectors
+        .resolve(&NATIVE_REVEAL_PORT, context.connector_context);
     let diagnostics = resolution.diagnostics.clone();
     let Some(connector) = resolution.connector else {
         return Err(ActionResult::failure(
             Some(action_id),
             ResultStatus::UnavailableCapability,
-            format!("No eligible Connector implements {}.", NATIVE_REVEAL_PORT.id),
+            format!(
+                "No eligible Connector implements {}.",
+                NATIVE_REVEAL_PORT.id
+            ),
             Some(json!({ "port": NATIVE_REVEAL_PORT.id, "diagnostics": diagnostics })),
         ));
     };
@@ -433,16 +631,26 @@ fn invoke_native_reveal(action_id: &str, target: &Path, context: &ActionExecutio
         return Err(ActionResult::failure(
             Some(action_id),
             ResultStatus::ConnectorFailure,
-            format!("Selected Connector does not expose {} implementation.", NATIVE_REVEAL_PORT.id),
-            Some(json!({ "port": NATIVE_REVEAL_PORT.id, "connector": connector.manifest().id, "diagnostics": diagnostics })),
+            format!(
+                "Selected Connector does not expose {} implementation.",
+                NATIVE_REVEAL_PORT.id
+            ),
+            Some(
+                json!({ "port": NATIVE_REVEAL_PORT.id, "connector": connector.manifest().id, "diagnostics": diagnostics }),
+            ),
         ));
     };
-    match implementation.reveal(&NativeRevealInput { target: target.to_path_buf() }) {
+    match implementation.reveal(&NativeRevealInput {
+        target: target.to_path_buf(),
+    }) {
         Ok(_) => Ok(diagnostics),
         Err(error) => Err(ActionResult::failure(
             Some(action_id),
             ResultStatus::ConnectorFailure,
-            format!("Connector failed while executing {}.", NATIVE_REVEAL_PORT.id),
+            format!(
+                "Connector failed while executing {}.",
+                NATIVE_REVEAL_PORT.id
+            ),
             Some(json!({
                 "port": NATIVE_REVEAL_PORT.id,
                 "connector": connector.manifest().id,
@@ -453,14 +661,25 @@ fn invoke_native_reveal(action_id: &str, target: &Path, context: &ActionExecutio
     }
 }
 
-fn work_list_action(_registry: &ActionRegistry, _input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn work_list_action(
+    _registry: &ActionRegistry,
+    _input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     match discover_work("work.list", context) {
-        Ok(discovered) => ActionResult::success("work.list", to_value(discovered).expect("Work discovery serializes")),
+        Ok(discovered) => ActionResult::success(
+            "work.list",
+            to_value(discovered).expect("Work discovery serializes"),
+        ),
         Err(result) => result,
     }
 }
 
-fn work_search_action(_registry: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn work_search_action(
+    _registry: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let query = match required_text(input, "query", "work.search") {
         Ok(query) => query,
         Err(result) => return result,
@@ -481,7 +700,11 @@ fn work_search_action(_registry: &ActionRegistry, input: &Value, context: &Actio
     )
 }
 
-fn work_open_action(_registry: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn work_open_action(
+    _registry: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let selected = match select_work("work.open", input, context) {
         Ok(selected) => selected,
         Err(result) => return result,
@@ -503,12 +726,17 @@ fn work_open_action(_registry: &ActionRegistry, input: &Value, context: &ActionE
     )
 }
 
-fn work_reveal_action(_registry: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn work_reveal_action(
+    _registry: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let selected = match select_work("work.reveal", input, context) {
         Ok(selected) => selected,
         Err(result) => return result,
     };
-    let native_diagnostics = match invoke_native_reveal("work.reveal", &selected.item.path, context) {
+    let native_diagnostics = match invoke_native_reveal("work.reveal", &selected.item.path, context)
+    {
         Ok(diagnostics) => diagnostics,
         Err(result) => return result,
     };
@@ -528,10 +756,18 @@ fn work_reveal_action(_registry: &ActionRegistry, input: &Value, context: &Actio
 pub fn create_core_action_registry() -> ActionRegistry {
     let mut registry = ActionRegistry::default();
     crate::recognition::register(&mut registry);
-    registry.register(
-        descriptor("central.root", "Show Central root", "Resolve the active Central root.", MutationClass::ReadOnly, "central-root"),
-        root_action,
-    ).expect("core Action ids are valid");
+    registry
+        .register(
+            descriptor(
+                "central.root",
+                "Show Central root",
+                "Resolve the active Central root.",
+                MutationClass::ReadOnly,
+                "central-root",
+            ),
+            root_action,
+        )
+        .expect("core Action ids are valid");
     registry.register(
         descriptor("central.init", "Initialize Central", "Create the required Central root structure without imposing a schema below Control roots.", MutationClass::LocallyMutating, "central-initialization"),
         init_action,
@@ -548,10 +784,19 @@ pub fn create_core_action_registry() -> ActionRegistry {
     ).expect("core Action ids are valid");
     crate::world_map::register_world_map_actions(&mut registry);
     crate::files::register_file_actions(&mut registry);
-    registry.register(
-        descriptor("action.list", "List Actions", "List canonical Action descriptors.", MutationClass::ReadOnly, "action-descriptor-list"),
-        list_actions,
-    ).expect("core Action ids are valid");
+    crate::wiki_read::register_central_wiki_read_action(&mut registry);
+    registry
+        .register(
+            descriptor(
+                "action.list",
+                "List Actions",
+                "List canonical Action descriptors.",
+                MutationClass::ReadOnly,
+                "action-descriptor-list",
+            ),
+            list_actions,
+        )
+        .expect("core Action ids are valid");
 
     let mut control_open = descriptor(
         "control.open",
@@ -561,9 +806,16 @@ pub fn create_core_action_registry() -> ActionRegistry {
         "control-source-root",
     );
     let mut target = string_input("target");
-    target.choices = Some(CONTROL_ROOTS.iter().map(|value| (*value).to_owned()).collect());
+    target.choices = Some(
+        CONTROL_ROOTS
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect(),
+    );
     control_open.inputs = vec![target];
-    registry.register(control_open, control_open_action).expect("core Action ids are valid");
+    registry
+        .register(control_open, control_open_action)
+        .expect("core Action ids are valid");
 
     let mut control_search = descriptor(
         "control.search",
@@ -573,7 +825,9 @@ pub fn create_core_action_registry() -> ActionRegistry {
         "control-source-search",
     );
     control_search.inputs = vec![string_input("query")];
-    registry.register(control_search, control_search_action).expect("core Action ids are valid");
+    registry
+        .register(control_search, control_search_action)
+        .expect("core Action ids are valid");
 
     crate::control_skills::register_control_skills_actions(&mut registry);
 
@@ -588,7 +842,9 @@ pub fn create_core_action_registry() -> ActionRegistry {
         "work-item-list",
     );
     work_list.required_ports = vec![WORK_DISCOVERY_PORT.id.to_owned()];
-    registry.register(work_list, work_list_action).expect("core Action ids are valid");
+    registry
+        .register(work_list, work_list_action)
+        .expect("core Action ids are valid");
 
     let mut work_search = descriptor(
         "work.search",
@@ -599,7 +855,9 @@ pub fn create_core_action_registry() -> ActionRegistry {
     );
     work_search.inputs = vec![string_input("query")];
     work_search.required_ports = vec![WORK_DISCOVERY_PORT.id.to_owned()];
-    registry.register(work_search, work_search_action).expect("core Action ids are valid");
+    registry
+        .register(work_search, work_search_action)
+        .expect("core Action ids are valid");
 
     let mut work_open = descriptor(
         "work.open",
@@ -609,8 +867,13 @@ pub fn create_core_action_registry() -> ActionRegistry {
         "work-item-open",
     );
     work_open.inputs = vec![work_query_input()];
-    work_open.required_ports = vec![WORK_DISCOVERY_PORT.id.to_owned(), NATIVE_OPEN_PORT.id.to_owned()];
-    registry.register(work_open, work_open_action).expect("core Action ids are valid");
+    work_open.required_ports = vec![
+        WORK_DISCOVERY_PORT.id.to_owned(),
+        NATIVE_OPEN_PORT.id.to_owned(),
+    ];
+    registry
+        .register(work_open, work_open_action)
+        .expect("core Action ids are valid");
 
     let mut work_reveal = descriptor(
         "work.reveal",
@@ -620,7 +883,12 @@ pub fn create_core_action_registry() -> ActionRegistry {
         "work-item-reveal",
     );
     work_reveal.inputs = vec![work_query_input()];
-    work_reveal.required_ports = vec![WORK_DISCOVERY_PORT.id.to_owned(), NATIVE_REVEAL_PORT.id.to_owned()];
-    registry.register(work_reveal, work_reveal_action).expect("core Action ids are valid");
+    work_reveal.required_ports = vec![
+        WORK_DISCOVERY_PORT.id.to_owned(),
+        NATIVE_REVEAL_PORT.id.to_owned(),
+    ];
+    registry
+        .register(work_reveal, work_reveal_action)
+        .expect("core Action ids are valid");
     registry
 }
