@@ -1,4 +1,4 @@
-use crate::agent_profile::{AgentProfile, AgentProfileScope, AGENT_PROFILE_SCHEMA};
+use crate::agent_profile::{AGENT_PROFILE_SCHEMA, AgentProfile, AgentProfileScope};
 use serde::Serialize;
 use std::error::Error;
 use std::fmt;
@@ -91,7 +91,9 @@ impl AgentProfileStore {
             if metadata.file_type().is_symlink() {
                 return Err(AgentProfileStoreError::UnsafeSource(path));
             }
-            if !metadata.is_file() || path.extension().and_then(|value| value.to_str()) != Some("json") {
+            if !metadata.is_file()
+                || path.extension().and_then(|value| value.to_str()) != Some("json")
+            {
                 continue;
             }
             let profile = read_profile_file(&path)?;
@@ -158,20 +160,20 @@ impl AgentProfileStore {
                 return Err(AgentProfileStoreError::MissingForUpdate {
                     profile_ref: profile.profile_ref.clone(),
                     expected: expected.to_owned(),
-                })
+                });
             }
             (Some(current), None) => {
                 return Err(AgentProfileStoreError::AlreadyExists {
                     profile_ref: profile.profile_ref.clone(),
                     revision: current.revision.clone(),
-                })
+                });
             }
             (Some(current), Some(expected)) if current.revision != expected => {
                 return Err(AgentProfileStoreError::RevisionConflict {
                     profile_ref: profile.profile_ref.clone(),
                     expected: expected.to_owned(),
                     actual: current.revision.clone(),
-                })
+                });
             }
             (Some(current), Some(_)) => {
                 self.validate_loaded(&profile.profile_ref, current)?;
@@ -330,7 +332,10 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), AgentProfileStoreError>
         .parent()
         .ok_or_else(|| AgentProfileStoreError::UnsafeSource(path.to_path_buf()))?;
     ensure_directory_not_symlink(parent)?;
-    let tmp = parent.join(format!(".agent-profile-{}.tmp", profile_key(&path.to_string_lossy())));
+    let tmp = parent.join(format!(
+        ".agent-profile-{}.tmp",
+        profile_key(&path.to_string_lossy())
+    ));
     if tmp.exists() {
         fs::remove_file(&tmp)?;
     }
@@ -401,19 +406,82 @@ impl fmt::Display for AgentProfileStoreError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(error) => formatter.write_str(error),
-            Self::UnsafeRoot(path) => write!(formatter, "AgentProfile owner root is unsafe: {}", path.display()),
-            Self::UnsafeSource(path) => write!(formatter, "AgentProfile source path is unsafe: {}", path.display()),
-            Self::InvalidProfile(error) => write!(formatter, "invalid AgentProfile source: {error}"),
-            Self::InvalidProfileRef(value) => write!(formatter, "invalid AgentProfile ref {value:?}"),
-            Self::ScopeMismatch { store, profile } => write!(formatter, "AgentProfile scope {profile:?} does not match store {store:?}"),
-            Self::NotFound(path) => write!(formatter, "AgentProfile source not found: {}", path.display()),
-            Self::RefMismatch { requested, actual } => write!(formatter, "AgentProfile source contains ref {actual}, requested {requested}"),
-            Self::SourcePathMismatch { profile_ref, expected, actual } => write!(formatter, "AgentProfile {profile_ref} is stored at {}, expected {}", actual.display(), expected.display()),
-            Self::AlreadyExists { profile_ref, revision } => write!(formatter, "AgentProfile {profile_ref} already exists at revision {revision}"),
-            Self::MissingForUpdate { profile_ref, expected } => write!(formatter, "AgentProfile {profile_ref} is absent; cannot update expected revision {expected}"),
-            Self::RevisionConflict { profile_ref, expected, actual } => write!(formatter, "AgentProfile {profile_ref} revision conflict: expected {expected}, actual {actual}"),
-            Self::RevisionNotAdvanced { profile_ref, revision } => write!(formatter, "AgentProfile {profile_ref} update did not advance revision {revision}"),
-            Self::AgentIdentityChanged { profile_ref, expected_agent, actual_agent } => write!(formatter, "AgentProfile {profile_ref} cannot change semantic Agent from {expected_agent} to {actual_agent}"),
+            Self::UnsafeRoot(path) => write!(
+                formatter,
+                "AgentProfile owner root is unsafe: {}",
+                path.display()
+            ),
+            Self::UnsafeSource(path) => write!(
+                formatter,
+                "AgentProfile source path is unsafe: {}",
+                path.display()
+            ),
+            Self::InvalidProfile(error) => {
+                write!(formatter, "invalid AgentProfile source: {error}")
+            }
+            Self::InvalidProfileRef(value) => {
+                write!(formatter, "invalid AgentProfile ref {value:?}")
+            }
+            Self::ScopeMismatch { store, profile } => write!(
+                formatter,
+                "AgentProfile scope {profile:?} does not match store {store:?}"
+            ),
+            Self::NotFound(path) => write!(
+                formatter,
+                "AgentProfile source not found: {}",
+                path.display()
+            ),
+            Self::RefMismatch { requested, actual } => write!(
+                formatter,
+                "AgentProfile source contains ref {actual}, requested {requested}"
+            ),
+            Self::SourcePathMismatch {
+                profile_ref,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "AgentProfile {profile_ref} is stored at {}, expected {}",
+                actual.display(),
+                expected.display()
+            ),
+            Self::AlreadyExists {
+                profile_ref,
+                revision,
+            } => write!(
+                formatter,
+                "AgentProfile {profile_ref} already exists at revision {revision}"
+            ),
+            Self::MissingForUpdate {
+                profile_ref,
+                expected,
+            } => write!(
+                formatter,
+                "AgentProfile {profile_ref} is absent; cannot update expected revision {expected}"
+            ),
+            Self::RevisionConflict {
+                profile_ref,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "AgentProfile {profile_ref} revision conflict: expected {expected}, actual {actual}"
+            ),
+            Self::RevisionNotAdvanced {
+                profile_ref,
+                revision,
+            } => write!(
+                formatter,
+                "AgentProfile {profile_ref} update did not advance revision {revision}"
+            ),
+            Self::AgentIdentityChanged {
+                profile_ref,
+                expected_agent,
+                actual_agent,
+            } => write!(
+                formatter,
+                "AgentProfile {profile_ref} cannot change semantic Agent from {expected_agent} to {actual_agent}"
+            ),
         }
     }
 }
@@ -503,11 +571,16 @@ mod tests {
         )
         .unwrap();
         profile.source_profile_ref = Some("agent-profile:builder:personal".into());
-        profile.provenance_refs.push("agent-profile:builder:personal".into());
+        profile
+            .provenance_refs
+            .push("agent-profile:builder:personal".into());
         store.save(&profile, None).unwrap();
         let reading = store.read(&profile.profile_ref).unwrap();
         assert!(reading.source_path.starts_with(PROJECT_AGENT_PROFILE_DIR));
-        assert_eq!(reading.profile.source_profile_ref, profile.source_profile_ref);
+        assert_eq!(
+            reading.profile.source_profile_ref,
+            profile.source_profile_ref
+        );
     }
 
     #[test]

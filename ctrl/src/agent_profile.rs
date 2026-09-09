@@ -7,6 +7,90 @@ use std::error::Error;
 use std::fmt;
 
 pub const AGENT_PROFILE_SCHEMA: &str = "central.agent-profile/v1";
+pub const AGENT_PROFILE_PROVENANCE_SCHEMA: &str = "central.agent-profile-provenance/v1";
+
+/// Authorship standing of an authored AgentProfile record. A generated Action can
+/// only ever author `GeneratedProposal`; the human owner's recognition is a
+/// separate act that no Action performs and no payload can shortcut.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentProfileAuthorship {
+    GeneratedProposal,
+}
+
+/// Recognition standing of an authored AgentProfile record. Until the human owner
+/// recognises the proposal the only representable state is `Unrecognised`; the
+/// recognition act itself is owned by the human, not by any Central Action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentProfileRecognition {
+    Unrecognised,
+}
+
+/// Generated-proposal provenance stamped when a profile is authored from an
+/// expressed intent. The intent expression is retained verbatim; every other
+/// reference in the profile stays a world-relative ref, never copied payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentProfileProvenance {
+    pub schema: String,
+    /// The intent expression exactly as expressed: verbatim, never rewritten,
+    /// never summarised by the authoring Action.
+    pub intent_expression: String,
+    /// Canonical Central Action that authored this proposal.
+    pub origin_action: String,
+    pub authorship: AgentProfileAuthorship,
+    pub recognition: AgentProfileRecognition,
+}
+
+impl AgentProfileProvenance {
+    /// Mint the only provenance an Action can author: a generated proposal whose
+    /// recognition is explicitly the human owner's separate act.
+    pub fn generated_proposal(
+        intent_expression: impl Into<String>,
+        origin_action: impl Into<String>,
+    ) -> Result<Self, AgentProfileError> {
+        let intent_expression = intent_expression.into();
+        if intent_expression.trim().is_empty()
+            || intent_expression != intent_expression.trim()
+            || intent_expression.contains('\0')
+        {
+            return Err(AgentProfileError::InvalidIntentExpression);
+        }
+        let origin_action = origin_action.into();
+        if origin_action.trim().is_empty() || origin_action != origin_action.trim() {
+            return Err(AgentProfileError::InvalidText("origin action".into()));
+        }
+        Ok(Self {
+            schema: AGENT_PROFILE_PROVENANCE_SCHEMA.into(),
+            intent_expression,
+            origin_action,
+            authorship: AgentProfileAuthorship::GeneratedProposal,
+            recognition: AgentProfileRecognition::Unrecognised,
+        })
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), AgentProfileError> {
+        if self.schema != AGENT_PROFILE_PROVENANCE_SCHEMA {
+            return Err(AgentProfileError::Schema(self.schema.clone()));
+        }
+        if self.intent_expression.trim().is_empty()
+            || self.intent_expression != self.intent_expression.trim()
+            || self.intent_expression.contains('\0')
+        {
+            return Err(AgentProfileError::InvalidIntentExpression);
+        }
+        if self.origin_action.trim().is_empty() {
+            return Err(AgentProfileError::InvalidText("origin action".into()));
+        }
+        // Single-variant enums make the unrepresentable states unparseable: no
+        // payload can claim human acceptance that the typed record cannot hold.
+        match (self.authorship, self.recognition) {
+            (AgentProfileAuthorship::GeneratedProposal, AgentProfileRecognition::Unrecognised) => {
+                Ok(())
+            }
+        }
+    }
+}
 
 /// Authored residence of an Agent profile. Scope is a source relation, not a
 /// runtime AIKit Profile and not a new Agent identity namespace.
@@ -72,6 +156,12 @@ pub struct AgentProfile {
     pub placement_intent_refs: Vec<String>,
     #[serde(default)]
     pub provenance_refs: Vec<String>,
+    /// Generated-proposal provenance present exactly when this profile was
+    /// authored from an expressed intent through the intent authoring Action.
+    /// Directly owner-authored profiles carry no provenance block; recognition
+    /// is the human owner's act and is never represented as performed here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent_provenance: Option<AgentProfileProvenance>,
 }
 
 impl AgentProfile {
@@ -102,7 +192,30 @@ impl AgentProfile {
             computer_access_intent_refs: Vec::new(),
             placement_intent_refs: Vec::new(),
             provenance_refs: Vec::new(),
+            intent_provenance: None,
         };
+        value.validate_shape()?;
+        Ok(value)
+    }
+
+    /// Author a generated proposal grounded in an expressed intent. The record
+    /// is durable Control ground from creation, but its provenance is stamped
+    /// `generated-proposal` / `unrecognised`: recognition is the human owner's
+    /// separate act and no parameter of this constructor can claim it.
+    pub fn propose_from_intent(
+        profile_ref: impl Into<String>,
+        revision: impl Into<String>,
+        agent_ref: impl Into<String>,
+        scope: AgentProfileScope,
+        world_ref: WorldRef,
+        intent_expression: impl Into<String>,
+        origin_action: impl Into<String>,
+    ) -> Result<Self, AgentProfileError> {
+        let mut value = Self::new(profile_ref, revision, agent_ref, scope, world_ref)?;
+        value.intent_provenance = Some(AgentProfileProvenance::generated_proposal(
+            intent_expression,
+            origin_action,
+        )?);
         value.validate_shape()?;
         Ok(value)
     }
@@ -115,10 +228,14 @@ impl AgentProfile {
         let profile_ancestry = graph.ancestry(&self.world_ref)?;
         match self.scope {
             AgentProfileScope::Personal if profile_ancestry.len() != 1 => {
-                return Err(AgentProfileError::PersonalScopeNotRoot(self.world_ref.clone()));
+                return Err(AgentProfileError::PersonalScopeNotRoot(
+                    self.world_ref.clone(),
+                ));
             }
             AgentProfileScope::Project if profile_ancestry.len() < 2 => {
-                return Err(AgentProfileError::ProjectScopeIsRoot(self.world_ref.clone()));
+                return Err(AgentProfileError::ProjectScopeIsRoot(
+                    self.world_ref.clone(),
+                ));
             }
             _ => {}
         }
@@ -148,9 +265,9 @@ impl AgentProfile {
             .collect::<std::collections::BTreeMap<_, _>>();
 
         for intent_ref in &self.computer_access_intent_refs {
-            let intent = by_ref
-                .get(intent_ref.as_str())
-                .ok_or_else(|| AgentProfileError::MissingComputerAccessIntent(intent_ref.clone()))?;
+            let intent = by_ref.get(intent_ref.as_str()).ok_or_else(|| {
+                AgentProfileError::MissingComputerAccessIntent(intent_ref.clone())
+            })?;
             match &intent.subject {
                 ComputerAccessSubject::Agent { agent_ref } if agent_ref == &self.agent_ref => {}
                 _ => {
@@ -221,7 +338,9 @@ impl AgentProfile {
         required(self.revision.clone(), "Agent Profile revision")?;
         required(self.agent_ref.clone(), "Agent ref")?;
         if self.source_profile_ref.as_ref() == Some(&self.profile_ref) {
-            return Err(AgentProfileError::SelfSourceProfile(self.profile_ref.clone()));
+            return Err(AgentProfileError::SelfSourceProfile(
+                self.profile_ref.clone(),
+            ));
         }
         if self.ratified_world_refs.is_empty() {
             return Err(AgentProfileError::NoRatifiedWorlds);
@@ -243,6 +362,9 @@ impl AgentProfile {
         validate_refs("provenance refs", &self.provenance_refs)?;
         if let Some(source) = &self.source_profile_ref {
             required(source.clone(), "source Agent Profile ref")?;
+        }
+        if let Some(provenance) = &self.intent_provenance {
+            provenance.validate()?;
         }
         Ok(())
     }
@@ -327,16 +449,31 @@ fn validate_world_refs(worlds: &[WorldRef]) -> Result<(), AgentProfileError> {
 pub enum AgentProfileError {
     Schema(String),
     InvalidText(String),
-    DuplicateRef { field: String, value: String },
+    DuplicateRef {
+        field: String,
+        value: String,
+    },
     DuplicateWorld(WorldRef),
     SelfSourceProfile(String),
     NoRatifiedWorlds,
     PersonalScopeNotRoot(WorldRef),
     ProjectScopeIsRoot(WorldRef),
-    WorldOutsideProfileScope { world: WorldRef, profile_world: WorldRef },
-    ProjectOutsideSourceProfile { project_world: WorldRef, source_world: WorldRef },
+    WorldOutsideProfileScope {
+        world: WorldRef,
+        profile_world: WorldRef,
+    },
+    ProjectOutsideSourceProfile {
+        project_world: WorldRef,
+        source_world: WorldRef,
+    },
     MissingComputerAccessIntent(String),
-    WrongComputerAccessSubject { intent_ref: String, agent_ref: String },
+    WrongComputerAccessSubject {
+        intent_ref: String,
+        agent_ref: String,
+    },
+    /// The expressed intent was empty, carried surrounding whitespace, or
+    /// contained unsafe characters; an authored profile never rewrites intent.
+    InvalidIntentExpression,
     World(WorldError),
 }
 
@@ -353,14 +490,48 @@ impl fmt::Display for AgentProfileError {
             Self::InvalidText(field) => write!(formatter, "{field} cannot be empty"),
             Self::DuplicateRef { field, value } => write!(formatter, "{field} repeats ref {value}"),
             Self::DuplicateWorld(world) => write!(formatter, "Agent Profile repeats World {world}"),
-            Self::SelfSourceProfile(profile) => write!(formatter, "Agent Profile {profile} cannot source itself"),
-            Self::NoRatifiedWorlds => formatter.write_str("Agent Profile requires at least one ratified World"),
-            Self::PersonalScopeNotRoot(world) => write!(formatter, "personal Agent Profile World {world} is not the root World"),
-            Self::ProjectScopeIsRoot(world) => write!(formatter, "Project Agent Profile World {world} cannot be the root World"),
-            Self::WorldOutsideProfileScope { world, profile_world } => write!(formatter, "ratified World {world} is outside Agent Profile World {profile_world}"),
-            Self::ProjectOutsideSourceProfile { project_world, source_world } => write!(formatter, "Project World {project_world} is not a descendant of source Agent Profile World {source_world}"),
-            Self::MissingComputerAccessIntent(intent) => write!(formatter, "Agent Profile references missing Central Computer access intent {intent}"),
-            Self::WrongComputerAccessSubject { intent_ref, agent_ref } => write!(formatter, "Central Computer access intent {intent_ref} does not belong to Agent {agent_ref}"),
+            Self::SelfSourceProfile(profile) => {
+                write!(formatter, "Agent Profile {profile} cannot source itself")
+            }
+            Self::NoRatifiedWorlds => {
+                formatter.write_str("Agent Profile requires at least one ratified World")
+            }
+            Self::PersonalScopeNotRoot(world) => write!(
+                formatter,
+                "personal Agent Profile World {world} is not the root World"
+            ),
+            Self::ProjectScopeIsRoot(world) => write!(
+                formatter,
+                "Project Agent Profile World {world} cannot be the root World"
+            ),
+            Self::WorldOutsideProfileScope {
+                world,
+                profile_world,
+            } => write!(
+                formatter,
+                "ratified World {world} is outside Agent Profile World {profile_world}"
+            ),
+            Self::ProjectOutsideSourceProfile {
+                project_world,
+                source_world,
+            } => write!(
+                formatter,
+                "Project World {project_world} is not a descendant of source Agent Profile World {source_world}"
+            ),
+            Self::MissingComputerAccessIntent(intent) => write!(
+                formatter,
+                "Agent Profile references missing Central Computer access intent {intent}"
+            ),
+            Self::WrongComputerAccessSubject {
+                intent_ref,
+                agent_ref,
+            } => write!(
+                formatter,
+                "Central Computer access intent {intent_ref} does not belong to Agent {agent_ref}"
+            ),
+            Self::InvalidIntentExpression => formatter.write_str(
+                "intent expression must be non-empty, trimmed, and free of unsafe characters",
+            ),
             Self::World(error) => fmt::Display::fmt(error, formatter),
         }
     }
@@ -450,12 +621,7 @@ mod tests {
         personal_profile.routine_refs = vec!["routine:source-return".into()];
 
         let project_profile = personal_profile
-            .project_variant(
-                "agent-profile:researcher:factory",
-                "j1",
-                project,
-                &graph,
-            )
+            .project_variant("agent-profile:researcher:factory", "j1", project, &graph)
             .unwrap();
 
         assert_eq!(project_profile.agent_ref, personal_profile.agent_ref);
@@ -464,12 +630,17 @@ mod tests {
             project_profile.source_profile_ref.as_deref(),
             Some("agent-profile:researcher:personal")
         );
-        assert_eq!(project_profile.skill_set_refs, personal_profile.skill_set_refs);
+        assert_eq!(
+            project_profile.skill_set_refs,
+            personal_profile.skill_set_refs
+        );
         assert_eq!(project_profile.method_refs, personal_profile.method_refs);
         assert_eq!(project_profile.routine_refs, personal_profile.routine_refs);
-        assert!(project_profile
-            .provenance_refs
-            .contains(&personal_profile.profile_ref));
+        assert!(
+            project_profile
+                .provenance_refs
+                .contains(&personal_profile.profile_ref)
+        );
         project_profile.validate_against(&graph).unwrap();
     }
 
@@ -486,6 +657,122 @@ mod tests {
         }))
         .unwrap();
         assert!(profile.routine_refs.is_empty());
+    }
+
+    #[test]
+    fn propose_from_intent_stamps_generated_proposal_and_keeps_intent_verbatim() {
+        let profile = AgentProfile::propose_from_intent(
+            "agent-profile:guardian",
+            "p1",
+            "agent:guardian",
+            AgentProfileScope::Personal,
+            world("world:personal"),
+            "I want a guardian that orients every session and never writes my source.",
+            "agent-profile.propose",
+        )
+        .unwrap();
+        let provenance = profile.intent_provenance.as_ref().unwrap();
+        assert_eq!(provenance.schema, AGENT_PROFILE_PROVENANCE_SCHEMA);
+        assert_eq!(
+            provenance.intent_expression,
+            "I want a guardian that orients every session and never writes my source."
+        );
+        assert_eq!(
+            provenance.authorship,
+            AgentProfileAuthorship::GeneratedProposal
+        );
+        assert_eq!(
+            provenance.recognition,
+            AgentProfileRecognition::Unrecognised
+        );
+        assert_eq!(provenance.origin_action, "agent-profile.propose");
+        // The authored ground round-trips with its provenance block intact.
+        let encoded = serde_json::to_value(&profile).unwrap();
+        let decoded: AgentProfile = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded, profile);
+    }
+
+    #[test]
+    fn intent_provenance_cannot_claim_recognition_or_human_authorship() {
+        // The typed record has no representable recognised state: payloads that
+        // pretend to human acceptance cannot even be parsed.
+        let recognised = serde_json::from_value::<AgentProfile>(serde_json::json!({
+            "schema": AGENT_PROFILE_SCHEMA,
+            "ref": "agent-profile:forged",
+            "revision": "p1",
+            "agent_ref": "agent:forged",
+            "scope": "personal",
+            "world_ref": "world:personal",
+            "ratified_world_refs": ["world:personal"],
+            "intent_provenance": {
+                "schema": AGENT_PROFILE_PROVENANCE_SCHEMA,
+                "intent_expression": "intent",
+                "origin_action": "agent-profile.propose",
+                "authorship": "human-accepted",
+                "recognition": "recognised"
+            }
+        }));
+        assert!(recognised.is_err());
+        // Even a structurally valid block with a wrong provenance schema parses
+        // as JSON but fails typed shape validation, so it can never reach ground.
+        let wrong_schema: AgentProfile = serde_json::from_value(serde_json::json!({
+            "schema": AGENT_PROFILE_SCHEMA,
+            "ref": "agent-profile:forged",
+            "revision": "p1",
+            "agent_ref": "agent:forged",
+            "scope": "personal",
+            "world_ref": "world:personal",
+            "ratified_world_refs": ["world:personal"],
+            "intent_provenance": {
+                "schema": "central.agent-profile-provenance/v99",
+                "intent_expression": "intent",
+                "origin_action": "agent-profile.propose",
+                "authorship": "generated-proposal",
+                "recognition": "unrecognised"
+            }
+        }))
+        .unwrap();
+        assert!(wrong_schema.validate_shape().is_err());
+    }
+
+    #[test]
+    fn invalid_intent_expressions_are_rejected_not_rewritten() {
+        for intent in ["", "   ", " padded ", "embedded\0nul"] {
+            let result = AgentProfile::propose_from_intent(
+                "agent-profile:guardian",
+                "p1",
+                "agent:guardian",
+                AgentProfileScope::Personal,
+                world("world:personal"),
+                intent,
+                "agent-profile.propose",
+            );
+            assert_eq!(
+                result.unwrap_err(),
+                AgentProfileError::InvalidIntentExpression
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_v1_profile_without_intent_provenance_loads_unprovenanced() {
+        let profile: AgentProfile = serde_json::from_value(serde_json::json!({
+            "schema": AGENT_PROFILE_SCHEMA,
+            "ref": "agent-profile:legacy",
+            "revision": "p1",
+            "agent_ref": "agent:legacy",
+            "scope": "personal",
+            "world_ref": "world:personal",
+            "ratified_world_refs": ["world:personal"]
+        }))
+        .unwrap();
+        assert!(profile.intent_provenance.is_none());
+        assert!(
+            serde_json::to_value(&profile)
+                .unwrap()
+                .get("intent_provenance")
+                .is_none()
+        );
     }
 
     #[test]
@@ -534,9 +821,7 @@ mod tests {
             ComputerAccessSubject::Agent {
                 agent_ref: "agent:researcher".into(),
             },
-            vec![ComputerAccessScope::World {
-                world_ref: project,
-            }],
+            vec![ComputerAccessScope::World { world_ref: project }],
             WorkspaceIntent::SharedComputer,
         )
         .unwrap();

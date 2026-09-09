@@ -41,6 +41,7 @@ The current composed registry exposes 68 Actions:
 | `central.world.project` | project the world onto one ProjectCentral: its fractal ground, Wiki, Flows, NOW folder, participating sources with provenance, and position under Work. Read-only | `world <project>` |
 | `central.world.reproject.plan` | list the canonical ProjectCentral scaffolding that is missing, classify everything else by source provenance, and state what reprojection would never do. Read-only | `world plan <project>` |
 | `central.world.reproject.apply` | stamp only the missing canonical ProjectCentral scaffolding; never moves, renames, deletes, relabels, or writes into anything that exists | `world apply <project>` |
+| `central.wiki.read` | read the root register Agent Wiki source into Central's canonical structural read model: spaces, nodes, U0.2 source refs, relation rows derived at read time, and owner counts. Read-only; never writes the agent-maintained wiki | `action run central.wiki.read` |
 | `central.recovery.plan` | explain recovery for an authored machine role | `recovery plan <role>` |
 | `central.recover` | reconcile supported recovery for an authored machine role | `recover <role>` |
 | `control.open` | resolve one authored Control source root | `control open <user|agents|machines>` |
@@ -72,6 +73,7 @@ The current composed registry exposes 68 Actions:
 | `projectcentral.change.horizon` | reconcile participating Project sources and read the deterministic Source Change Horizon | `action run projectcentral.change.horizon` |
 | `projectcentral.change.reconcile` | reconcile authoritative Project source revisions | `action run projectcentral.change.reconcile` |
 | `projectcentral.change.ack` | advance one named consumer cursor without changing source | `action run projectcentral.change.ack` |
+| `projectcentral.wiki.read` | read one Project's canonical Agent Wiki source into Central's canonical structural read model: spaces, nodes, U0.2 source refs, relation rows derived at read time, and owner counts; the disclosed source ref round-trips through `projectcentral.source.read`. Read-only; never writes the agent-maintained wiki | `action run projectcentral.wiki.read` |
 | `projectcentral.now.inspect` | inspect the opt-in Project NOW field | `action run projectcentral.now.inspect` |
 | `projectcentral.now.init` | initialise Project NOW / DAY state | `action run projectcentral.now.init` |
 | `projectcentral.now.return` | write a bounded Agent return into the Project Wiki relation | `action run projectcentral.now.return` |
@@ -86,8 +88,13 @@ The current composed registry exposes 68 Actions:
 | `projectcentral.flow.rename` | rename the retained source while preserving FlowRef | `action run projectcentral.flow.rename` |
 | `projectcentral.flow.lifecycle` | set active/dormant/closed lifecycle without changing source revision | `action run projectcentral.flow.lifecycle` |
 | `projectcentral.flow.history` | read exact Flow revision provenance/history | `action run projectcentral.flow.history` |
+| `projectcentral.flow.now` | W1.3 NOW view: live/held/closed Flows, day grouping by embedded local civil stamp, caller-supplied `current_day` DAY facts, rest-vs-thinking disclosure — never timezone-derived, never invokes an Agent/model | `action run projectcentral.flow.now` |
 | `projectcentral.source.read` | read one participating World source with its exact revision and provenance | `action run projectcentral.source.read` |
 | `projectcentral.source.write` | revise one participating World source under compare-and-swap with an attributed change record | `action run projectcentral.source.write` |
+| `agent-profile.propose` | author one canonical Central AgentProfile source relation as durable Control ground from an expressed intent. The record carries `central.agent-profile/v1` plus a `central.agent-profile-provenance/v1` block stamped `generated-proposal`/`unrecognised` with the verbatim intent expression; recognition is the human owner's separate act and no input can claim it. Invalid intent, absent/unwritable target ground and duplicate profile identity are explicit states, never silent | `action run agent-profile.propose` |
+| `agent-profile.read` | read one authored AgentProfile source relation back through Central's canonical surface; this is the exact read path downstream composition consumers (AIKit composition preparation) use to ground on the authored profile and its provenance | `action run agent-profile.read` |
+| `central.remember` | remember one selection (verbatim text + source ref) into durable root-register ground under `Control/agents/remembered/` as a generated proposal stamped `generated-proposal`/`unrecognised`; recognition is the human owner's separate act and no input can claim it. Invalid destination, empty selection, invalid source ref and absent/unwritable ground are explicit machine-readable states, never silent | `action run central.remember` |
+| `projectcentral.remember` | remember one selection (verbatim text + source ref) into durable Project ground under `ProjectCentral/agents/remembered/` as a generated proposal stamped `generated-proposal`/`unrecognised`; recognition is the human owner's separate act and no input can claim it. Invalid destination, empty selection, invalid source ref, absent Project ground and absent/unwritable ground are explicit machine-readable states, never silent | `action run projectcentral.remember` |
 
 Every row is invokable through `action run`. Examples:
 
