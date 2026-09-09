@@ -16,6 +16,73 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const FLOW_REGISTRY: &str = ".central/flows.json";
 pub const FLOW_HISTORY_DIR: &str = ".central/flow-revisions";
 pub const DEFAULT_FLOW_DIR: &str = "ProjectCentral/now/flows";
+pub const ROOT_FLOW_DIR: &str = "Control/agents/now/flows";
+/// The root register's identity in the canonical world-ref grammar.
+pub const ROOT_WORLD_REF: &str = "control:root";
+
+/// The register a Flow belongs to. Central root is the meta-project: it keeps a
+/// NOW field of its own (`Control/agents/now`), and a Flow that is not about any
+/// one project belongs there. A ProjectCentral is a specification over that same
+/// shape, so both registers hold Flows through one implementation and differ
+/// only in where the NOW field sits and how the register names itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlowRegister {
+    /// `control:root`, or the ProjectCentral manifest's project id.
+    pub id: String,
+    pub root_register: bool,
+}
+
+impl FlowRegister {
+    /// How the register names itself in the world-ref grammar, and the scope
+    /// every Flow and source ref inside it is stamped with.
+    pub fn scope_ref(&self) -> String {
+        if self.root_register {
+            ROOT_WORLD_REF.to_owned()
+        } else {
+            format!("project:{}", self.id)
+        }
+    }
+    fn flow_dir(&self) -> &'static str {
+        if self.root_register { ROOT_FLOW_DIR } else { DEFAULT_FLOW_DIR }
+    }
+}
+
+/// Read the register a directory is. A ProjectCentral manifest names a project
+/// register; a directory holding `Control/` and `Work/` is the Central root.
+pub fn register_of(register_root: &Path) -> io::Result<FlowRegister> {
+    match read_project_manifest(register_root) {
+        Ok(manifest) => Ok(FlowRegister { id: manifest.project_id, root_register: false }),
+        Err(error) => {
+            if register_root.join("Control").is_dir() && register_root.join("Work").is_dir() {
+                Ok(FlowRegister { id: ROOT_WORLD_REF.to_owned(), root_register: true })
+            } else {
+                Err(error)
+            }
+        }
+    }
+}
+
+/// Reconcile the Source Change Horizon of whichever register holds the Flow:
+/// Central keeps a root horizon of its own beside the per-project ones.
+fn reconcile_register_sources(register_root: &Path) -> io::Result<()> {
+    if register_of(register_root)?.root_register {
+        crate::source_horizon::reconcile_control_sources(register_root)?;
+    } else {
+        reconcile_project_sources(register_root)?;
+    }
+    Ok(())
+}
+
+/// The source bindings of whichever register holds the Flow.
+fn register_source_bindings(
+    register_root: &Path,
+) -> io::Result<Vec<crate::source_horizon::SourceBinding>> {
+    if register_of(register_root)?.root_register {
+        crate::source_horizon::control_source_bindings(register_root)
+    } else {
+        crate::source_horizon::project_source_bindings(register_root)
+    }
+}
 pub const FLOW_REGISTRY_SCHEMA: &str = "central.project-flow-registry/v1";
 pub const FLOW_DAY_SCHEMA: &str = "central.project-flow-day/v1";
 
@@ -286,12 +353,12 @@ pub(crate) fn content_revision_bytes(bytes: &[u8]) -> String {
     format!("central.content-fnv1a64/v1:{}:{hash:016x}", bytes.len())
 }
 
-fn escaped_source_ref(project_id: &str, path: &str) -> String {
+fn escaped_source_ref(register: &FlowRegister, path: &str) -> String {
     let escaped = path
         .replace('%', "%25")
         .replace(':', "%3A")
         .replace(' ', "%20");
-    format!("central:source:project:{project_id}:{escaped}")
+    format!("central:source:{}:{escaped}", register.scope_ref())
 }
 
 fn flow_key(flow_ref: &str) -> String {
@@ -312,28 +379,30 @@ fn registry_path(project_root: &Path) -> PathBuf {
 }
 
 fn load_registry(project_root: &Path) -> io::Result<FlowRegistry> {
-    let manifest = read_project_manifest(project_root)?;
-    let validation = manifest.validate();
-    if !validation.valid {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            validation.errors.join("; "),
-        ));
+    let register = register_of(project_root)?;
+    if !register.root_register {
+        let validation = read_project_manifest(project_root)?.validate();
+        if !validation.valid {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                validation.errors.join("; "),
+            ));
+        }
     }
     let path = registry_path(project_root);
     if !path.is_file() {
         return Ok(FlowRegistry {
             schema: FLOW_REGISTRY_SCHEMA.into(),
-            project_id: manifest.project_id,
+            project_id: register.id,
             flows: vec![],
         });
     }
     let registry: FlowRegistry = serde_json::from_slice(&fs::read(path)?)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    if registry.schema != FLOW_REGISTRY_SCHEMA || registry.project_id != manifest.project_id {
+    if registry.schema != FLOW_REGISTRY_SCHEMA || registry.project_id != register.id {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "Flow registry schema or Project identity is invalid",
+            "Flow registry schema or register identity is invalid",
         ));
     }
     Ok(registry)
@@ -493,7 +562,7 @@ pub fn inspect_flow(project_root: &Path, flow_ref: &str) -> io::Result<Value> {
     let reason = check.err().map(|e| e.to_string());
     let capability = json!({"available":reason.is_none(),"reason":reason});
     let write_reason = reason.or_else(|| {
-        crate::source_horizon::project_source_bindings(project_root)
+        register_source_bindings(project_root)
             .and_then(|bindings| {
                 let binding = bindings
                     .into_iter()
@@ -549,15 +618,31 @@ fn validate_lifecycle(value: &str) -> io::Result<()> {
 }
 
 fn validate_flow_placement(project_root: &Path, path: &str) -> io::Result<()> {
-    let manifest = read_project_manifest(project_root)?;
+    let register = register_of(project_root)?;
     let candidate = Path::new(path);
-    let reserved = [
-        manifest.human_source.as_str(),
-        "ProjectCentral/agents/governance",
-        "ProjectCentral/agents/wiki",
-        "ProjectCentral/now/user",
-        "ProjectCentral/now/agents",
-    ];
+    let human = if register.root_register {
+        String::new()
+    } else {
+        read_project_manifest(project_root)?.human_source
+    };
+    let reserved: Vec<&str> = if register.root_register {
+        vec![
+            "Control/user",
+            "Control/agents/governance",
+            "Control/agents/wiki",
+            "Control/agents/now/user",
+            "Control/agents/now/agents",
+            "Control/machines",
+        ]
+    } else {
+        vec![
+            human.as_str(),
+            "ProjectCentral/agents/governance",
+            "ProjectCentral/agents/wiki",
+            "ProjectCentral/now/user",
+            "ProjectCentral/now/agents",
+        ]
+    };
     if reserved
         .iter()
         .any(|root| candidate.starts_with(Path::new(root)))
@@ -570,7 +655,7 @@ fn validate_flow_placement(project_root: &Path, path: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn default_path(local_stamp: Option<&str>) -> io::Result<String> {
+fn default_path(register: &FlowRegister, local_stamp: Option<&str>, title: Option<&str>) -> io::Result<String> {
     let filename = match local_stamp {
         Some(stamp) => {
             let valid = stamp.len() == 15
@@ -587,11 +672,27 @@ fn default_path(local_stamp: Option<&str>) -> io::Result<String> {
                     "local_stamp must use YYYY-MM-DD-HHMM",
                 ));
             }
-            format!("{stamp}.md")
+            let slug = crate::names::slugify(title.unwrap_or(""), 6);
+            if slug.is_empty() {
+                format!("{stamp}.md")
+            } else {
+                format!("{slug}-{stamp}.md")
+            }
         }
-        None => format!("flow-{}.md", unique_nanos()),
+        None => {
+            // Naming law: a flow created without an explicit stamp still gets a
+            // readable local civil name; nanos are never the human-facing path.
+            let (date, hhmm) = crate::names::local_civil_stamp();
+            let stamp = format!("{date}-{hhmm}");
+            let slug = crate::names::slugify(title.unwrap_or(""), 6);
+            if slug.is_empty() {
+                format!("{stamp}.md")
+            } else {
+                format!("{slug}-{stamp}.md")
+            }
+        }
     };
-    Ok(format!("{DEFAULT_FLOW_DIR}/{filename}"))
+    Ok(format!("{}/{filename}", register.flow_dir()))
 }
 
 fn ensure_unique_path(
@@ -619,29 +720,50 @@ pub fn registered_flow_records(project_root: &Path) -> io::Result<Vec<FlowRecord
 /// Extract the local civil date (`YYYY-MM-DD`) from a Flow source filename
 /// stamp. Returns `None` when the filename carries no stamp — an explicit
 /// unavailable state, never a guess.
+/// The local civil day a Flow's retained filename carries.
+///
+/// The naming law puts the readable slug first — `<slug>-YYYY-MM-DD-HHMM.md` —
+/// so the stamp is at the END of the stem, not the start. A stem that is only
+/// the stamp still reads, and a filename that carries no stamp at all is
+/// honestly undated rather than mis-parsed.
 pub(crate) fn embedded_local_stamp_date(path: &str) -> Option<String> {
     let stem = Path::new(path)
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())?;
-    let bytes = stem.as_bytes();
-    let dated = bytes.len() >= 10
-        && bytes[4] == b'-'
-        && bytes[7] == b'-'
-        && bytes[..10]
-            .iter()
-            .enumerate()
-            .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit());
-    if !dated {
-        return None;
-    }
-    let (year, _rest) = stem.split_at(4);
-    let Ok(year) = year.parse::<u32>() else {
-        return None;
+    let stem = stem.strip_suffix(".md").unwrap_or(&stem);
+    let date_at = |offset: usize| -> Option<String> {
+        let bytes = stem.as_bytes();
+        if bytes.len() < offset + 10 {
+            return None;
+        }
+        let window = &bytes[offset..offset + 10];
+        let shaped = window[4] == b'-'
+            && window[7] == b'-'
+            && window
+                .iter()
+                .enumerate()
+                .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit());
+        if !shaped {
+            return None;
+        }
+        let day = &stem[offset..offset + 10];
+        let year: u32 = day[..4].parse().ok()?;
+        if !(1..=9999).contains(&year) {
+            return None;
+        }
+        Some(day.to_owned())
     };
-    if !(1..=9999).contains(&year) {
-        return None;
+    // `…-YYYY-MM-DD-HHMM` — the stamp the naming law appends.
+    if stem.len() >= 15 {
+        if let Some(day) = date_at(stem.len() - 15) {
+            let time = &stem.as_bytes()[stem.len() - 4..];
+            if stem.as_bytes()[stem.len() - 5] == b'-' && time.iter().all(u8::is_ascii_digit) {
+                return Some(day);
+            }
+        }
     }
-    Some(stem[..10].to_owned())
+    // A stem that is the stamp alone.
+    date_at(0)
 }
 
 fn validate_civil_day(day: &str) -> io::Result<()> {
@@ -792,7 +914,7 @@ pub fn list_flows(project_root: &Path) -> io::Result<FlowList> {
     if changed {
         write_registry(project_root, &registry)?;
     }
-    let _ = reconcile_project_sources(project_root)?;
+    reconcile_register_sources(project_root)?;
     Ok(FlowList {
         schema: "central.project-flow-list/v1".into(),
         project_id: registry.project_id,
@@ -813,9 +935,10 @@ pub fn create_flow(
     let _source_lock = crate::source_safety::lock(project_root, "source-mutation.lock")?;
     validate_actor_kind(actor_kind)?;
     let mut registry = load_registry(project_root)?;
+    let register = register_of(project_root)?;
     let path = match explicit_path {
         Some(path) => relative_member(path)?.to_string_lossy().replace('\\', "/"),
-        None => default_path(local_stamp)?,
+        None => default_path(&register, local_stamp, title.as_deref())?,
     };
     ensure_unique_path(&registry, &path, None)?;
     validate_flow_placement(project_root, &path)?;
@@ -828,19 +951,19 @@ pub fn create_flow(
     }
     fs::write(&source, b"")?;
     let flow_ref = format!(
-        "central:flow:project:{}:{}",
-        registry.project_id,
+        "central:flow:{}:{}",
+        register.scope_ref(),
         unique_nanos()
     );
     let mut record = FlowRecord {
         flow_ref: flow_ref.clone(),
-        source_ref: escaped_source_ref(&registry.project_id, &path),
+        source_ref: escaped_source_ref(&register, &path),
         path,
         created_at_unix_seconds: unix_seconds(),
         current_revision: String::new(),
         lifecycle: "active".into(),
         title,
-        scope_ref: format!("project:{}", registry.project_id),
+        scope_ref: register.scope_ref(),
         privacy: "inherits-source-authority".into(),
         revisions: vec![],
     };
@@ -857,7 +980,7 @@ pub fn create_flow(
         .flows
         .sort_by(|left, right| left.flow_ref.cmp(&right.flow_ref));
     write_registry(project_root, &registry)?;
-    let _ = reconcile_project_sources(project_root)?;
+    reconcile_register_sources(project_root)?;
     Ok(record)
 }
 
@@ -872,6 +995,7 @@ pub fn adopt_flow(
     let _source_lock = crate::source_safety::lock(project_root, "source-mutation.lock")?;
     validate_actor_kind(actor_kind)?;
     let mut registry = load_registry(project_root)?;
+    let register = register_of(project_root)?;
     let path = relative_member(raw_path)?
         .to_string_lossy()
         .replace('\\', "/");
@@ -879,19 +1003,19 @@ pub fn adopt_flow(
     validate_flow_placement(project_root, &path)?;
     let bytes = flow_bytes(project_root, &path)?;
     let flow_ref = format!(
-        "central:flow:project:{}:{}",
-        registry.project_id,
+        "central:flow:{}:{}",
+        register.scope_ref(),
         unique_nanos()
     );
     let mut record = FlowRecord {
         flow_ref,
-        source_ref: escaped_source_ref(&registry.project_id, &path),
+        source_ref: escaped_source_ref(&register, &path),
         path,
         created_at_unix_seconds: unix_seconds(),
         current_revision: String::new(),
         lifecycle: "active".into(),
         title,
-        scope_ref: format!("project:{}", registry.project_id),
+        scope_ref: register.scope_ref(),
         privacy: "inherits-source-authority".into(),
         revisions: vec![],
     };
@@ -908,7 +1032,7 @@ pub fn adopt_flow(
         .flows
         .sort_by(|left, right| left.flow_ref.cmp(&right.flow_ref));
     write_registry(project_root, &registry)?;
-    let _ = reconcile_project_sources(project_root)?;
+    reconcile_register_sources(project_root)?;
     Ok(record)
 }
 
@@ -938,7 +1062,7 @@ pub fn read_flow(project_root: &Path, flow_ref: &str) -> io::Result<FlowReading>
     if reconciled {
         write_registry(project_root, &registry)?;
     }
-    let _ = reconcile_project_sources(project_root)?;
+    reconcile_register_sources(project_root)?;
     Ok(FlowReading {
         schema: "central.project-flow-reading/v1".into(),
         flow: record,
@@ -990,7 +1114,7 @@ pub fn write_flow(
         ));
     }
     crate::world_source::validate_attribution(actor_kind, agent_session_ref.as_deref())?;
-    let binding = crate::source_horizon::project_source_bindings(project_root)?
+    let binding = register_source_bindings(project_root)?
         .into_iter()
         .find(|b| b.source_ref == registry.flows[index].source_ref)
         .ok_or_else(|| {
@@ -1023,7 +1147,7 @@ pub fn write_flow(
         write_registry(project_root, &registry)?;
     }
     let record = registry.flows[index].clone();
-    let _ = reconcile_project_sources(project_root)?;
+    reconcile_register_sources(project_root)?;
     Ok(record)
 }
 
@@ -1069,10 +1193,10 @@ pub fn rename_flow(
     let old = safe_source_member_path(project_root, &registry.flows[index].path, true)?;
     fs::rename(old, &destination)?;
     registry.flows[index].path = normalized.clone();
-    registry.flows[index].source_ref = escaped_source_ref(&registry.project_id, &normalized);
+    registry.flows[index].source_ref = escaped_source_ref(&register_of(project_root)?, &normalized);
     write_registry(project_root, &registry)?;
     let record = registry.flows[index].clone();
-    let _ = reconcile_project_sources(project_root)?;
+    reconcile_register_sources(project_root)?;
     Ok(record)
 }
 
@@ -1181,12 +1305,30 @@ fn optional(input: &Value, field: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// The register an action addresses. `project` names a Work project; its
+/// absence names the Central root, the meta-project that keeps its own NOW
+/// field and that every ProjectCentral specifies over.
 fn project_context(
     action: &str,
     input: &Value,
     context: &ActionExecutionContext<'_>,
 ) -> Result<PathBuf, ActionResult> {
-    let project = required(input, "project", action)?;
+    let Some(project) = optional(input, "project") else {
+        let root = resolve_central_root(context.root_options)
+            .map_err(|message| {
+                ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None)
+            })?
+            .path;
+        register_of(&root).map_err(|error| {
+            ActionResult::failure(
+                Some(action),
+                ResultStatus::InvalidCentralStructure,
+                format!("Central root is not a usable Flow register: {error}"),
+                None,
+            )
+        })?;
+        return Ok(root);
+    };
     let project = relative_member(&project).map_err(|error| {
         ActionResult::failure(
             Some(action),
@@ -1604,7 +1746,7 @@ pub fn register_projectcentral_flow_actions(registry: &mut ActionRegistry) {
                 "Read native Flow descriptor and last-observed revision with retrieval availability; no source body is returned.",
                 MutationClass::ReadOnly,
                 "projectcentral-flow-inspection",
-                &[("project", true), ("flow_ref", true)],
+                &[("project", false), ("flow_ref", true)],
             ),
             inspect_action
                 as fn(&ActionRegistry, &Value, &ActionExecutionContext<'_>) -> ActionResult,
@@ -1616,7 +1758,7 @@ pub fn register_projectcentral_flow_actions(registry: &mut ActionRegistry) {
                 "List stable Flow identities and current source/revision/lifecycle state. Reconciles external file edits into revision provenance and Source Change Horizon without invoking an Agent/model.",
                 MutationClass::LocallyMutating,
                 "projectcentral-flow-list",
-                &[("project", true)],
+                &[("project", false)],
             ),
             list_action as fn(&ActionRegistry, &Value, &ActionExecutionContext<'_>) -> ActionResult,
         ),
@@ -1628,7 +1770,7 @@ pub fn register_projectcentral_flow_actions(registry: &mut ActionRegistry) {
                 MutationClass::LocallyMutating,
                 "projectcentral-flow-reading",
                 &[
-                    ("project", true),
+                    ("project", false),
                     ("flow_ref", true),
                     ("expected_revision", false),
                 ],
@@ -1643,7 +1785,7 @@ pub fn register_projectcentral_flow_actions(registry: &mut ActionRegistry) {
                 MutationClass::LocallyMutating,
                 "projectcentral-flow",
                 &[
-                    ("project", true),
+                    ("project", false),
                     ("actor", true),
                     ("actor_kind", true),
                     ("local_stamp", false),
@@ -1662,7 +1804,7 @@ pub fn register_projectcentral_flow_actions(registry: &mut ActionRegistry) {
                 MutationClass::LocallyMutating,
                 "projectcentral-flow",
                 &[
-                    ("project", true),
+                    ("project", false),
                     ("path", true),
                     ("actor", true),
                     ("actor_kind", true),
@@ -1680,7 +1822,7 @@ pub fn register_projectcentral_flow_actions(registry: &mut ActionRegistry) {
                 MutationClass::LocallyMutating,
                 "projectcentral-flow",
                 &[
-                    ("project", true),
+                    ("project", false),
                     ("flow_ref", true),
                     ("expected_revision", true),
                     ("content", false),
@@ -1699,7 +1841,7 @@ pub fn register_projectcentral_flow_actions(registry: &mut ActionRegistry) {
                 MutationClass::LocallyMutating,
                 "projectcentral-flow",
                 &[
-                    ("project", true),
+                    ("project", false),
                     ("flow_ref", true),
                     ("expected_revision", true),
                     ("new_path", true),
@@ -1715,7 +1857,7 @@ pub fn register_projectcentral_flow_actions(registry: &mut ActionRegistry) {
                 MutationClass::LocallyMutating,
                 "projectcentral-flow",
                 &[
-                    ("project", true),
+                    ("project", false),
                     ("flow_ref", true),
                     ("expected_revision", true),
                     ("lifecycle", true),
@@ -1730,7 +1872,7 @@ pub fn register_projectcentral_flow_actions(registry: &mut ActionRegistry) {
                 "Read exact stored revision receipts for one FlowRef. Current Flow remains refinable while prior bytes remain under derived owner history.",
                 MutationClass::LocallyMutating,
                 "projectcentral-flow-history",
-                &[("project", true), ("flow_ref", true)],
+                &[("project", false), ("flow_ref", true)],
             ),
             history_action,
         ),
@@ -1741,7 +1883,7 @@ pub fn register_projectcentral_flow_actions(registry: &mut ActionRegistry) {
                 "W1.3 owner read model: live/held/closed Flows, day grouping by embedded local civil filename stamp, caller-supplied current_day DAY facts, and rest-vs-thinking disclosure. A date boundary does not close a Flow; the civil date is caller-supplied, never timezone-derived. No Agent/model invocation.",
                 MutationClass::LocallyMutating,
                 "projectcentral-flow-now",
-                &[("project", true), ("current_day", false)],
+                &[("project", false), ("current_day", false)],
             ),
             now_action,
         ),

@@ -603,6 +603,47 @@ pub fn control_source_bindings(central_root: &Path) -> io::Result<Vec<SourceBind
         &mut bindings,
     )?;
 
+    // Flows participate in the root horizon under the same law as the project
+    // side: the FlowRef is the continuity identity, the SourceRef the current
+    // ordinary-file relation, and a file that already participates through
+    // another relation gains the flow role rather than being replaced. A root
+    // with no Flow registry simply has no Flows; that absence is not a failure.
+    for flow in registered_flow_records(central_root).unwrap_or_default() {
+        // A registered Flow whose retained file is gone, unreadable or not a
+        // usable member is simply not in the horizon right now. Its absence is
+        // never allowed to fail the whole root reading.
+        if validate_project_member(&flow.path).is_err() {
+            continue;
+        }
+        let path = central_root.join(&flow.path);
+        if !safe_regular_file(central_root, &path).unwrap_or(false) {
+            continue;
+        }
+        if let Some(existing) = bindings
+            .values_mut()
+            .find(|binding| binding.path == flow.path)
+        {
+            if !existing.roles.iter().any(|role| role == "flow-source") {
+                existing.roles.push("flow-source".to_owned());
+                existing.roles.sort();
+                existing.roles.dedup();
+            }
+        } else {
+            bindings.insert(
+                flow.source_ref.clone(),
+                SourceBinding {
+                    source_ref: flow.source_ref,
+                    path: flow.path,
+                    roles: vec!["flow-source".to_owned()],
+                    provenance: "collaborative-revision-provenance".to_owned(),
+                    standing: "working-source".to_owned(),
+                    treatment: "projectcentral-flow-retained-in-place".to_owned(),
+                    agent_retrieval_allowed: retrieval_allowed(central_root, &path),
+                },
+            );
+        }
+    }
+
     for relation in read_control_ground_relations(central_root)? {
         let relative = relation.path.clone();
         let path = central_root.join(&relative);

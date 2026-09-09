@@ -13,6 +13,7 @@ pub mod control_skills;
 pub mod engineering_ground;
 pub mod machine;
 pub mod machine_account;
+pub mod names;
 pub mod pasu;
 pub mod personal;
 pub mod picker;
