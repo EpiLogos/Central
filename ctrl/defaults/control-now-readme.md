@@ -36,9 +36,9 @@ the root.
   and policy; it ships no root NOW lifecycle executor. Until Central ships a
   native root NOW action, the root field's lifecycle (inspect / return / update /
   promote / rollover) is executed by the mirroring procedure — the
-  `central-session-strap` skill — which arrives through the O:I guardian
-  projection, not through this stamp. A fresh tree without that projection has
-  the field but no operator for those lifecycle steps; nothing here hides that.
+  `central-session-strap` skill — which arrives through the O:I guardian projection,
+  not through this stamp. A fresh tree without that projection has the field
+  but no operator for those lifecycle steps; nothing here hides that.
 - The mirroring procedure follows the ctrl semantics exactly: same envelope,
   same policy classification, same rollover order (inspect → classify →
   snapshot → derive → carry/clean → clear promotions ledger), same
