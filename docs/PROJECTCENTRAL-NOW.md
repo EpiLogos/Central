@@ -1,27 +1,58 @@
-# ProjectCentral NOW / DAY
+# NOW / DAY
 
-**Status:** Central temporal source/retention contract for Central #74  
-**Scope:** optional Project-local human↔Agent working field  
-**Ordinary correctness:** no QL, AIKit, Factory, O:I, database, session or chat dependency
+```yaml
+standing: architecture-contract
+register: episteme
+provenance: human-adopted
+temporal: docs update after Central #134
+```
+
+**Ordinary correctness:** no QL, AIKit, Factory, O:I, database, session or chat dependency.
+
+## One law, two registers
+
+NOW/DAY is one temporal contract. Two registers keep the same field:
+
+```text
+Central root `control:root`     Control/agents/now/
+                                including Control/agents/now/flows
+
+Work project                    ProjectCentral/now/
+                                including ProjectCentral/now/flows
+```
+
+`NOW` is the moving current working horizon of its register. At the root that horizon is the world (cross-project, suite-level, personal). In a project it is that project's working field. A session works one register at a time; material that belongs to a project returns through that project's field even when the session started at the root.
+
+The shape and the policy are the same in both registers:
+
+```text
+<register NOW>/
+├── user/                     free human scratch / current source
+├── agents/                   attributed bounded Agent returns
+├── flows/                    ordinary-file Flows of this register
+├── day/
+│   ├── YYYY-MM-DD.md         derived dated closure reading
+│   └── YYYY-MM-DD.sources/   byte-preserving source state at close
+│       ├── user/**
+│       ├── agents/**
+│       ├── flows/
+│       └── flows.json
+├── policy.json               inspectable rollover policy
+└── promotions.json           current promotion receipts
+```
+
+Root operational Flow state lives at the Central root (`.central/flows.json`, `.central/flow-revisions/`). Project operational Flow state lives at the Work project root. See [Flow](PROJECTCENTRAL-FLOW.md).
+
+Implementation standing:
+
+- `projectcentral.flow.*` Actions serve both registers. Absent `project` names the root.
+- `projectcentral.now.*` Actions currently require `project` and operate on a Work project. The root field is present under `Control/agents/now/` (stamped as a distributed default). Its lifecycle — inspect / init / return / update / promote / rollover — is executed by the session-strap mirroring procedure until a native root NOW Action exists.
 
 ## Why this exists
 
-ProjectCentral already distinguishes durable human-authored Project ground from Agent-maintained Wiki knowledge. A further temporal distinction is needed because not everything useful in collaboration deserves either standing.
+Durable human-authored ground and Agent-maintained Wiki knowledge are distinct. A further temporal distinction is needed because not everything useful in collaboration deserves either standing.
 
 A person may need to leave rough current state. An Agent may need to return a bounded result after the initiating chat is gone. An unanswered question may need to remain visible tomorrow. A completed transient check should not permanently accumulate in the current working view. A useful statement may later deserve durable human authorship or Wiki standing, but temporal presence alone must never grant that authority.
-
-The resulting relation is:
-
-```text
-ProjectCentral/user/**
-    durable human-authored Project ground
-              ↕ explicit accepted return
-ProjectCentral/now/**
-    moving temporal working field
-              ↕ bounded refs / promotion
-ProjectCentral/agents/wiki/**
-    Agent-maintained Project knowledge
-```
 
 This is a temporal source layer, not another collaboration product.
 
@@ -44,17 +75,17 @@ NOW ≠ Session
 NOW ≠ Run
 NOW ≠ Focus
 NOW ≠ Wiki
-NOW ≠ authored Project canon
+NOW ≠ authored canon
 
-DAY ≠ Project history database
+DAY ≠ history database
 DAY ≠ automatic truth promotion
 ```
 
 Run, Session, Focus, source, evidence and other identities therefore appear only as refs owned by their native systems.
 
-## Filesystem shape
+## ProjectCentral
 
-NOW is an opt-in child of an already-valid ProjectCentral:
+The project register is an opt-in child of an already-valid ProjectCentral:
 
 ```text
 ProjectCentral/
@@ -67,18 +98,36 @@ ProjectCentral/
 └── now/
     ├── user/                     free human scratch/current source
     ├── agents/                   attributed bounded Agent returns
+    ├── flows/                    ordinary-file Flows of this project
     ├── day/
     │   ├── YYYY-MM-DD.md         derived dated closure reading
     │   └── YYYY-MM-DD.sources/   byte-preserving source state at close
     │       ├── user/**
-    │       └── agents/**
+    │       ├── agents/**
+    │       ├── flows/
+    │       └── flows.json
     ├── policy.json               inspectable rollover policy
     └── promotions.json           current promotion receipts
 ```
 
-A ProjectCentral without `now/` remains fully valid. `projectcentral.now.inspect` is read-only and does not opt the Project in. `projectcentral.now.init` performs that explicit opt-in.
+A ProjectCentral without `now/` remains fully valid. `projectcentral.now.inspect` is read-only and does not opt the Project in. `projectcentral.now.init` performs that explicit opt-in. Init creates `user/`, `agents/`, `day/`, policy and promotions; it does not create `flows/`. The first Flow create materialises that directory.
 
-The shape intentionally separates authorship before it aggregates experience. One shared Markdown file would make a human sentence, an Agent inference and a derived daily summary difficult to distinguish later. DAY therefore keeps the human and Agent source copies separate, while its Markdown reading points back to those copies.
+The shape separates authorship before it aggregates experience. One shared Markdown file would make a human sentence, an Agent inference and a derived daily summary difficult to distinguish later. DAY therefore keeps the human, Agent and Flow source copies separate, while its Markdown reading points back to those copies.
+
+The project relation to durable owners is:
+
+```text
+ProjectCentral/user/**
+    durable human-authored Project ground
+              ↕ explicit accepted return
+ProjectCentral/now/**
+    moving temporal working field
+              ↕ bounded refs / promotion
+ProjectCentral/agents/wiki/**
+    Agent-maintained Project knowledge
+```
+
+At the root the corresponding durable owners are `Control/user/**` and `Control/agents/wiki/**`.
 
 ### Human side
 
@@ -104,6 +153,7 @@ subject
 returned result
 status = active | waiting | resolved | carried | promoted | expired
 optional Run / Session / Focus refs
+optional attributed_to (central.pasu/v1, declared not inferred)
 optional source / evidence refs
 optional preserve refs
 carry / promotion lineage
@@ -113,11 +163,11 @@ This small envelope exists because a result that must survive its Session needs 
 
 Agent returns are likewise snapshotted under `day/YYYY-MM-DD.sources/agents/**` before rollover mutates or removes the moving record.
 
-Agent learning returns toward the existing Wiki owner path through `ProjectCentral/agents/wiki/returns/**`. This deliberately does **not** edit `wiki.json` directly. The durable returned copy is written with `status = promoted` and its `promoted_to` lineage already present, so provenance does not depend on consulting the transient source after rollover. The system that owns semantic Wiki maintenance can then decide how that returned source should alter the Wiki.
+Agent learning returns toward the existing Wiki owner path through `ProjectCentral/agents/wiki/returns/**`. This does not edit `wiki.json` directly. The durable returned copy is written with `status = promoted` and its `promoted_to` lineage already present, so provenance does not depend on consulting the transient source after rollover. The system that owns semantic Wiki maintenance can then decide how that returned source should alter the Wiki.
 
-## Read model
+### Read model
 
-`projectcentral.now.inspect` returns one bounded current reading:
+`projectcentral.now.inspect` returns one bounded current reading of the project register:
 
 ```text
 human_scratch
@@ -133,9 +183,11 @@ boundary statements
 
 `day_records` lists the top-level dated Markdown closure readings; each reading names its adjacent `.sources/` snapshot.
 
+`projectcentral.flow.now` is the Flow reading of the same field (both registers). See [Flow](PROJECTCENTRAL-FLOW.md).
+
 This is the source/read-model seam for AIKit and future Surfaces. Central does not rank these records or decide how much of them belongs in a model context.
 
-## DAY rollover
+### DAY rollover
 
 The caller supplies `day` and `next_day` as valid local civil dates (`YYYY-MM-DD`), with `next_day` later than `day`. Central does not guess a timezone from UTC and does not require a scheduler.
 
@@ -154,7 +206,7 @@ Rollover proceeds in this order:
 
 1. inspect human scratch, bounded Agent returns and current promotion receipts;
 2. classify Agent records under the current policy;
-3. snapshot human and Agent source state into `day/YYYY-MM-DD.sources/**`;
+3. snapshot human, Agent and Flow source state into `day/YYYY-MM-DD.sources/**`;
 4. derive `day/YYYY-MM-DD.md` from that snapshot and the lifecycle classification, **before** any cleanup;
 5. leave live Agent records at their stable NOW paths and mark them `carried`, adding the closed DAY to their carry lineage;
 6. delete resolved/expired/promoted Agent records from moving NOW when no `preserve_refs` protect them;
@@ -164,30 +216,32 @@ Rollover proceeds in this order:
 
 If snapshotting or writing the DAY reading fails, moving NOW has not yet been cleaned. If DAY is durably written but a later carry/delete/reset step fails, the Action returns `partial_completion` and identifies the failed cleanup instead of claiming atomic success.
 
-The DAY reading contains human temporal source in its own words where renderable, plus source/snapshot refs, and it records Agent actor/provenance, bounded result, lifecycle standing and foreign refs. Therefore deleting a resolved transient return from NOW removes current clutter without erasing the dated source from which the DAY reading was made.
+The DAY reading contains human temporal source in its own words where renderable, plus source/snapshot refs, and it records Agent actor/provenance, bounded result, lifecycle standing and foreign refs. Flow entries record FlowRef, revision, source path, snapshot path and lifecycle. Therefore deleting a resolved transient return from NOW removes current clutter without erasing the dated source from which the DAY reading was made.
 
-### Reference protection
+#### Reference protection
 
 Central cannot discover every future durable object in every external owner. It therefore uses an explicit conservative contract: a NOW return with one or more `preserve_refs` is not deleted by rollover even if its lifecycle status would otherwise be removable.
 
 A Factory Artifact, Run, accepted canonical relation or another durable owner can place its own ref there when the temporal source must remain materialised. This satisfies the deletion law without making Central parse or own those external ontologies.
 
-## Actions
+### Actions
 
 ```text
-projectcentral.now.inspect    read current temporal field; non-mutating
-projectcentral.now.init       opt a valid ProjectCentral into NOW/DAY
-projectcentral.now.return     write attributed bounded Agent return
-projectcentral.now.update     update status / add preserve refs
-projectcentral.now.promote    explicit return into human ground or Agent Wiki owner path
-projectcentral.now.rollover   snapshot DAY, then clean/carry NOW
+projectcentral.now.inspect    read current temporal field; non-mutating; requires project
+projectcentral.now.init       opt a valid ProjectCentral into NOW/DAY; requires project
+projectcentral.now.return     write attributed bounded Agent return; requires project
+projectcentral.now.update     update status / add preserve refs; requires project
+projectcentral.now.promote    explicit return into human ground or Agent Wiki owner path; requires project
+projectcentral.now.rollover   snapshot DAY, then clean/carry NOW; requires project
 ```
 
 Human scratch requires no Action. Generic Agent/action callers can use the structured Actions; a future O:I Surface can project the same contract.
 
-## Ownership boundaries
+Flow operations on this field are native at both registers: see [Flow](PROJECTCENTRAL-FLOW.md).
 
-**Central owns:** directory/source identity, provenance envelope, inspectable retention policy, DAY source snapshot/closure and temporal cleanup, explicit source-return semantics.
+### Ownership boundaries
+
+**Central owns:** directory/source identity, provenance envelope, inspectable retention policy, DAY source snapshot/closure and temporal cleanup, explicit source-return semantics, Flow continuity on the same field.
 
 **AIKit owns:** discovery as a ContextSource, relevance/ranking, bounded retrieval and ContextResolution. Central does not push the entire NOW horizon into every Agent context.
 
@@ -197,21 +251,16 @@ Human scratch requires no Action. Generic Agent/action callers can use the struc
 
 **Agent Wiki owner path:** returned Agent learning can become source under `agents/wiki/returns/**`; semantic incorporation into `wiki.json` remains a Wiki-maintenance concern.
 
-## Root / personal scope
+### Nara precedent
 
-This tranche does not add a new top-level `Central/Now` root. The established personal-world law remains `Control/**`. The implemented contract is Project-local because #74's acceptance concerns a Work Project and because adding another top-level root merely for symmetry would weaken the existing Central boundary.
-
-A later personal NOW design should be derived through the current Control structure only when there is a concrete personal-world use case and owner contract for it.
-
-## Nara precedent
-
-The nara-personal daily-note work established a useful experiential result: a dated aggregation should contain the person's state in their own words, preserve open forward questions for later Sessions, and keep a compact progress/wayfinder reading. ProjectCentral generalises the relation rather than the Nara ontology.
+The nara-personal daily-note work established a useful experiential result: a dated aggregation should contain the person's state in their own words, preserve open forward questions for later Sessions, and keep a compact progress/wayfinder reading. The NOW/DAY contract generalises the relation rather than the Nara ontology.
 
 The generalised rule is:
 
 ```text
 human current source
 + Agent returns
++ Flows at their current revision
 + active refs
 + open questions
         ↓
@@ -222,7 +271,7 @@ remove current clutter
 return meaningful material to its durable owner
 ```
 
-## Acceptance evidence
+### Acceptance evidence
 
 `ctrl/tests/projectcentral_now.rs` proves a filesystem-level Work Project traversal:
 
@@ -243,5 +292,7 @@ human writes direct scratch
 Module-level tests additionally prove that changing moving human scratch after rollover cannot rewrite the prior DAY snapshot/reading, and that a Wiki-return copy carries its own `promoted_to` lineage.
 
 `ctrl/tests/projectcentral_now_portable_real.rs` copies exact files from the checked-out Central Project into a portable `Central/Work/Central-current` specimen, opts that Project into NOW, performs DAY rollover, and verifies that native README, vision and implementation source bytes remain unchanged.
+
+`ctrl/tests/projectcentral_flow.rs` (`the_central_root_register_holds_a_flow_of_its_own`) proves the root register holds a Flow of its own under `Control/agents/now/flows`, stamped `control:root`.
 
 This portable evidence is deliberately distinct from a receipt against the owner's physical `~/Central/Work/*` installation. CI can prove the repository contract; it cannot truthfully claim access to a machine it does not have.

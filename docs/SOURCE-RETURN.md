@@ -7,14 +7,17 @@ invokes an agent or model.
 
 ## Flow disclosure seam
 
-`projectcentral.flow.inspect {project, flow_ref}` returns
+`projectcentral.flow.inspect` takes `flow_ref` and optional `project`. Absent
+`project` names the root register `control:root`. A supplied `project` names
+that Work project's register. The Action returns
 `central.project-flow-inspection/v1`, the existing `flow` record,
 `revision_observation: last-observed`, and `capabilities.read/write/history` with
 `available` and `reason`. It reads owner metadata and checks native access; it
 never returns the source body. Its revision is deliberately the registry's last
 observation, not a claim to have read current bytes.
 
-`projectcentral.flow.read` accepts optional `expected_revision`. It reconciles
+`projectcentral.flow.read` accepts optional `project` (absent names the root
+register) and optional `expected_revision`. It reconciles
 external edits, verifies that the returned content matches that revision and
 refuses a stale expectation. Flow bodies are bounded to 4 MiB UTF-8 without NUL.
 Retrieval exclusions apply to body reads, history and adoption; excluded Flows

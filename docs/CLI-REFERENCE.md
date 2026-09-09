@@ -80,15 +80,15 @@ The current composed registry exposes 68 Actions:
 | `projectcentral.now.update` | update NOW lifecycle material | `action run projectcentral.now.update` |
 | `projectcentral.now.promote` | promote selected NOW material with lineage | `action run projectcentral.now.promote` |
 | `projectcentral.now.rollover` | close a DAY snapshot and roll NOW forward | `action run projectcentral.now.rollover` |
-| `projectcentral.flow.list` | list stable Flow identities and current source/revision state | `action run projectcentral.flow.list` |
-| `projectcentral.flow.read` | read current Flow source by FlowRef and reconcile external edits | `action run projectcentral.flow.read` |
-| `projectcentral.flow.create` | create a blank ordinary-file Flow with stable identity | `action run projectcentral.flow.create` |
-| `projectcentral.flow.adopt` | adopt an existing retained ordinary file as a Flow without moving it | `action run projectcentral.flow.adopt` |
-| `projectcentral.flow.write` | perform a revision-safe human/Agent Flow write | `action run projectcentral.flow.write` |
-| `projectcentral.flow.rename` | rename the retained source while preserving FlowRef | `action run projectcentral.flow.rename` |
-| `projectcentral.flow.lifecycle` | set active/dormant/closed lifecycle without changing source revision | `action run projectcentral.flow.lifecycle` |
-| `projectcentral.flow.history` | read exact Flow revision provenance/history | `action run projectcentral.flow.history` |
-| `projectcentral.flow.now` | W1.3 NOW view: live/held/closed Flows, day grouping by embedded local civil stamp, caller-supplied `current_day` DAY facts, rest-vs-thinking disclosure — never timezone-derived, never invokes an Agent/model | `action run projectcentral.flow.now` |
+| `projectcentral.flow.list` | list stable Flow identities and current source/revision state. `project` is optional; omit it to name the root register `control:root` | `action run projectcentral.flow.list` |
+| `projectcentral.flow.read` | read current Flow source by FlowRef and reconcile external edits. `project` is optional; omit it to name the root register | `action run projectcentral.flow.read` |
+| `projectcentral.flow.create` | create a blank ordinary-file Flow with stable identity. `project` is optional; omit it to name the root register | `action run projectcentral.flow.create` |
+| `projectcentral.flow.adopt` | adopt an existing retained ordinary file as a Flow without moving it. `project` is optional; omit it to name the root register | `action run projectcentral.flow.adopt` |
+| `projectcentral.flow.write` | perform a revision-safe human/Agent Flow write. `project` is optional; omit it to name the root register | `action run projectcentral.flow.write` |
+| `projectcentral.flow.rename` | rename the retained source while preserving FlowRef. `project` is optional; omit it to name the root register | `action run projectcentral.flow.rename` |
+| `projectcentral.flow.lifecycle` | set active/dormant/closed lifecycle without changing source revision. `project` is optional; omit it to name the root register | `action run projectcentral.flow.lifecycle` |
+| `projectcentral.flow.history` | read exact Flow revision provenance/history. `project` is optional; omit it to name the root register | `action run projectcentral.flow.history` |
+| `projectcentral.flow.now` | NOW view: live/held/closed Flows, day grouping by the stamp at the end of the stem, caller-supplied `current_day` DAY facts, rest-vs-thinking disclosure — never timezone-derived, never invokes an Agent/model. `project` is optional; omit it to name the root register | `action run projectcentral.flow.now` |
 | `projectcentral.source.read` | read one participating World source with its exact revision and provenance | `action run projectcentral.source.read` |
 | `projectcentral.source.write` | revise one participating World source under compare-and-swap with an attributed change record | `action run projectcentral.source.write` |
 | `agent-profile.propose` | author one canonical Central AgentProfile source relation as durable Control ground from an expressed intent. The record carries `central.agent-profile/v1` plus a `central.agent-profile-provenance/v1` block stamped `generated-proposal`/`unrecognised` with the verbatim intent expression; recognition is the human owner's separate act and no input can claim it. Invalid intent, absent/unwritable target ground and duplicate profile identity are explicit states, never silent | `action run agent-profile.propose` |
@@ -108,6 +108,7 @@ ctrl --json action run control.skills.inspect
 ctrl --json action run control.skills.retire '{"scope":"control-user","name":"central-ground-keeping","retired_by":"owner-in-session","retirement_reason":"superseded"}'
 ctrl --json action run projectcentral.change.horizon '{"project":"Central"}'
 ctrl --json action run projectcentral.now.inspect '{"project":"Central"}'
+ctrl --json action run projectcentral.flow.create '{"actor":"human:local","actor_kind":"human","title":"a loose thought"}'
 ctrl --json action run projectcentral.flow.create '{"project":"Central","actor":"human:local","actor_kind":"human","local_stamp":"2026-08-23-2310"}'
 ctrl --json action run central.recover '{"role":"primary-workstation"}'
 ```
@@ -171,7 +172,7 @@ Ordinary file authority, conflict, bounded history and interruption semantics: [
 
 Returned work and Flow provider inspection:
 
-- `projectcentral.flow.inspect`: native descriptor, last-observed revision, and retrieval/write/history availability without source body.
+- `projectcentral.flow.inspect`: native descriptor, last-observed revision, and retrieval/write/history availability without source body. `project` is optional; omit it to name the root register `control:root`.
 - `projectcentral.source.return`: persist exact-basis returned work as a proposal.
 - `projectcentral.source.returns`: bounded metadata pages of native returns.
 - `projectcentral.source.return_read`: proposal, current source, conflict and native acceptance availability.

@@ -101,12 +101,12 @@ resembles the product checkout (`mixed_root` in the structured health report).
 - [PROJECTCENTRAL-AUTHORED-GROUND.md](PROJECTCENTRAL-AUTHORED-GROUND.md) —
   conservative inspection and explicit accepted source/provenance/standing
   relations for existing or ProjectCentral-local human Project source.
-- [PROJECTCENTRAL-NOW.md](PROJECTCENTRAL-NOW.md) — the opt-in NOW temporal field,
-  DAY source snapshots/closure, bounded Agent returns, promotion lineage and
-  rollover semantics over an already-valid ProjectCentral.
-- [PROJECTCENTRAL-FLOW.md](PROJECTCENTRAL-FLOW.md) — stable Flow source identity,
-  revision-safe collaborative writes, retained-in-place source placement,
-  Source Change Horizon participation and exact DAY revision snapshots.
+- [PROJECTCENTRAL-NOW.md](PROJECTCENTRAL-NOW.md) — Central NOW/DAY temporal
+  contract (root register `control:root` and ProjectCentral), DAY snapshots,
+  bounded Agent returns, promotion and rollover.
+- [PROJECTCENTRAL-FLOW.md](PROJECTCENTRAL-FLOW.md) — Flow continuity identity
+  across registers, optional `project` (absent = root), naming law, revision-safe
+  writes, Source Change Horizon participation and exact DAY revision snapshots.
 
 ## Supporting product understanding
 
@@ -123,7 +123,7 @@ resembles the product checkout (`mixed_root` in the structured health report).
 | Establishing the current machine | `MACHINE-WORKCELL-RELATION.md` → `CLI-REFERENCE.md` |
 | Working with authored Project ground | `PROJECT-CONTEXT-PROTOCOL.md` → `PROJECTCENTRAL-CONTRACT.md` → `PROJECTCENTRAL-AUTHORED-GROUND.md` → `CLI-REFERENCE.md` |
 | Working with Project context / Intent / disclosure | `PROJECT-CONTEXT-PROTOCOL.md` → `PRODUCT-GROUND-CONVENTION.md` → `AGENT-GOVERNANCE-SOURCES.md` → AIKit ContextResolution/Explain contracts |
-| Working with Project NOW / DAY | `PROJECTCENTRAL-CONTRACT.md` → `PROJECTCENTRAL-NOW.md` → `CLI-REFERENCE.md` |
+| Working with NOW / DAY | `PROJECTCENTRAL-NOW.md` → `CLI-REFERENCE.md` |
 | Working with a live Flow | `PROJECTCENTRAL-FLOW.md` → `PROJECTCENTRAL-NOW.md` → `CLI-REFERENCE.md` |
 | Working with Agent governance source | `PROJECT-CONTEXT-PROTOCOL.md` → `AGENT-GOVERNANCE-SOURCES.md` → `CONTROL-CONTENT-PROTOCOL.md` → AIKit operational composition docs |
 | Working with Personal notification/proposal extensions | `PERSONAL-SURFACE-AND-NOTIFICATION.md` → `CONNECTOR-SDK-SPEC.md` → `CONTROL-CONTENT-PROTOCOL.md` |
