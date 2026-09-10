@@ -44,6 +44,13 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/prove-continuous-work.py --ctrl "$GITHUB_WORKSPACE/target/debug/ctrl" | tee "$RUNNER_TEMP/caw-native-consumer-proof.json"
+      - name: Exercise native exclusion and lifecycle boundaries
+        shell: bash
+        env:
+          CENTRAL_CAW_CTRL: ${{ github.workspace }}/target/debug/ctrl
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests/continuous-work -p 'test_native_placement_boundary.py' -v 2>&1 | tee "$RUNNER_TEMP/caw-native-boundary-proof.log"
       - name: Preserve the exact public source and binary exercised
         if: always()
         shell: bash
@@ -61,6 +68,7 @@ jobs:
           path: |
             ${{ runner.temp }}/caw-native-tests.log
             ${{ runner.temp }}/caw-native-consumer-proof.json
+            ${{ runner.temp }}/caw-native-boundary-proof.log
             ${{ runner.temp }}/caw-source-sha.txt
             ${{ runner.temp }}/caw-source.tar.gz
             ${{ runner.temp }}/caw-ctrl

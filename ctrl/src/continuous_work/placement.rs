@@ -75,6 +75,10 @@ pub struct EffectivePolicy {
     pub sources: Vec<PolicySource>,
     pub writable_destinations: Vec<WritableDestination>,
     pub protected_paths: Vec<PathBuf>,
+    /// Authored exclusions remain binding inside the native NOW aperture. This
+    /// is separate from structural parent protection (for example ProjectCentral)
+    /// whose one authorised exception is the allocated task T directory.
+    pub explicit_protected_paths: Vec<PathBuf>,
     pub enforcement: String,
     pub required_coverage: Vec<String>,
     pub issued_at_unix_seconds: u64,
@@ -175,9 +179,12 @@ fn destinations(scope: &Scope, policy: &PlacementPolicy) -> io::Result<Vec<Writa
         Ok(WritableDestination { anchor: anchor(&scope.central_root, &path)?, path, class: grant.class.clone() })
     }).collect()
 }
+fn explicit_protection(scope: &Scope, policy: &PlacementPolicy) -> io::Result<Vec<PathBuf>> {
+    policy.protected.iter().map(|path| absolute(scope, path)).collect()
+}
 fn protection(scope: &Scope, policy: &PlacementPolicy) -> io::Result<Vec<PathBuf>> {
     let mut paths = vec![scope.root.join(".central"), scope.root.join(&scope.prefix).join("user"), scope.root.join(&scope.relations_path)];
-    for path in &policy.protected { paths.push(absolute(scope, path)?); }
+    paths.extend(explicit_protection(scope, policy)?);
     Ok(paths)
 }
 fn level(level: &str) -> u8 {
@@ -189,6 +196,7 @@ pub fn effective_policy(scope: &Scope, now: u64) -> io::Result<EffectivePolicy> 
     if root_policy.parent_policy.is_some() { return Err(invalid("root placement policy cannot name a Project parent")); }
     let mut grants = destinations(&root, &root_policy)?;
     let mut protected = protection(&root, &root_policy)?;
+    let mut explicit_protected = explicit_protection(&root, &root_policy)?;
     let mut enforcement = root_policy.enforcement.clone();
     let mut coverage = root_policy.required_coverage.clone();
     let mut expiry = now.saturating_add(root_policy.lease_seconds).min(root_policy.expires_at_unix_seconds.unwrap_or(u64::MAX));
@@ -208,6 +216,7 @@ pub fn effective_policy(scope: &Scope, now: u64) -> io::Result<EffectivePolicy> 
             }
             grants = local_grants;
             protected.extend(protection(scope, &local)?);
+            explicit_protected.extend(explicit_protection(scope, &local)?);
             if level(&local.enforcement) > level(&enforcement) { enforcement = local.enforcement.clone(); }
             coverage.extend(local.required_coverage.clone());
             expiry = expiry.min(now.saturating_add(local.lease_seconds)).min(local.expires_at_unix_seconds.unwrap_or(u64::MAX));
@@ -215,11 +224,12 @@ pub fn effective_policy(scope: &Scope, now: u64) -> io::Result<EffectivePolicy> 
         }
     }
     coverage.sort(); coverage.dedup(); protected.sort(); protected.dedup();
-    let stable = json!({"scope":scope.world_ref,"sources":sources,"writable":grants,"protected":protected,"enforcement":enforcement,"required_coverage":coverage});
+    explicit_protected.sort(); explicit_protected.dedup();
+    let stable = json!({"scope":scope.world_ref,"sources":sources,"writable":grants,"protected":protected,"explicit_protected":explicit_protected,"enforcement":enforcement,"required_coverage":coverage});
     Ok(EffectivePolicy {
         schema: "central.effective-placement-policy/v1".into(), scope_ref: scope.world_ref.clone(), root_scope_ref: root.world_ref,
         revision: source::revision(&serde_json::to_string(&stable)?), sources,
-        writable_destinations: grants, protected_paths: protected, enforcement, required_coverage: coverage,
+        writable_destinations: grants, protected_paths: protected, explicit_protected_paths: explicit_protected, enforcement, required_coverage: coverage,
         issued_at_unix_seconds: now, expires_at_unix_seconds: expiry,
         native_enforcement: "only operations routed through Central; consumers enforce their actual coverage".into(), outside_writes_prevented: false,
     })
@@ -269,7 +279,21 @@ pub(crate) fn now_destination(scope: &Scope, source_path: &str) -> io::Result<Pa
     if !parent.starts_with(format!("{}/agents/now", scope.prefix)) { return Err(denied("NOW is outside the active agent aperture; inspect migration/continuation before re-entry")); }
     Ok(scope.root.join(parent).join("T"))
 }
+/// Refuse a wholly excluded clearing before creating/rebinding source or T.
+/// A protected descendant does not erase the entire aperture; validation still
+/// excludes that descendant and ambiguous mutations of its parents.
+fn check_allocation_protection(scope: &Scope, source_path: &str, policy: &EffectivePolicy) -> io::Result<()> {
+    let source_path_absolute = scope.root.join(source_path);
+    let destination = now_destination(scope, source_path)?;
+    if policy.explicit_protected_paths.iter().any(|protected| {
+        source_path_absolute.starts_with(protected) || destination.starts_with(protected)
+    }) {
+        return Err(denied("NOW allocation conflicts with an explicit protected source/destination; resolve the current owner policy before retry"));
+    }
+    Ok(())
+}
 fn allocation_reading(scope: &Scope, record: &NowRecord, source: &source::SourceReading, mut policy: EffectivePolicy, created: bool) -> io::Result<Value> {
+    check_allocation_protection(scope, &source.source.path, &policy)?;
     let destination = now_destination(scope, &source.source.path)?;
     crate::file_mutation::directory(&scope.root, destination.strip_prefix(&scope.root).map_err(io::Error::other)?)?;
     policy.protected_paths.push(scope.root.join(&source.source.path));
@@ -295,8 +319,9 @@ pub fn allocate(scope: &Scope, input: &Value, now: u64) -> io::Result<Value> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(e),
     }
-    scope.reconcile(None, &[])?;
     let path = format!("{}/{}/now.json", scope.now_dir(), key(task));
+    check_allocation_protection(scope, &path, &policy)?;
+    scope.reconcile(None, &[])?;
     let mut record = NowRecord {
         schema: NOW_SCHEMA.into(), now_ref, source_ref: scope.source_ref(&path), scope_ref: scope.world_ref.clone(),
         task_ref: task.into(), purpose: purpose.into(), participant_refs: participants, source_refs,
@@ -341,11 +366,28 @@ pub fn validate(scope: &Scope, input: &Value, now: u64) -> io::Result<Value> {
         let basis: PathAnchor = serde_json::from_value(basis.clone())?;
         if basis != current_anchor { return Err(conflict("destination basis changed since preview")); }
     }
-    let in_now = record.lifecycle == "active" && path.starts_with(&valid_now) && path != valid_now;
+    // This public operation does not distinguish a content write from a recursive
+    // remove/rename. An ancestor of an explicit protected object cannot receive
+    // an ambiguous approval. A sibling remains writable.
+    let explicitly_protected = policy.explicit_protected_paths.iter()
+        .any(|protected| path.starts_with(protected) || protected.starts_with(&path));
+    let in_now = path.starts_with(&valid_now) && path != valid_now;
     let is_metadata = path.strip_prefix(&scope.central_root).map_err(io::Error::other)?.components()
         .any(|part| matches!(part.as_os_str().to_str(), Some(".git" | ".central" | "ProjectCentral" | "Control")));
     let ordinary = !is_metadata && policy.writable_destinations.iter().any(|grant| path.starts_with(&grant.path))
-        && !policy.protected_paths.iter().any(|protected| path.starts_with(protected));
-    let allowed = in_now || ordinary;
-    Ok(json!({"schema":"central.work-placement-validation/v1","allowed":allowed,"outcome":if allowed {"permitted"} else {"rejected"},"destination":path,"destination_anchor":current_anchor,"now_ref":record.now_ref,"now_revision":reading.revision.revision,"policy_revision":policy.revision,"expires_at_unix_seconds":policy.expires_at_unix_seconds,"required_enforcement":policy.enforcement,"required_coverage":policy.required_coverage,"valid_now_destination":valid_now,"retry_action":"central.work.validate","reason":if allowed {"authorised NOW artifact or ordinary repository/worktree/build write; native source authority remains separate"} else {"destination is outside this task's allowed writes or is protected structural/source ground; use the allocated NOW T destination or the native source/adoption operation"},"outside_writes_prevented":false}))
+        && !policy.protected_paths.iter().any(|protected| path.starts_with(protected) || protected.starts_with(&path));
+    // An inactive task cannot borrow the Project grant to continue effects while
+    // its NOW is quiescent/closed/archived. Explicit re-entry retains its identity.
+    let active = record.lifecycle == "active";
+    let allowed = active && !explicitly_protected && (in_now || ordinary);
+    let reason = if !active {
+        "task NOW is not active; use explicit lifecycle re-entry before any task write"
+    } else if explicitly_protected {
+        "destination intersects explicit protected source ground; an allocated NOW never overrides it"
+    } else if allowed {
+        "authorised NOW artifact or ordinary repository/worktree/build write; native source authority remains separate"
+    } else {
+        "destination is outside this task's allowed writes or is protected structural/source ground; use the allocated NOW T destination or the native source/adoption operation"
+    };
+    Ok(json!({"schema":"central.work-placement-validation/v1","allowed":allowed,"outcome":if allowed {"permitted"} else {"rejected"},"destination":path,"destination_anchor":current_anchor,"now_ref":record.now_ref,"now_lifecycle":record.lifecycle,"now_revision":reading.revision.revision,"policy_revision":policy.revision,"expires_at_unix_seconds":policy.expires_at_unix_seconds,"required_enforcement":policy.enforcement,"required_coverage":policy.required_coverage,"valid_now_destination":valid_now,"retry_action":"central.work.validate","reason":reason,"outside_writes_prevented":false}))
 }
