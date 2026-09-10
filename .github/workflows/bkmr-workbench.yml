@@ -1,0 +1,33 @@
+name: BKMR workbench
+on:
+  push:
+    branches: [agent/bkmr-154-persistent]
+    paths: [.github/workflows/bkmr-workbench.yml]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect native integration points
+        run: |
+          rustc --version
+          cargo --version
+          grep -nE '^pub|^fn|register\(|ActionDescriptor|MutationClass::' ctrl/src/world_map.rs ctrl/src/file_mutation.rs ctrl/src/source_horizon.rs
+          sed -n '340,520p' ctrl/src/world_source.rs
+          git clone --depth 1 https://github.com/EpiLogos/ai-kit.git "$RUNNER_TEMP/aikit"
+          cd "$RUNNER_TEMP/aikit"
+          git rev-parse HEAD
+          grep -Rn 'BkmrSourcePoolProvider\|bkmr_db\|source_provider.rebuild\|provider.rebuild' crates --include='*.rs' | head -80
+          grep -n 'struct\|fn\|Source' crates/aikit-adapters/src/central_world_sources.rs | head -65
+      - name: Install and inspect the real bkmr release
+        run: |
+          python3 -m venv "$RUNNER_TEMP/bkmr-env"
+          "$RUNNER_TEMP/bkmr-env/bin/pip" install bkmr==7.6.7
+          export PATH="$RUNNER_TEMP/bkmr-env/bin:$PATH"
+          bkmr --version
+          bkmr --help
+          bkmr import-files --help
+          bkmr --generate-config
