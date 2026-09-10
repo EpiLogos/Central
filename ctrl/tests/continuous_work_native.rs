@@ -1,4 +1,4 @@
-use central_ctrl::continuous_work::{execute_at, execute_with_token_at};
+use central_ctrl::continuous_work::{execute_at, execute_with_token_at, source::Scope};
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -28,11 +28,12 @@ fn world() -> World {
         ("time.json","civil-time-policy",json!({"schema":"central.civil-time-policy/v1","scope_ref":"control:root","timezone":"Europe/London","day_boundary_minutes":240,"automatic_day_rollover":true})),
         ("authority.json","native-action-authority",json!({"schema":"central.native-action-authority/v1","scope_ref":"control:root","grants":grants})),
     ];
+    let scope = Scope::resolve(world.path(),None).unwrap();
     let mut relations = vec![];
     for (name,role,value) in policies {
         let path = format!("Control/user/{name}");
         fs::write(world.path().join(&path),serde_json::to_vec_pretty(&value).unwrap()).unwrap();
-        relations.push(json!({"ref":central_ctrl::source_horizon::source_ref("control:root",&path),"path":path,"roles":[role],"provenance":"human-adopted","standing":"architecture-contract","treatment":"projectcentral-user","recognition":"explicit-controlled-test-fixture-not-personal-adoption","recorded_at_unix_seconds":1}));
+        relations.push(json!({"ref":scope.source_ref(&path),"path":path,"roles":[role],"provenance":"human-adopted","standing":"architecture-contract","treatment":"projectcentral-user","recognition":"explicit-controlled-test-fixture-not-personal-adoption","recorded_at_unix_seconds":1}));
     }
     fs::create_dir_all(world.path().join("Control/relations")).unwrap();
     fs::write(world.path().join("Control/relations/source-relations.json"),serde_json::to_vec_pretty(&json!({"schema":"central.control.ground-relations/v1","project_id":"control:root","relations":relations})).unwrap()).unwrap();
