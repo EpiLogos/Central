@@ -475,7 +475,15 @@ fn action_list_has_human_and_structured_cli_renderings() {
     let value: serde_json::Value = serde_json::from_str(&structured.output).unwrap();
     assert_eq!(value["status"], "success");
     let actions = value["data"]["actions"].as_array().unwrap();
-    assert_eq!(actions.len(), 111);
+    let mut continuous = ActionRegistry::default();
+    central_ctrl::continuous_work::register_actions(&mut continuous);
+    assert_eq!(actions.len(), 111 + continuous.list().len());
+    for descriptor in continuous.list() {
+        let actual = actions.iter().find(|action| action["id"] == descriptor.id)
+            .unwrap_or_else(|| panic!("missing native continuous-work Action {}", descriptor.id));
+        assert_eq!(*actual, serde_json::to_value(&descriptor).unwrap());
+        assert!(human.output.contains(&format!("{}\t{}", descriptor.id, descriptor.title)));
+    }
     let ids = actions
         .iter()
         .filter_map(|action| action["id"].as_str())
