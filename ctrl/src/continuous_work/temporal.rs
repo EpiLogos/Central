@@ -75,8 +75,7 @@ pub fn ensure_day(scope: &Scope, input: &Value, principal: &Principal, now: u64)
     let (mut relations, mut basis) = scope.relations()?;
     let mut created = false;
     if day_relation(&relations, &day_ref).is_err() {
-        // A genuinely blank native text source. No unavailable template field
-        // names are invented; structured template import is a separate operation.
+        // Native blank text, not an invented original HTML-template payload.
         let path = format!("{}/{}/day.md", scope.day_dir(), time.civil_date);
         let had_bytes = match crate::source_safety::read(&scope.root, &path) {
             Ok(_) => true,
@@ -100,7 +99,6 @@ pub fn ensure_day(scope: &Scope, input: &Value, principal: &Principal, now: u64)
             "template_fidelity":"native-blank-text-not-an-original-HTML-fixture","preexisting_bytes_retained":had_bytes});
     }
     let old_date = relations["temporal"]["today"]["civil_date"].as_str().unwrap_or("");
-    // A clock correction must not silently replace a later today pointer.
     let advanced = time.civil_date.as_str() > old_date;
     if advanced {
         if !relations["temporal"].is_object() { relations["temporal"] = json!({}); }
@@ -147,16 +145,23 @@ fn outstanding_returns(scope: &Scope, now_ref: &str, source_ref: &str) -> io::Re
         };
         for entry in entries {
             let entry = entry?;
-            if entry.path().extension().and_then(|e| e.to_str()) != Some("json") { continue; }
-            let path = format!("{directory}/{}", entry.file_name().to_string_lossy());
+            let name = entry.file_name().to_string_lossy().into_owned();
+            // The receiving cursor is bookkeeping, not a Return. Other native
+            // subdirectories hold document mutation intents, not ledger entries.
+            if name == "cursor.json" || entry.path().extension().and_then(|e| e.to_str()) != Some("json") { continue; }
+            let path = format!("{directory}/{name}");
             let raw = crate::source_safety::read(&scope.root, &path)?;
             let item: Value = serde_json::from_str(&raw)?;
-            if (item["now_ref"] == now_ref || item["source_ref"] == source_ref)
-                && !matches!(item["status"].as_str(), Some("accepted" | "included" | "rejected" | "cancelled")) {
-                pending.push(item["return_ref"].as_str().unwrap_or(&path).into());
-            }
+            if item["now_ref"] != now_ref && item["source_ref"] != source_ref { continue; }
+            // Legacy source-return acceptance already committed its source
+            // effect. New receiving acceptance explicitly has NOT included it.
+            let settled = matches!(item["status"].as_str(), Some("included" | "rejected" | "cancelled"))
+                || (item["schema"] == "central.source-return/v1" && item["status"] == "accepted");
+            if !settled { pending.push(item["return_ref"].as_str().unwrap_or(&path).into()); }
         }
     }
+    pending.sort();
+    pending.dedup();
     Ok(pending)
 }
 pub fn now_lifecycle(scope: &Scope, input: &Value, principal: &Principal, now: u64) -> io::Result<Value> {
@@ -185,8 +190,6 @@ pub fn now_lifecycle(scope: &Scope, input: &Value, principal: &Principal, now: u
         record.archive_ref = Some(format!("central:archive:{}:{}", record.now_ref, current.revision.revision));
     }
     if next == "active" && record.lifecycle != "active" {
-        // Fresh owner policy and a real existing destination are required even
-        // when the underlying NOW identity has survived a session or archive.
         let destination = placement::now_destination(scope, &current.source.path)?;
         crate::file_mutation::directory(&scope.root, destination.strip_prefix(&scope.root).map_err(io::Error::other)?)?;
     }
@@ -211,4 +214,31 @@ pub fn now_obligations(scope: &Scope, input: &Value, principal: &Principal, now:
     }
     let result = history::replace(scope, &current, &encoded(&record)?, &principal.principal_ref, &principal.actor_kind, now)?;
     Ok(json!({"record":record,"source":result.source,"revision":result.revision,"obligations_removed":false}))
+}
+
+#[cfg(test)]
+mod receiving_obligation_tests {
+    use super::*;
+    #[test]
+    fn accepted_contribution_still_blocks_archive_but_cursor_is_not_a_return() {
+        let world = super::super::tests::world();
+        let scope = Scope::resolve(world.path(), None).unwrap();
+        let area = scope.root.join(".central/source-returns/contributions");
+        fs::create_dir_all(&area).unwrap();
+        fs::write(area.join("cursor.json"), encoded(&json!({"schema":"central.receiving-cursor/v1","sequence":1})).unwrap()).unwrap();
+        assert!(outstanding_returns(&scope, "now:test", "source:test").unwrap().is_empty());
+        fs::write(area.join("accepted.json"), encoded(&json!({"schema":"central.received-contribution/v1","return_ref":"return:test","now_ref":"now:test","status":"accepted"})).unwrap()).unwrap();
+        assert_eq!(outstanding_returns(&scope, "now:test", "source:test").unwrap(), vec!["return:test"]);
+        fs::write(area.join("accepted.json"), encoded(&json!({"schema":"central.received-contribution/v1","return_ref":"return:test","now_ref":"now:test","status":"included"})).unwrap()).unwrap();
+        assert!(outstanding_returns(&scope, "now:test", "source:test").unwrap().is_empty());
+    }
+    #[test]
+    fn legacy_applied_acceptance_is_not_confused_with_new_review_acceptance() {
+        let world = super::super::tests::world();
+        let scope = Scope::resolve(world.path(), None).unwrap();
+        let area = scope.root.join(".central/source-returns");
+        fs::create_dir_all(&area).unwrap();
+        fs::write(area.join("legacy.json"), encoded(&json!({"schema":"central.source-return/v1","return_ref":"legacy:test","source_ref":"source:test","status":"accepted"})).unwrap()).unwrap();
+        assert!(outstanding_returns(&scope, "now:test", "source:test").unwrap().is_empty());
+    }
 }
