@@ -269,7 +269,7 @@ pub(crate) fn now_destination(scope: &Scope, source_path: &str) -> io::Result<Pa
     if !parent.starts_with(format!("{}/agents/now", scope.prefix)) { return Err(denied("NOW is outside the active agent aperture; inspect migration/continuation before re-entry")); }
     Ok(scope.root.join(parent).join("T"))
 }
-fn allocation_reading(scope: &Scope, record: &NowRecord, source: &source::SourceReading, mut policy: EffectivePolicy, created: bool) -> io::Result<Value> {
+pub(crate) fn allocation_reading(scope: &Scope, record: &NowRecord, source: &source::SourceReading, mut policy: EffectivePolicy, created: bool) -> io::Result<Value> {
     let destination = now_destination(scope, &source.source.path)?;
     crate::file_mutation::directory(&scope.root, destination.strip_prefix(&scope.root).map_err(io::Error::other)?)?;
     policy.protected_paths.push(scope.root.join(&source.source.path));
@@ -341,11 +341,14 @@ pub fn validate(scope: &Scope, input: &Value, now: u64) -> io::Result<Value> {
         let basis: PathAnchor = serde_json::from_value(basis.clone())?;
         if basis != current_anchor { return Err(conflict("destination basis changed since preview")); }
     }
-    let in_now = record.lifecycle == "active" && path.starts_with(&valid_now) && path != valid_now;
+    // NOW is an allocation aperture, not an override of explicit source law.
+    // Both engineering and artifact writes require an active task, and every
+    // explicit protected path wins even inside the allocated T directory.
+    let protected = policy.protected_paths.iter().any(|protected| path.starts_with(protected));
+    let in_now = path.starts_with(&valid_now) && path != valid_now;
     let is_metadata = path.strip_prefix(&scope.central_root).map_err(io::Error::other)?.components()
         .any(|part| matches!(part.as_os_str().to_str(), Some(".git" | ".central" | "ProjectCentral" | "Control")));
-    let ordinary = !is_metadata && policy.writable_destinations.iter().any(|grant| path.starts_with(&grant.path))
-        && !policy.protected_paths.iter().any(|protected| path.starts_with(protected));
-    let allowed = in_now || ordinary;
-    Ok(json!({"schema":"central.work-placement-validation/v1","allowed":allowed,"outcome":if allowed {"permitted"} else {"rejected"},"destination":path,"destination_anchor":current_anchor,"now_ref":record.now_ref,"now_revision":reading.revision.revision,"policy_revision":policy.revision,"expires_at_unix_seconds":policy.expires_at_unix_seconds,"required_enforcement":policy.enforcement,"required_coverage":policy.required_coverage,"valid_now_destination":valid_now,"retry_action":"central.work.validate","reason":if allowed {"authorised NOW artifact or ordinary repository/worktree/build write; native source authority remains separate"} else {"destination is outside this task's allowed writes or is protected structural/source ground; use the allocated NOW T destination or the native source/adoption operation"},"outside_writes_prevented":false}))
+    let ordinary = !is_metadata && policy.writable_destinations.iter().any(|grant| path.starts_with(&grant.path));
+    let allowed = record.lifecycle == "active" && !protected && (in_now || ordinary);
+    Ok(json!({"schema":"central.work-placement-validation/v1","allowed":allowed,"outcome":if allowed {"permitted"} else {"rejected"},"destination":path,"destination_anchor":current_anchor,"now_ref":record.now_ref,"now_revision":reading.revision.revision,"policy_revision":policy.revision,"expires_at_unix_seconds":policy.expires_at_unix_seconds,"required_enforcement":policy.enforcement,"required_coverage":policy.required_coverage,"valid_now_destination":valid_now,"retry_action":"central.work.validate","reason":if allowed {"authorised NOW artifact or ordinary repository/worktree/build write; native source authority remains separate"} else {"task is inactive, destination is outside this task's allowed writes, or explicit source/structural protection applies; re-enter the same NOW explicitly or use the native source/adoption operation"},"outside_writes_prevented":false}))
 }
