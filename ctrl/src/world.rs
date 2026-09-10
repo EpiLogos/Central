@@ -5,6 +5,10 @@ use std::fmt;
 
 pub const WORLD_RELATION_SCHEMA: &str = "central.world-relations/v1";
 pub const AGENT_SET_SCHEMA: &str = "central.agent-set/v1";
+/// Canonical schema for the correction block that a corrective agent-set
+/// revision carries. A separate schema string keeps the correction
+/// distinguishable from the record it corrects.
+pub const AGENT_SET_CORRECTION_SCHEMA: &str = "central.agent-set-correction/v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -108,6 +112,16 @@ pub struct WorldRecord {
     pub agent_sets: Vec<AgentSetRef>,
     #[serde(default)]
     pub placements: Vec<PlacementIntent>,
+    /// The agent set this world offers as its default formation when no
+    /// project-scope profile names one. Absent means the world expresses no
+    /// default, which is the state of every record written before this field
+    /// existed.
+    ///
+    /// A default is a proposal, not an election: naming a set here tells a
+    /// reader what formation the world offers. It grants the set no authority
+    /// over this world or any other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_agent_set_ref: Option<AgentSetRef>,
 }
 
 impl WorldRecord {
@@ -121,6 +135,7 @@ impl WorldRecord {
             excluded_sources: BTreeSet::new(),
             agent_sets: Vec::new(),
             placements: Vec::new(),
+            default_agent_set_ref: None,
         }
     }
 }
@@ -276,6 +291,79 @@ pub enum AgentSetMember {
     AgentSet { agent_set_ref: AgentSetRef },
 }
 
+/// Authorship standing of a correction to an authored agent set. A generated
+/// Action can only ever record an agent-made correction; the human owner's
+/// acceptance is a separate act that no Action performs and no payload can
+/// claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentSetCorrectionAuthorship {
+    AgentCorrection,
+}
+
+/// Provenance for a revision that corrects an earlier authored agent set.
+/// Absent on original authorship, which has no correction to name.
+///
+/// The superseded membership is retained rather than dropped with the
+/// revision: a corrected record must be able to say what it removed, or the
+/// correction is exactly the unattributed rewrite of authored composition
+/// that this block exists to prevent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSetCorrection {
+    pub schema: String,
+    /// The revision this correction supersedes.
+    pub supersedes_revision: String,
+    /// Canonical Central Action that made the correction.
+    pub origin_action: String,
+    pub authorship: AgentSetCorrectionAuthorship,
+    /// Why the correction was made, in the corrector's own words.
+    pub reason: String,
+    /// Member refs the correction removed, retained so the removal stays
+    /// recoverable instead of silent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed_members: Vec<String>,
+}
+
+impl AgentSetCorrection {
+    /// Mint an agent-made correction. Every field is required and is rejected
+    /// when blank or padded, so a correction can never be authored without
+    /// saying what it supersedes and why.
+    pub fn agent_correction(
+        supersedes_revision: impl Into<String>,
+        origin_action: impl Into<String>,
+        reason: impl Into<String>,
+        removed_members: Vec<String>,
+    ) -> Result<Self, WorldError> {
+        let correction = Self {
+            schema: AGENT_SET_CORRECTION_SCHEMA.into(),
+            supersedes_revision: supersedes_revision.into(),
+            origin_action: origin_action.into(),
+            authorship: AgentSetCorrectionAuthorship::AgentCorrection,
+            reason: reason.into(),
+            removed_members,
+        };
+        correction.validate()?;
+        Ok(correction)
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), WorldError> {
+        if self.schema != AGENT_SET_CORRECTION_SCHEMA {
+            return Err(WorldError::Schema(self.schema.clone()));
+        }
+        validate_correction_text("superseded revision", &self.supersedes_revision)?;
+        validate_correction_text("origin action", &self.origin_action)?;
+        validate_correction_text("reason", &self.reason)?;
+        Ok(())
+    }
+}
+
+fn validate_correction_text(field: &str, value: &str) -> Result<(), WorldError> {
+    if value.trim().is_empty() || value != value.trim() || value.contains('\0') {
+        return Err(WorldError::InvalidCorrection(field.to_owned()));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentSetRecord {
     pub schema: String,
@@ -284,6 +372,20 @@ pub struct AgentSetRecord {
     pub revision: String,
     #[serde(default)]
     pub members: Vec<AgentSetMember>,
+    /// The agency that orchestrates this set. Absent means no orchestrator is
+    /// authored, which is the state of every record written before this field
+    /// existed.
+    ///
+    /// This is a relation, not a grant. Naming an agency here says who holds
+    /// the set's orchestration among its authored relations; it confers no
+    /// authority, no capability and no selection on the named agency. The
+    /// orchestrator is not required to be a member: the field guardian
+    /// orchestrates the product guardians without being one of them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestrator_agent_ref: Option<String>,
+    /// Provenance for a corrective revision. Absent on original authorship.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correction: Option<AgentSetCorrection>,
 }
 
 impl AgentSetRecord {
@@ -293,8 +395,53 @@ impl AgentSetRecord {
             agent_set_ref,
             revision: revision.into(),
             members: Vec::new(),
+            orchestrator_agent_ref: None,
+            correction: None,
         }
     }
+
+    /// Reject a record whose declared composition is not well formed. The
+    /// orchestrator is checked here rather than inherited from the store's
+    /// `validate_ref`, which accepts anything non-blank: a new field must not
+    /// enter through the hole in an existing one.
+    pub(crate) fn validate(&self) -> Result<(), WorldError> {
+        if self.schema != AGENT_SET_SCHEMA {
+            return Err(WorldError::Schema(self.schema.clone()));
+        }
+        if let Some(orchestrator) = self.orchestrator_agent_ref.as_deref() {
+            validate_relation_agent_ref(orchestrator)?;
+        }
+        if let Some(correction) = self.correction.as_ref() {
+            correction.validate()?;
+        }
+        Ok(())
+    }
+}
+
+/// Agent refs inside Central relation records are slash-form (`agent/<id>`),
+/// matching every authored profile. The colon form is the suite's pasu grammar
+/// (`central:pasu:agent:<id>`), which is a different identity: accepting it
+/// here is how a harness ref like `agent:hermes` was able to pass as an
+/// agency. Both are rejected, so the drift cannot re-accumulate through the
+/// new field.
+fn validate_relation_agent_ref(value: &str) -> Result<(), WorldError> {
+    let Some(id) = value.strip_prefix("agent/") else {
+        return Err(WorldError::InvalidRef(format!(
+            "agent ref must be slash-form `agent/<id>`, got {value:?}"
+        )));
+    };
+    if id.is_empty()
+        || id.trim() != id
+        || id.contains('\0')
+        || id.contains(':')
+        || id.contains('/')
+        || id.contains(char::is_whitespace)
+    {
+        return Err(WorldError::InvalidRef(format!(
+            "agent ref must be slash-form `agent/<id>`, got {value:?}"
+        )));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -315,9 +462,7 @@ pub struct AgentSetRegistry {
 
 impl AgentSetRegistry {
     pub fn insert(&mut self, set: AgentSetRecord) -> Result<(), WorldError> {
-        if set.schema != AGENT_SET_SCHEMA {
-            return Err(WorldError::Schema(set.schema));
-        }
+        set.validate()?;
         self.sets.insert(set.agent_set_ref.clone(), set);
         Ok(())
     }
@@ -427,6 +572,7 @@ pub enum WorldError {
     MissingAgentSet(AgentSetRef),
     AgentSetCycle(Vec<AgentSetRef>),
     InvalidReturn { from: WorldRef, toward: WorldRef },
+    InvalidCorrection(String),
 }
 
 impl fmt::Display for WorldError {
@@ -442,6 +588,7 @@ impl fmt::Display for WorldError {
             Self::InvalidReturn { from, toward } => {
                 write!(f, "{toward} is not an ancestor of {from}")
             }
+            Self::InvalidCorrection(field) => write!(f, "invalid correction {field}"),
         }
     }
 }
@@ -596,5 +743,126 @@ mod tests {
         assert!(proposal.recognition_required);
         assert_eq!(proposal.from_world, development);
         assert_eq!(proposal.toward_world, root);
+    }
+
+    #[test]
+    fn orchestration_and_default_are_additive_so_records_written_before_them_still_parse() {
+        let legacy_set = serde_json::json!({
+            "schema": AGENT_SET_SCHEMA,
+            "ref": "agent-set:legacy",
+            "revision": "r1",
+            "members": [],
+        });
+        let set: AgentSetRecord = serde_json::from_value(legacy_set).unwrap();
+        assert!(set.orchestrator_agent_ref.is_none());
+        assert!(set.correction.is_none());
+
+        let legacy_world = serde_json::json!({
+            "schema": WORLD_RELATION_SCHEMA,
+            "ref": "world:legacy",
+            "revision": "w1",
+            "parent": null,
+        });
+        let record: WorldRecord = serde_json::from_value(legacy_world).unwrap();
+        assert!(record.default_agent_set_ref.is_none());
+
+        // An unauthored default stays absent on the way out: it must never be
+        // emitted as an authored null that a reader could mistake for a choice.
+        let emitted = serde_json::to_value(&record).unwrap();
+        assert!(emitted.get("default_agent_set_ref").is_none());
+    }
+
+    #[test]
+    fn a_correction_names_what_it_supersedes_and_retains_the_membership_it_removed() {
+        let operators = set_ref("agent-set:world-operators");
+        let mut corrected = AgentSetRecord::new(operators.clone(), "r2");
+        corrected.members.push(AgentSetMember::AgentSet {
+            agent_set_ref: set_ref("agent-set:factory-bounded-acceptance-commission"),
+        });
+        corrected.correction = Some(
+            AgentSetCorrection::agent_correction(
+                "r1",
+                "central.agent-set.save",
+                "a harness was authored as an agency in slot 0",
+                vec!["agent:hermes".to_owned()],
+            )
+            .unwrap(),
+        );
+
+        let mut registry = AgentSetRegistry::default();
+        registry.insert(corrected).unwrap();
+        let stored = registry.sets.get(&operators).unwrap();
+        let correction = stored.correction.as_ref().unwrap();
+        assert_eq!(correction.supersedes_revision, "r1");
+        assert_eq!(correction.removed_members, vec!["agent:hermes".to_owned()]);
+        assert_eq!(
+            correction.authorship,
+            AgentSetCorrectionAuthorship::AgentCorrection
+        );
+        // Removed from the live membership, retained in the correction: the
+        // removal is recorded rather than silent.
+        assert!(!stored.members.iter().any(|member| matches!(
+            member,
+            AgentSetMember::Agent { agent_ref } if agent_ref == "agent:hermes"
+        )));
+    }
+
+    #[test]
+    fn a_correction_cannot_be_authored_without_saying_what_it_supersedes_or_why() {
+        assert!(matches!(
+            AgentSetCorrection::agent_correction("", "central.agent-set.save", "reason", vec![]),
+            Err(WorldError::InvalidCorrection(_))
+        ));
+        assert!(matches!(
+            AgentSetCorrection::agent_correction(
+                "r1",
+                "central.agent-set.save",
+                "  padded  ",
+                vec![]
+            ),
+            Err(WorldError::InvalidCorrection(_))
+        ));
+
+        // A correction carrying a foreign schema is refused at insert, so a
+        // record cannot adopt an unversioned provenance block.
+        let mut set = AgentSetRecord::new(set_ref("agent-set:unversioned"), "r2");
+        set.correction = Some(AgentSetCorrection {
+            schema: "central.agent-set-correction/v9".into(),
+            supersedes_revision: "r1".into(),
+            origin_action: "central.agent-set.save".into(),
+            authorship: AgentSetCorrectionAuthorship::AgentCorrection,
+            reason: "reason".into(),
+            removed_members: vec![],
+        });
+        let mut registry = AgentSetRegistry::default();
+        assert!(matches!(registry.insert(set), Err(WorldError::Schema(_))));
+    }
+
+    #[test]
+    fn an_orchestrator_must_be_a_slash_form_agency_ref_not_a_harness_shaped_colon_ref() {
+        let mut accepted = AgentSetRecord::new(set_ref("agent-set:guardians"), "r2");
+        accepted.orchestrator_agent_ref = Some("agent/oi-guardian-field".into());
+        let mut registry = AgentSetRegistry::default();
+        registry.insert(accepted).unwrap();
+
+        // The colon form is the pasu grammar, not a relation-record agent ref.
+        // It is exactly how a harness slipped in as an agency, so it is refused.
+        let mut rejected = AgentSetRecord::new(set_ref("agent-set:operators"), "r2");
+        rejected.orchestrator_agent_ref = Some("agent:hermes".into());
+        let mut registry = AgentSetRegistry::default();
+        assert!(matches!(
+            registry.insert(rejected),
+            Err(WorldError::InvalidRef(_))
+        ));
+
+        for malformed in ["agent/", "agent/ spaced", "agent/a:b", "agent/a/b", "oi-guardian-field"] {
+            let mut set = AgentSetRecord::new(set_ref("agent-set:malformed"), "r2");
+            set.orchestrator_agent_ref = Some(malformed.into());
+            let mut registry = AgentSetRegistry::default();
+            assert!(
+                matches!(registry.insert(set), Err(WorldError::InvalidRef(_))),
+                "{malformed:?} should be refused"
+            );
+        }
     }
 }
