@@ -154,7 +154,7 @@ fn resolve_store(
         _ => Err(ActionResult::failure(
             Some(action),
             ResultStatus::InvalidInput,
-            "scope must be personal or project.",
+            "scope must be root or project.",
             None,
         )),
     }
@@ -956,6 +956,62 @@ mod tests {
             &context,
         );
         assert!(!wrong_scope.ok);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The root register had two names: the profile action called it `personal`
+    /// while the agent-set and world registers already answered to `root`. A
+    /// consumer standing in one place should not have to know which noun an
+    /// Action happens to use. Both must name the same store.
+    #[test]
+    fn the_root_register_answers_to_both_its_names() {
+        let root = fixture_root();
+        let registry = registry();
+        let mut options = None;
+        let mut connectors = None;
+        let mut connector_context = None;
+        let context = context(&root, &mut options, &mut connectors, &mut connector_context);
+
+        let saved = registry.execute(
+            AGENT_PROFILE_SAVE_ACTION,
+            &json!({"scope": "root", "profile": personal_profile("r1")}),
+            &context,
+        );
+        assert!(saved.ok, "the root register answers to `root`: {saved:?}");
+
+        let by_root = registry.execute(
+            AGENT_PROFILE_READ_ACTION,
+            &json!({"scope": "root", "profile_ref": "agent-profile:guardian"}),
+            &context,
+        );
+        assert!(by_root.ok, "{by_root:?}");
+
+        // The legacy synonym reaches the same record, not a second store.
+        let by_personal = registry.execute(
+            AGENT_PROFILE_READ_ACTION,
+            &json!({"scope": "personal", "profile_ref": "agent-profile:guardian"}),
+            &context,
+        );
+        assert!(by_personal.ok, "{by_personal:?}");
+        assert_eq!(
+            by_root.data, by_personal.data,
+            "one register, two names — not two stores"
+        );
+
+        // A third name is still refused, and the refusal names the register.
+        let refused = registry.execute(
+            AGENT_PROFILE_READ_ACTION,
+            &json!({"scope": "world", "profile_ref": "agent-profile:guardian"}),
+            &context,
+        );
+        assert!(!refused.ok);
+        assert!(refused
+            .error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("scope must be root or project."));
+
         fs::remove_dir_all(root).unwrap();
     }
 

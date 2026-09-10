@@ -920,6 +920,54 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    /// Absence and unreadability share the `invalid_input` status, so a
+    /// consumer could only tell them apart by reading prose. They are
+    /// different facts — absence is the ordinary state of a project that
+    /// declares no world of its own, while a malformed declaration must never
+    /// widen what a turn receives — so absence is named in the error code.
+    #[test]
+    fn an_absent_world_is_named_in_the_error_code_and_a_malformed_one_is_not() {
+        let root = fixture_root();
+        let registry = registry();
+        let mut options = None;
+        let mut connectors = None;
+        let mut connector_context = None;
+        let context = context(&root, &mut options, &mut connectors, &mut connector_context);
+
+        let absent = registry.execute(
+            WORLD_EFFECTIVE_SOURCES_ACTION,
+            &json!({"scope": "root", "world_ref": "project:never-declared"}),
+            &context,
+        );
+        assert!(!absent.ok);
+        assert_eq!(absent.status, ResultStatus::InvalidInput);
+        let absence = absent.error.as_ref().unwrap();
+        assert_eq!(
+            absence.code, WORLD_DECLARATION_ABSENT_CODE,
+            "absence is named in the code, not only in the message"
+        );
+        assert!(
+            absence.message.contains("missing World"),
+            "the prose is unchanged: {}",
+            absence.message
+        );
+
+        // A malformed request is not absence, and must not claim to be.
+        let malformed = registry.execute(
+            WORLD_EFFECTIVE_SOURCES_ACTION,
+            &json!({"scope": "root"}),
+            &context,
+        );
+        assert!(!malformed.ok);
+        assert_ne!(
+            malformed.error.as_ref().unwrap().code,
+            WORLD_DECLARATION_ABSENT_CODE,
+            "only a genuinely absent world wears the absent code"
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn project_scope_uses_the_fractal_container_and_overrides_root_sets_at_resolve() {
         let root = fixture_root();
