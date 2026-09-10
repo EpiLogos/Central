@@ -8,33 +8,17 @@ permissions:
 jobs:
   workspace:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
-          path: Central
-      - uses: actions/checkout@v4
-        with:
           repository: EpiLogos/ai-kit
-          ref: 1f9ef6ab2ab45cf79732426c171e5de13273d197
+          ref: 65d5b886e471530dd9e8a93b12644fb8fb2ab7b9
           path: ai-kit
-      - name: Archive source workspace
-        run: tar --exclude=.git -czf sources.tar.gz Central ai-kit
+      - name: Archive exact current source
+        run: tar --exclude=.git -czf aikit-current.tar.gz ai-kit
       - uses: actions/upload-artifact@v4
         with:
-          name: bkmr-source-workspace
-          path: sources.tar.gz
-          retention-days: 1
-      - name: Prepare offline compiler and dependencies
-        run: |
-          cd Central && cargo fetch --locked && cd ../ai-kit && cargo fetch --locked && cd ..
-          mkdir toolchain
-          cp -a "$(rustc --print sysroot)/bin" toolchain/
-          cp -a "$(rustc --print sysroot)/lib" toolchain/
-          rm -rf toolchain/lib/rustlib/src
-          tar -czf offline-rust.tar.gz toolchain -C "$HOME/.cargo" registry
-      - uses: actions/upload-artifact@v4
-        with:
-          name: bkmr-offline-rust
-          path: offline-rust.tar.gz
+          name: bkmr-aikit-current
+          path: aikit-current.tar.gz
           retention-days: 1
