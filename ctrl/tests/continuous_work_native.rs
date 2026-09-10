@@ -20,10 +20,13 @@ fn world() -> World {
         fs::write(root.join("ProjectCentral/project.json"),serde_json::to_vec(&central_ctrl::ProjectCentralManifest::new(format!("test/{name}"))).unwrap()).unwrap();
         fs::create_dir_all(root.join("src")).unwrap();
     }
+    let grants: Vec<Value> = [HUMAN, AGENT].iter().enumerate().map(|(index, secret)| {
+        json!({"principal_ref":if index==0 {"human:test"} else {"agent:test"},"actor_kind":if index==0 {"human"} else {"agent"},"token_sha256":format!("{:x}",Sha256::digest(secret.as_bytes())),"scope_refs":["control:root","project:test/one","project:test/two"],"actions":["central.day.ensure","central.day.lifecycle","central.now.lifecycle","central.now.obligations"],"expires_at_unix_seconds":u64::MAX})
+    }).collect();
     let policies = [
         ("placement.json","work-placement-policy",json!({"schema":"central.work-placement-policy/v1","scope_ref":"control:root","writable":[{"path":"Work/one","class":"repository"},{"path":"Work/two","class":"repository"}],"enforcement":"native-actions","required_coverage":["file-content"],"lease_seconds":300})),
         ("time.json","civil-time-policy",json!({"schema":"central.civil-time-policy/v1","scope_ref":"control:root","timezone":"Europe/London","day_boundary_minutes":240,"automatic_day_rollover":true})),
-        ("authority.json","native-action-authority",json!({"schema":"central.native-action-authority/v1","scope_ref":"control:root","grants":[HUMAN,AGENT].iter().enumerate().map(|(index,secret)| json!({"principal_ref":if index==0 {"human:test"} else {"agent:test"},"actor_kind":if index==0 {"human"} else {"agent"},"token_sha256":format!("{:x}",Sha256::digest(secret.as_bytes())),"scope_refs":["control:root","project:test/one","project:test/two"],"actions":["central.day.ensure","central.day.lifecycle","central.now.lifecycle","central.now.obligations"],"expires_at_unix_seconds":u64::MAX})).collect::<Vec<_>>()})),
+        ("authority.json","native-action-authority",json!({"schema":"central.native-action-authority/v1","scope_ref":"control:root","grants":grants})),
     ];
     let mut relations = vec![];
     for (name,role,value) in policies {
