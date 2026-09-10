@@ -37,6 +37,10 @@ resembles the product checkout (`mixed_root` in the structured health report).
 - [CENTRAL-SYSTEM-SPEC.md](CENTRAL-SYSTEM-SPEC.md) — the normative product and
   architecture specification: authored source classes, Actions, Ports,
   Connectors, and the observation/authoring boundary.
+- [DEVELOPMENT-FIELD-SOURCE.md](DEVELOPMENT-FIELD-SOURCE.md) — the Central-owned
+  Development Field source contract: root/Project `self` apertures, stable 0..5
+  tier bindings, UX/EX source relations, retained-native source relations and
+  opaque machine O:I suite-policy intent.
 - [CONTROL-CONTENT-PROTOCOL.md](CONTROL-CONTENT-PROTOCOL.md) — authorship,
   durable information, disclosure boundaries and the Control source roots.
 - [PROJECT-CONTEXT-PROTOCOL.md](PROJECT-CONTEXT-PROTOCOL.md) — the sixfold
@@ -121,6 +125,7 @@ resembles the product checkout (`mixed_root` in the structured health report).
 | Implementing a Connector | `CONNECTOR-SDK-SPEC.md` → `CONNECTOR-SDK-RUST.md` → `CONNECTOR-SDK-RUST.md` conformance harnesses → `skills/connector-authoring` |
 | Operating `ctrl` | `CLI-REFERENCE.md` → `INSTALL.md` |
 | Establishing the current machine | `MACHINE-WORKCELL-RELATION.md` → `CLI-REFERENCE.md` |
+| Working with Development Field source | `DEVELOPMENT-FIELD-SOURCE.md` → `CONTROL-CONTENT-PROTOCOL.md` → `PROJECTCENTRAL-AUTHORED-GROUND.md` → `CLI-REFERENCE.md` |
 | Working with authored Project ground | `PROJECT-CONTEXT-PROTOCOL.md` → `PROJECTCENTRAL-CONTRACT.md` → `PROJECTCENTRAL-AUTHORED-GROUND.md` → `CLI-REFERENCE.md` |
 | Working with Project context / Intent / disclosure | `PROJECT-CONTEXT-PROTOCOL.md` → `PRODUCT-GROUND-CONVENTION.md` → `AGENT-GOVERNANCE-SOURCES.md` → AIKit ContextResolution/Explain contracts |
 | Working with NOW / DAY | `PROJECTCENTRAL-NOW.md` → `CLI-REFERENCE.md` |

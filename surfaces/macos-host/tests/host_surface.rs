@@ -72,7 +72,7 @@ mod unix_tests {
             .collect::<Vec<_>>();
 
         let macos = create_macos_action_registry();
-        assert_eq!(macos.list().len(), 75);
+        assert_eq!(macos.list().len(), 91);
         for id in core_ids {
             assert!(macos.get(&id).is_some(), "macOS host lost core Action {id}");
         }
@@ -81,6 +81,10 @@ mod unix_tests {
         assert!(macos.get("projectcentral.change.horizon").is_some());
         assert!(macos.get("projectcentral.source.read").is_some());
         assert!(macos.get("projectcentral.source.write").is_some());
+        assert!(macos.get("central.self.inspect").is_some());
+        assert!(macos.get("projectcentral.self.inspect").is_some());
+        assert!(macos.get("projectcentral.self.retain-tier").is_some());
+        assert!(macos.get("machine.oi-suite-policy").is_some());
         assert!(macos.get("control.skills.inspect").is_some());
         assert!(macos.get("control.skills.retire").is_some());
         assert!(macos.get("control.skills.restore").is_some());

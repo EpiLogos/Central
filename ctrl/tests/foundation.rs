@@ -353,6 +353,9 @@ fn action_list_has_human_and_structured_cli_renderings() {
     assert!(human
         .output
         .contains("machine.adopt-current\tAdopt current machine"));
+    assert!(human
+        .output
+        .contains("machine.oi-suite-policy\tInspect machine O:I suite policy intent"));
     assert!(human.output.contains("work.open\tOpen Work item"));
     assert!(human.output.contains("work.reveal\tReveal Work item"));
     assert!(human
@@ -426,6 +429,15 @@ fn action_list_has_human_and_structured_cli_renderings() {
         .contains("projectcentral.flow.now\tRead Project Flow NOW view"));
     assert!(human
         .output
+        .contains("central.self.inspect\tInspect root self-description field"));
+    assert!(human
+        .output
+        .contains("projectcentral.self.inspect\tInspect Project self-description field"));
+    assert!(human
+        .output
+        .contains("projectcentral.self.retain-tier\tRelate retained native source into Project tier"));
+    assert!(human
+        .output
         .contains("agent-profile.list\tList Agent Profiles"));
     assert!(human
         .output
@@ -463,7 +475,7 @@ fn action_list_has_human_and_structured_cli_renderings() {
     let value: serde_json::Value = serde_json::from_str(&structured.output).unwrap();
     assert_eq!(value["status"], "success");
     let actions = value["data"]["actions"].as_array().unwrap();
-    assert_eq!(actions.len(), 95);
+    assert_eq!(actions.len(), 111);
     let ids = actions
         .iter()
         .filter_map(|action| action["id"].as_str())
@@ -511,6 +523,22 @@ fn action_list_has_human_and_structured_cli_renderings() {
         "projectcentral.source.recovery.preview",
         "projectcentral.source.read",
         "projectcentral.source.write",
+        "central.self.inspect",
+        "central.self.ensure",
+        "central.self.source.create",
+        "central.self.tier.relate",
+        "central.self.ux.relate",
+        "central.self.ex.relate",
+        "central.self.resolve",
+        "projectcentral.self.inspect",
+        "projectcentral.self.ensure",
+        "projectcentral.self.source.create",
+        "projectcentral.self.tier.relate",
+        "projectcentral.self.retain-tier",
+        "projectcentral.self.ux.relate",
+        "projectcentral.self.ex.relate",
+        "projectcentral.self.resolve",
+        "machine.oi-suite-policy",
         "machine.account",
         "agent-profile.list",
         "agent-profile.read",
@@ -582,4 +610,7 @@ fn binary_is_the_stable_development_entrypoint() {
     assert!(Path::new(root.to_str().unwrap())
         .join("Control/agents/wiki/wiki.json")
         .is_file());
+    assert!(!Path::new(root.to_str().unwrap())
+    .join("Control/self")
+    .exists());
 }
