@@ -45,6 +45,7 @@ pub mod projectcentral_ops {
 
     pub fn register_projectcentral_actions(registry: &mut crate::action::ActionRegistry) {
         super::projectcentral_ops_base::register_projectcentral_actions(registry);
+        super::file_map::register(registry);
         super::development_field::register_development_field_actions(registry);
         super::projectcentral_ground::register_projectcentral_ground_actions(registry);
         super::projectcentral_now::register_projectcentral_now_actions(registry);
@@ -330,3 +331,8 @@ mod source_safety;
 mod source_return;
 
 pub mod recognition;
+
+pub mod bkmr;
+pub mod file_map;
+mod file_map_links;
+mod file_map_skills;
