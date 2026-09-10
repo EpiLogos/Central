@@ -1,0 +1,41 @@
+name: caw-native-build-kit
+# Bounded implementation bootstrap for a disconnected verifier. Only public
+# compiler/crate bytes are archived; never cargo credentials or runner HOME.
+on:
+  push:
+    branches: ['agent/caw-temporal-documents-receiving']
+    paths: ['.github/workflows/caw-native-build-kit.yml', 'ctrl/Cargo.toml']
+permissions:
+  contents: read
+jobs:
+  kit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Resolve and vendor public source dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo vendor --versioned-dirs "$RUNNER_TEMP/vendor" > "$RUNNER_TEMP/vendor-config.toml"
+          cp Cargo.lock "$RUNNER_TEMP/Cargo.lock"
+          tar -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/caw-vendor.tar.gz" vendor
+      - name: Copy only compiler executables and public sysroot libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --version --verbose > "$RUNNER_TEMP/caw-rust-version.txt"
+          tar -C "$(rustc --print sysroot)" -czf "$RUNNER_TEMP/caw-rust-toolchain.tar.gz" bin/cargo bin/rustc bin/rustfmt lib
+          sha256sum "$RUNNER_TEMP/caw-rust-toolchain.tar.gz" "$RUNNER_TEMP/caw-vendor.tar.gz" > "$RUNNER_TEMP/caw-kit-digests.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: caw-native-build-kit-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/caw-rust-toolchain.tar.gz
+            ${{ runner.temp }}/caw-vendor.tar.gz
+            ${{ runner.temp }}/Cargo.lock
+            ${{ runner.temp }}/vendor-config.toml
+            ${{ runner.temp }}/caw-rust-version.txt
+            ${{ runner.temp }}/caw-kit-digests.txt
+          retention-days: 2
