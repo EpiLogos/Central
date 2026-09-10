@@ -1,6 +1,6 @@
 # Development Field source contract
 
-Status: implementation contract for Central S1 (`EpiLogos/Central#136`). The O:I whole-level Wayfinder remains the cross-product context; this document states only what Central owns.
+Status: implementation contract for Central S1 (`EpiLogos/Central#136`), reconciled on current Central ground for PR #145. The O:I whole-level Wayfinder remains the cross-product context; this document states only what Central owns.
 
 Central owns durable source identity, filesystem aperture, source revision, provenance/standing and authored machine intent. It does not own Wiki cognition, Factory developmental execution, Git semantics, Workcell material actuality, Actuation, or O:I suite selection.
 
@@ -66,7 +66,7 @@ ambiguous-source-relation
 
 Legacy absence is non-fatal. `central.self.ensure` and `projectcentral.self.ensure` only create the missing aperture; they do not move documentation or matrices. Broken directories/symlinks or malformed relation carriers are invalid. Relations whose `SourceRef`s no longer resolve are ambiguous and require source reconciliation/human judgement rather than silent rebinding.
 
-The existing `central.doctor` validity floor remains unchanged so an otherwise valid pre-S1 root stays valid. Development Field migration state is intentionally read through `central.self.inspect` rather than making `Control/self` a new mandatory base-root directory.
+Ordinary `central.init` retains the pre-S1 root floor and does not create or require `Control/self`; the S1 ensure Actions own that additive aperture. An otherwise valid old root therefore stays valid until the aperture is explicitly introduced.
 
 ## Public Action surface
 
