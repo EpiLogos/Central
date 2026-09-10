@@ -8,6 +8,7 @@ on:
       - 'ctrl/**'
       - 'Cargo.lock'
       - 'tests/continuous-work/**'
+      - 'scripts/prove-continuous-work.py'
       - '.github/workflows/continuous-work-proof.yml'
 
 permissions:
@@ -34,22 +35,32 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo test --workspace -- --nocapture 2>&1 | tee "$RUNNER_TEMP/caw-native-tests.log"
+          cargo test --workspace --locked --no-fail-fast -- --nocapture 2>&1 | tee "$RUNNER_TEMP/caw-native-tests.log"
       - name: Build the native consumer binary
-        run: cargo build -p ctrl
+        id: build
+        run: cargo build -p ctrl --locked
+      - name: Exercise concurrent native consumer requests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/prove-continuous-work.py --ctrl "$GITHUB_WORKSPACE/target/debug/ctrl" | tee "$RUNNER_TEMP/caw-native-consumer-proof.json"
       - name: Preserve the exact public source and binary exercised
         if: always()
         shell: bash
+        env:
+          NATIVE_BUILD_OUTCOME: ${{ steps.build.outcome }}
         run: |
           git rev-parse HEAD > "$RUNNER_TEMP/caw-source-sha.txt"
           tar --exclude=.git --exclude=target -czf "$RUNNER_TEMP/caw-source.tar.gz" .
-          if test -f target/debug/ctrl; then cp target/debug/ctrl "$RUNNER_TEMP/caw-ctrl"; fi
+          # A failed test/build must not publish a leftover cached binary as evidence.
+          if test "$NATIVE_BUILD_OUTCOME" = success; then cp target/debug/ctrl "$RUNNER_TEMP/caw-ctrl"; fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: caw-native-proof-${{ github.sha }}
           path: |
             ${{ runner.temp }}/caw-native-tests.log
+            ${{ runner.temp }}/caw-native-consumer-proof.json
             ${{ runner.temp }}/caw-source-sha.txt
             ${{ runner.temp }}/caw-source.tar.gz
             ${{ runner.temp }}/caw-ctrl
