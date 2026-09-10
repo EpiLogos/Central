@@ -1,10 +1,12 @@
 //! Native continuous-work operations over Central's existing source ownership.
 //! No personal installation, default-policy adoption, model call or shell rewrite.
 pub mod authority;
+pub mod documents;
 mod extended;
 mod history;
 pub mod migration;
 pub mod placement;
+pub mod receiving;
 pub mod source;
 pub mod temporal;
 
@@ -27,9 +29,12 @@ pub fn execute_with_token_at(central: &Path, operation: &str, input: &Value, tok
         _ => return Err(invalid("project must be a string or absent for root agency")),
     };
     let scope = Scope::resolve(central, project)?;
+    // Receiving retains the existing return-lock -> source-lock order. Never
+    // enter its dispatcher while holding the source-mutation lock already.
     match operation {
         "allocate" => return placement::allocate(&scope, input, now),
         "validate" => return placement::validate(&scope, input, now),
+        operation if operation.starts_with("receiving_") => return receiving::dispatch(&scope, operation, input, token, now),
         _ => {},
     }
     let _locks = source::lock(&scope)?;
