@@ -305,7 +305,7 @@ pub use wiki_read::{
 };
 pub use world::{
     AGENT_SET_CORRECTION_SCHEMA, AGENT_SET_SCHEMA, AgentSetCorrection, AgentSetCorrectionAuthorship,
-    AgentSetMember, AgentSetRecord, AgentSetRegistry, AgentSetRecord, AgentSetRef, AgentSetRegistry, EffectiveSourceState,
+    AgentSetMember, AgentSetRecord, AgentSetRef, AgentSetRegistry, EffectiveSourceState,
     EffectiveWorldSource, PlacementIntent, PlacementPreference, PlacementStrength, PlacementSubject,
     ResolvedAgentSet, SourceProvenanceHop, SourceTreatment as WorldSourceTreatment,
     WORLD_RELATION_SCHEMA, WorldError, WorldGraph, WorldRecord, WorldRef, WorldReturnProposal,
@@ -318,7 +318,7 @@ pub use world_map::{
     RelationsState, ReprojectPlan, ReprojectReceipt, ScaffoldKind, ScaffoldStep, SourceArea,
     WORLD_MAP_SCHEMA, WikiArea, WikiSpaceState, WorkMap, WorldMap, WorldProjection,
     apply_reproject, explain_project_world_map, explain_reproject_plan, explain_reproject_receipt,
-    explain_world_map, map_project_world, map_world, plan_reproject, register_world_map_actions,
+    explain_world_map, map_project_world, plan_reproject, register_world_map_actions,
 };
 pub use world_source::{
     WORLD_SOURCE_READING_SCHEMA, WORLD_SOURCE_WRITE_RECEIPT_SCHEMA, WorldSourceReading,
