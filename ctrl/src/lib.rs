@@ -289,11 +289,12 @@ pub use wiki_read::{
     register_central_wiki_read_action, register_projectcentral_wiki_read_action,
 };
 pub use world::{
-    AGENT_SET_SCHEMA, AgentSetMember, AgentSetRecord, AgentSetRef, AgentSetRegistry,
-    EffectiveSourceState, EffectiveWorldSource, PlacementIntent, PlacementPreference,
-    PlacementStrength, PlacementSubject, ResolvedAgentSet, SourceProvenanceHop,
-    SourceTreatment as WorldSourceTreatment, WORLD_RELATION_SCHEMA, WorldError, WorldGraph,
-    WorldRecord, WorldRef, WorldReturnProposal, WorldSourceRelation,
+    AGENT_SET_CORRECTION_SCHEMA, AGENT_SET_SCHEMA, AgentSetCorrection, AgentSetCorrectionAuthorship,
+    AgentSetMember, AgentSetRecord, AgentSetRef, AgentSetRegistry, EffectiveSourceState,
+    EffectiveWorldSource, PlacementIntent, PlacementPreference, PlacementStrength, PlacementSubject,
+    ResolvedAgentSet, SourceProvenanceHop, SourceTreatment as WorldSourceTreatment,
+    WORLD_RELATION_SCHEMA, WorldError, WorldGraph, WorldRecord, WorldRef, WorldReturnProposal,
+    WorldSourceRelation,
 };
 pub use world_map::{
     ControlMap, FlowEntry, FlowState, GroundState, NowState, PROJECT_RELATIONS_DIR,
