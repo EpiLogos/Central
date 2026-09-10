@@ -84,4 +84,32 @@ impl ActionResult {
             }),
         }
     }
+
+    /// A failure whose error `code` names the kind of failure instead of
+    /// restating the result status.
+    ///
+    /// `code == status` is the ordinary contract and callers may rely on it.
+    /// Reach for this only where a caller must act differently on two failures
+    /// that share a status — a World with no authored record at all against a
+    /// declaration that could not be read, say. Those are different facts and a
+    /// consumer that cannot tell them apart must guess from the message text.
+    pub fn failure_coded(
+        action: Option<&str>,
+        status: ResultStatus,
+        code: &str,
+        message: impl Into<String>,
+        details: Option<Value>,
+    ) -> Self {
+        Self {
+            ok: false,
+            status,
+            action: action.map(str::to_owned),
+            data: None,
+            error: Some(ActionError {
+                code: code.to_owned(),
+                message: message.into(),
+                details,
+            }),
+        }
+    }
 }
