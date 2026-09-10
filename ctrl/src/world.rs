@@ -5,6 +5,18 @@ use std::fmt;
 
 pub const WORLD_RELATION_SCHEMA: &str = "central.world-relations/v1";
 pub const AGENT_SET_SCHEMA: &str = "central.agent-set/v1";
+
+/// Error code for a World ref that has no authored record at all.
+///
+/// This is *absence*, not malformed input: it is the ordinary state of a
+/// project that declares no world of its own, and the answer to it is to
+/// inherit the root lineage by convention. It shares the `invalid_input`
+/// status with every genuinely malformed request, so the distinction is
+/// carried in the code — a consumer that cannot tell absence from
+/// unreadability must guess from prose, and an unreadable declaration must
+/// never widen what a turn receives the way an absent one may.
+pub const WORLD_DECLARATION_ABSENT_CODE: &str = "central.world_declaration_absent";
+
 /// Canonical schema for the correction block that a corrective agent-set
 /// revision carries. A separate schema string keeps the correction
 /// distinguishable from the record it corrects.

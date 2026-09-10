@@ -15,7 +15,7 @@ use crate::agent_set_store::{RelationRecordKind, RelationRecordStore, RelationRe
 use crate::projectcentral::read_project_manifest;
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
-use crate::world::{AgentSetRegistry, WorldGraph};
+use crate::world::{AgentSetRegistry, WORLD_DECLARATION_ABSENT_CODE, WorldError, WorldGraph};
 
 pub const AGENT_SET_SAVE_ACTION: &str = "central.agent-set.save";
 pub const AGENT_SET_LIST_ACTION: &str = "central.agent-set.list";
@@ -571,6 +571,20 @@ fn world_effective_sources(
     };
     match graph.effective_sources(&target) {
         Ok(sources) => ActionResult::success(action, json!({ "world_ref": world_ref, "sources": sources })),
+        // A World ref with no authored record at all is *absent*, not invalid:
+        // it is the ordinary state of a project that declares no world of its
+        // own, and the answer to it is to apply the root lineage by convention.
+        // Naming it in the error code lets a consumer tell that apart from a
+        // declaration it could not read, which must never widen what a turn
+        // receives. Both share the `invalid_input` status, so without the code
+        // the difference would live only in the message text.
+        Err(error @ WorldError::MissingWorld(_)) => ActionResult::failure_coded(
+            Some(action),
+            ResultStatus::InvalidInput,
+            WORLD_DECLARATION_ABSENT_CODE,
+            error.to_string(),
+            Some(json!({ "state": "absent", "world_ref": world_ref })),
+        ),
         Err(error) => invalid(action, error.to_string()),
     }
 }

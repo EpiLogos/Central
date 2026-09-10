@@ -32,7 +32,7 @@ fn input(name: &str, input_type: &str, required: bool) -> ActionInputDefinition 
 
 fn scope_input() -> ActionInputDefinition {
     let mut value = input("scope", "string", true);
-    value.choices = Some(vec!["personal".into(), "project".into()]);
+    value.choices = Some(vec!["root".into(), "project".into()]);
     value
 }
 
@@ -108,7 +108,11 @@ fn resolve_store(
         ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None)
     })?;
     match scope.as_str() {
-        "personal" => Ok(AgentProfileStore::personal(root.path)),
+        // `root` is the register's name; `personal` is the legacy synonym the
+        // profile store was first published under. Both name the same register,
+        // and the agent-set and world registers already answer to `root` — a
+        // consumer must not have to know which noun an Action happens to use.
+        "root" | "personal" => Ok(AgentProfileStore::personal(root.path)),
         "project" => {
             let project = required_text(input, "project", action)?;
             if !valid_project_member(&project) {
