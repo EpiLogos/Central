@@ -72,7 +72,13 @@ mod unix_tests {
             .collect::<Vec<_>>();
 
         let macos = create_macos_action_registry();
-        assert_eq!(macos.list().len(), 91);
+        let mut continuous = central_ctrl::ActionRegistry::default();
+        central_ctrl::continuous_work::register_actions(&mut continuous);
+        assert_eq!(macos.list().len(), 91 + continuous.list().len());
+        for descriptor in continuous.list() {
+            assert_eq!(macos.get(&descriptor.id), Some(&descriptor),
+                "macOS host lost or changed native continuous-work Action {}", descriptor.id);
+        }
         for id in core_ids {
             assert!(macos.get(&id).is_some(), "macOS host lost core Action {id}");
         }
