@@ -318,7 +318,7 @@ pub use world_map::{
     RelationsState, ReprojectPlan, ReprojectReceipt, ScaffoldKind, ScaffoldStep, SourceArea,
     WORLD_MAP_SCHEMA, WikiArea, WikiSpaceState, WorkMap, WorldMap, WorldProjection,
     apply_reproject, explain_project_world_map, explain_reproject_plan, explain_reproject_receipt,
-    explain_world_map, map_project_world, plan_reproject, register_world_map_actions,
+    explain_world_map, map_project_world, map_world, plan_reproject, register_world_map_actions,
 };
 pub use world_source::{
     WORLD_SOURCE_READING_SCHEMA, WORLD_SOURCE_WRITE_RECEIPT_SCHEMA, WorldSourceReading,

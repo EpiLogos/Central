@@ -18,8 +18,12 @@ fn world()->World{
         let project=path.join(format!("Work/{name}/ProjectCentral"));fs::create_dir_all(project.join("user")).unwrap();
         fs::write(project.join("project.json"),serde_json::to_vec(&central_ctrl::ProjectCentralManifest::new(format!("test/{name}"))).unwrap()).unwrap();
     }
-    let grants:Vec<Value>=[HUMAN,AGENT,OTHER].iter().enumerate().map(|(i,token)|json!({
-        "principal_ref":["human:test","agent:test","agent:other"][i],"actor_kind":if i==0{"human"}else{"agent"},
+    let grants:Vec<Value>=[
+        (HUMAN,"human:test","human"),
+        (AGENT,"agent:test","agent"),
+        (OTHER,"agent:other","agent"),
+    ].into_iter().map(|(token,principal_ref,actor_kind)|json!({
+        "principal_ref":principal_ref,"actor_kind":actor_kind,
         "token_sha256":format!("{:x}",Sha256::digest(token.as_bytes())),"scope_refs":["control:root","project:test/one","project:test/two"],
         "actions":["central.day.ensure","central.day.lifecycle","central.now.lifecycle","central.document.create","central.document.mutate","central.receiving.submit","central.receiving.review","central.receiving.include","central.receiving.recover"],"expires_at_unix_seconds":9999
     })).collect();
