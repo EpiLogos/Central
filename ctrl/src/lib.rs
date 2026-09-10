@@ -8,6 +8,7 @@ pub mod agent_set_store;
 pub mod automation;
 pub mod central_computer;
 pub mod cli;
+pub mod continuous_work;
 pub mod control;
 pub mod control_skills;
 pub mod development_field;
@@ -25,6 +26,7 @@ pub mod projectcentral_now;
 #[path = "projectcentral_ops.rs"]
 mod projectcentral_ops_base;
 pub mod source_history;
+#[path = "source_horizon_extensions.rs"]
 pub mod source_horizon;
 pub mod template_stamp;
 pub mod wiki_read;
@@ -53,6 +55,7 @@ pub mod projectcentral_ops {
         super::source_history::register_source_history_actions(registry);
         super::world_source::register_world_source_actions(registry);
         super::wiki_read::register_projectcentral_wiki_read_action(registry);
+        super::continuous_work::register_actions(registry);
     }
 }
 pub mod recovery;
@@ -122,8 +125,8 @@ pub use agent_governance::{
 };
 pub use agent_profile::{
     AGENT_PROFILE_PROVENANCE_SCHEMA, AGENT_PROFILE_SCHEMA, AgentProfile, AgentProfileAuthorship,
-    AgentProfileError, AgentProfileHandoff, AgentProfileProvenance, AgentProfileRecognition,
-    AgentProfileScope,
+    AgentProfileError, AgentProfileHandoff, AgentProfileProvenance, AgentProfileProvenance,
+    AgentProfileRecognition, AgentProfileScope,
 };
 pub use agent_profile_actions::{
     AGENT_PROFILE_LIST_ACTION, AGENT_PROFILE_PROPOSE_ACTION, AGENT_PROFILE_READ_ACTION,
@@ -132,6 +135,9 @@ pub use agent_profile_actions::{
 pub use agent_profile_store::{
     AgentProfileReading, AgentProfileStore, AgentProfileStoreError, AgentProfileWriteReceipt,
     PROJECT_AGENT_PROFILE_DIR, ROOT_AGENT_PROFILE_DIR,
+};
+pub use agent_set_actions::{
+    
 };
 pub use automation::register_automation_actions;
 pub use central_computer::{
@@ -296,7 +302,8 @@ pub use template_stamp::{
 };
 pub use wiki_read::{
     WIKI_READING_SCHEMA, WikiCounts, WikiNodeReading, WikiReadFailure, WikiReading, WikiRelation,
-    WikiSourcePointer, WikiSpaceReading, read_project_wiki, read_root_wiki,
+    WikiSourcePointer, WikiSpaceReading, WikiRelation,
+    WikiSpaceReading, read_project_wiki, read_root_wiki,
     register_central_wiki_read_action, register_projectcentral_wiki_read_action,
 };
 pub use world::{
