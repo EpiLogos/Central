@@ -20,6 +20,7 @@ pub mod pasu;
 pub mod personal;
 pub mod picker;
 pub mod projectcentral;
+#[path = "projectcentral_flow_extensions.rs"]
 pub mod projectcentral_flow;
 pub mod projectcentral_ground;
 pub mod projectcentral_now;
@@ -304,7 +305,7 @@ pub use wiki_read::{
 };
 pub use world::{
     AGENT_SET_CORRECTION_SCHEMA, AGENT_SET_SCHEMA, AgentSetCorrection, AgentSetCorrectionAuthorship,
-    AgentSetMember, AgentSetRecord, AgentSetRef, AgentSetRegistry, EffectiveSourceState,
+    AgentSetMember, AgentSetRecord, AgentSetRegistry, AgentSetRecord, AgentSetRef, AgentSetRegistry, EffectiveSourceState,
     EffectiveWorldSource, PlacementIntent, PlacementPreference, PlacementStrength, PlacementSubject,
     ResolvedAgentSet, SourceProvenanceHop, SourceTreatment as WorldSourceTreatment,
     WORLD_RELATION_SCHEMA, WorldError, WorldGraph, WorldRecord, WorldRef, WorldReturnProposal,
