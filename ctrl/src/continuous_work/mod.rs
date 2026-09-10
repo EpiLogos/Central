@@ -42,7 +42,23 @@ pub fn execute_with_token_at(central: &Path, operation: &str, input: &Value, tok
         "policy" => Ok(serde_json::to_value(placement::effective_policy(&scope, now)?)?),
         "now_read" => {
             let (record, reading) = placement::read_now(&scope, source::text(input, "now_ref")?)?;
-            Ok(json!({"schema":"central.now-reading/v1","record":record,"source":reading.source,"revision":reading.revision,"automatic_agent_or_model_invocation":false}))
+            match input.get("with_placement") {
+                Some(Value::Bool(true)) => {
+                    // Current acting facts are explicitly requested. Ordinary
+                    // history remains readable even when policy is unavailable.
+                    // allocation_reading only opens/verifies the existing T
+                    // directory; this read never allocates, re-enters or renews
+                    // an already-issued material authority lease.
+                    let policy = placement::effective_policy(&scope, now)?;
+                    let mut result = placement::allocation_reading(&scope, &record, &reading, policy, false)?;
+                    result["schema"] = json!("central.now-reading/v1");
+                    result["placement_included"] = json!(true);
+                    result.as_object_mut().expect("native reading object").remove("created");
+                    Ok(result)
+                }
+                None | Some(Value::Bool(false)) => Ok(json!({"schema":"central.now-reading/v1","record":record,"source":reading.source,"revision":reading.revision,"automatic_agent_or_model_invocation":false})),
+                _ => Err(invalid("with_placement must be a boolean")),
+            }
         }
         "time_policy" => Ok(serde_json::to_value(temporal::time_policy(&scope, now)?)?),
         "day_read" => temporal::day_read(&scope, input),
@@ -129,7 +145,7 @@ pub fn register_actions(registry: &mut ActionRegistry) {
         ("central.work.policy", "Read effective Work placement policy", "Resolve exact recognised root/Project source bases and bounded writable destinations without promoting draft policy.", false, policy_action, &[]),
         ("central.now.allocate", "Allocate an agent NOW clearing", "Idempotently allocate one source-owned NOW and T destination per task; preserve ordinary authorised repository writes.", true, allocate_action, &[("task_ref","string",true),("purpose","string",true),("expected_policy_revision","string",true),("participant_refs","array",false),("source_refs","array",false)]),
         ("central.work.validate", "Validate current task write placement", "Revalidate policy, NOW and destination anchors. Return a usable NOW retry destination; do not claim OS enforcement.", false, validate_action, &[("now_ref","string",true),("expected_now_revision","string",true),("expected_policy_revision","string",true),("destination","string",true),("expected_destination_anchor","object",false)]),
-        ("central.now.read", "Read allocated NOW source", "Read exact NOW identity, lifecycle and source revision at root or Project scope.", false, now_read_action, &[("now_ref","string",true)]),
+        ("central.now.read", "Read allocated NOW source", "Read exact NOW identity, lifecycle and source revision; optionally include current native placement without allocating or re-entering the task.", false, now_read_action, &[("now_ref","string",true),("with_placement","boolean",false)]),
         ("central.time.policy", "Read native civil-time policy", "Read the recognised root IANA timezone and local Day boundary, never the harness timezone.", false, time_action, &[]),
         ("central.day.read", "Read human Day source", "Read a stable DayRef or the current today pointer without replacing the open editor.", false, day_read_action, &[("day_ref","string",false)]),
         ("central.day.ensure", "Ensure the current blank Day", "Create a blank native Day and advance today only under the current authenticated human time policy; never close old writing or clear NOW.", true, day_ensure_action, &[("expected_time_policy_revision","string",true),("expected_authority_revision","string",false)]),
