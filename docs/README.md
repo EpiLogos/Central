@@ -81,6 +81,9 @@ resembles the product checkout (`mixed_root` in the structured health report).
   reference: published Ports, versions and conformance harnesses.
 - [CLI-REFERENCE.md](CLI-REFERENCE.md) — the stock `ctrl` command surface:
   canonical Actions, invocation seams and the result/exit contract.
+- [CAW-NATIVE-CONSUMER-INTERFACES.md](CAW-NATIVE-CONSUMER-INTERFACES.md) —
+  implemented continuous-work Actions, concrete AIKit/Workcell request/result
+  examples, controlled-World evidence and explicit remaining feature limits.
 
 ## Installation / recovery
 
