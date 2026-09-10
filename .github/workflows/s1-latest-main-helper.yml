@@ -1,0 +1,177 @@
+name: S1 latest-main reconciliation helper
+
+on:
+  push:
+    branches: [agent/development-field-s1]
+
+permissions:
+  contents: write
+
+jobs:
+  reconcile:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/development-field-s1
+          fetch-depth: 0
+      - name: Reconcile S1 onto latest accepted Central ground
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import csv
+          import hashlib
+          import io
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          root = Path('.')
+          user = root / 'ProjectCentral/user'
+
+          lib_path = root / 'ctrl/src/lib.rs'
+          lib = lib_path.read_text()
+          if 'pub mod development_field;' not in lib:
+              lib = lib.replace('pub mod control_skills;\n', 'pub mod control_skills;\npub mod development_field;\n', 1)
+          registration = '        super::development_field::register_development_field_actions(registry);\n'
+          if registration not in lib:
+              lib = lib.replace(
+                  '        super::projectcentral_ops_base::register_projectcentral_actions(registry);\n',
+                  '        super::projectcentral_ops_base::register_projectcentral_actions(registry);\n' + registration,
+                  1,
+              )
+          if 'pub use test_tempfile::{tempdir, TempDir};' not in lib:
+              lib = lib.replace('pub use test_tempfile::tempdir;\n', 'pub use test_tempfile::{tempdir, TempDir};\n', 1)
+          development_export = '''pub use development_field::{
+              DEVELOPMENT_READING_SCHEMA, DEVELOPMENT_RELATIONS_SCHEMA, DevelopmentFieldReading,
+              DevelopmentSourceRelations, ExBinding, ExReading, MachineOiSuitePolicyReading,
+              OI_SUITE_POLICY_BINDING_KIND, PROJECT_DEVELOPMENT_RELATIONS, PROJECT_SELF_DIR,
+              ROOT_DEVELOPMENT_RELATIONS, ROOT_SELF_DIR, ResolvedDevelopmentSource, SelfApertureReading,
+              SelfApertureStatus, SelfEnsureReceipt, TierBinding, TierReading, UnboundSelfSource, UxBinding,
+              UxReading, ensure_project_self, ensure_root_self, inspect_project_development_field,
+              inspect_root_development_field, read_machine_oi_suite_policy, register_development_field_actions,
+          };
+'''
+          if 'pub use development_field::{' not in lib:
+              lib = lib.replace('pub use engineering_ground::{\n', development_export + 'pub use engineering_ground::{\n', 1)
+          lib_path.write_text(lib)
+
+          def sha256(path: str) -> str:
+              return hashlib.sha256((root / path).read_bytes()).hexdigest()
+
+          lib_hash = sha256('ctrl/src/lib.rs')
+          development_hash = sha256('ctrl/src/development_field.rs')
+          matrix = user / 'capability-matrix.csv'
+          with matrix.open(newline='') as stream:
+              reader = csv.DictReader(stream)
+              header = reader.fieldnames
+              rows = list(reader)
+          if not header:
+              raise SystemExit('capability matrix has no header')
+
+          by_id = {row['id']: row for row in rows}
+          for ident in ('cap.central.pasu-identity', 'cap.central.bounded-relations'):
+              row = by_id.get(ident)
+              if row is None:
+                  raise SystemExit(f'missing expected capability row: {ident}')
+              ext = json.loads(row['extensions'])
+              maintenance = ext.setdefault('maintenance', {})
+              maintenance['updated_at'] = '2026-09-10'
+              refs = maintenance.setdefault('change_refs', [])
+              for ref in ('EpiLogos/Central#136', 'EpiLogos/Central#145'):
+                  if ref not in refs:
+                      refs.append(ref)
+              maintenance.setdefault('code_basis', {})['ctrl/src/lib.rs'] = lib_hash
+              row['extensions'] = json.dumps(ext, ensure_ascii=False)
+
+          ident = 'cap.central.development-field-source'
+          anchor = 'cap-central-development-field-source'
+          commands = [
+              'central.self.ensure', 'central.self.ex.relate', 'central.self.inspect',
+              'central.self.resolve', 'central.self.source.create', 'central.self.tier.relate',
+              'central.self.ux.relate', 'machine.oi-suite-policy',
+              'projectcentral.self.ensure', 'projectcentral.self.ex.relate',
+              'projectcentral.self.inspect', 'projectcentral.self.resolve',
+              'projectcentral.self.retain-tier', 'projectcentral.self.source.create',
+              'projectcentral.self.tier.relate', 'projectcentral.self.ux.relate',
+          ]
+          if ident not in by_id:
+              ext = {
+                  'basis': 'Development Field S1 native source surface; capability maintenance for #136, not bulk source migration.',
+                  'cli_commands': commands,
+                  'cli_exposure': {
+                      'kind': 'direct',
+                      'reason': 'The S1 source-field Actions are native Central owner operations, invocable through ctrl action run and discoverable through ctrl action list.'
+                  },
+                  'maintenance': {
+                      'updated_at': '2026-09-10',
+                      'change_refs': ['EpiLogos/Central#136', 'EpiLogos/Central#145'],
+                      'code_basis': {'ctrl/src/development_field.rs': development_hash},
+                  },
+              }
+              new = {key: '' for key in header}
+              new.update({
+                  'id': ident,
+                  'record_type': 'capability',
+                  'capability_refs': '[]',
+                  'need': 'A World or Project needs its durable self-description, intended experience and human experiential return to be addressable without collapsing authored source into Wiki knowledge, observation or generated material.',
+                  'operation': 'Central resolves root/Project self apertures, stable 0..5 tier relations, UX/EX source refs and opaque machine O:I suite-policy intent through canonical SourceRef, revision and standing contracts.',
+                  'outcome': 'Consumers can address self-description and retained native sources without reconstructing paths; EX remains human-attributable, and installed-suite/material facts stay with their native owners.',
+                  'implementation_status': 'implemented; S1 native source/read/Action behavior is covered by hosted Rust and Action-surface tests; physical H/EX acceptance remains external.',
+                  'standing': 'agent-inference',
+                  'source_refs': 'docs/DEVELOPMENT-FIELD-SOURCE.md;docs/CONTROL-CONTENT-PROTOCOL.md;docs/MACHINE-WORKCELL-RELATION.md',
+                  'code_refs': 'ctrl/src/development_field.rs',
+                  'test_refs': 'ctrl/src/development_field.rs;ctrl/tests/foundation.rs;surfaces/macos-host/tests/host_surface.rs',
+                  'account_ref': 'central.html#q1/ground',
+                  'extensions': json.dumps(ext, ensure_ascii=False),
+              })
+              insert_at = next((i for i, row in enumerate(rows) if row.get('record_type') == 'relation'), len(rows))
+              rows.insert(insert_at, new)
+
+          output = io.StringIO(newline='')
+          writer = csv.DictWriter(output, fieldnames=header, lineterminator='\n')
+          writer.writeheader(); writer.writerows(rows)
+          matrix.write_text(output.getvalue())
+
+          md_path = user / 'capability-matrix.md'
+          md = md_path.read_text()
+          if f'id="{anchor}"' not in md:
+              block = f'''\n<a id="{anchor}"></a>\n\n### Development Field source\n\nCentral exposes the root and Project self-description aperture, stable document-tier relations, UX/EX source identity and opaque machine O:I suite-policy intent through canonical source refs and revisions. Human source authority, Agent Wiki knowledge, observed state and generated material remain distinct; retained native source does not need to move merely to participate.\n\n[Source contract](../../docs/DEVELOPMENT-FIELD-SOURCE.md) · [Control source law](../../docs/CONTROL-CONTENT-PROTOCOL.md) · standing: agent-inference.\n\n'''
+              marker = '```csv'
+              if marker not in md:
+                  raise SystemExit('capability matrix Markdown has no CSV appendix')
+              md = md.replace(marker, block + marker, 1)
+              md_path.write_text(md)
+
+          html_path = user / 'central.html'
+          raw = html_path.read_text()
+          match = re.search(r'(<script[^>]*id="ground-resources"[^>]*>)(.*?)(</script>)', raw, re.S)
+          if not match:
+              raise SystemExit('central.html has no ground-resources script')
+          resources = json.loads(match.group(2))
+          resources[ident] = {
+              'href': f'capability-matrix.md#{anchor}',
+              'title': 'Development Field source capability',
+          }
+          raw = raw[:match.start(2)] + json.dumps(resources, ensure_ascii=False, indent=2) + raw[match.end(2):]
+          html_path.write_text(raw)
+
+          sys.path.insert(0, str(root / 'tools'))
+          import reconcile_product_ground
+          plan = reconcile_product_ground.make_plan(root, 'central.html', 'central', 'csv-to-html')
+          reconcile_product_ground.apply_plan(plan, plan['required_review'], 'EpiLogos/Central#136')
+          PY
+
+          cargo build -p ctrl --bin ctrl
+          python3 tools/product_maintenance.py --root . --account central.html --namespace central --product-index 0 --base f23cdd4a682fecc93274d48a66339b7a8551dbdd --reference-scope repository
+
+          rm .github/workflows/s1-latest-main-helper.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ctrl/src/lib.rs ProjectCentral/user/capability-matrix.csv ProjectCentral/user/capability-matrix.json ProjectCentral/user/capability-matrix.md ProjectCentral/user/central.html .github/workflows/s1-latest-main-helper.yml
+          git diff --cached --check
+          git commit -m 'Reconcile Development Field S1 on current Central main'
+          git push origin HEAD:agent/development-field-s1

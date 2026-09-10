@@ -64,6 +64,27 @@ current observation (evidence in the adoption result)
 
 The current local Workcell is the first material context. Additional machines can later bind to remote Workcells through the same durable machine relation.
 
+## O:I suite policy is a second opaque authored relation
+
+Development Field S1 does not turn Central into a suite/version manager. The existing generic binding shape is sufficient for an authored machine role to express desired O:I suite policy alongside its Workcell relation:
+
+```json
+"bindings": [
+  { "kind": "workcell", "reference": "workcell:local" },
+  { "kind": "oi-suite-policy", "reference": "mainline" }
+]
+```
+
+`oi-suite-policy` is the Central-side binding kind; its reference is deliberately opaque here. O:I owns the semantics of a channel/policy reference and the active installed-suite receipt. Workcell/native observation owns material executable actuality. Central owns only the authored intent carried by the machine declaration.
+
+The native read surface is:
+
+```sh
+ctrl --json action run machine.oi-suite-policy '{"role":"current"}'
+```
+
+It reports `absent`, one `authored-intent`, or `ambiguous-human-decision-required` when several different policy refs are authored. It never interprets the reference and never reports installed product versions as though they were authored machine intent. `machine.adopt-current` continues to touch only the `workcell` binding kind, so the two relations remain independent.
+
 ## Bootstrap binary
 
 The `central-machine-adopt` binary (shipped with `ctrl`) performs the same bootstrap through the same `machine.inspect` application path and writes the same ground; it predates the native Action and remains available for scripted first establishment:
@@ -78,4 +99,4 @@ central-machine-adopt \
 
 Both surfaces produce the declaration form documented above; `machine.adopt-current` is the canonical one.
 
-Coordination: `EpiLogos/O-I#131`, `EpiLogos/Central#87`.
+Coordination: `EpiLogos/O-I#131`, `EpiLogos/Central#87`, `EpiLogos/Central#136`.
