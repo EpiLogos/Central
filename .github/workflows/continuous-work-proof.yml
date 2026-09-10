@@ -1,0 +1,56 @@
+name: continuous-work-proof
+
+on:
+  push:
+    branches: ['agent/caw-temporal-documents-receiving']
+  pull_request:
+    paths:
+      - 'ctrl/**'
+      - 'Cargo.lock'
+      - 'tests/continuous-work/**'
+      - '.github/workflows/continuous-work-proof.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: caw-proof-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  controlled-worlds:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          cache-on-failure: true
+      - name: Execute native workspace tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --workspace -- --nocapture 2>&1 | tee "$RUNNER_TEMP/caw-native-tests.log"
+      - name: Build the native consumer binary
+        run: cargo build -p ctrl
+      - name: Preserve the exact public source and binary exercised
+        if: always()
+        shell: bash
+        run: |
+          git rev-parse HEAD > "$RUNNER_TEMP/caw-source-sha.txt"
+          tar --exclude=.git --exclude=target -czf "$RUNNER_TEMP/caw-source.tar.gz" .
+          if test -f target/debug/ctrl; then cp target/debug/ctrl "$RUNNER_TEMP/caw-ctrl"; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: caw-native-proof-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/caw-native-tests.log
+            ${{ runner.temp }}/caw-source-sha.txt
+            ${{ runner.temp }}/caw-source.tar.gz
+            ${{ runner.temp }}/caw-ctrl
+          retention-days: 14
