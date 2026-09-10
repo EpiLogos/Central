@@ -1,0 +1,33 @@
+name: BKMR validation workspace
+on:
+  push:
+    branches: [agent/bkmr-154-validation-workspace]
+    paths: [.github/workflows/bkmr-validation-workspace.yml]
+permissions:
+  contents: read
+jobs:
+  sources:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: EpiLogos/Central
+          ref: 040a2220afdf8d317301052a801ddf7f26f88b20
+          path: Central
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: EpiLogos/ai-kit
+          ref: 9fd48e5bc32371b06478e89875c9ec201b36337f
+          path: ai-kit
+          persist-credentials: false
+      - run: |
+          git -C Central rev-parse HEAD
+          git -C ai-kit rev-parse HEAD
+          tar --exclude=.git -czf bkmr-validation-sources.tar.gz Central ai-kit
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bkmr-validation-sources
+          path: bkmr-validation-sources.tar.gz
+          retention-days: 1
