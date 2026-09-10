@@ -10,6 +10,7 @@ pub mod central_computer;
 pub mod cli;
 pub mod control;
 pub mod control_skills;
+pub mod development_field;
 pub mod engineering_ground;
 pub mod machine;
 pub mod machine_account;
@@ -44,6 +45,7 @@ pub mod projectcentral_ops {
 
     pub fn register_projectcentral_actions(registry: &mut crate::action::ActionRegistry) {
         super::projectcentral_ops_base::register_projectcentral_actions(registry);
+        super::development_field::register_development_field_actions(registry);
         super::projectcentral_ground::register_projectcentral_ground_actions(registry);
         super::projectcentral_now::register_projectcentral_now_actions(registry);
         super::projectcentral_flow::register_projectcentral_flow_actions(registry);
@@ -103,7 +105,7 @@ mod test_tempfile {
 }
 
 #[cfg(test)]
-pub use test_tempfile::tempdir;
+pub use test_tempfile::{tempdir, TempDir};
 
 pub use action::{
     ActionAvailability, ActionDescriptor, ActionExecutionContext, ActionInputDefinition,
@@ -178,6 +180,15 @@ pub use control_skills::{
     SkillProvenance, SkillRecord, SkillRetirement, SkillScope, SkillScopeSurface, SkillStanding,
     SkillsInspection, inspect_control_skills, read_skill_manifest, register_control_skills_actions,
     restore_skill, retire_skill,
+};
+pub use development_field::{
+    DEVELOPMENT_READING_SCHEMA, DEVELOPMENT_RELATIONS_SCHEMA, DevelopmentFieldReading,
+    DevelopmentSourceRelations, ExBinding, ExReading, MachineOiSuitePolicyReading,
+    OI_SUITE_POLICY_BINDING_KIND, PROJECT_DEVELOPMENT_RELATIONS, PROJECT_SELF_DIR,
+    ROOT_DEVELOPMENT_RELATIONS, ROOT_SELF_DIR, ResolvedDevelopmentSource, SelfApertureReading,
+    SelfApertureStatus, SelfEnsureReceipt, TierBinding, TierReading, UnboundSelfSource, UxBinding,
+    UxReading, ensure_project_self, ensure_root_self, inspect_project_development_field,
+    inspect_root_development_field, read_machine_oi_suite_policy, register_development_field_actions,
 };
 pub use engineering_ground::{
     ENGINEERING_GROUND_DIR, ENGINEERING_GROUND_OUTPUT, ENGINEERING_GROUND_STATEMENTS,
