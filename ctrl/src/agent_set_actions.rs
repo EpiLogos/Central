@@ -227,8 +227,10 @@ fn invalid(action: &str, message: String) -> ActionResult {
     )
 }
 
-/// Resolve the store for the requested register. Root scope → `Control/relations`;
-/// project scope → `<project>/ProjectCentral/relations` with manifest validation.
+/// Resolve the store for the requested register. Agent-sets live with the agent
+/// profiles: root scope → `Control/agents/agent-sets`; project scope →
+/// `<project>/ProjectCentral/agents/agent-sets` with manifest validation. World
+/// relations remain under `relations/` at both registers.
 fn resolve_store(
     action: &str,
     kind: RelationRecordKind,
@@ -934,7 +936,7 @@ mod tests {
         assert!(saved.data.as_ref().unwrap()["source_path"]
             .as_str()
             .unwrap()
-            .starts_with("ProjectCentral/relations/agent-sets/"));
+            .starts_with("ProjectCentral/agents/agent-sets/"));
 
         let listed = registry.execute(
             AGENT_SET_LIST_ACTION,

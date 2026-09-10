@@ -6,8 +6,10 @@
 //! ref lives in the document (never inferred from the filename), saves run
 //! under compare-and-swap revision discipline, writes are atomic, and
 //! symlinked containers are refused. Root register:
-//! `Control/relations/{agent-sets,worlds}/`; Project register:
-//! `ProjectCentral/relations/{agent-sets,worlds}/`.
+//! `Control/agents/agent-sets/` + `Control/relations/worlds/`; Project
+//! register: `ProjectCentral/agents/agent-sets/` +
+//! `ProjectCentral/relations/worlds/`. Agent-sets sit with the agent profiles
+//! under `agents/`; only world relations remain under `relations/`.
 
 use serde::Serialize;
 use std::error::Error;
@@ -18,9 +20,9 @@ use std::path::{Component, Path, PathBuf};
 use crate::world::{AgentSetRecord, WorldRecord, AGENT_SET_SCHEMA, WORLD_RELATION_SCHEMA};
 
 pub const ROOT_RELATIONS_DIR: &str = "Control/relations";
-pub const ROOT_AGENT_SET_DIR: &str = "Control/relations/agent-sets";
+pub const ROOT_AGENT_SET_DIR: &str = "Control/agents/agent-sets";
 pub const ROOT_WORLD_DIR: &str = "Control/relations/worlds";
-pub const PROJECT_AGENT_SET_DIR: &str = "ProjectCentral/relations/agent-sets";
+pub const PROJECT_AGENT_SET_DIR: &str = "ProjectCentral/agents/agent-sets";
 pub const PROJECT_WORLD_DIR: &str = "ProjectCentral/relations/worlds";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -638,7 +640,7 @@ mod tests {
             .unwrap();
         assert!(created.created);
         assert_eq!(created.revision, "r1");
-        assert!(created.source_path.starts_with("Control/relations/agent-sets/"));
+        assert!(created.source_path.starts_with("Control/agents/agent-sets/"));
 
         // Create-without-conflict is refused.
         assert!(matches!(
@@ -744,6 +746,6 @@ mod tests {
         assert_eq!(project_store.list().unwrap().len(), 1);
         assert!(project_store.list().unwrap()[0]
             .source_path
-            .starts_with("ProjectCentral/relations/agent-sets/"));
+            .starts_with("ProjectCentral/agents/agent-sets/"));
     }
 }
