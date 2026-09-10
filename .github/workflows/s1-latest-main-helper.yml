@@ -45,16 +45,17 @@ jobs:
               )
           if 'pub use test_tempfile::{tempdir, TempDir};' not in lib:
               lib = lib.replace('pub use test_tempfile::tempdir;\n', 'pub use test_tempfile::{tempdir, TempDir};\n', 1)
-          development_export = '''pub use development_field::{
-              DEVELOPMENT_READING_SCHEMA, DEVELOPMENT_RELATIONS_SCHEMA, DevelopmentFieldReading,
-              DevelopmentSourceRelations, ExBinding, ExReading, MachineOiSuitePolicyReading,
-              OI_SUITE_POLICY_BINDING_KIND, PROJECT_DEVELOPMENT_RELATIONS, PROJECT_SELF_DIR,
-              ROOT_DEVELOPMENT_RELATIONS, ROOT_SELF_DIR, ResolvedDevelopmentSource, SelfApertureReading,
-              SelfApertureStatus, SelfEnsureReceipt, TierBinding, TierReading, UnboundSelfSource, UxBinding,
-              UxReading, ensure_project_self, ensure_root_self, inspect_project_development_field,
-              inspect_root_development_field, read_machine_oi_suite_policy, register_development_field_actions,
-          };
-'''
+          development_export = (
+              'pub use development_field::{\n'
+              '    DEVELOPMENT_READING_SCHEMA, DEVELOPMENT_RELATIONS_SCHEMA, DevelopmentFieldReading,\n'
+              '    DevelopmentSourceRelations, ExBinding, ExReading, MachineOiSuitePolicyReading,\n'
+              '    OI_SUITE_POLICY_BINDING_KIND, PROJECT_DEVELOPMENT_RELATIONS, PROJECT_SELF_DIR,\n'
+              '    ROOT_DEVELOPMENT_RELATIONS, ROOT_SELF_DIR, ResolvedDevelopmentSource, SelfApertureReading,\n'
+              '    SelfApertureStatus, SelfEnsureReceipt, TierBinding, TierReading, UnboundSelfSource, UxBinding,\n'
+              '    UxReading, ensure_project_self, ensure_root_self, inspect_project_development_field,\n'
+              '    inspect_root_development_field, read_machine_oi_suite_policy, register_development_field_actions,\n'
+              '};\n'
+          )
           if 'pub use development_field::{' not in lib:
               lib = lib.replace('pub use engineering_ground::{\n', development_export + 'pub use engineering_ground::{\n', 1)
           lib_path.write_text(lib)
@@ -89,16 +90,16 @@ jobs:
 
           ident = 'cap.central.development-field-source'
           anchor = 'cap-central-development-field-source'
-          commands = [
-              'central.self.ensure', 'central.self.ex.relate', 'central.self.inspect',
-              'central.self.resolve', 'central.self.source.create', 'central.self.tier.relate',
-              'central.self.ux.relate', 'machine.oi-suite-policy',
-              'projectcentral.self.ensure', 'projectcentral.self.ex.relate',
-              'projectcentral.self.inspect', 'projectcentral.self.resolve',
-              'projectcentral.self.retain-tier', 'projectcentral.self.source.create',
-              'projectcentral.self.tier.relate', 'projectcentral.self.ux.relate',
-          ]
           if ident not in by_id:
+              commands = [
+                  'central.self.ensure', 'central.self.ex.relate', 'central.self.inspect',
+                  'central.self.resolve', 'central.self.source.create', 'central.self.tier.relate',
+                  'central.self.ux.relate', 'machine.oi-suite-policy',
+                  'projectcentral.self.ensure', 'projectcentral.self.ex.relate',
+                  'projectcentral.self.inspect', 'projectcentral.self.resolve',
+                  'projectcentral.self.retain-tier', 'projectcentral.self.source.create',
+                  'projectcentral.self.tier.relate', 'projectcentral.self.ux.relate',
+              ]
               ext = {
                   'basis': 'Development Field S1 native source surface; capability maintenance for #136, not bulk source migration.',
                   'cli_commands': commands,
@@ -139,7 +140,12 @@ jobs:
           md_path = user / 'capability-matrix.md'
           md = md_path.read_text()
           if f'id="{anchor}"' not in md:
-              block = f'''\n<a id="{anchor}"></a>\n\n### Development Field source\n\nCentral exposes the root and Project self-description aperture, stable document-tier relations, UX/EX source identity and opaque machine O:I suite-policy intent through canonical source refs and revisions. Human source authority, Agent Wiki knowledge, observed state and generated material remain distinct; retained native source does not need to move merely to participate.\n\n[Source contract](../../docs/DEVELOPMENT-FIELD-SOURCE.md) · [Control source law](../../docs/CONTROL-CONTENT-PROTOCOL.md) · standing: agent-inference.\n\n'''
+              block = (
+                  f'\n<a id="{anchor}"></a>\n\n'
+                  '### Development Field source\n\n'
+                  'Central exposes the root and Project self-description aperture, stable document-tier relations, UX/EX source identity and opaque machine O:I suite-policy intent through canonical source refs and revisions. Human source authority, Agent Wiki knowledge, observed state and generated material remain distinct; retained native source does not need to move merely to participate.\n\n'
+                  '[Source contract](../../docs/DEVELOPMENT-FIELD-SOURCE.md) · [Control source law](../../docs/CONTROL-CONTENT-PROTOCOL.md) · standing: agent-inference.\n\n'
+              )
               marker = '```csv'
               if marker not in md:
                   raise SystemExit('capability matrix Markdown has no CSV appendix')
