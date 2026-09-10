@@ -66,7 +66,7 @@
       "id": "product-field",
       "row_axis": {
         "id": "product-seeds",
-        "label": "Central \u00b7 six seed questions",
+        "label": "Central · six seed questions",
         "members": [
           {
             "id": "q0",
@@ -101,7 +101,7 @@
         ]
       },
       "semantics": "Each intersection states how this aspect of the product contributes to, depends on, or receives a return from the named member. Empty means unassessed; placements are attributed in the records.",
-      "title": "Central \u00b7 seed \u00d7 field contribution"
+      "title": "Central · seed × field contribution"
     },
     {
       "column_axis": {
@@ -110,51 +110,51 @@
         "members": [
           {
             "id": "H0",
-            "label": "Central \u00b7 H0"
+            "label": "Central · H0"
           },
           {
             "id": "H1",
-            "label": "Actuation \u00b7 H1"
+            "label": "Actuation · H1"
           },
           {
             "id": "H2",
-            "label": "AIKit \u00b7 H2"
+            "label": "AIKit · H2"
           },
           {
             "id": "H3",
-            "label": "Software Factory \u00b7 H3"
+            "label": "Software Factory · H3"
           },
           {
             "id": "H4",
-            "label": "Workcell \u00b7 H4"
+            "label": "Workcell · H4"
           },
           {
             "id": "H5",
-            "label": "Quaternal Logic \u00b7 H5"
+            "label": "Quaternal Logic · H5"
           },
           {
             "id": "A0",
-            "label": "Central \u00b7 A0"
+            "label": "Central · A0"
           },
           {
             "id": "A1",
-            "label": "Actuation \u00b7 A1"
+            "label": "Actuation · A1"
           },
           {
             "id": "A2",
-            "label": "AIKit \u00b7 A2"
+            "label": "AIKit · A2"
           },
           {
             "id": "A3",
-            "label": "Software Factory \u00b7 A3"
+            "label": "Software Factory · A3"
           },
           {
             "id": "A4",
-            "label": "Workcell \u00b7 A4"
+            "label": "Workcell · A4"
           },
           {
             "id": "A5",
-            "label": "Quaternal Logic \u00b7 A5"
+            "label": "Quaternal Logic · A5"
           }
         ]
       },
@@ -165,55 +165,55 @@
         "members": [
           {
             "id": "H0",
-            "label": "Central \u00b7 H0"
+            "label": "Central · H0"
           },
           {
             "id": "H1",
-            "label": "Actuation \u00b7 H1"
+            "label": "Actuation · H1"
           },
           {
             "id": "H2",
-            "label": "AIKit \u00b7 H2"
+            "label": "AIKit · H2"
           },
           {
             "id": "H3",
-            "label": "Software Factory \u00b7 H3"
+            "label": "Software Factory · H3"
           },
           {
             "id": "H4",
-            "label": "Workcell \u00b7 H4"
+            "label": "Workcell · H4"
           },
           {
             "id": "H5",
-            "label": "Quaternal Logic \u00b7 H5"
+            "label": "Quaternal Logic · H5"
           },
           {
             "id": "A0",
-            "label": "Central \u00b7 A0"
+            "label": "Central · A0"
           },
           {
             "id": "A1",
-            "label": "Actuation \u00b7 A1"
+            "label": "Actuation · A1"
           },
           {
             "id": "A2",
-            "label": "AIKit \u00b7 A2"
+            "label": "AIKit · A2"
           },
           {
             "id": "A3",
-            "label": "Software Factory \u00b7 A3"
+            "label": "Software Factory · A3"
           },
           {
             "id": "A4",
-            "label": "Workcell \u00b7 A4"
+            "label": "Workcell · A4"
           },
           {
             "id": "A5",
-            "label": "Quaternal Logic \u00b7 A5"
+            "label": "Quaternal Logic · A5"
           }
         ]
       },
-      "semantics": "Source-defined H/A product relations, limited to this product\u2019s incident questions. H and A retain the source field identities; they are not the seed axis. Coverage I=self, H=harmonic, S=strong support, L=latent, W=weak/intentionally indirect. Absence means outside this selected scope.",
+      "semantics": "Source-defined H/A product relations, limited to this product’s incident questions. H and A retain the source field identities; they are not the seed axis. Coverage I=self, H=harmonic, S=strong support, L=latent, W=weak/intentionally indirect. Absence means outside this selected scope.",
       "title": "Suite direct and conjugate relational readings"
     }
   ]
