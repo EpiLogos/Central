@@ -1,7 +1,9 @@
 //! Native continuous-work operations over Central's existing source ownership.
 //! No personal installation, default-policy adoption, model call or shell rewrite.
 pub mod authority;
+mod extended;
 mod history;
+pub mod migration;
 pub mod placement;
 pub mod source;
 pub mod temporal;
@@ -25,7 +27,6 @@ pub fn execute_with_token_at(central: &Path, operation: &str, input: &Value, tok
         _ => return Err(invalid("project must be a string or absent for root agency")),
     };
     let scope = Scope::resolve(central, project)?;
-    // These operations acquire their own root-before-Project source locks.
     match operation {
         "allocate" => return placement::allocate(&scope, input, now),
         "validate" => return placement::validate(&scope, input, now),
@@ -57,7 +58,7 @@ pub fn execute_with_token_at(central: &Path, operation: &str, input: &Value, tok
                 _ => temporal::now_obligations(&scope, input, &principal, now),
             }
         }
-        _ => Err(invalid("unknown continuous-work operation")),
+        _ => extended::dispatch(&scope, operation, input, token, now),
     }
 }
 fn execute(action: &str, operation: &str, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
@@ -132,6 +133,7 @@ pub fn register_actions(registry: &mut ActionRegistry) {
         ("central.now.obligations", "Retain NOW obligations", "Append exact native obligation SourceRefs without silently dropping outstanding work.", true, now_obligations_action, &[("now_ref","string",true),("expected_revision","string",true),("obligation_refs","array",true),("expected_authority_revision","string",false)]),
         ("central.temporal.source-history", "Read native temporal source history", "Read SourceRef snapshots from the existing native file-history owner store.", false, history_action, &[("source_ref","string",true),("limit","integer",false),("before","integer",false)]),
     ]);
+    extended::register_actions(registry);
 }
 
 #[cfg(test)]
