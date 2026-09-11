@@ -5,6 +5,9 @@ use serde::{Deserialize,Serialize};
 use serde_json::{json,Value};
 use std::{fs,io,path::Path};
 
+#[path = "receiving_aperture.rs"]
+mod aperture;
+
 const AREA: &str=".central/source-returns/contributions";
 #[derive(Debug,Clone,Serialize,Deserialize)]
 struct Review {
@@ -42,6 +45,14 @@ struct Received {
     inclusion_request: Option<Value>,
     applied_source_revision: Option<String>,
     last_error: Option<String>,
+    #[serde(default)]
+    acknowledgement: Option<Value>,
+    #[serde(default)]
+    summary: Option<String>,
+    #[serde(default)]
+    evidence_refs: Vec<String>,
+    #[serde(default)]
+    artifacts: Vec<Value>,
 }
 fn path(reference: &str) -> String {format!("{AREA}/{}.json",source::key(reference))}
 fn read_record(scope: &Scope,reference: &str) -> io::Result<(Received,String)> {
@@ -56,6 +67,11 @@ fn write(scope: &Scope,record: &Received) -> io::Result<String> {
     if raw.len()>crate::source_safety::MAX_SOURCE {return Err(invalid("receiving record exceeds native bounded persistence"));}
     crate::file_mutation::atomic_record(&scope.root.join(path(&record.return_ref)),raw.as_bytes())?;
     Ok(source::revision(&raw))
+}
+fn require_disclosure(scope: &Scope,record: &Received) -> io::Result<()> {
+    scope.read(&record.source_ref)?;
+    for artifact in &record.artifacts {scope.read(text(&artifact["source"],"ref")?)?;}
+    Ok(())
 }
 fn response(record: &Received,revision: &str) -> Value {
     json!({"schema":"central.receiving-reading/v1","return_ref":record.return_ref,"revision":revision,"record":record,
@@ -86,6 +102,7 @@ fn submit(scope: &Scope,input: &Value,principal: &Principal,now: u64) -> io::Res
     match read_record(scope,&reference) {
         Ok((existing,revision))=>{
             if existing.request_digest!=digest || existing.author.principal_ref!=principal.principal_ref {return Err(conflict("Return producer key already has different content or attribution"));}
+            require_disclosure(scope,&existing)?;
             return Ok(response(&existing,&revision));
         }
         Err(error) if error.kind()==io::ErrorKind::NotFound=>{},
@@ -103,27 +120,61 @@ fn submit(scope: &Scope,input: &Value,principal: &Principal,now: u64) -> io::Res
     if let Some(reference)=&now_ref {super::placement::read_now(scope,reference)?;}
     let day_ref=optional(input,"day_ref")?;
     if let Some(reference)=&day_ref {super::temporal::day_read(scope,&json!({"day_ref":reference}))?;}
+    let summary=match input.get("summary") {None|Some(Value::Null)=>None,Some(Value::String(s)) if s.len()<=8192=>Some(s.clone()),_=>return Err(invalid("summary must be bounded text"))};
+    let evidence_refs: Vec<String>=serde_json::from_value(input.get("evidence_refs").cloned().unwrap_or(json!([])))?;
+    if evidence_refs.len()>128 || evidence_refs.iter().any(|r|r.trim().is_empty()||r.len()>4096) {return Err(invalid("evidence refs exceed bounded receiving limits"));}
+    let artifacts=retain_artifacts(scope,input,principal)?;
+    if input.get("occurred_at_unix_seconds").is_some_and(|v|!v.is_null()&&v.as_u64().is_none()) {return Err(invalid("occurrence time must be an integer or absent"));}
     let stale=source.revision.revision!=expected;
     let record=Received {schema:"central.received-contribution/v1".into(),return_ref:reference,scope_ref:scope.world_ref.clone(),sequence:next_sequence(scope)?,request_digest:digest,
         source_ref:source.source.source_ref,document_id:text(&document,"document_id")?.into(),proposed_source_revision:expected.into(),proposal,
         author:principal.into(),authority_ref:principal.authority_ref.clone(),authority_revision:principal.authority_revision.clone(),
         occurred_at_unix_seconds:input.get("occurred_at_unix_seconds").and_then(Value::as_u64),received_at_unix_seconds:now,now_ref,day_ref,
         task_ref:optional(input,"task_ref")?,run_ref:optional(input,"run_ref")?,session_ref:optional(input,"session_ref")?,
-        status:if stale {"needs-review"} else {"pending"}.into(),stale_at_arrival:stale,review:None,inclusion_request:None,applied_source_revision:None,last_error:None};
+        status:if stale {"needs-review"} else {"pending"}.into(),stale_at_arrival:stale,review:None,inclusion_request:None,applied_source_revision:None,last_error:None,acknowledgement:None,summary,evidence_refs,artifacts};
     let revision=write(scope,&record)?;
     Ok(response(&record,&revision))
+}
+/// Evidence is retained from the actual scoped SourceRef at the supplied
+/// revision. It does not become included Day prose or adopted human ground.
+fn retain_artifacts(scope: &Scope,input: &Value,principal: &Principal) -> io::Result<Vec<Value>> {
+    let items=match input.get("artifacts") {None=>return Ok(vec![]),Some(v)=>v.as_array().ok_or_else(||invalid("artifacts must be an array"))?};
+    if items.len()>16 {return Err(invalid("at most 16 explicit source artifacts per Return"));}
+    let mut retained=Vec::new();let mut total=0;
+    for item in items {
+        let reading=scope.read(text(item,"source_ref")?)?;
+        if reading.revision.revision!=text(item,"expected_revision")? {return Err(conflict("draft artifact changed before receiving"));}
+        total+=reading.content.len();
+        if total>512*1024 {return Err(invalid("retained draft evidence exceeds bounded receiving size"));}
+        retained.push(json!({"source":reading.source,"revision":reading.revision,"content":reading.content,
+            "content_sha256":source::key(&reading.content),"submitted_by":principal.principal_ref,
+            "declared_original_producer_ref":optional(item,"producer_ref")?,
+            "proposed_target_ref":optional(item,"proposed_target_ref")?,
+            "standing":"retained-source-evidence-not-human-adoption"}));
+    }
+    Ok(retained)
 }
 fn checked(scope: &Scope,input: &Value) -> io::Result<Received> {
     let (record,revision)=read_record(scope,text(input,"return_ref")?)?;
     if revision!=text(input,"expected_return_revision")? {return Err(conflict("receiving record changed since review/selection"));}
+    require_disclosure(scope,&record)?;
     Ok(record)
 }
 fn review(scope: &Scope,input: &Value,principal: &Principal,now: u64) -> io::Result<Value> {
     principal.require_human()?;
     let mut record=checked(scope,input)?;
-    if !matches!(record.status.as_str(),"pending"|"needs-review"|"accepted"|"rejected") {return Err(conflict("Return has applied or uncertain effects; review cannot reset them"));}
     let disposition=text(input,"disposition")?;
-    if !matches!(disposition,"accepted"|"rejected") {return Err(invalid("review disposition is accepted or rejected; inclusion is a separate Action"));}
+    if disposition=="acknowledged" {
+        record.acknowledgement=Some(json!({"principal_ref":principal.principal_ref,"recorded_at_unix_seconds":now,"authority_ref":principal.authority_ref,"authority_revision":principal.authority_revision}));
+        let revision=write(scope,&record)?;return Ok(response(&record,&revision));
+    }
+    if disposition=="pending" {
+        if !matches!(record.status.as_str(),"pending"|"needs-review"|"accepted"|"rejected") {return Err(conflict("pending cannot undo applied or uncertain effects"));}
+        record.status="pending".into();record.review=None;
+        let revision=write(scope,&record)?;return Ok(response(&record,&revision));
+    }
+    if !matches!(record.status.as_str(),"pending"|"needs-review"|"accepted"|"rejected") {return Err(conflict("Return has applied or uncertain effects; review cannot reset them"));}
+    if !matches!(disposition,"accepted"|"rejected") {return Err(invalid("review disposition is accepted, rejected, pending or acknowledged; inclusion is separate"));}
     let source_revision=if disposition=="accepted" {
         let current=scope.read(&record.source_ref)?;
         if current.revision.revision!=text(input,"expected_source_revision")? {return Err(conflict("reviewed target source changed"));}
@@ -152,6 +203,10 @@ fn include(scope: &Scope,input: &Value,principal: &Principal,now: u64,recover: b
         request["document_id"]=json!(record.document_id);
         request["expected_revision"]=json!(review.source_revision);
         request["request_id"]=json!(format!("include:{}",record.return_ref));
+        // Inclusion retains the original receipt/occurrence, not the later
+        // review clock. None remains absent rather than a fabricated event.
+        request["occurred_at_unix_seconds"]=json!(record.occurred_at_unix_seconds);
+        request["received_at_unix_seconds"]=json!(record.received_at_unix_seconds);
         request
     };
     record.inclusion_request=Some(request.clone());
@@ -194,9 +249,9 @@ fn list(scope: &Scope,input: &Value) -> io::Result<Value> {
         let record: Received=serde_json::from_str(&raw)?;
         if record.schema!="central.received-contribution/v1" || record.scope_ref!=scope.world_ref {return Err(invalid("unexpected record in receiving owner store"));}
         if record.sequence<=after {continue;}
-        if scope.read(&record.source_ref).is_err() {withheld+=1;continue;}
+        if require_disclosure(scope,&record).is_err() {withheld+=1;continue;}
         records.push(json!({"return_ref":record.return_ref,"revision":source::revision(&raw),"sequence":record.sequence,"status":record.status,
-            "source_ref":record.source_ref,"document_id":record.document_id,"author":record.author,
+            "source_ref":record.source_ref,"document_id":record.document_id,"author":record.author,"summary":record.summary,"acknowledgement":record.acknowledgement,
             "occurred_at_unix_seconds":record.occurred_at_unix_seconds,"received_at_unix_seconds":record.received_at_unix_seconds,
             "now_ref":record.now_ref,"day_ref":record.day_ref,"task_ref":record.task_ref,"run_ref":record.run_ref,"session_ref":record.session_ref}));
     }
@@ -208,13 +263,15 @@ fn list(scope: &Scope,input: &Value) -> io::Result<Value> {
 /// Called before the generic source lock. This preserves the legacy owner's
 /// return-lock → source-lock ordering and cannot deadlock against v1 acceptance.
 pub(crate) fn dispatch(scope: &Scope,operation: &str,input: &Value,token: Option<&str>,now: u64) -> io::Result<Value> {
+    if operation=="receiving_list" && input.get("projects").is_some() {return aperture::read(scope,input,token,now);}
+    if operation=="receiving_list" && input.get("cursor").is_some() {return Err(invalid("root aperture cursor requires its explicit projects selection"));}
     let _receiving=crate::source_safety::lock(&scope.root,"source-return.lock")?;
     let _sources=source::lock(scope)?;
     match operation {
         "receiving_list"=>return list(scope,input),
         "receiving_read"=>{
             let (record,revision)=read_record(scope,text(input,"return_ref")?)?;
-            scope.read(&record.source_ref)?;
+            require_disclosure(scope,&record)?;
             return Ok(response(&record,&revision));
         }
         _=>{},
