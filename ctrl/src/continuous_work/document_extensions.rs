@@ -177,6 +177,7 @@ pub(super) fn edit(document: &mut Value, input: &Value, author: &ContributionAut
             // imported JSON. Preserve origin as untrusted evidence by reference.
             restored["operations"] = document["operations"].clone();
             restored["creation_digest"] = document["creation_digest"].clone();
+            restored["template_fidelity"] = document["template_fidelity"].clone();
             restored["external_reconciliations"] = document.get("external_reconciliations").cloned().unwrap_or(json!([]));
             restored["portable_imports"] = document.get("portable_imports").cloned().unwrap_or(json!([]));
             restored["portable_imports"].as_array_mut().ok_or_else(||invalid("invalid retained import history"))?.push(json!({

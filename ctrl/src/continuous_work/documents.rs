@@ -285,6 +285,11 @@ pub(crate) fn mutate_reviewed(scope: &Scope,input: &Value,author: &ContributionA
     mutate_as(scope,input,author,Some(reviewer),now)
 }
 fn mutate_as(scope: &Scope,input: &Value,author: &ContributionAuthor,reviewer: Option<&Principal>,now: u64) -> io::Result<Value> {
+    for key in ["occurred_at_unix_seconds","received_at_unix_seconds"] {
+        if input.get(key).is_some_and(|v| !v.is_null() && v.as_u64().is_none()) {
+            return Err(invalid(format!("{key} must be an integer or absent")));
+        }
+    }
     let reference=text(input,"source_ref")?;
     let id=text(input,"document_id")?;
     let request_key=format!("{}:{}:{}:{}",scope.world_ref,reference,author.principal_ref,text(input,"request_id")?);

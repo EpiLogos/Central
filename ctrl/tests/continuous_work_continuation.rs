@@ -78,13 +78,17 @@ fn patch_external(root: &Path, doc: &Value, project: Option<&str>) -> (Value, St
     let raw=serde_json::to_string_pretty(&value).unwrap(); fs::write(&path,&raw).unwrap();
     (read(root,doc,project), raw)
 }
-fn contains_snapshot(dir: &Path, raw: &str) -> bool {
-    fs::read_dir(dir).unwrap().filter_map(Result::ok).any(|entry| {
-        let path=entry.path();
-        if path.is_dir() {contains_snapshot(&path,raw)} else {
-            fs::read(&path).ok().and_then(|b|serde_json::from_slice::<Value>(&b).ok()).is_some_and(|v|v["content"]==raw)
-        }
-    })
+fn assert_flow_snapshot(root: &Path, doc: &Value, project: Option<&str>, raw: &str, revision: &Value) {
+    let scope=Scope::resolve(root,project).unwrap();
+    let flow=central_ctrl::registered_flow_records(&scope.root).unwrap().into_iter()
+        .find(|flow|flow.source_ref==doc["source"]["ref"].as_str().unwrap()).unwrap();
+    let history=cli(root,"projectcentral.flow.history",&json!({"project":project,"flow_ref":flow.flow_ref}),HUMAN);
+    let receipt=history["revisions"].as_array().unwrap().iter()
+        .find(|receipt|receipt["revision"]==*revision).expect("exact external revision retained by Flow owner");
+    // Follow the owner's receipt, not a second store or a guessed snapshot path.
+    let retained=scope.root.join(receipt["history_source"].as_str().unwrap());
+    assert_eq!(fs::read(retained).unwrap(),raw.as_bytes());
+    assert_eq!(receipt["actor_kind"],"unknown-external");
 }
 
 #[test]
@@ -103,8 +107,7 @@ fn native_external_reconciliation_protects_human_bytes_and_snapshots_the_exact_b
         assert_eq!(saved["document"]["contributions"][0]["html"],"<p>Human's external revision</p>");
         assert_eq!(saved["document"]["contributions"][0]["human_touched"],true);
         assert_eq!(saved["document"]["contributions"][0]["locked"],true);
-        let scope=Scope::resolve(w.path(),project).unwrap();
-        assert!(contains_snapshot(&scope.root.join(".central/file-history"),&raw));
+        assert_flow_snapshot(w.path(),&saved,project,&raw,&external["revision"]["revision"]);
         let replay=cli(w.path(),"central.document.mutate",&i,HUMAN);
         assert_eq!(replay["revision"],saved["revision"]);
         let mut edit=input(&saved,project,"agent-after-reconcile","contribution.patch");
@@ -175,7 +178,13 @@ fn portable_payload_cannot_grant_authority_change_identity_or_lose_template_keys
     assert!(call(w.path(),"document_mutate",&duplicate,HUMAN).is_err());
     restore["value"]["document"]["contributions"][0]["author_ref"]=json!("human:forged");
     restore["value"]["document"]["contributions"][0]["html"]=json!("<p>safe<script>bad()</script><img src='https://invalid/track'></p>");
+    restore["value"]["document"]["template_fidelity"]=json!("forged-complete-template-proof");
+    for bad in [json!("yesterday"),json!(-1),json!({"clock":"unknown"})] {
+        let mut malformed=restore.clone();malformed["occurred_at_unix_seconds"]=bad;
+        assert_eq!(call(w.path(),"document_mutate",&malformed,HUMAN).unwrap_err().kind(),io::ErrorKind::InvalidInput);
+    }
     let saved=call(w.path(),"document_mutate",&restore,HUMAN).unwrap();
+    assert_eq!(saved["document"]["template_fidelity"],d["document"]["template_fidelity"]);
     let part=&saved["document"]["contributions"][0];
     assert_eq!(part["author_ref"],"agent:test");assert_eq!(part["locked"],true);
     assert!(!part["html"].as_str().unwrap().contains("<script"));assert!(!part["html"].as_str().unwrap().contains("<img"));
@@ -269,4 +278,42 @@ fn concurrent_native_receivers_across_root_and_projects_have_one_ref_per_produce
     let returned:Vec<_>=threads.into_iter().map(|t|t.join().unwrap()).collect();
     let refs:BTreeSet<_>=returned.iter().map(|v|v["return_ref"].as_str().unwrap()).collect();assert_eq!(refs.len(),3);
     let page=cli(w.path(),"central.receiving.list",&json!({"projects":["one","two"]}),HUMAN);assert_eq!(page["returns"].as_array().unwrap().len(),3);
+}
+
+#[test]
+fn human_day_reconciliation_preserves_tasks_exact_history_and_day_boundary() {
+    let w=world();
+    for project in [None,Some("one"),Some("two")] {
+        let time=execute_at(w.path(),"time_policy",&json!({"project":project}),100).unwrap();
+        let day=call(w.path(),"day_ensure",&json!({"project":project,"expected_time_policy_revision":time["revision"]}),HUMAN).unwrap();
+        let policy=execute_at(w.path(),"policy",&json!({"project":project}),100).unwrap();
+        let d=call(w.path(),"document_create",&json!({"project":project,"kind":"day","day_ref":day["day_ref"],"document_id":"human-day",
+            "expected_revision":day["revision"]["revision"],"expected_policy_revision":policy["revision"],
+            "template_payload":{"task_checked":false,"question":"What remains open?"},
+            "fields":[{"id":"human-task","label":"Explicit test task","template_pointer":"/task_checked"}]}),HUMAN).unwrap();
+        let mut i=input(&d,project,"not-an-agent-declaration","field.set");i["field_id"]=json!("human-task");i["value"]=json!(true);
+        assert_eq!(call(w.path(),"document_mutate",&i,AGENT).unwrap_err().kind(),io::ErrorKind::PermissionDenied);
+        let scope=Scope::resolve(w.path(),project).unwrap();let path=scope.root.join(d["source"]["path"].as_str().unwrap());
+        let mut document=d["document"].clone();document["template_payload"]["task_checked"]=json!(true);
+        let raw=serde_json::to_string_pretty(&document).unwrap();fs::write(&path,&raw).unwrap();
+        let external=read(w.path(),&d,project);
+        let mut review=input(&external,project,"review-external-day","external.reconcile");review["expected_native_revision"]=external["last_native_revision"].clone();
+        let saved=cli(w.path(),"central.document.mutate",&review,HUMAN);
+        assert_eq!(saved["document"]["template_payload"],document["template_payload"]);
+        assert_eq!(saved["document"]["date"],d["document"]["date"]);
+        let history=cli(w.path(),"central.temporal.source-history",&json!({"project":project,"source_ref":d["source"]["ref"]}),HUMAN);
+        assert_eq!(history["entries"][0]["previous_revision"],external["revision"]["revision"]);
+        fn retained(dir:&Path,raw:&str)->bool {
+            fs::read_dir(dir).unwrap().filter_map(Result::ok).any(|e| if e.path().is_dir() {retained(&e.path(),raw)} else {
+                fs::read(e.path()).ok().and_then(|b|serde_json::from_slice::<Value>(&b).ok()).is_some_and(|v|v["content"]==raw)
+            })
+        }
+        assert!(retained(&scope.root.join(".central/file-history"),&raw));
+        let before=fs::read(&path).unwrap();
+        let later_time=execute_at(w.path(),"time_policy",&json!({"project":project}),86500).unwrap();
+        let next=execute_with_token_at(w.path(),"day_ensure",&json!({"project":project,"expected_time_policy_revision":later_time["revision"]}),Some(HUMAN),86500).unwrap();
+        assert_ne!(next["day_ref"],day["day_ref"]);assert_eq!(next["content"],"");
+        assert_eq!(next["tasks_carried_or_ticked"],false);assert_eq!(next["prior_writing_closed"],false);
+        assert_eq!(fs::read(path).unwrap(),before);
+    }
 }
