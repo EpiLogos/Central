@@ -1,3 +1,11 @@
+mod file_map_moves;
+pub mod file_map;
+mod file_map_catalog;
+mod file_map_index;
+mod file_map_adoption;
+mod file_map_projection;
+mod file_map_skills;
+mod file_map_backend;
 pub mod action;
 pub mod agent_governance;
 pub mod agent_profile;
@@ -45,12 +53,12 @@ pub mod projectcentral_ops {
 
     pub fn register_projectcentral_actions(registry: &mut crate::action::ActionRegistry) {
         super::projectcentral_ops_base::register_projectcentral_actions(registry);
-        super::file_map::register(registry);
         super::development_field::register_development_field_actions(registry);
         super::projectcentral_ground::register_projectcentral_ground_actions(registry);
         super::projectcentral_now::register_projectcentral_now_actions(registry);
         super::projectcentral_flow::register_projectcentral_flow_actions(registry);
         super::source_horizon::register_source_horizon_actions(registry);
+        super::file_map::register(registry);
         super::source_history::register_source_history_actions(registry);
         super::world_source::register_world_source_actions(registry);
         super::wiki_read::register_projectcentral_wiki_read_action(registry);
@@ -331,8 +339,3 @@ mod source_safety;
 mod source_return;
 
 pub mod recognition;
-
-pub mod bkmr;
-pub mod file_map;
-mod file_map_links;
-mod file_map_skills;

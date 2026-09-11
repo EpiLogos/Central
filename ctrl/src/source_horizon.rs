@@ -159,10 +159,6 @@ struct GroundRelationsFile {
 
 #[derive(Debug, Clone, Deserialize)]
 struct GroundRelation {
-    #[serde(default)]
-    external_root: Option<String>,
-    #[serde(default)]
-    resource_uri: Option<String>,
     #[serde(rename = "ref")]
     source_ref: String,
     path: String,
@@ -467,7 +463,6 @@ pub fn project_source_bindings(project_root: &Path) -> io::Result<Vec<SourceBind
     )?;
 
     for relation in read_ground_relations(project_root, &manifest.project_id)? {
-        if relation.external_root.is_some() || relation.resource_uri.is_some() { continue; }
         let relative = relation.path.clone();
         let path = project_root.join(&relative);
         if !safe_regular_file(project_root, &path)? {
@@ -650,7 +645,6 @@ pub fn control_source_bindings(central_root: &Path) -> io::Result<Vec<SourceBind
     }
 
     for relation in read_control_ground_relations(central_root)? {
-        if relation.external_root.is_some() || relation.resource_uri.is_some() { continue; }
         let relative = relation.path.clone();
         let path = central_root.join(&relative);
         if !safe_regular_file(central_root, &path)? {
