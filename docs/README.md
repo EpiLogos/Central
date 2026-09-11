@@ -82,6 +82,8 @@ resembles the product checkout (`mixed_root` in the structured health report).
 - [CLI-REFERENCE.md](CLI-REFERENCE.md) — the stock `ctrl` command surface:
   canonical Actions, invocation seams and the result/exit contract.
 
+- [integrations/BKMR-FILE-MAP.md](integrations/BKMR-FILE-MAP.md) — persistent root/Project file maps, managed links, migration, native bkmr adoption and AIKit knowledge/skill consumption.
+
 ## Installation / recovery
 
 - [INSTALL.md](INSTALL.md) — native `ctrl` installation and clean-root

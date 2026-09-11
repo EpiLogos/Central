@@ -72,7 +72,8 @@ mod unix_tests {
             .collect::<Vec<_>>();
 
         let macos = create_macos_action_registry();
-        assert_eq!(macos.list().len(), 91);
+        assert_eq!(macos.list().len(), 107);
+        assert!(macos.get("central.file-map.skill-tree").is_some());
         for id in core_ids {
             assert!(macos.get(&id).is_some(), "macOS host lost core Action {id}");
         }

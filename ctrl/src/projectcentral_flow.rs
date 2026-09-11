@@ -408,6 +408,28 @@ fn load_registry(project_root: &Path) -> io::Result<FlowRegistry> {
     Ok(registry)
 }
 
+/// Prepare this owner's current-location update for a file-map transaction.
+/// Historical source paths remain historical. The caller holds the existing
+/// source-mutation lock and journals both exact documents for replay/rollback.
+pub(crate) fn plan_file_relocation(
+    root: &Path, from: &Path, to: &Path,
+) -> io::Result<Option<(String, String)>> {
+    let registry = load_registry(root)?;
+    if !registry.flows.iter().any(|flow| Path::new(&flow.path).starts_with(from)) {
+        return Ok(None);
+    }
+    reject_symlink_components(root, Path::new(FLOW_REGISTRY))?;
+    let before = fs::read_to_string(root.join(FLOW_REGISTRY))?;
+    let mut after: Value = serde_json::from_str(&before).map_err(io::Error::other)?;
+    for flow in after["flows"].as_array_mut().ok_or_else(|| io::Error::other("Invalid Flow registry"))? {
+        let Some(path) = flow["path"].as_str() else { return Err(io::Error::other("Flow lacks current path")); };
+        if let Ok(suffix) = Path::new(path).strip_prefix(from) {
+            flow["path"] = serde_json::json!(if suffix.as_os_str().is_empty() { to.to_path_buf() } else { to.join(suffix) });
+        }
+    }
+    Ok(Some((before, serde_json::to_string_pretty(&after)?)))
+}
+
 fn write_registry(project_root: &Path, registry: &FlowRegistry) -> io::Result<()> {
     let path = registry_path(project_root);
     if let Some(parent) = path.parent() {

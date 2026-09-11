@@ -1,0 +1,80 @@
+name: BKMR joined verification
+on:
+  push:
+    branches: [main, agent/bkmr-154-persistent]
+    paths:
+      - 'ctrl/**'
+      - 'crates/**'
+      - 'Cargo.lock'
+      - 'tests/bkmr_joined.py'
+      - '.github/workflows/bkmr-joined.yml'
+  pull_request:
+    paths:
+      - 'ctrl/**'
+      - 'crates/**'
+      - 'Cargo.lock'
+      - 'tests/bkmr_joined.py'
+      - '.github/workflows/bkmr-joined.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: bkmr-joined-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CENTRAL_NO_REAL_OPEN: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: Central
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: EpiLogos/ai-kit
+          ref: 299e54f765edbd7db89dd55164c036a2486085c1
+          path: ai-kit
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            Central -> target
+            ai-kit -> target
+          shared-key: bkmr-154-native
+      - name: Install the pinned native bkmr release
+        run: |
+          python3 -m venv "$RUNNER_TEMP/bkmr"
+          "$RUNNER_TEMP/bkmr/bin/pip" install bkmr==7.6.7
+          mkdir -p evidence
+          {
+            git -C Central rev-parse HEAD
+            git -C ai-kit rev-parse HEAD
+            rustc --version
+            "$RUNNER_TEMP/bkmr/bin/bkmr" --version
+          } | tee evidence/revisions.txt
+      - name: Build both real owner and consumer binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd Central && cargo build -p ctrl --locked) 2>&1 | tee evidence/central-build.log
+          (cd ai-kit && cargo build -p aikit-cli --bin aikit --locked) 2>&1 | tee evidence/aikit-build.log
+          sha256sum Central/target/debug/ctrl ai-kit/target/debug/aikit | tee evidence/binaries.sha256
+      - name: Exercise all native joined cases in disposable Worlds
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 Central/tests/bkmr_joined.py \
+            --ctrl "$PWD/Central/target/debug/ctrl" \
+            --aikit "$PWD/ai-kit/target/debug/aikit" \
+            --bkmr "$RUNNER_TEMP/bkmr/bin/bkmr" 2>&1 | tee evidence/joined.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bkmr-joined-evidence
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 7
