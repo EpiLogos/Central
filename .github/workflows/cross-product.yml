@@ -1,28 +1,24 @@
-name: BKMR joined verification
+name: Cross-product (weekly)
+
+# Checks that build another repository run here weekly and on demand, not
+# per push: each sibling gates its own main. A red job is a rotted pin or a
+# moved seam, repaired in its own change.
+
 on:
-  push:
-    branches: [main, agent/bkmr-154-persistent]
-    paths:
-      - 'ctrl/**'
-      - 'crates/**'
-      - 'Cargo.lock'
-      - 'tests/bkmr_joined.py'
-      - '.github/workflows/bkmr-joined.yml'
-  pull_request:
-    paths:
-      - 'ctrl/**'
-      - 'crates/**'
-      - 'Cargo.lock'
-      - 'tests/bkmr_joined.py'
-      - '.github/workflows/bkmr-joined.yml'
+  schedule:
+    - cron: '0 5 * * 1'
   workflow_dispatch:
+
 permissions:
   contents: read
+
 concurrency:
-  group: bkmr-joined-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 jobs:
-  native:
+  bkmr-joined:
+    name: BKMR joined verification against pinned AIKit
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
