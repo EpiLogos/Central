@@ -1,10 +1,10 @@
+use central_ctrl::projectcentral_ops::register_projectcentral_actions;
 use central_ctrl::{
     create_core_action_registry, create_default_connector_registry, create_flow, read_flow,
     read_project_change_horizon, read_world_source, run_cli, write_world_source,
     ActionExecutionContext, CliEnvironment, ConnectorContext, ConnectorRegistry, ResultStatus,
     RootOptions, WORLD_SOURCE_READING_SCHEMA, WORLD_SOURCE_WRITE_RECEIPT_SCHEMA,
 };
-use central_ctrl::projectcentral_ops::register_projectcentral_actions;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -17,7 +17,10 @@ struct TempRoot(PathBuf);
 
 impl TempRoot {
     fn new(label: &str) -> Self {
-        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let sequence = NEXT_TEMP_ROOT.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
             "central-world-source-{label}-{}-{nonce}-{sequence}",
@@ -43,7 +46,12 @@ fn project_fixture(label: &str, name: &str) -> (TempRoot, PathBuf, PathBuf) {
     let central = temp.path().join("Central");
     let project = central.join("Work").join(name);
     fs::create_dir_all(&project).unwrap();
-    central_ctrl::projectcentral_ops::initialize_projectcentral(&central, &project, &format!("example/{name}")).unwrap();
+    central_ctrl::projectcentral_ops::initialize_projectcentral(
+        &central,
+        &project,
+        &format!("example/{name}"),
+    )
+    .unwrap();
     (temp, central, project)
 }
 
@@ -53,9 +61,15 @@ fn run_action(action: &str, input: Value, central: &Path) -> central_ctrl::Actio
         configured_root: None,
         home: None,
     }));
-    let connectors: &'static ConnectorRegistry = Box::leak(Box::new(create_default_connector_registry()));
-    let connector_context: &'static ConnectorContext = Box::leak(Box::new(ConnectorContext::current()));
-    let context = ActionExecutionContext { root_options: options, connectors, connector_context };
+    let connectors: &'static ConnectorRegistry =
+        Box::leak(Box::new(create_default_connector_registry()));
+    let connector_context: &'static ConnectorContext =
+        Box::leak(Box::new(ConnectorContext::current()));
+    let context = ActionExecutionContext {
+        root_options: options,
+        connectors,
+        connector_context,
+    };
     let mut registry = create_core_action_registry();
     register_projectcentral_actions(&mut registry);
     registry.execute(action, &input, &context)
@@ -103,7 +117,10 @@ fn world_source_read_discloses_one_source_with_its_exact_revision_and_provenance
     assert_eq!(data["schema"], WORLD_SOURCE_READING_SCHEMA);
     assert_eq!(data["content"], "keep ordinary files ordinary\n");
     assert_eq!(data["content_encoding"], "utf-8");
-    assert_eq!(data["revision"]["revision"], current_revision(&project, &source_ref));
+    assert_eq!(
+        data["revision"]["revision"],
+        current_revision(&project, &source_ref)
+    );
     assert_eq!(data["source"]["ref"], source_ref);
     assert_eq!(data["source"]["path"], "ProjectCentral/user/intent.md");
     assert_eq!(data["world_ref"], horizon.world_ref);
@@ -141,7 +158,11 @@ fn world_source_read_refuses_non_participating_and_masked_source() {
         &central,
     );
     assert_eq!(masked.status, ResultStatus::UnavailableCapability);
-    assert!(masked.error.unwrap().message.contains(".no-agent-retrieval"));
+    assert!(masked
+        .error
+        .unwrap()
+        .message
+        .contains(".no-agent-retrieval"));
 
     let masked_library = read_world_source(&project, &masked_ref);
     assert!(masked_library.is_err());
@@ -184,12 +205,19 @@ fn world_source_write_is_cas_and_attributes_the_emitted_change() {
 
     let after = read_project_change_horizon(&project, None).unwrap();
     assert_eq!(after.cursor, cursor_before + 1);
-    let change = after.changes.iter().find(|change| change.source_ref == source_ref).unwrap();
+    let change = after
+        .changes
+        .iter()
+        .find(|change| change.source_ref == source_ref)
+        .unwrap();
     assert_eq!(change.change_ref, receipt["change_ref"]);
     assert_eq!(change.actor.as_deref(), Some("human:cradle"));
     assert_eq!(change.actor_kind.as_deref(), Some("human"));
     assert_eq!(change.before_revision.as_deref(), Some(basis.as_str()));
-    assert_eq!(change.after_revision.as_deref(), Some(new_revision.as_str()));
+    assert_eq!(
+        change.after_revision.as_deref(),
+        Some(new_revision.as_str())
+    );
 
     // An agent session write on the same working source keeps its session lineage.
     let session_basis = current_revision(&project, &source_ref);
@@ -217,7 +245,10 @@ fn world_source_write_is_cas_and_attributes_the_emitted_change() {
         .unwrap();
     assert_eq!(agent_change.actor.as_deref(), Some("agent:epii"));
     assert_eq!(agent_change.actor_kind.as_deref(), Some("agent"));
-    assert_eq!(agent_change.agent_session_ref.as_deref(), Some("aikit:agent-session:1"));
+    assert_eq!(
+        agent_change.agent_session_ref.as_deref(),
+        Some("aikit:agent-session:1")
+    );
     assert!(!after_agent.automatic_agent_or_model_invocation);
 }
 
@@ -248,7 +279,10 @@ fn stale_revision_fails_without_mutating_source_or_horizon() {
     assert_eq!(fs::read_to_string(&source).unwrap(), "current\n");
     let after = read_project_change_horizon(&project, None).unwrap();
     assert_eq!(after.cursor, horizon.cursor);
-    assert!(after.changes.iter().all(|change| change.source_ref != source_ref));
+    assert!(after
+        .changes
+        .iter()
+        .all(|change| change.source_ref != source_ref));
 }
 
 #[test]
@@ -355,18 +389,24 @@ fn an_agent_session_cannot_claim_human_authorship_to_write_human_ground() {
         }),
         &central,
     );
-    assert_eq!(claimed.status, ResultStatus::InvalidInput, "{:?}", claimed.error);
-    assert!(
-        claimed
-            .error
-            .unwrap()
-            .message
-            .contains("does not also carry an agent_session_ref")
+    assert_eq!(
+        claimed.status,
+        ResultStatus::InvalidInput,
+        "{:?}",
+        claimed.error
     );
+    assert!(claimed
+        .error
+        .unwrap()
+        .message
+        .contains("does not also carry an agent_session_ref"));
     assert_eq!(fs::read_to_string(&source).unwrap(), "held by the human\n");
     let after = read_project_change_horizon(&project, None).unwrap();
     assert_eq!(after.cursor, horizon.cursor);
-    assert!(after.changes.iter().all(|change| change.source_ref != source_ref));
+    assert!(after
+        .changes
+        .iter()
+        .all(|change| change.source_ref != source_ref));
     assert_eq!(
         after
             .sources
@@ -383,7 +423,10 @@ fn an_agent_session_cannot_claim_human_authorship_to_write_human_ground() {
     let working = project.join("ProjectCentral/agents/wiki/notes.md");
     fs::create_dir_all(working.parent().unwrap()).unwrap();
     fs::write(&working, "session notes\n").unwrap();
-    let working_ref = source_ref_of(&read_project_change_horizon(&project, None).unwrap(), "notes.md");
+    let working_ref = source_ref_of(
+        &read_project_change_horizon(&project, None).unwrap(),
+        "notes.md",
+    );
     let claimed_working = run_action(
         "projectcentral.source.write",
         json!({
@@ -415,7 +458,10 @@ fn an_agent_session_cannot_claim_human_authorship_to_write_human_ground() {
         &central,
     );
     assert_eq!(human.status, ResultStatus::Success, "{:?}", human.error);
-    assert_eq!(fs::read_to_string(&source).unwrap(), "revised by the human\n");
+    assert_eq!(
+        fs::read_to_string(&source).unwrap(),
+        "revised by the human\n"
+    );
 }
 
 #[test]
@@ -465,9 +511,15 @@ fn world_source_seam_and_flow_seam_compose_over_one_source_ref() {
 fn cli_doorway_discovers_and_serves_world_source_actions() {
     let (_temp, central, project) = project_fixture("cli", "cli-project");
     fs::write(project.join("ProjectCentral/user/intent.md"), "via cli\n").unwrap();
-    let environment = CliEnvironment { configured_root: Some(central.clone()), home: None };
+    let environment = CliEnvironment {
+        configured_root: Some(central.clone()),
+        home: None,
+    };
 
-    let listed = run_cli(&["--json".to_owned(), "action".to_owned(), "list".to_owned()], &environment);
+    let listed = run_cli(
+        &["--json".to_owned(), "action".to_owned(), "list".to_owned()],
+        &environment,
+    );
     assert_eq!(listed.result.status, ResultStatus::Success);
     let actions: Value = listed.result.data.unwrap();
     let ids: Vec<String> = actions["actions"]
@@ -476,8 +528,14 @@ fn cli_doorway_discovers_and_serves_world_source_actions() {
         .iter()
         .map(|descriptor| descriptor["id"].as_str().unwrap().to_owned())
         .collect();
-    assert!(ids.contains(&"projectcentral.source.read".to_owned()), "{ids:?}");
-    assert!(ids.contains(&"projectcentral.source.write".to_owned()), "{ids:?}");
+    assert!(
+        ids.contains(&"projectcentral.source.read".to_owned()),
+        "{ids:?}"
+    );
+    assert!(
+        ids.contains(&"projectcentral.source.write".to_owned()),
+        "{ids:?}"
+    );
 
     let horizon = read_project_change_horizon(&project, None).unwrap();
     let source_ref = source_ref_of(&horizon, "intent.md");

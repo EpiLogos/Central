@@ -1,5 +1,5 @@
 use super::source::{self, conflict, denied, encoded, invalid, key, text, Scope};
-use crate::projectcentral_flow::{relative_member, reject_symlink_components};
+use crate::projectcentral_flow::{reject_symlink_components, relative_member};
 use crate::source_horizon::SourceBinding;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -88,70 +88,145 @@ pub struct EffectivePolicy {
 }
 
 pub(crate) fn anchor(root: &Path, absolute: &Path) -> io::Result<PathAnchor> {
-    let relative = absolute.strip_prefix(root).map_err(|_| denied("destination is outside Central"))?;
+    let relative = absolute
+        .strip_prefix(root)
+        .map_err(|_| denied("destination is outside Central"))?;
     reject_symlink_components(root, relative)?;
     let mut current = absolute;
     loop {
         match fs::symlink_metadata(current) {
             Ok(meta) => {
-                if meta.file_type().is_symlink() { return Err(denied("symlink destination requires reviewed material resolution")); }
-                if !meta.is_dir() && !meta.is_file() { return Err(denied("destination is not a regular file or directory")); }
+                if meta.file_type().is_symlink() {
+                    return Err(denied(
+                        "symlink destination requires reviewed material resolution",
+                    ));
+                }
+                if !meta.is_dir() && !meta.is_file() {
+                    return Err(denied("destination is not a regular file or directory"));
+                }
                 return Ok(PathAnchor {
-                    path: absolute.into(), existing_ancestor: current.into(),
-                    device: meta.dev(), inode: meta.ino(), exists: current == absolute,
+                    path: absolute.into(),
+                    existing_ancestor: current.into(),
+                    device: meta.dev(),
+                    inode: meta.ino(),
+                    exists: current == absolute,
                 });
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                current = current.parent().ok_or_else(|| denied("destination has no existing Central ancestor"))?;
+                current = current
+                    .parent()
+                    .ok_or_else(|| denied("destination has no existing Central ancestor"))?;
             }
             Err(e) => return Err(e),
         }
     }
 }
 fn absolute(scope: &Scope, raw: &str) -> io::Result<PathBuf> {
-    if raw == "." && scope.project.is_some() { return Ok(scope.root.clone()); }
+    if raw == "." && scope.project.is_some() {
+        return Ok(scope.root.clone());
+    }
     Ok(scope.root.join(relative_member(raw)?))
 }
 fn recognised(source: &SourceBinding) -> bool {
-    matches!(source.provenance.as_str(), "human-authored" | "human-adopted")
-        && matches!(source.standing.as_str(), "authored-human-position" | "design-commitment" | "architecture-contract")
-        && source.agent_retrieval_allowed
+    matches!(
+        source.provenance.as_str(),
+        "human-authored" | "human-adopted"
+    ) && matches!(
+        source.standing.as_str(),
+        "authored-human-position" | "design-commitment" | "architecture-contract"
+    ) && source.agent_retrieval_allowed
 }
-fn policy_at(scope: &Scope, now: u64, required: bool) -> io::Result<Option<(PlacementPolicy, PolicySource)>> {
+fn policy_at(
+    scope: &Scope,
+    now: u64,
+    required: bool,
+) -> io::Result<Option<(PlacementPolicy, PolicySource)>> {
     let (relations, _) = scope.relations()?;
-    let candidates: Vec<_> = relations["relations"].as_array().ok_or_else(|| invalid("invalid relations"))?
-        .iter().filter(|r| r["roles"].as_array().is_some_and(|roles| roles.iter().any(|role| role == POLICY_ROLE))).collect();
-    if candidates.len() > 1 { return Err(invalid("multiple effective placement-policy relations require reconciliation")); }
+    let candidates: Vec<_> = relations["relations"]
+        .as_array()
+        .ok_or_else(|| invalid("invalid relations"))?
+        .iter()
+        .filter(|r| {
+            r["roles"]
+                .as_array()
+                .is_some_and(|roles| roles.iter().any(|role| role == POLICY_ROLE))
+        })
+        .collect();
+    if candidates.len() > 1 {
+        return Err(invalid(
+            "multiple effective placement-policy relations require reconciliation",
+        ));
+    }
     let Some(relation) = candidates.first() else {
-        return if required { Err(denied("no recognised root placement policy; record exact policy adoption through Central source operations")) } else { Ok(None) };
+        return if required {
+            Err(denied("no recognised root placement policy; record exact policy adoption through Central source operations"))
+        } else {
+            Ok(None)
+        };
     };
     let reading = scope.read(text(relation, "ref")?)?;
-    if !recognised(&reading.source) || relation["recognition"].as_str().is_none_or(|s| s.trim().is_empty() || s == "owner-recorded-source-relation-not-human-recognition") {
-        return Err(denied("placement-policy source is draft/unrecognised; no fallback or authority widening"));
+    if !recognised(&reading.source)
+        || relation["recognition"].as_str().is_none_or(|s| {
+            s.trim().is_empty() || s == "owner-recorded-source-relation-not-human-recognition"
+        })
+    {
+        return Err(denied(
+            "placement-policy source is draft/unrecognised; no fallback or authority widening",
+        ));
     }
     let policy: PlacementPolicy = serde_json::from_str(&reading.content)?;
     if policy.schema != POLICY_SCHEMA || policy.scope_ref != scope.world_ref {
         return Err(invalid("placement-policy schema or scope mismatch"));
     }
-    if policy.lease_seconds == 0 || policy.lease_seconds > 86400
-        || policy.expires_at_unix_seconds.is_some_and(|expiry| now >= expiry) {
-        return Err(denied("placement policy is expired or has an invalid bounded lease"));
+    if policy.lease_seconds == 0
+        || policy.lease_seconds > 86400
+        || policy
+            .expires_at_unix_seconds
+            .is_some_and(|expiry| now >= expiry)
+    {
+        return Err(denied(
+            "placement policy is expired or has an invalid bounded lease",
+        ));
     }
-    if !matches!(policy.enforcement.as_str(), "native-actions" | "harness-interception" | "material-filesystem")
-        || policy.required_coverage.is_empty() || policy.required_coverage.len() > 32 {
-        return Err(invalid("placement policy requires a known enforcement level and explicit coverage"));
+    if !matches!(
+        policy.enforcement.as_str(),
+        "native-actions" | "harness-interception" | "material-filesystem"
+    ) || policy.required_coverage.is_empty()
+        || policy.required_coverage.len() > 32
+    {
+        return Err(invalid(
+            "placement policy requires a known enforcement level and explicit coverage",
+        ));
     }
-    let mut authorities = vec![SourceBasis { source_ref: reading.source.source_ref.clone(), revision: reading.revision.revision.clone() }];
+    let mut authorities = vec![SourceBasis {
+        source_ref: reading.source.source_ref.clone(),
+        revision: reading.revision.revision.clone(),
+    }];
     for basis in &policy.authority_refs {
         let authority = scope.read(&basis.source_ref)?;
-        if authority.revision.revision != basis.revision { return Err(conflict("placement authority source revision is stale")); }
-        if !recognised(&authority.source) { return Err(denied("placement authority is not recognised human source")); }
+        if authority.revision.revision != basis.revision {
+            return Err(conflict("placement authority source revision is stale"));
+        }
+        if !recognised(&authority.source) {
+            return Err(denied("placement authority is not recognised human source"));
+        }
         authorities.push(basis.clone());
     }
-    Ok(Some((policy, PolicySource { source: reading.source, revision: reading.revision.revision, authority_refs: authorities })))
+    Ok(Some((
+        policy,
+        PolicySource {
+            source: reading.source,
+            revision: reading.revision.revision,
+            authority_refs: authorities,
+        },
+    )))
 }
 fn destinations(scope: &Scope, policy: &PlacementPolicy) -> io::Result<Vec<WritableDestination>> {
-    if policy.writable.len() > 256 || policy.protected.len() > 256 { return Err(invalid("placement policy exceeds bounded destination count")); }
+    if policy.writable.len() > 256 || policy.protected.len() > 256 {
+        return Err(invalid(
+            "placement policy exceeds bounded destination count",
+        ));
+    }
     policy.writable.iter().map(|grant| {
         if !matches!(grant.class.as_str(), "repository" | "worktree" | "build-output" | "declared-exception") {
             return Err(invalid("unknown destination class"));
@@ -180,63 +255,118 @@ fn destinations(scope: &Scope, policy: &PlacementPolicy) -> io::Result<Vec<Writa
     }).collect()
 }
 fn explicit_protection(scope: &Scope, policy: &PlacementPolicy) -> io::Result<Vec<PathBuf>> {
-    policy.protected.iter().map(|path| absolute(scope, path)).collect()
+    policy
+        .protected
+        .iter()
+        .map(|path| absolute(scope, path))
+        .collect()
 }
 fn protection(scope: &Scope, policy: &PlacementPolicy) -> io::Result<Vec<PathBuf>> {
-    let mut paths = vec![scope.root.join(".central"), scope.root.join(&scope.prefix).join("user"), scope.root.join(&scope.relations_path)];
+    let mut paths = vec![
+        scope.root.join(".central"),
+        scope.root.join(&scope.prefix).join("user"),
+        scope.root.join(&scope.relations_path),
+    ];
     paths.extend(explicit_protection(scope, policy)?);
     Ok(paths)
 }
 fn level(level: &str) -> u8 {
-    match level { "material-filesystem" => 2, "harness-interception" => 1, _ => 0 }
+    match level {
+        "material-filesystem" => 2,
+        "harness-interception" => 1,
+        _ => 0,
+    }
 }
 pub fn effective_policy(scope: &Scope, now: u64) -> io::Result<EffectivePolicy> {
     let root = Scope::resolve(&scope.central_root, None)?;
-    let (root_policy, root_source) = policy_at(&root, now, true)?.ok_or_else(|| denied("root policy unavailable"))?;
-    if root_policy.parent_policy.is_some() { return Err(invalid("root placement policy cannot name a Project parent")); }
+    let (root_policy, root_source) =
+        policy_at(&root, now, true)?.ok_or_else(|| denied("root policy unavailable"))?;
+    if root_policy.parent_policy.is_some() {
+        return Err(invalid(
+            "root placement policy cannot name a Project parent",
+        ));
+    }
     let mut grants = destinations(&root, &root_policy)?;
     let mut protected = protection(&root, &root_policy)?;
     let mut explicit_protected = explicit_protection(&root, &root_policy)?;
     let mut enforcement = root_policy.enforcement.clone();
     let mut coverage = root_policy.required_coverage.clone();
-    let mut expiry = now.saturating_add(root_policy.lease_seconds).min(root_policy.expires_at_unix_seconds.unwrap_or(u64::MAX));
+    let mut expiry = now
+        .saturating_add(root_policy.lease_seconds)
+        .min(root_policy.expires_at_unix_seconds.unwrap_or(u64::MAX));
     let mut sources = vec![root_source];
     if scope.project.is_some() {
         grants.retain(|grant| grant.path.starts_with(&scope.root));
         protected.push(scope.root.join("ProjectCentral"));
         protected.push(scope.root.join(".central"));
         if let Some((local, local_source)) = policy_at(scope, now, false)? {
-            let parent = local.parent_policy.as_ref().ok_or_else(|| invalid("Project policy must pin its root policy basis"))?;
-            if parent.source_ref != sources[0].source.source_ref || parent.revision != sources[0].revision {
-                return Err(conflict("Project placement policy pins a stale root policy"));
+            let parent = local
+                .parent_policy
+                .as_ref()
+                .ok_or_else(|| invalid("Project policy must pin its root policy basis"))?;
+            if parent.source_ref != sources[0].source.source_ref
+                || parent.revision != sources[0].revision
+            {
+                return Err(conflict(
+                    "Project placement policy pins a stale root policy",
+                ));
             }
             let local_grants = destinations(scope, &local)?;
-            if local_grants.iter().any(|g| !grants.iter().any(|parent| g.path.starts_with(&parent.path))) {
+            if local_grants
+                .iter()
+                .any(|g| !grants.iter().any(|parent| g.path.starts_with(&parent.path)))
+            {
                 return Err(denied("Project policy cannot widen its root grants"));
             }
             grants = local_grants;
             protected.extend(protection(scope, &local)?);
             explicit_protected.extend(explicit_protection(scope, &local)?);
-            if level(&local.enforcement) > level(&enforcement) { enforcement = local.enforcement.clone(); }
+            if level(&local.enforcement) > level(&enforcement) {
+                enforcement = local.enforcement.clone();
+            }
             coverage.extend(local.required_coverage.clone());
-            expiry = expiry.min(now.saturating_add(local.lease_seconds)).min(local.expires_at_unix_seconds.unwrap_or(u64::MAX));
+            expiry = expiry
+                .min(now.saturating_add(local.lease_seconds))
+                .min(local.expires_at_unix_seconds.unwrap_or(u64::MAX));
             sources.push(local_source);
         }
     }
-    coverage.sort(); coverage.dedup(); protected.sort(); protected.dedup();
-    explicit_protected.sort(); explicit_protected.dedup();
+    coverage.sort();
+    coverage.dedup();
+    protected.sort();
+    protected.dedup();
+    explicit_protected.sort();
+    explicit_protected.dedup();
     let stable = json!({"scope":scope.world_ref,"sources":sources,"writable":grants,"protected":protected,"explicit_protected":explicit_protected,"enforcement":enforcement,"required_coverage":coverage});
     Ok(EffectivePolicy {
-        schema: "central.effective-placement-policy/v1".into(), scope_ref: scope.world_ref.clone(), root_scope_ref: root.world_ref,
-        revision: source::revision(&serde_json::to_string(&stable)?), sources,
-        writable_destinations: grants, protected_paths: protected, explicit_protected_paths: explicit_protected, enforcement, required_coverage: coverage,
-        issued_at_unix_seconds: now, expires_at_unix_seconds: expiry,
-        native_enforcement: "only operations routed through Central; consumers enforce their actual coverage".into(), outside_writes_prevented: false,
+        schema: "central.effective-placement-policy/v1".into(),
+        scope_ref: scope.world_ref.clone(),
+        root_scope_ref: root.world_ref,
+        revision: source::revision(&serde_json::to_string(&stable)?),
+        sources,
+        writable_destinations: grants,
+        protected_paths: protected,
+        explicit_protected_paths: explicit_protected,
+        enforcement,
+        required_coverage: coverage,
+        issued_at_unix_seconds: now,
+        expires_at_unix_seconds: expiry,
+        native_enforcement:
+            "only operations routed through Central; consumers enforce their actual coverage".into(),
+        outside_writes_prevented: false,
     })
 }
-pub(crate) fn checked_policy(scope: &Scope, input: &Value, now: u64) -> io::Result<EffectivePolicy> {
+pub(crate) fn checked_policy(
+    scope: &Scope,
+    input: &Value,
+    now: u64,
+) -> io::Result<EffectivePolicy> {
     let policy = effective_policy(scope, now)?;
-    if policy.revision != text(input, "expected_policy_revision")? { return Err(conflict("effective placement policy changed; re-read central.work.policy before retry")); }
+    if policy.revision != text(input, "expected_policy_revision")? {
+        return Err(conflict(
+            "effective placement policy changed; re-read central.work.policy before retry",
+        ));
+    }
     Ok(policy)
 }
 
@@ -259,30 +389,56 @@ pub struct NowRecord {
     pub archive_ref: Option<String>,
 }
 fn refs(input: &Value, name: &str) -> io::Result<Vec<String>> {
-    let values: Vec<String> = serde_json::from_value(input.get(name).cloned().unwrap_or_else(|| json!([])))?;
-    if values.len() > 256 || values.iter().any(|v| v.trim().is_empty() || v.len() > 4096) { return Err(invalid("invalid or excessive relationship refs")); }
+    let values: Vec<String> =
+        serde_json::from_value(input.get(name).cloned().unwrap_or_else(|| json!([])))?;
+    if values.len() > 256 || values.iter().any(|v| v.trim().is_empty() || v.len() > 4096) {
+        return Err(invalid("invalid or excessive relationship refs"));
+    }
     Ok(values)
 }
-pub(crate) fn read_now(scope: &Scope, reference: &str) -> io::Result<(NowRecord, source::SourceReading)> {
-    for binding in scope.bindings()?.into_iter().filter(|b| b.roles.iter().any(|r| r == "now-clearing")) {
+pub(crate) fn read_now(
+    scope: &Scope,
+    reference: &str,
+) -> io::Result<(NowRecord, source::SourceReading)> {
+    for binding in scope
+        .bindings()?
+        .into_iter()
+        .filter(|b| b.roles.iter().any(|r| r == "now-clearing"))
+    {
         let source = scope.read(&binding.source_ref)?;
         let record: NowRecord = serde_json::from_str(&source.content)?;
-        if record.schema != NOW_SCHEMA || record.scope_ref != scope.world_ref || record.source_ref != binding.source_ref {
+        if record.schema != NOW_SCHEMA
+            || record.scope_ref != scope.world_ref
+            || record.source_ref != binding.source_ref
+        {
             return Err(invalid("NOW source identity/schema mismatch"));
         }
-        if record.now_ref == reference { return Ok((record, source)); }
+        if record.now_ref == reference {
+            return Ok((record, source));
+        }
     }
-    Err(io::Error::new(io::ErrorKind::NotFound, "NOW ref is not allocated in this World"))
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        "NOW ref is not allocated in this World",
+    ))
 }
 pub(crate) fn now_destination(scope: &Scope, source_path: &str) -> io::Result<PathBuf> {
-    let parent = Path::new(source_path).parent().ok_or_else(|| invalid("NOW source parent missing"))?;
-    if !parent.starts_with(format!("{}/agents/now", scope.prefix)) { return Err(denied("NOW is outside the active agent aperture; inspect migration/continuation before re-entry")); }
+    let parent = Path::new(source_path)
+        .parent()
+        .ok_or_else(|| invalid("NOW source parent missing"))?;
+    if !parent.starts_with(format!("{}/agents/now", scope.prefix)) {
+        return Err(denied("NOW is outside the active agent aperture; inspect migration/continuation before re-entry"));
+    }
     Ok(scope.root.join(parent).join("T"))
 }
 /// Refuse a wholly excluded clearing before creating/rebinding source or T.
 /// A protected descendant does not erase the entire aperture; validation still
 /// excludes that descendant and ambiguous mutations of its parents.
-fn check_allocation_protection(scope: &Scope, source_path: &str, policy: &EffectivePolicy) -> io::Result<()> {
+fn check_allocation_protection(
+    scope: &Scope,
+    source_path: &str,
+    policy: &EffectivePolicy,
+) -> io::Result<()> {
     let source_path_absolute = scope.root.join(source_path);
     let destination = now_destination(scope, source_path)?;
     if policy.explicit_protected_paths.iter().any(|protected| {
@@ -292,13 +448,32 @@ fn check_allocation_protection(scope: &Scope, source_path: &str, policy: &Effect
     }
     Ok(())
 }
-pub(super) fn allocation_reading(scope: &Scope, record: &NowRecord, source: &source::SourceReading, mut policy: EffectivePolicy, created: bool) -> io::Result<Value> {
+pub(super) fn allocation_reading(
+    scope: &Scope,
+    record: &NowRecord,
+    source: &source::SourceReading,
+    mut policy: EffectivePolicy,
+    created: bool,
+) -> io::Result<Value> {
     check_allocation_protection(scope, &source.source.path, &policy)?;
     let destination = now_destination(scope, &source.source.path)?;
-    crate::file_mutation::directory(&scope.root, destination.strip_prefix(&scope.root).map_err(io::Error::other)?)?;
-    policy.protected_paths.push(scope.root.join(&source.source.path));
-    policy.writable_destinations.push(WritableDestination { path: destination.clone(), class: "now-artifact".into(), anchor: anchor(&scope.central_root, &destination)? });
-    Ok(json!({"schema":"central.now-allocation/v1","created":created,"now_ref":record.now_ref,"source":source.source,"revision":source.revision,"record":record,"writable_destination":destination,"artifact_namespace":"T","permitted_artifact_kinds":["plans","findings","coordination","tracking"],"policy":policy,"automatic_agent_or_model_invocation":false}))
+    crate::file_mutation::directory(
+        &scope.root,
+        destination
+            .strip_prefix(&scope.root)
+            .map_err(io::Error::other)?,
+    )?;
+    policy
+        .protected_paths
+        .push(scope.root.join(&source.source.path));
+    policy.writable_destinations.push(WritableDestination {
+        path: destination.clone(),
+        class: "now-artifact".into(),
+        anchor: anchor(&scope.central_root, &destination)?,
+    });
+    Ok(
+        json!({"schema":"central.now-allocation/v1","created":created,"now_ref":record.now_ref,"source":source.source,"revision":source.revision,"record":record,"writable_destination":destination,"artifact_namespace":"T","permitted_artifact_kinds":["plans","findings","coordination","tracking"],"policy":policy,"automatic_agent_or_model_invocation":false}),
+    )
 }
 pub fn allocate(scope: &Scope, input: &Value, now: u64) -> io::Result<Value> {
     let _locks = source::lock(scope)?;
@@ -310,10 +485,18 @@ pub fn allocate(scope: &Scope, input: &Value, now: u64) -> io::Result<Value> {
     let now_ref = format!("central:now:{}:{}", scope.world_ref, key(task));
     match read_now(scope, &now_ref) {
         Ok((record, reading)) => {
-            if record.task_ref != task || record.purpose != purpose || record.participant_refs != participants || record.source_refs != source_refs {
-                return Err(conflict("allocation id already has a different task/purpose/relationship basis"));
+            if record.task_ref != task
+                || record.purpose != purpose
+                || record.participant_refs != participants
+                || record.source_refs != source_refs
+            {
+                return Err(conflict(
+                    "allocation id already has a different task/purpose/relationship basis",
+                ));
             }
-            if record.lifecycle != "active" { return Err(denied("existing NOW is not active; use explicit lifecycle re-entry, not another allocation")); }
+            if record.lifecycle != "active" {
+                return Err(denied("existing NOW is not active; use explicit lifecycle re-entry, not another allocation"));
+            }
             return allocation_reading(scope, &record, &reading, policy, false);
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
@@ -323,10 +506,20 @@ pub fn allocate(scope: &Scope, input: &Value, now: u64) -> io::Result<Value> {
     check_allocation_protection(scope, &path, &policy)?;
     scope.reconcile(None, &[])?;
     let mut record = NowRecord {
-        schema: NOW_SCHEMA.into(), now_ref, source_ref: scope.source_ref(&path), scope_ref: scope.world_ref.clone(),
-        task_ref: task.into(), purpose: purpose.into(), participant_refs: participants, source_refs,
-        policy_revision_at_allocation: policy.revision.clone(), created_at_unix_seconds: now,
-        lifecycle: "active".into(), obligations: vec![], continuation_refs: vec![], archive_ref: None,
+        schema: NOW_SCHEMA.into(),
+        now_ref,
+        source_ref: scope.source_ref(&path),
+        scope_ref: scope.world_ref.clone(),
+        task_ref: task.into(),
+        purpose: purpose.into(),
+        participant_refs: participants,
+        source_refs,
+        policy_revision_at_allocation: policy.revision.clone(),
+        created_at_unix_seconds: now,
+        lifecycle: "active".into(),
+        obligations: vec![],
+        continuation_refs: vec![],
+        archive_ref: None,
     };
     let mut created = true;
     // A process may die after publishing now.json but before binding it. Resume
@@ -334,48 +527,91 @@ pub fn allocate(scope: &Scope, input: &Value, now: u64) -> io::Result<Value> {
     match crate::source_safety::read(&scope.root, &path) {
         Ok(raw) => {
             let previous: NowRecord = serde_json::from_str(&raw)?;
-            if previous.schema != record.schema || previous.now_ref != record.now_ref || previous.source_ref != record.source_ref
-                || previous.scope_ref != record.scope_ref || previous.task_ref != record.task_ref || previous.purpose != record.purpose
-                || previous.participant_refs != record.participant_refs || previous.source_refs != record.source_refs || previous.lifecycle != "active" {
+            if previous.schema != record.schema
+                || previous.now_ref != record.now_ref
+                || previous.source_ref != record.source_ref
+                || previous.scope_ref != record.scope_ref
+                || previous.task_ref != record.task_ref
+                || previous.purpose != record.purpose
+                || previous.participant_refs != record.participant_refs
+                || previous.source_refs != record.source_refs
+                || previous.lifecycle != "active"
+            {
                 return Err(conflict("unbound NOW bytes disagree with allocation; inspect recovery instead of overwriting"));
             }
-            record = previous; created = false;
+            record = previous;
+            created = false;
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(e),
     }
     let destination = now_destination(scope, &path)?;
-    source::directories(&scope.root, destination.strip_prefix(&scope.root).map_err(io::Error::other)?)?;
+    source::directories(
+        &scope.root,
+        destination
+            .strip_prefix(&scope.root)
+            .map_err(io::Error::other)?,
+    )?;
     let reading = scope.create_agent_source(&path, &encoded(&record)?, "now-clearing", now)?;
-    scope.reconcile(Some(("central.now.allocate", "native-operation", None)), std::slice::from_ref(&reading.source.source_ref))?;
+    scope.reconcile(
+        Some(("central.now.allocate", "native-operation", None)),
+        std::slice::from_ref(&reading.source.source_ref),
+    )?;
     allocation_reading(scope, &record, &reading, policy, created)
 }
 pub fn validate(scope: &Scope, input: &Value, now: u64) -> io::Result<Value> {
     let _locks = source::lock(scope)?;
     let policy = checked_policy(scope, input, now)?;
     let (record, reading) = read_now(scope, text(input, "now_ref")?)?;
-    if reading.revision.revision != text(input, "expected_now_revision")? { return Err(conflict("NOW source revision changed")); }
+    if reading.revision.revision != text(input, "expected_now_revision")? {
+        return Err(conflict("NOW source revision changed"));
+    }
     let valid_now = now_destination(scope, &reading.source.path)?;
     let raw = text(input, "destination")?;
     let path = if Path::new(raw).is_absolute() {
-        let relative = Path::new(raw).strip_prefix(&scope.central_root).map_err(|_| denied("destination outside Central"))?;
-        scope.central_root.join(relative_member(&relative.to_string_lossy())?)
-    } else { scope.central_root.join(relative_member(raw)?) };
+        let relative = Path::new(raw)
+            .strip_prefix(&scope.central_root)
+            .map_err(|_| denied("destination outside Central"))?;
+        scope
+            .central_root
+            .join(relative_member(&relative.to_string_lossy())?)
+    } else {
+        scope.central_root.join(relative_member(raw)?)
+    };
     let current_anchor = anchor(&scope.central_root, &path)?;
     if let Some(basis) = input.get("expected_destination_anchor") {
         let basis: PathAnchor = serde_json::from_value(basis.clone())?;
-        if basis != current_anchor { return Err(conflict("destination basis changed since preview")); }
+        if basis != current_anchor {
+            return Err(conflict("destination basis changed since preview"));
+        }
     }
     // This public operation does not distinguish a content write from a recursive
     // remove/rename. An ancestor of an explicit protected object cannot receive
     // an ambiguous approval. A sibling remains writable.
-    let explicitly_protected = policy.explicit_protected_paths.iter()
+    let explicitly_protected = policy
+        .explicit_protected_paths
+        .iter()
         .any(|protected| path.starts_with(protected) || protected.starts_with(&path));
     let in_now = path.starts_with(&valid_now) && path != valid_now;
-    let is_metadata = path.strip_prefix(&scope.central_root).map_err(io::Error::other)?.components()
-        .any(|part| matches!(part.as_os_str().to_str(), Some(".git" | ".central" | "ProjectCentral" | "Control")));
-    let ordinary = !is_metadata && policy.writable_destinations.iter().any(|grant| path.starts_with(&grant.path))
-        && !policy.protected_paths.iter().any(|protected| path.starts_with(protected) || protected.starts_with(&path));
+    let is_metadata = path
+        .strip_prefix(&scope.central_root)
+        .map_err(io::Error::other)?
+        .components()
+        .any(|part| {
+            matches!(
+                part.as_os_str().to_str(),
+                Some(".git" | ".central" | "ProjectCentral" | "Control")
+            )
+        });
+    let ordinary = !is_metadata
+        && policy
+            .writable_destinations
+            .iter()
+            .any(|grant| path.starts_with(&grant.path))
+        && !policy
+            .protected_paths
+            .iter()
+            .any(|protected| path.starts_with(protected) || protected.starts_with(&path));
     // An inactive task cannot borrow the Project grant to continue effects while
     // its NOW is quiescent/closed/archived. Explicit re-entry retains its identity.
     let active = record.lifecycle == "active";
@@ -389,5 +625,7 @@ pub fn validate(scope: &Scope, input: &Value, now: u64) -> io::Result<Value> {
     } else {
         "destination is outside this task's allowed writes or is protected structural/source ground; use the allocated NOW T destination or the native source/adoption operation"
     };
-    Ok(json!({"schema":"central.work-placement-validation/v1","allowed":allowed,"outcome":if allowed {"permitted"} else {"rejected"},"destination":path,"destination_anchor":current_anchor,"now_ref":record.now_ref,"now_lifecycle":record.lifecycle,"now_revision":reading.revision.revision,"policy_revision":policy.revision,"expires_at_unix_seconds":policy.expires_at_unix_seconds,"required_enforcement":policy.enforcement,"required_coverage":policy.required_coverage,"valid_now_destination":valid_now,"retry_action":"central.work.validate","reason":reason,"outside_writes_prevented":false}))
+    Ok(
+        json!({"schema":"central.work-placement-validation/v1","allowed":allowed,"outcome":if allowed {"permitted"} else {"rejected"},"destination":path,"destination_anchor":current_anchor,"now_ref":record.now_ref,"now_lifecycle":record.lifecycle,"now_revision":reading.revision.revision,"policy_revision":policy.revision,"expires_at_unix_seconds":policy.expires_at_unix_seconds,"required_enforcement":policy.enforcement,"required_coverage":policy.required_coverage,"valid_now_destination":valid_now,"retry_action":"central.work.validate","reason":reason,"outside_writes_prevented":false}),
+    )
 }

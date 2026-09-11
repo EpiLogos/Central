@@ -102,7 +102,10 @@ impl SourceAwareConfigurationConnector {
 }
 
 impl MachineInspector for SourceAwareConfigurationConnector {
-    fn inspect(&self, _input: &MachineInspectionInput) -> Result<MachineInspectionOutput, PortError> {
+    fn inspect(
+        &self,
+        _input: &MachineInspectionInput,
+    ) -> Result<MachineInspectionOutput, PortError> {
         Ok(MachineInspectionOutput {
             platform: "test-os".to_owned(),
             architecture: "test-arch".to_owned(),
@@ -121,7 +124,10 @@ impl ConfigurationManager for SourceAwareConfigurationConnector {
     fn preview(&self, input: &ConfigurationStateRequest) -> Result<StateChangePreview, PortError> {
         assert_eq!(input.id, "fixture-config");
         assert!(input.present);
-        let source = input.source.as_ref().expect("source-backed request must preserve source");
+        let source = input
+            .source
+            .as_ref()
+            .expect("source-backed request must preserve source");
         assert_eq!(source.kind, "fixture");
         assert_eq!(source.reference, "authored-source-v1");
         let changed = !self.state.matches();
@@ -209,10 +215,7 @@ fn source_backed_configuration_drift_is_not_hidden_by_target_presence() {
     assert_eq!(config["observed"]["present"], true);
     assert_eq!(config["status"], "changeable");
     assert_eq!(config["port"], CONFIGURATION_MANAGER_PORT.id);
-    assert_eq!(
-        config["connector"]["id"],
-        "test.source-aware-configuration"
-    );
+    assert_eq!(config["connector"]["id"], "test.source-aware-configuration");
     assert_eq!(config["preview"]["changed"], true);
 
     let verify = execute(&root, &connectors, "machine.verify");
@@ -273,7 +276,9 @@ fn source_backed_configuration_is_unverifiable_without_configuration_manager() {
     };
     let mut connectors = ConnectorRegistry::default();
     connectors
-        .register(central_ctrl::StaticMachineInspectorConnector::new(observation))
+        .register(central_ctrl::StaticMachineInspectorConnector::new(
+            observation,
+        ))
         .unwrap();
 
     let plan = execute(&root, &connectors, "machine.plan");

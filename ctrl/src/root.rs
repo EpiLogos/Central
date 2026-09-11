@@ -175,14 +175,35 @@ pub struct CentralInitialization {
 }
 
 pub fn resolve_central_root(options: &RootOptions) -> Result<ResolvedRoot, String> {
-    if let Some(path) = options.explicit_root.as_ref().filter(|path| !path.as_os_str().is_empty()) {
-        return Ok(ResolvedRoot { path: path.clone(), source: RootSource::Explicit });
+    if let Some(path) = options
+        .explicit_root
+        .as_ref()
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        return Ok(ResolvedRoot {
+            path: path.clone(),
+            source: RootSource::Explicit,
+        });
     }
-    if let Some(path) = options.configured_root.as_ref().filter(|path| !path.as_os_str().is_empty()) {
-        return Ok(ResolvedRoot { path: path.clone(), source: RootSource::Environment });
+    if let Some(path) = options
+        .configured_root
+        .as_ref()
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        return Ok(ResolvedRoot {
+            path: path.clone(),
+            source: RootSource::Environment,
+        });
     }
-    if let Some(home) = options.home.as_ref().filter(|path| !path.as_os_str().is_empty()) {
-        return Ok(ResolvedRoot { path: home.join("Central"), source: RootSource::Default });
+    if let Some(home) = options
+        .home
+        .as_ref()
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        return Ok(ResolvedRoot {
+            path: home.join("Central"),
+            source: RootSource::Default,
+        });
     }
     Err("Central root cannot be resolved because no home directory is available.".to_owned())
 }
@@ -199,7 +220,9 @@ pub fn inspect_central(root: &Path) -> io::Result<CentralHealth> {
         .iter()
         .map(|relative| DirectoryCheck {
             path: (*relative).to_owned(),
-            valid: fs::metadata(root.join(relative)).map(|metadata| metadata.is_dir()).unwrap_or(false),
+            valid: fs::metadata(root.join(relative))
+                .map(|metadata| metadata.is_dir())
+                .unwrap_or(false),
         })
         .collect::<Vec<_>>();
     let valid = root_state == "directory" && checks.iter().all(|check| check.valid);
@@ -216,7 +239,10 @@ pub fn inspect_central(root: &Path) -> io::Result<CentralHealth> {
 pub fn initialize_central(root: &Path) -> io::Result<CentralInitialization> {
     if let Ok(metadata) = fs::metadata(root) {
         if !metadata.is_dir() {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "Central root exists but is not a directory."));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Central root exists but is not a directory.",
+            ));
         }
     }
     fs::create_dir_all(root)?;
@@ -226,6 +252,9 @@ pub fn initialize_central(root: &Path) -> io::Result<CentralInitialization> {
     crate::projectcentral_ops::ensure_root_federation(root, None)?;
     Ok(CentralInitialization {
         root: root.to_path_buf(),
-        directories: REQUIRED_DIRECTORIES.iter().map(|item| (*item).to_owned()).collect(),
+        directories: REQUIRED_DIRECTORIES
+            .iter()
+            .map(|item| (*item).to_owned())
+            .collect(),
     })
 }

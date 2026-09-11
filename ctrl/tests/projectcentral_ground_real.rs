@@ -16,7 +16,10 @@ fn current_central_checkout_is_a_real_project_ground_specimen() {
     // anything itself. Deviation D5, Work/wiki-continuity-2026-09-06.
     assert!(inspection.projectcentral_ready);
     assert_eq!(inspection.status, GroundStatus::Partial);
-    assert!(inspection.account_handoff.recognised_human_sources.is_empty());
+    assert!(inspection
+        .account_handoff
+        .recognised_human_sources
+        .is_empty());
 
     // Role-like native source is discoverable, but authorship/authority remain unresolved.
     let readme = inspection

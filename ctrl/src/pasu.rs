@@ -72,7 +72,10 @@ impl std::fmt::Display for PasuRefError {
                 write!(f, "pasu ref must be {PASU_REF_PREFIX}<form>:<id>")
             }
             PasuRefError::UnknownForm(form) => {
-                write!(f, "pasu ref has unknown form `{form}` (nara, agent, agent-set)")
+                write!(
+                    f,
+                    "pasu ref has unknown form `{form}` (nara, agent, agent-set)"
+                )
             }
             PasuRefError::MissingId => write!(f, "pasu ref is missing its subject id"),
         }
@@ -101,19 +104,13 @@ impl PasuRef {
     }
 
     pub fn form(&self) -> PasuForm {
-        let rest = self
-            .0
-            .strip_prefix(PASU_REF_PREFIX)
-            .unwrap_or_default();
+        let rest = self.0.strip_prefix(PASU_REF_PREFIX).unwrap_or_default();
         let (form, _) = rest.split_once(':').unwrap_or(("", ""));
         PasuForm::parse(form).unwrap_or(PasuForm::Nara)
     }
 
     pub fn subject_id(&self) -> &str {
-        let rest = self
-            .0
-            .strip_prefix(PASU_REF_PREFIX)
-            .unwrap_or_default();
+        let rest = self.0.strip_prefix(PASU_REF_PREFIX).unwrap_or_default();
         rest.split_once(':').map(|(_, id)| id).unwrap_or_default()
     }
 
@@ -254,8 +251,8 @@ impl PasuIdentityManifest {
             return Err(PasuManifestError::Io("manifest file is absent".to_owned()));
         }
         let bytes = fs::read(&path).map_err(|error| PasuManifestError::Io(error.to_string()))?;
-        let manifest: PasuIdentityManifest =
-            serde_json::from_slice(&bytes).map_err(|error| PasuManifestError::Io(error.to_string()))?;
+        let manifest: PasuIdentityManifest = serde_json::from_slice(&bytes)
+            .map_err(|error| PasuManifestError::Io(error.to_string()))?;
         manifest.validate()?;
         Ok(manifest)
     }
@@ -265,8 +262,7 @@ impl PasuIdentityManifest {
         self.validate()?;
         let path = central_root.join(PASU_IDENTITY_MANIFEST_PATH);
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| PasuManifestError::Io(error.to_string()))?;
+            fs::create_dir_all(parent).map_err(|error| PasuManifestError::Io(error.to_string()))?;
         }
         let mut body = serde_json::to_string_pretty(self)
             .map_err(|error| PasuManifestError::Io(error.to_string()))?;
@@ -348,7 +344,10 @@ impl PasuIdentityState {
         }
     }
 
-    pub fn read(central_root: &Path, ground_relations_subject_ref: Option<String>) -> PasuIdentityState {
+    pub fn read(
+        central_root: &Path,
+        ground_relations_subject_ref: Option<String>,
+    ) -> PasuIdentityState {
         let manifest_path = PASU_IDENTITY_MANIFEST_PATH.to_owned();
         let manifest = match PasuIdentityManifest::load(central_root) {
             Ok(manifest) => manifest,
@@ -467,11 +466,11 @@ mod tests {
             assert_eq!(parsed.subject_id(), id);
             assert_eq!(parsed.0, raw);
         }
+        assert!(matches!(PasuRef::parse(""), Err(PasuRefError::Empty)));
         assert!(matches!(
-            PasuRef::parse(""),
-            Err(PasuRefError::Empty)
+            PasuRef::parse("central:user"),
+            Err(PasuRefError::NotPasu)
         ));
-        assert!(matches!(PasuRef::parse("central:user"), Err(PasuRefError::NotPasu)));
         assert!(matches!(
             PasuRef::parse("central:pasu:human:local"),
             Err(PasuRefError::UnknownForm(_))
@@ -502,7 +501,9 @@ mod tests {
             "central:pasu:agent:session-runner"
         );
         assert_eq!(
-            PasuRef::for_agent_set("control-operators").unwrap().as_str(),
+            PasuRef::for_agent_set("control-operators")
+                .unwrap()
+                .as_str(),
             "central:pasu:agent-set:control-operators"
         );
         assert!(matches!(
@@ -574,12 +575,12 @@ mod tests {
         .unwrap();
         sample_manifest().persist(&root).unwrap();
 
-        let state = PasuIdentityState::read(
-            &root,
-            Some("central:pasu:nara:local".to_owned()),
-        );
+        let state = PasuIdentityState::read(&root, Some("central:pasu:nara:local".to_owned()));
         assert!(state.present);
-        assert_eq!(state.subject_ref.as_deref(), Some("central:pasu:nara:local"));
+        assert_eq!(
+            state.subject_ref.as_deref(),
+            Some("central:pasu:nara:local")
+        );
         assert_eq!(state.form.as_deref(), Some("nara"));
         assert_eq!(state.subject_ref_consistent, Some(true));
         assert_eq!(state.sourced_files.len(), 2);
@@ -593,8 +594,7 @@ mod tests {
         let root = root.path().to_path_buf();
         fs::create_dir_all(root.join(PASU_IDENTITY_SOURCE_DIR)).unwrap();
         sample_manifest().persist(&root).unwrap();
-        let state =
-            PasuIdentityState::read(&root, Some("central:pasu:agent:other".to_owned()));
+        let state = PasuIdentityState::read(&root, Some("central:pasu:agent:other".to_owned()));
         assert_eq!(state.subject_ref_consistent, Some(false));
     }
 

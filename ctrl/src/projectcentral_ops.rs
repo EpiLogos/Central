@@ -296,12 +296,23 @@ pub fn initialize_projectcentral(
     validate_manifest(&manifest)?;
     let paths = projectcentral_paths(project_root, &manifest);
     create_fractal_dirs(&paths)?;
-    write_json_new(&paths.manifest, &serde_json::to_value(&manifest).expect("manifest serializes"))?;
+    write_json_new(
+        &paths.manifest,
+        &serde_json::to_value(&manifest).expect("manifest serializes"),
+    )?;
 
     let space_ref = project_space_ref(project_id);
-    write_json_new(&paths.wiki_source, &project_wiki_value(&space_ref, project_id, &[]))?;
+    write_json_new(
+        &paths.wiki_source,
+        &project_wiki_value(&space_ref, project_id, &[]),
+    )?;
     ensure_root_federation(central_root, Some(&space_ref))?;
-    let provenance = append_provenance(project_root, "initialize", None, Some(&manifest.wiki.source))?;
+    let provenance = append_provenance(
+        project_root,
+        "initialize",
+        None,
+        Some(&manifest.wiki.source),
+    )?;
     Ok(mutation_result(
         ProjectCentralOutcome::CreateProjectCentral,
         project_root,
@@ -352,7 +363,10 @@ pub fn adopt_in_place(
     validate_manifest(&manifest)?;
     let paths = projectcentral_paths(project_root, &manifest);
     create_fractal_dirs(&paths)?;
-    write_json_new(&paths.manifest, &serde_json::to_value(&manifest).expect("manifest serializes"))?;
+    write_json_new(
+        &paths.manifest,
+        &serde_json::to_value(&manifest).expect("manifest serializes"),
+    )?;
 
     let space_ref = project_space_ref(project_id);
     write_json_new(
@@ -422,11 +436,22 @@ pub fn migrate_selected(
     create_fractal_dirs(&paths)?;
     fs::copy(project_root.join(source), &paths.wiki_source)?;
     let space_ref = compatible_wiki(&paths.wiki_source)?.ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidData, "copied Wiki failed compatibility verification")
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "copied Wiki failed compatibility verification",
+        )
     })?;
-    write_json_new(&paths.manifest, &serde_json::to_value(&manifest).expect("manifest serializes"))?;
+    write_json_new(
+        &paths.manifest,
+        &serde_json::to_value(&manifest).expect("manifest serializes"),
+    )?;
     ensure_root_federation(central_root, Some(&space_ref))?;
-    let provenance = append_provenance(project_root, "migrate_copy", Some(source), Some(WIKI_SOURCE))?;
+    let provenance = append_provenance(
+        project_root,
+        "migrate_copy",
+        Some(source),
+        Some(WIKI_SOURCE),
+    )?;
     Ok(mutation_result(
         ProjectCentralOutcome::MigrateSelectedMaterial,
         project_root,
@@ -455,7 +480,12 @@ pub fn ensure_root_federation(central_root: &Path, child_ref: Option<&str>) -> i
     let objects = value
         .get_mut("objects")
         .and_then(Value::as_array_mut)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "root Wiki requires an objects list"))?;
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "root Wiki requires an objects list",
+            )
+        })?;
     let root_index = objects.iter().position(|object| {
         object.get("profile").and_then(Value::as_str) == Some(WIKI_PROFILE)
             && object.get("object").and_then(Value::as_str) == Some("space")
@@ -470,23 +500,41 @@ pub fn ensure_root_federation(central_root: &Path, child_ref: Option<&str>) -> i
         None => {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("{} does not contain the canonical Central root WikiSpace", path.display()),
+                format!(
+                    "{} does not contain the canonical Central root WikiSpace",
+                    path.display()
+                ),
             ));
         }
     };
 
     if let Some(child_ref) = child_ref {
-        let object = objects[root_index]
-            .as_object_mut()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "root WikiSpace must be an object"))?;
+        let object = objects[root_index].as_object_mut().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "root WikiSpace must be an object",
+            )
+        })?;
         let children = object
             .entry("child_space_refs")
             .or_insert_with(|| json!([]))
             .as_array_mut()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "root child_space_refs must be an array"))?;
-        if !children.iter().any(|entry| entry.as_str() == Some(child_ref)) {
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "root child_space_refs must be an array",
+                )
+            })?;
+        if !children
+            .iter()
+            .any(|entry| entry.as_str() == Some(child_ref))
+        {
             children.push(Value::String(child_ref.into()));
-            children.sort_by(|a, b| a.as_str().unwrap_or_default().cmp(b.as_str().unwrap_or_default()));
+            children.sort_by(|a, b| {
+                a.as_str()
+                    .unwrap_or_default()
+                    .cmp(b.as_str().unwrap_or_default())
+            });
             let revision = object.get("revision").and_then(Value::as_u64).unwrap_or(1) + 1;
             object.insert("revision".into(), Value::from(revision));
         }
@@ -511,7 +559,11 @@ fn root_contains_child(path: &Path, child_ref: &str) -> io::Result<bool> {
                 && object
                     .get("child_space_refs")
                     .and_then(Value::as_array)
-                    .is_some_and(|children| children.iter().any(|entry| entry.as_str() == Some(child_ref)))
+                    .is_some_and(|children| {
+                        children
+                            .iter()
+                            .any(|entry| entry.as_str() == Some(child_ref))
+                    })
         }))
 }
 
@@ -522,7 +574,10 @@ fn discover_wiki_candidates(project_root: &Path) -> io::Result<Vec<WikiCandidate
     for path in paths {
         if let Some(space_ref) = compatible_wiki(&path)? {
             let relative = path.strip_prefix(project_root).map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidData, "discovered Wiki escaped Project root")
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "discovered Wiki escaped Project root",
+                )
             })?;
             candidates.push(WikiCandidate {
                 source: relative.to_string_lossy().replace('\\', "/"),
@@ -547,7 +602,13 @@ fn collect_json(current: &Path, depth: usize, output: &mut Vec<PathBuf>) -> io::
         if entry.file_type()?.is_dir() {
             if matches!(
                 name.as_ref(),
-                ".git" | ".central" | "node_modules" | "target" | "dist" | "build" | PROJECTCENTRAL_DIR
+                ".git"
+                    | ".central"
+                    | "node_modules"
+                    | "target"
+                    | "dist"
+                    | "build"
+                    | PROJECTCENTRAL_DIR
             ) {
                 continue;
             }
@@ -613,7 +674,10 @@ fn validate_manifest(manifest: &ProjectCentralManifest) -> io::Result<()> {
     if validation.valid {
         Ok(())
     } else {
-        Err(io::Error::new(io::ErrorKind::InvalidInput, validation.errors.join("; ")))
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            validation.errors.join("; "),
+        ))
     }
 }
 
@@ -621,7 +685,11 @@ pub(crate) fn project_space_ref(project_id: &str) -> String {
     format!("central:wiki:project:{project_id}")
 }
 
-pub(crate) fn project_wiki_value(space_ref: &str, title: &str, child_space_refs: &[String]) -> Value {
+pub(crate) fn project_wiki_value(
+    space_ref: &str,
+    title: &str,
+    child_space_refs: &[String],
+) -> Value {
     json!({"objects":[{
         "profile":WIKI_PROFILE,
         "object":"space",
@@ -684,14 +752,21 @@ fn ensure_project_directory(project_root: &Path) -> io::Result<()> {
     } else {
         Err(io::Error::new(
             io::ErrorKind::NotFound,
-            format!("Project root does not exist as a directory: {}", project_root.display()),
+            format!(
+                "Project root does not exist as a directory: {}",
+                project_root.display()
+            ),
         ))
     }
 }
 
 fn ensure_unbound(project_root: &Path) -> io::Result<()> {
     ensure_project_directory(project_root)?;
-    if project_root.join(PROJECTCENTRAL_DIR).join(PROJECT_MANIFEST).exists() {
+    if project_root
+        .join(PROJECTCENTRAL_DIR)
+        .join(PROJECT_MANIFEST)
+        .exists()
+    {
         Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
             "ProjectCentral is already bound; inspect/doctor it rather than replacing its source implicitly.",
@@ -758,7 +833,12 @@ fn append_provenance(
     let entries = value
         .get_mut("entries")
         .and_then(Value::as_array_mut)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "ProjectCentral provenance entries must be an array"))?;
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "ProjectCentral provenance entries must be an array",
+            )
+        })?;
     entries.push(json!({
         "action":action,
         "source":source,
@@ -794,11 +874,16 @@ fn descriptor(
         title: title.into(),
         description: description.into(),
         inputs: inputs.iter().map(|name| action_input(name)).collect(),
-        output: ActionOutputDefinition { output_type: output_type.into() },
+        output: ActionOutputDefinition {
+            output_type: output_type.into(),
+        },
         mutation_class,
         preview_supported,
         required_ports: vec![],
-        availability: ActionAvailability { available: true, reason: None },
+        availability: ActionAvailability {
+            available: true,
+            reason: None,
+        },
     }
 }
 
@@ -826,14 +911,26 @@ fn project_context(
 ) -> Result<(PathBuf, PathBuf), ActionResult> {
     let project = required(input, "project", action)?;
     ensure_project_member(&project).map_err(|error| {
-        ActionResult::failure(Some(action), ResultStatus::InvalidInput, error.to_string(), None)
+        ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            error.to_string(),
+            None,
+        )
     })?;
-    let root = resolve_central_root(context.root_options).map_err(|message| {
-        ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None)
-    })?.path;
+    let root = resolve_central_root(context.root_options)
+        .map_err(|message| {
+            ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None)
+        })?
+        .path;
     let project_root = root.join("Work").join(project);
     ensure_project_directory(&project_root).map_err(|error| {
-        ActionResult::failure(Some(action), ResultStatus::InvalidInput, error.to_string(), None)
+        ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            error.to_string(),
+            None,
+        )
     })?;
     Ok((root, project_root))
 }
@@ -849,27 +946,41 @@ fn io_failure(action: &str, error: io::Error) -> ActionResult {
     ActionResult::failure(Some(action), status, error.to_string(), None)
 }
 
-fn inspect_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn inspect_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.inspect";
     let (_, project_root) = match project_context(action, input, context) {
         Ok(value) => value,
         Err(result) => return result,
     };
     inspect_projectcentral(&project_root)
-        .map(|value| ActionResult::success(action, serde_json::to_value(value).expect("inspection serializes")))
+        .map(|value| {
+            ActionResult::success(
+                action,
+                serde_json::to_value(value).expect("inspection serializes"),
+            )
+        })
         .unwrap_or_else(|error| io_failure(action, error))
 }
 
-fn doctor_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn doctor_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.doctor";
     let (root, project_root) = match project_context(action, input, context) {
         Ok(value) => value,
         Err(result) => return result,
     };
     match doctor_projectcentral(&root, &project_root) {
-        Ok(report) if report.valid => {
-            ActionResult::success(action, serde_json::to_value(report).expect("doctor serializes"))
-        }
+        Ok(report) if report.valid => ActionResult::success(
+            action,
+            serde_json::to_value(report).expect("doctor serializes"),
+        ),
         Ok(report) => ActionResult::failure(
             Some(action),
             ResultStatus::VerificationFailure,
@@ -880,7 +991,11 @@ fn doctor_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionCon
     }
 }
 
-fn init_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn init_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.init";
     let (root, project_root) = match project_context(action, input, context) {
         Ok(value) => value,
@@ -891,11 +1006,20 @@ fn init_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionConte
         Err(result) => return result,
     };
     initialize_projectcentral(&root, &project_root, &project_id)
-        .map(|value| ActionResult::success(action, serde_json::to_value(value).expect("mutation serializes")))
+        .map(|value| {
+            ActionResult::success(
+                action,
+                serde_json::to_value(value).expect("mutation serializes"),
+            )
+        })
         .unwrap_or_else(|error| io_failure(action, error))
 }
 
-fn adopt_preview_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn adopt_preview_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.adopt.preview";
     let (_, project_root) = match project_context(action, input, context) {
         Ok(value) => value,
@@ -906,11 +1030,20 @@ fn adopt_preview_action(_: &ActionRegistry, input: &Value, context: &ActionExecu
         Err(result) => return result,
     };
     preview_adopt(&project_root, &source)
-        .map(|value| ActionResult::success(action, serde_json::to_value(value).expect("plan serializes")))
+        .map(|value| {
+            ActionResult::success(
+                action,
+                serde_json::to_value(value).expect("plan serializes"),
+            )
+        })
         .unwrap_or_else(|error| io_failure(action, error))
 }
 
-fn adopt_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn adopt_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.adopt";
     let (root, project_root) = match project_context(action, input, context) {
         Ok(value) => value,
@@ -925,11 +1058,20 @@ fn adopt_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionCont
         Err(result) => return result,
     };
     adopt_in_place(&root, &project_root, &project_id, &source)
-        .map(|value| ActionResult::success(action, serde_json::to_value(value).expect("mutation serializes")))
+        .map(|value| {
+            ActionResult::success(
+                action,
+                serde_json::to_value(value).expect("mutation serializes"),
+            )
+        })
         .unwrap_or_else(|error| io_failure(action, error))
 }
 
-fn migrate_preview_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn migrate_preview_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.migrate.preview";
     let (_, project_root) = match project_context(action, input, context) {
         Ok(value) => value,
@@ -940,11 +1082,20 @@ fn migrate_preview_action(_: &ActionRegistry, input: &Value, context: &ActionExe
         Err(result) => return result,
     };
     preview_migrate(&project_root, &source)
-        .map(|value| ActionResult::success(action, serde_json::to_value(value).expect("plan serializes")))
+        .map(|value| {
+            ActionResult::success(
+                action,
+                serde_json::to_value(value).expect("plan serializes"),
+            )
+        })
         .unwrap_or_else(|error| io_failure(action, error))
 }
 
-fn migrate_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn migrate_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.migrate";
     let (root, project_root) = match project_context(action, input, context) {
         Ok(value) => value,
@@ -959,7 +1110,12 @@ fn migrate_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionCo
         Err(result) => return result,
     };
     migrate_selected(&root, &project_root, &project_id, &source)
-        .map(|value| ActionResult::success(action, serde_json::to_value(value).expect("mutation serializes")))
+        .map(|value| {
+            ActionResult::success(
+                action,
+                serde_json::to_value(value).expect("mutation serializes"),
+            )
+        })
         .unwrap_or_else(|error| io_failure(action, error))
 }
 
@@ -977,7 +1133,9 @@ pub fn register_projectcentral_actions(registry: &mut ActionRegistry) {
         (descriptor("projectcentral.migrate", "Migrate selected Wiki", "Copy one selected compatible Wiki into ProjectCentral/agents/wiki, preserve the original, record provenance, and federate it.", MutationClass::LocallyMutating, "projectcentral-mutation", &["project", "project_id", "source"], true), migrate_action),
     ];
     for (descriptor, handler) in actions {
-        registry.register(descriptor, handler).expect("ProjectCentral Action ids are valid");
+        registry
+            .register(descriptor, handler)
+            .expect("ProjectCentral Action ids are valid");
     }
 }
 
@@ -1032,12 +1190,17 @@ mod tests {
         fs::write(project.join("README.md"), "native source").unwrap();
         let result = initialize_projectcentral(&central, &project, "example/project").unwrap();
 
-        assert_eq!(fs::read_to_string(project.join("README.md")).unwrap(), "native source");
+        assert_eq!(
+            fs::read_to_string(project.join("README.md")).unwrap(),
+            "native source"
+        );
         assert!(project.join(HUMAN_SOURCE_DIR).is_dir());
         assert!(project.join(AGENT_GOVERNANCE_DIR).is_dir());
         assert!(project.join(WIKI_SOURCE).is_file());
         assert!(!project.join("ProjectCentral/README.md").exists());
-        assert!(root_contains_child(&central.join(ROOT_WIKI_SOURCE), &result.wiki_space_ref).unwrap());
+        assert!(
+            root_contains_child(&central.join(ROOT_WIKI_SOURCE), &result.wiki_space_ref).unwrap()
+        );
         assert!(doctor_projectcentral(&central, &project).unwrap().valid);
     }
 
@@ -1049,7 +1212,8 @@ mod tests {
         fs::create_dir_all(&adopted).unwrap();
         write_existing_wiki(&adopted, "docs/wiki.json", "example:space:adopted");
 
-        let adoption = adopt_in_place(&central, &adopted, "example/adopted", "docs/wiki.json").unwrap();
+        let adoption =
+            adopt_in_place(&central, &adopted, "example/adopted", "docs/wiki.json").unwrap();
         assert_eq!(adoption.wiki_source, WIKI_SOURCE);
         assert_eq!(adoption.adopted_sources, vec!["docs/wiki.json"]);
         assert!(adopted.join("docs/wiki.json").is_file());

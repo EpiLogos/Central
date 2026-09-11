@@ -13,9 +13,7 @@ use crate::action::{
     ActionOutputDefinition, ActionRegistry, MutationClass,
 };
 use crate::projectcentral::read_project_manifest;
-use crate::projectcentral_flow::{
-    relative_member, safe_source_member_path, validate_actor_kind,
-};
+use crate::projectcentral_flow::{relative_member, safe_source_member_path, validate_actor_kind};
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
 use crate::source_horizon::{
@@ -70,7 +68,10 @@ fn require_retrieval(binding: &SourceBinding) -> io::Result<()> {
 }
 
 fn recognised_human_source(binding: &SourceBinding) -> bool {
-    matches!(binding.provenance.as_str(), "human-authored" | "human-adopted")
+    matches!(
+        binding.provenance.as_str(),
+        "human-authored" | "human-adopted"
+    )
 }
 
 fn authored_human_ground(binding: &SourceBinding) -> bool {
@@ -83,7 +84,10 @@ fn authored_human_ground(binding: &SourceBinding) -> bool {
 /// Attribution is declared by the caller, and a declaration has to be coherent:
 /// human authorship does not happen inside an agent session, so a write that
 /// declares both is refusing to say what it is and is recorded as nothing.
-pub(crate) fn validate_attribution(actor_kind: &str, agent_session_ref: Option<&str>) -> io::Result<()> {
+pub(crate) fn validate_attribution(
+    actor_kind: &str,
+    agent_session_ref: Option<&str>,
+) -> io::Result<()> {
     if actor_kind == "human" && agent_session_ref.is_some() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -101,7 +105,17 @@ pub(crate) fn enforce_write_authority(
     actor_kind: &str,
     agent_session_ref: Option<&str>,
 ) -> io::Result<()> {
-    if binding.roles.iter().any(|role| matches!(role.as_str(), "protected-contribution-document" | "human-day" | "now-clearing" | "work-placement-policy" | "civil-time-policy" | "native-action-authority")) {
+    if binding.roles.iter().any(|role| {
+        matches!(
+            role.as_str(),
+            "protected-contribution-document"
+                | "human-day"
+                | "now-clearing"
+                | "work-placement-policy"
+                | "civil-time-policy"
+                | "native-action-authority"
+        )
+    }) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "this source has native temporal/document/authority ownership; use its authenticated owner operation or explicit source review, not a generic declared-human whole-file write",
@@ -134,8 +148,15 @@ pub fn read_world_source(project_root: &Path, source_ref: &str) -> io::Result<Wo
         })?;
     require_retrieval(&observed.binding)?;
     let _path = safe_source_member_path(project_root, &observed.binding.path, true)?;
-    let content=crate::source_safety::read(project_root,&observed.binding.path)?;
-    if crate::projectcentral_flow::content_revision_bytes(content.as_bytes())!=observed.revision.revision {return Err(io::Error::new(io::ErrorKind::AlreadyExists,"Source changed while reading its revision"));}
+    let content = crate::source_safety::read(project_root, &observed.binding.path)?;
+    if crate::projectcentral_flow::content_revision_bytes(content.as_bytes())
+        != observed.revision.revision
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "Source changed while reading its revision",
+        ));
+    }
     Ok(WorldSourceReading {
         schema: WORLD_SOURCE_READING_SCHEMA.to_owned(),
         world_ref: horizon.world_ref,
@@ -156,7 +177,7 @@ pub fn write_world_source(
     actor_kind: &str,
     agent_session_ref: Option<String>,
 ) -> io::Result<WorldSourceWriteReceipt> {
-    let _lock=crate::source_safety::lock(project_root,"source-mutation.lock")?;
+    let _lock = crate::source_safety::lock(project_root, "source-mutation.lock")?;
     validate_actor_kind(actor_kind)?;
     validate_attribution(actor_kind, agent_session_ref.as_deref())?;
     if expected_revision.trim().is_empty() {
@@ -187,7 +208,7 @@ pub fn write_world_source(
         ));
     }
     let _path = safe_source_member_path(project_root, &binding.path, true)?;
-    crate::source_safety::replace(project_root,&binding.path,expected_revision,content)?;
+    crate::source_safety::replace(project_root, &binding.path, expected_revision, content)?;
     let mut attributions = BTreeMap::new();
     attributions.insert(
         source_ref.to_owned(),
@@ -204,9 +225,15 @@ pub fn write_world_source(
         .iter()
         .find(|source| source.binding.source_ref == source_ref)
         .ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData,"written World source left its Project horizon")
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "written World source left its Project horizon",
+            )
         })?;
-    let change = report.new_changes.iter().find(|change| change.source_ref == source_ref);
+    let change = report
+        .new_changes
+        .iter()
+        .find(|change| change.source_ref == source_ref);
     Ok(WorldSourceWriteReceipt {
         schema: WORLD_SOURCE_WRITE_RECEIPT_SCHEMA.to_owned(),
         world_ref: report.horizon.world_ref,
@@ -223,25 +250,74 @@ pub fn write_world_source(
 }
 
 fn required(input: &Value, field: &str, action: &str) -> Result<String, ActionResult> {
-    input.get(field).and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty()).map(str::to_owned)
-        .ok_or_else(|| ActionResult::failure(Some(action),ResultStatus::InvalidInput,format!("{action} requires {field}."),None))
+    input
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            ActionResult::failure(
+                Some(action),
+                ResultStatus::InvalidInput,
+                format!("{action} requires {field}."),
+                None,
+            )
+        })
 }
 fn optional(input: &Value, field: &str) -> Option<String> {
-    input.get(field).and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty()).map(str::to_owned)
+    input
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
 }
-fn project_root(action: &str, input: &Value, context: &ActionExecutionContext<'_>) -> Result<PathBuf, ActionResult> {
+fn project_root(
+    action: &str,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> Result<PathBuf, ActionResult> {
     let project = required(input, "project", action)?;
     let project = relative_member(&project).map_err(|error| {
-        ActionResult::failure(Some(action), ResultStatus::InvalidInput, error.to_string(), None)
+        ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            error.to_string(),
+            None,
+        )
     })?;
     let root = resolve_central_root(context.root_options)
-        .map_err(|message| ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None))?.path;
-    crate::projectcentral_flow::reject_symlink_components(&root,&Path::new("Work").join(&project)).map_err(|e|ActionResult::failure(Some(action),ResultStatus::InvalidInput,e.to_string(),None))?;
+        .map_err(|message| {
+            ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None)
+        })?
+        .path;
+    crate::projectcentral_flow::reject_symlink_components(&root, &Path::new("Work").join(&project))
+        .map_err(|e| {
+            ActionResult::failure(
+                Some(action),
+                ResultStatus::InvalidInput,
+                e.to_string(),
+                None,
+            )
+        })?;
     let project_root = root.join("Work").join(project);
     if !project_root.is_dir() {
-        return Err(ActionResult::failure(Some(action),ResultStatus::InvalidInput,format!("Project root does not exist: {}", project_root.display()),None));
+        return Err(ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            format!("Project root does not exist: {}", project_root.display()),
+            None,
+        ));
     }
-    read_project_manifest(&project_root).map_err(|error| ActionResult::failure(Some(action),ResultStatus::InvalidCentralStructure,error.to_string(),None))?;
+    read_project_manifest(&project_root).map_err(|error| {
+        ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidCentralStructure,
+            error.to_string(),
+            None,
+        )
+    })?;
     Ok(project_root)
 }
 fn io_failure(action: &str, error: io::Error) -> ActionResult {
@@ -254,35 +330,95 @@ fn io_failure(action: &str, error: io::Error) -> ActionResult {
     };
     ActionResult::failure(Some(action), status, error.to_string(), None)
 }
-fn read_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn read_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.source.read";
-    let root = match project_root(action, input, context) {Ok(root) => root,Err(result) => return result};
-    let source_ref = match required(input, "source_ref", action) {Ok(value) => value,Err(result) => return result};
+    let root = match project_root(action, input, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
+    let source_ref = match required(input, "source_ref", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
     read_world_source(&root, &source_ref)
-        .map(|value| ActionResult::success(action, serde_json::to_value(value).expect("World source reading serialises")))
+        .map(|value| {
+            ActionResult::success(
+                action,
+                serde_json::to_value(value).expect("World source reading serialises"),
+            )
+        })
         .unwrap_or_else(|error| io_failure(action, error))
 }
-fn write_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn write_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.source.write";
-    let root = match project_root(action, input, context) {Ok(root) => root,Err(result) => return result};
-    let source_ref = match required(input, "source_ref", action) {Ok(value) => value,Err(result) => return result};
-    let expected_revision = match required(input, "expected_revision", action) {Ok(value) => value,Err(result) => return result};
-    let actor = match required(input, "actor", action) {Ok(value) => value,Err(result) => return result};
-    let actor_kind = match required(input, "actor_kind", action) {Ok(value) => value,Err(result) => return result};
+    let root = match project_root(action, input, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
+    let source_ref = match required(input, "source_ref", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let expected_revision = match required(input, "expected_revision", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let actor = match required(input, "actor", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let actor_kind = match required(input, "actor_kind", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
     let content = input.get("content").and_then(Value::as_str).unwrap_or("");
     write_world_source(&root,&source_ref,&expected_revision,content,&actor,&actor_kind,optional(input, "agent_session_ref"))
         .map(|value| ActionResult::success(action,json!({"receipt":serde_json::to_value(value).expect("World source write receipt serialises"),"automatic_agent_or_model_invocation":false})))
         .unwrap_or_else(|error| io_failure(action, error))
 }
 fn text_input(name: &str, required: bool) -> ActionInputDefinition {
-    ActionInputDefinition {name:name.to_owned(),input_type:"string".to_owned(),required,choices:None,selection:None}
+    ActionInputDefinition {
+        name: name.to_owned(),
+        input_type: "string".to_owned(),
+        required,
+        choices: None,
+        selection: None,
+    }
 }
-fn descriptor(id: &str,title: &str,description: &str,mutation_class: MutationClass,output_type: &str,inputs: &[(&str, bool)]) -> ActionDescriptor {
+fn descriptor(
+    id: &str,
+    title: &str,
+    description: &str,
+    mutation_class: MutationClass,
+    output_type: &str,
+    inputs: &[(&str, bool)],
+) -> ActionDescriptor {
     ActionDescriptor {
-        id:id.to_owned(),title:title.to_owned(),description:description.to_owned(),
-        inputs:inputs.iter().map(|(name,required)|text_input(name,*required)).collect(),
-        output:ActionOutputDefinition {output_type:output_type.to_owned()},mutation_class,
-        preview_supported:false,required_ports:Vec::new(),availability:ActionAvailability {available:true,reason:None},
+        id: id.to_owned(),
+        title: title.to_owned(),
+        description: description.to_owned(),
+        inputs: inputs
+            .iter()
+            .map(|(name, required)| text_input(name, *required))
+            .collect(),
+        output: ActionOutputDefinition {
+            output_type: output_type.to_owned(),
+        },
+        mutation_class,
+        preview_supported: false,
+        required_ports: Vec::new(),
+        availability: ActionAvailability {
+            available: true,
+            reason: None,
+        },
     }
 }
 pub fn register_world_source_actions(registry: &mut ActionRegistry) {
@@ -312,6 +448,8 @@ pub fn register_world_source_actions(registry: &mut ActionRegistry) {
         ),
     ];
     for (descriptor, handler) in actions {
-        registry.register(descriptor, handler).expect("World source Action ids are valid");
+        registry
+            .register(descriptor, handler)
+            .expect("World source Action ids are valid");
     }
 }

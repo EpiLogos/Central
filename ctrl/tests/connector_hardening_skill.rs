@@ -62,7 +62,9 @@ impl BrokenWorkConnector {
 
 impl WorkDiscovery for BrokenWorkConnector {
     fn list(&self, _input: &WorkDiscoveryInput) -> Result<WorkDiscoveryOutput, PortError> {
-        Err(PortError::provider("controlled WorkDiscovery provider failure"))
+        Err(PortError::provider(
+            "controlled WorkDiscovery provider failure",
+        ))
     }
 }
 
@@ -159,7 +161,10 @@ fn skill_requires_reproduction_classification_owned_regression_conformance_and_l
         "personal-stack exception in core",
         "Controlled reference proof",
     ] {
-        assert!(SKILL.contains(required), "Connector-hardening Skill is missing: {required}");
+        assert!(
+            SKILL.contains(required),
+            "Connector-hardening Skill is missing: {required}"
+        );
     }
 }
 
@@ -172,13 +177,17 @@ fn controlled_failure_fixture_classifies_the_problem_before_selecting_the_fix() 
     assert_eq!(case["failure"]["port"], "WorkDiscovery");
     assert_eq!(case["classification"]["owner"], "Connector implementation");
     assert_eq!(case["regression"]["owner"], "Connector implementation");
-    assert_eq!(case["regression"]["shared_conformance"], "run_work_discovery_conformance");
+    assert_eq!(
+        case["regression"]["shared_conformance"],
+        "run_work_discovery_conformance"
+    );
     assert_eq!(case["fix"]["layer"], "Connector implementation");
     assert_eq!(case["core_exception_allowed"], false);
 }
 
 #[test]
-fn controlled_connector_failure_is_rejected_by_public_conformance_and_surfaces_through_the_canonical_action() {
+fn controlled_connector_failure_is_rejected_by_public_conformance_and_surfaces_through_the_canonical_action(
+) {
     let fixture = temporary_directory("failure");
     let root = fixture.join("Central");
     initialize_central(&root).unwrap();
@@ -194,7 +203,9 @@ fn controlled_connector_failure_is_rejected_by_public_conformance_and_surfaces_t
     )
     .expect_err("broken Connector must fail public conformance");
     assert_eq!(conformance.check, "typed-operation");
-    assert!(conformance.message.contains("controlled WorkDiscovery provider failure"));
+    assert!(conformance
+        .message
+        .contains("controlled WorkDiscovery provider failure"));
 
     let mut connectors = ConnectorRegistry::default();
     connectors.register(BrokenWorkConnector::new()).unwrap();
@@ -213,7 +224,10 @@ fn controlled_connector_failure_is_rejected_by_public_conformance_and_surfaces_t
     let details = error.details.unwrap();
     assert_eq!(details["port"], "WorkDiscovery");
     assert_eq!(details["connector"], "fixture.work-broken");
-    assert_eq!(details["provider_error"]["code"], "provider_operation_failed");
+    assert_eq!(
+        details["provider_error"]["code"],
+        "provider_operation_failed"
+    );
     assert!(details["provider_error"]["message"]
         .as_str()
         .unwrap()
@@ -241,7 +255,10 @@ fn connector_local_fix_passes_the_same_public_conformance_and_unchanged_canonica
     .expect("corrected Connector must pass public conformance");
     assert_eq!(report.port_id, "WorkDiscovery");
     assert!(report.checks.iter().any(|check| check == "typed-operation"));
-    assert!(report.checks.iter().any(|check| check == "repeat-stability"));
+    assert!(report
+        .checks
+        .iter()
+        .any(|check| check == "repeat-stability"));
 
     let mut connectors = ConnectorRegistry::default();
     connectors.register(connector).unwrap();

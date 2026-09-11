@@ -1,11 +1,19 @@
-use central_ctrl::{initialize_now, initialize_projectcentral, inspect_now, rollover_now, NOW_USER_DIR};
+use central_ctrl::{
+    initialize_now, initialize_projectcentral, inspect_now, rollover_now, NOW_USER_DIR,
+};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temporary_root() -> PathBuf {
-    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    std::env::temp_dir().join(format!("central-now-real-copy-{}-{nonce}", std::process::id()))
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "central-now-real-copy-{}-{nonce}",
+        std::process::id()
+    ))
 }
 
 #[test]
@@ -45,20 +53,33 @@ fn portable_exact_current_central_project_can_use_now_without_rewriting_native_s
     .unwrap();
     let inspection = inspect_now(&project).unwrap();
     assert!(inspection.exists);
-    assert_eq!(inspection.human_scratch, vec!["ProjectCentral/now/user/current.md"]);
+    assert_eq!(
+        inspection.human_scratch,
+        vec!["ProjectCentral/now/user/current.md"]
+    );
 
     let report = rollover_now(&project, "2026-08-19", "2026-08-20").unwrap();
-    assert_eq!(report.human_scratch, vec!["ProjectCentral/now/user/current.md"]);
-    assert!(project.join("ProjectCentral/now/day/2026-08-19.md").is_file());
+    assert_eq!(
+        report.human_scratch,
+        vec!["ProjectCentral/now/user/current.md"]
+    );
+    assert!(project
+        .join("ProjectCentral/now/day/2026-08-19.md")
+        .is_file());
 
     // Temporal collaboration does not rewrite native Project meaning or implementation.
     assert_eq!(fs::read(project.join("README.md")).unwrap(), readme_before);
-    assert_eq!(fs::read(project.join("docs/CENTRAL-VISION.md")).unwrap(), vision_before);
+    assert_eq!(
+        fs::read(project.join("docs/CENTRAL-VISION.md")).unwrap(),
+        vision_before
+    );
     assert_eq!(
         fs::read(project.join("ctrl/src/projectcentral_now.rs")).unwrap(),
         implementation_before
     );
-    assert!(project.join("ProjectCentral/agents/wiki/wiki.json").is_file());
+    assert!(project
+        .join("ProjectCentral/agents/wiki/wiki.json")
+        .is_file());
 
     let _ = fs::remove_dir_all(central);
 }

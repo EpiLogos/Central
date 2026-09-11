@@ -4,8 +4,8 @@
 //! typed inputs, handlers that resolve the store for the requested scope,
 //! failures mapped to Action result statuses.
 
-use std::collections::BTreeSet;
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 
 use crate::action::{
     ActionAvailability, ActionDescriptor, ActionExecutionContext, ActionInputDefinition,
@@ -15,7 +15,7 @@ use crate::agent_set_store::{RelationRecordKind, RelationRecordStore, RelationRe
 use crate::projectcentral::read_project_manifest;
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
-use crate::world::{AgentSetRegistry, WORLD_DECLARATION_ABSENT_CODE, WorldError, WorldGraph};
+use crate::world::{AgentSetRegistry, WorldError, WorldGraph, WORLD_DECLARATION_ABSENT_CODE};
 
 pub const AGENT_SET_SAVE_ACTION: &str = "central.agent-set.save";
 pub const AGENT_SET_LIST_ACTION: &str = "central.agent-set.list";
@@ -60,50 +60,67 @@ pub fn register_agent_set_actions(registry: &mut ActionRegistry) {
         availability: always_available(),
     }, agent_set_save);
 
-    registry.register(ActionDescriptor {
-        id: AGENT_SET_LIST_ACTION.into(),
-        title: "List agent-sets".into(),
-        description: "List authored central.agent-set/v1 records at the requested register.".into(),
-        inputs: store_inputs("agent-set"),
-        output: ActionOutputDefinition { output_type: format!("list<{REF_OUTPUT}>") },
-        mutation_class: MutationClass::ReadOnly,
-        preview_supported: false,
-        required_ports: Vec::new(),
-        availability: always_available(),
-    }, agent_set_list);
-
-    registry.register(ActionDescriptor {
-        id: AGENT_SET_READ_ACTION.into(),
-        title: "Read agent-set".into(),
-        description: "Read one authored central.agent-set/v1 record.".into(),
-        inputs: {
-            let mut inputs = store_inputs("agent-set");
-            inputs.push(input("ref", "string", true));
-            inputs
+    registry.register(
+        ActionDescriptor {
+            id: AGENT_SET_LIST_ACTION.into(),
+            title: "List agent-sets".into(),
+            description: "List authored central.agent-set/v1 records at the requested register."
+                .into(),
+            inputs: store_inputs("agent-set"),
+            output: ActionOutputDefinition {
+                output_type: format!("list<{REF_OUTPUT}>"),
+            },
+            mutation_class: MutationClass::ReadOnly,
+            preview_supported: false,
+            required_ports: Vec::new(),
+            availability: always_available(),
         },
-        output: ActionOutputDefinition { output_type: REF_OUTPUT.into() },
-        mutation_class: MutationClass::ReadOnly,
-        preview_supported: false,
-        required_ports: Vec::new(),
-        availability: always_available(),
-    }, agent_set_read);
+        agent_set_list,
+    );
 
-    registry.register(ActionDescriptor {
-        id: AGENT_SET_REMOVE_ACTION.into(),
-        title: "Remove agent-set".into(),
-        description: "Remove one authored central.agent-set/v1 record at an exact revision.".into(),
-        inputs: {
-            let mut inputs = store_inputs("agent-set");
-            inputs.push(input("ref", "string", true));
-            inputs.push(input("expected_revision", "string", true));
-            inputs
+    registry.register(
+        ActionDescriptor {
+            id: AGENT_SET_READ_ACTION.into(),
+            title: "Read agent-set".into(),
+            description: "Read one authored central.agent-set/v1 record.".into(),
+            inputs: {
+                let mut inputs = store_inputs("agent-set");
+                inputs.push(input("ref", "string", true));
+                inputs
+            },
+            output: ActionOutputDefinition {
+                output_type: REF_OUTPUT.into(),
+            },
+            mutation_class: MutationClass::ReadOnly,
+            preview_supported: false,
+            required_ports: Vec::new(),
+            availability: always_available(),
         },
-        output: ActionOutputDefinition { output_type: REF_OUTPUT.into() },
-        mutation_class: MutationClass::LocallyMutating,
-        preview_supported: true,
-        required_ports: Vec::new(),
-        availability: always_available(),
-    }, agent_set_remove);
+        agent_set_read,
+    );
+
+    registry.register(
+        ActionDescriptor {
+            id: AGENT_SET_REMOVE_ACTION.into(),
+            title: "Remove agent-set".into(),
+            description: "Remove one authored central.agent-set/v1 record at an exact revision."
+                .into(),
+            inputs: {
+                let mut inputs = store_inputs("agent-set");
+                inputs.push(input("ref", "string", true));
+                inputs.push(input("expected_revision", "string", true));
+                inputs
+            },
+            output: ActionOutputDefinition {
+                output_type: REF_OUTPUT.into(),
+            },
+            mutation_class: MutationClass::LocallyMutating,
+            preview_supported: true,
+            required_ports: Vec::new(),
+            availability: always_available(),
+        },
+        agent_set_remove,
+    );
 
     registry.register(ActionDescriptor {
         id: AGENT_SET_RESOLVE_ACTION.into(),
@@ -151,21 +168,26 @@ pub fn register_agent_set_actions(registry: &mut ActionRegistry) {
         availability: always_available(),
     }, world_relations_list);
 
-    registry.register(ActionDescriptor {
-        id: WORLD_RELATIONS_READ_ACTION.into(),
-        title: "Read world relations".into(),
-        description: "Read one authored central.world-relations/v1 record.".into(),
-        inputs: {
-            let mut inputs = store_inputs("world-relations");
-            inputs.push(input("ref", "string", true));
-            inputs
+    registry.register(
+        ActionDescriptor {
+            id: WORLD_RELATIONS_READ_ACTION.into(),
+            title: "Read world relations".into(),
+            description: "Read one authored central.world-relations/v1 record.".into(),
+            inputs: {
+                let mut inputs = store_inputs("world-relations");
+                inputs.push(input("ref", "string", true));
+                inputs
+            },
+            output: ActionOutputDefinition {
+                output_type: REF_OUTPUT.into(),
+            },
+            mutation_class: MutationClass::ReadOnly,
+            preview_supported: false,
+            required_ports: Vec::new(),
+            availability: always_available(),
         },
-        output: ActionOutputDefinition { output_type: REF_OUTPUT.into() },
-        mutation_class: MutationClass::ReadOnly,
-        preview_supported: false,
-        required_ports: Vec::new(),
-        availability: always_available(),
-    }, world_relations_read);
+        world_relations_read,
+    );
 
     registry.register(ActionDescriptor {
         id: WORLD_RELATIONS_REMOVE_ACTION.into(),
@@ -219,12 +241,7 @@ fn input(name: &str, input_type: &str, required: bool) -> ActionInputDefinition 
 }
 
 fn invalid(action: &str, message: String) -> ActionResult {
-    ActionResult::failure(
-        Some(action),
-        ResultStatus::InvalidInput,
-        message,
-        None,
-    )
+    ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None)
 }
 
 /// Resolve the store for the requested register. Agent-sets live with the agent
@@ -264,13 +281,19 @@ fn resolve_store(
                 ));
             }
             let manifest = read_project_manifest(&project_root).map_err(|error| {
-                invalid(action, format!("Project does not expose a valid ProjectCentral source: {error}"))
+                invalid(
+                    action,
+                    format!("Project does not expose a valid ProjectCentral source: {error}"),
+                )
             })?;
             let validation = manifest.validate();
             if !validation.valid {
                 return Err(invalid(
                     action,
-                    format!("ProjectCentral manifest is invalid: {}", validation.errors.join("; ")),
+                    format!(
+                        "ProjectCentral manifest is invalid: {}",
+                        validation.errors.join("; ")
+                    ),
                 ));
             }
             Ok(match kind {
@@ -343,11 +366,7 @@ fn world_relations_save(
     save_action(store, input, action)
 }
 
-fn save_action(
-    store: RelationRecordStore,
-    input: &Value,
-    action: &str,
-) -> ActionResult {
+fn save_action(store: RelationRecordStore, input: &Value, action: &str) -> ActionResult {
     let record = match input.get("record") {
         Some(record) if record.is_object() => record.clone(),
         _ => return invalid(action, "`record` must be an object".into()),
@@ -570,7 +589,10 @@ fn world_effective_sources(
         Err(error) => return invalid(action, error.to_string()),
     };
     match graph.effective_sources(&target) {
-        Ok(sources) => ActionResult::success(action, json!({ "world_ref": world_ref, "sources": sources })),
+        Ok(sources) => ActionResult::success(
+            action,
+            json!({ "world_ref": world_ref, "sources": sources }),
+        ),
         // A World ref with no authored record at all is *absent*, not invalid:
         // it is the ordinary state of a project that declares no world of its
         // own, and the answer to it is to apply the root lineage by convention.
@@ -607,13 +629,12 @@ fn store_failure(action: &str, error: RelationRecordStoreError) -> ActionResult 
     ActionResult::failure(Some(action), status, error.to_string(), None)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::action::create_core_action_registry;
-    use central_connector_sdk::{ConnectorContext, ConnectorRegistry};
     use crate::root::{initialize_central, RootOptions};
+    use central_connector_sdk::{ConnectorContext, ConnectorRegistry};
     use serde_json::json;
     use std::fs;
     use std::path::PathBuf;
@@ -739,7 +760,10 @@ mod tests {
         let resolved = &partial.data.as_ref().unwrap();
         assert_eq!(
             resolved["resolved_agents"].as_array().unwrap(),
-            &json!(["agent:hermes", "agent:picker"]).as_array().unwrap().clone()
+            &json!(["agent:hermes", "agent:picker"])
+                .as_array()
+                .unwrap()
+                .clone()
         );
         assert_eq!(
             resolved["unavailable_agents"].as_array().unwrap(),
@@ -760,34 +784,32 @@ mod tests {
         );
 
         // Membership cycles are rejected at resolve time.
-        registry
-            .execute(
-                AGENT_SET_SAVE_ACTION,
-                &json!({
-                    "scope": "root",
-                    "record": {
-                        "schema": "central.agent-set/v1",
-                        "ref": "loop-a",
-                        "revision": "r1",
-                        "members": [{"kind": "agent-set", "agent_set_ref": "loop-b"}]
-                    }
-                }),
-                &context,
-            );
-        registry
-            .execute(
-                AGENT_SET_SAVE_ACTION,
-                &json!({
-                    "scope": "root",
-                    "record": {
-                        "schema": "central.agent-set/v1",
-                        "ref": "loop-b",
-                        "revision": "r1",
-                        "members": [{"kind": "agent-set", "agent_set_ref": "loop-a"}]
-                    }
-                }),
-                &context,
-            );
+        registry.execute(
+            AGENT_SET_SAVE_ACTION,
+            &json!({
+                "scope": "root",
+                "record": {
+                    "schema": "central.agent-set/v1",
+                    "ref": "loop-a",
+                    "revision": "r1",
+                    "members": [{"kind": "agent-set", "agent_set_ref": "loop-b"}]
+                }
+            }),
+            &context,
+        );
+        registry.execute(
+            AGENT_SET_SAVE_ACTION,
+            &json!({
+                "scope": "root",
+                "record": {
+                    "schema": "central.agent-set/v1",
+                    "ref": "loop-b",
+                    "revision": "r1",
+                    "members": [{"kind": "agent-set", "agent_set_ref": "loop-a"}]
+                }
+            }),
+            &context,
+        );
         let cyclic = registry.execute(
             AGENT_SET_RESOLVE_ACTION,
             &json!({"scope": "root", "ref": "loop-a"}),
@@ -905,7 +927,10 @@ mod tests {
             .find(|s| s["ref"] == "central:source:control:root:identity")
             .expect("identity source is effective");
         assert_eq!(identity["state"], "available");
-        assert_eq!(identity["effective_revision"], "2", "the child override wins");
+        assert_eq!(
+            identity["effective_revision"], "2",
+            "the child override wins"
+        );
         assert_eq!(
             identity["propagation_path"].as_array().unwrap().len(),
             2,
@@ -1005,7 +1030,13 @@ mod tests {
             &json!({"scope": "project", "project": "garden"}),
             &context,
         );
-        assert_eq!(listed.data.as_ref().unwrap()["records"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            listed.data.as_ref().unwrap()["records"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
 
         fs::remove_dir_all(root).unwrap();
     }

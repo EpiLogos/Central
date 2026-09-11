@@ -19,13 +19,13 @@ use crate::action::{
     ActionOutputDefinition, ActionRegistry, MutationClass,
 };
 use crate::projectcentral::{
-    ProjectCentralManifest, ROOT_WIKI_SOURCE, WIKI_PROFILE, read_project_manifest,
+    read_project_manifest, ProjectCentralManifest, ROOT_WIKI_SOURCE, WIKI_PROFILE,
 };
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
 use crate::source_horizon::source_ref;
 use serde::Serialize;
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -691,11 +691,9 @@ mod tests {
             "central:source:control:root:Control/agents/wiki/wiki.json"
         );
         assert_eq!(data["source"]["path"], ROOT_WIKI_SOURCE);
-        assert!(
-            !data["automatic_agent_or_model_invocation"]
-                .as_bool()
-                .unwrap()
-        );
+        assert!(!data["automatic_agent_or_model_invocation"]
+            .as_bool()
+            .unwrap());
     }
 
     /// Project fixture hand count: 1 space, 2 nodes, 0 other. Relations:

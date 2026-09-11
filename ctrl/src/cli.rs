@@ -1,12 +1,12 @@
-use crate::action::{ActionExecutionContext, create_core_action_registry};
+use crate::action::{create_core_action_registry, ActionExecutionContext};
 use crate::agent_profile_actions::register_agent_profile_actions;
-use crate::picker::{NullTerminalSurface, TerminalSurface, run_guided_action_picker};
+use crate::picker::{run_guided_action_picker, NullTerminalSurface, TerminalSurface};
 use crate::projectcentral_ops::register_projectcentral_actions;
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::RootOptions;
 use central_connector_sdk::{ConnectorContext, ConnectorRegistry};
 use central_reference_connectors::create_default_connector_registry;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::env;
 use std::path::PathBuf;
 
@@ -448,8 +448,14 @@ fn human_output(result: &ActionResult) -> String {
             }
             if let Some(sections) = data.get("sections").and_then(Value::as_array) {
                 for section in sections {
-                    let id = section.get("id").and_then(Value::as_str).unwrap_or_default();
-                    let title = section.get("title").and_then(Value::as_str).unwrap_or_default();
+                    let id = section
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let title = section
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
                     let settings = section
                         .get("settings")
                         .and_then(Value::as_array)
@@ -611,8 +617,7 @@ pub fn run_cli_with_runtime(
         // The Wave 5 System disclosure is itself the output document: `ctrl system
         // --json` returns the bare descriptor on stdout (the O:I composition kernel
         // mount seam), not the ActionResult envelope.
-        if result.action.as_deref() == Some(crate::system_disclosure::SYSTEM_ACTION_ID)
-            && result.ok
+        if result.action.as_deref() == Some(crate::system_disclosure::SYSTEM_ACTION_ID) && result.ok
         {
             match result.data.as_ref() {
                 Some(data) => serde_json::to_string(data).expect("disclosure serializes"),

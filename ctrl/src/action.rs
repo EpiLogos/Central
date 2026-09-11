@@ -1,16 +1,15 @@
-use crate::control::{CONTROL_ROOTS, locate_control_root, search_control};
+use crate::control::{locate_control_root, search_control, CONTROL_ROOTS};
 use crate::result::{ActionResult, ResultStatus};
-use crate::root::{RootOptions, initialize_central, inspect_central, resolve_central_root};
+use crate::root::{initialize_central, inspect_central, resolve_central_root, RootOptions};
 use central_connector_sdk::{
-    ConnectorContext, ConnectorDiagnostics, ConnectorRegistry, NATIVE_OPEN_PORT,
-    NATIVE_REVEAL_PORT, NativeOpenInput, NativeRevealInput, WORK_DISCOVERY_PORT,
-    WorkDiscoveryInput, WorkItem,
+    ConnectorContext, ConnectorDiagnostics, ConnectorRegistry, NativeOpenInput, NativeRevealInput,
+    WorkDiscoveryInput, WorkItem, NATIVE_OPEN_PORT, NATIVE_REVEAL_PORT, WORK_DISCOVERY_PORT,
 };
 use serde::Serialize;
-use serde_json::{Value, json, to_value};
+use serde_json::{json, to_value, Value};
 use std::collections::BTreeMap;
 use std::io;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

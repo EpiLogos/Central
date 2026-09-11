@@ -125,7 +125,9 @@ fn mixed_project_context_preserves_role_authority_and_presentation_distinctions(
     assert_eq!(agents.source_role, "possible-project-agent-governance");
 
     assert_eq!(governance.composition.operational_resolution_owner, "AIKit");
-    assert!(!governance
-        .composition
-        .operational_precedence_defined_by_central);
+    assert!(
+        !governance
+            .composition
+            .operational_precedence_defined_by_central
+    );
 }

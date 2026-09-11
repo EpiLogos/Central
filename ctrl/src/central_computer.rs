@@ -88,7 +88,9 @@ impl CentralComputerProjection {
             return Err(CentralComputerError::NoProjectedWorlds);
         }
         if !self.projected_worlds.contains(&self.root_world) {
-            return Err(CentralComputerError::RootNotProjected(self.root_world.clone()));
+            return Err(CentralComputerError::RootNotProjected(
+                self.root_world.clone(),
+            ));
         }
         let mut seen = BTreeSet::new();
         for world in &self.projected_worlds {
@@ -117,8 +119,12 @@ pub enum ComputerAccessSubject {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ComputerAccessScope {
-    WholeWorld { world_ref: WorldRef },
-    World { world_ref: WorldRef },
+    WholeWorld {
+        world_ref: WorldRef,
+    },
+    World {
+        world_ref: WorldRef,
+    },
     SelectedSources {
         world_ref: WorldRef,
         source_refs: Vec<String>,
@@ -308,18 +314,46 @@ impl From<WorldError> for CentralComputerError {
 impl fmt::Display for CentralComputerError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Schema(schema) => write!(formatter, "unsupported Central Computer schema {schema}"),
+            Self::Schema(schema) => {
+                write!(formatter, "unsupported Central Computer schema {schema}")
+            }
             Self::InvalidText(field) => write!(formatter, "{field} cannot be empty"),
-            Self::InvalidSubject => formatter.write_str("Central Computer access subject cannot be empty"),
-            Self::NoProjectedWorlds => formatter.write_str("Central Computer projection requires at least one World"),
-            Self::RootNotProjected(world) => write!(formatter, "Central Computer root World {world} is not projected"),
-            Self::DuplicateWorld(world) => write!(formatter, "Central Computer projection repeats World {world}"),
-            Self::MissingProjectedWorld(world) => write!(formatter, "Central Computer projection references missing World {world}"),
-            Self::OutsideRoot { world, root } => write!(formatter, "projected World {world} is not inside root World {root}"),
-            Self::NoAccessScopes => formatter.write_str("Central Computer access intent requires at least one scope"),
-            Self::InvalidSelectedSources => formatter.write_str("selected-source scope requires non-empty source refs"),
-            Self::WrongComputerRelation { expected, actual } => write!(formatter, "access intent belongs to Central Computer {actual}, expected {expected}"),
-            Self::ScopeOutsideProjection(world) => write!(formatter, "access scope World {world} is not projected on this Central Computer"),
+            Self::InvalidSubject => {
+                formatter.write_str("Central Computer access subject cannot be empty")
+            }
+            Self::NoProjectedWorlds => {
+                formatter.write_str("Central Computer projection requires at least one World")
+            }
+            Self::RootNotProjected(world) => write!(
+                formatter,
+                "Central Computer root World {world} is not projected"
+            ),
+            Self::DuplicateWorld(world) => write!(
+                formatter,
+                "Central Computer projection repeats World {world}"
+            ),
+            Self::MissingProjectedWorld(world) => write!(
+                formatter,
+                "Central Computer projection references missing World {world}"
+            ),
+            Self::OutsideRoot { world, root } => write!(
+                formatter,
+                "projected World {world} is not inside root World {root}"
+            ),
+            Self::NoAccessScopes => {
+                formatter.write_str("Central Computer access intent requires at least one scope")
+            }
+            Self::InvalidSelectedSources => {
+                formatter.write_str("selected-source scope requires non-empty source refs")
+            }
+            Self::WrongComputerRelation { expected, actual } => write!(
+                formatter,
+                "access intent belongs to Central Computer {actual}, expected {expected}"
+            ),
+            Self::ScopeOutsideProjection(world) => write!(
+                formatter,
+                "access scope World {world} is not projected on this Central Computer"
+            ),
             Self::World(error) => fmt::Display::fmt(error, formatter),
         }
     }
@@ -341,12 +375,22 @@ mod tests {
         let project_a = world("world:project:a");
         let project_b = world("world:project:b");
         let mut graph = WorldGraph::default();
-        graph.insert(WorldRecord::new(root.clone(), "r1", None)).unwrap();
         graph
-            .insert(WorldRecord::new(project_a.clone(), "a1", Some(root.clone())))
+            .insert(WorldRecord::new(root.clone(), "r1", None))
             .unwrap();
         graph
-            .insert(WorldRecord::new(project_b.clone(), "b1", Some(root.clone())))
+            .insert(WorldRecord::new(
+                project_a.clone(),
+                "a1",
+                Some(root.clone()),
+            ))
+            .unwrap();
+        graph
+            .insert(WorldRecord::new(
+                project_b.clone(),
+                "b1",
+                Some(root.clone()),
+            ))
             .unwrap();
         (graph, root, project_a, project_b)
     }
@@ -368,8 +412,12 @@ mod tests {
             "computer-access:agent-a",
             "aa1",
             computer.relation_ref.clone(),
-            ComputerAccessSubject::Agent { agent_ref: "agent:a".into() },
-            vec![ComputerAccessScope::World { world_ref: project_a.clone() }],
+            ComputerAccessSubject::Agent {
+                agent_ref: "agent:a".into(),
+            },
+            vec![ComputerAccessScope::World {
+                world_ref: project_a.clone(),
+            }],
             WorkspaceIntent::SharedComputer,
         )
         .unwrap();
@@ -379,9 +427,13 @@ mod tests {
             "computer-access:agent-b",
             "ab1",
             computer.relation_ref.clone(),
-            ComputerAccessSubject::Agent { agent_ref: "agent:b".into() },
+            ComputerAccessSubject::Agent {
+                agent_ref: "agent:b".into(),
+            },
             vec![
-                ComputerAccessScope::World { world_ref: project_b.clone() },
+                ComputerAccessScope::World {
+                    world_ref: project_b.clone(),
+                },
                 ComputerAccessScope::SelectedSources {
                     world_ref: root.clone(),
                     source_refs: vec!["source:shared-working-rule".into()],
@@ -406,7 +458,9 @@ mod tests {
         let set_ref = AgentSetRef::new("agent-set:development").unwrap();
         let mut registry = AgentSetRegistry::default();
         let mut set = AgentSetRecord::new(set_ref.clone(), "set-r1");
-        set.members.push(AgentSetMember::Agent { agent_ref: "agent:builder".into() });
+        set.members.push(AgentSetMember::Agent {
+            agent_ref: "agent:builder".into(),
+        });
         registry.insert(set).unwrap();
 
         let computer = CentralComputerProjection::new(
@@ -421,8 +475,12 @@ mod tests {
             "computer-access:development",
             "ca1",
             computer.relation_ref.clone(),
-            ComputerAccessSubject::AgentSet { agent_set_ref: set_ref.clone() },
-            vec![ComputerAccessScope::World { world_ref: project_a }],
+            ComputerAccessSubject::AgentSet {
+                agent_set_ref: set_ref.clone(),
+            },
+            vec![ComputerAccessScope::World {
+                world_ref: project_a,
+            }],
             WorkspaceIntent::IsolatedWorkspace {
                 requirement_ref: Some("workcell-requirement:isolated-development".into()),
             },
@@ -470,7 +528,9 @@ mod tests {
             "computer-access:structured",
             "cs1",
             computer.relation_ref.clone(),
-            ComputerAccessSubject::Agent { agent_ref: "agent:reader".into() },
+            ComputerAccessSubject::Agent {
+                agent_ref: "agent:reader".into(),
+            },
             vec![ComputerAccessScope::SelectedSources {
                 world_ref: project_a.clone(),
                 source_refs: vec!["source:architecture".into()],
@@ -484,9 +544,15 @@ mod tests {
             "computer-access:isolated",
             "ci1",
             computer.relation_ref.clone(),
-            ComputerAccessSubject::Agent { agent_ref: "agent:builder".into() },
-            vec![ComputerAccessScope::World { world_ref: project_a }],
-            WorkspaceIntent::IsolatedWorkspace { requirement_ref: None },
+            ComputerAccessSubject::Agent {
+                agent_ref: "agent:builder".into(),
+            },
+            vec![ComputerAccessScope::World {
+                world_ref: project_a,
+            }],
+            WorkspaceIntent::IsolatedWorkspace {
+                requirement_ref: None,
+            },
         )
         .unwrap();
         isolated.validate_against(&computer, &graph).unwrap();
@@ -498,7 +564,9 @@ mod tests {
     fn scope_outside_projected_tree_is_refused() {
         let (mut graph, root, project_a, project_b) = fixture();
         let outside = world("world:other-root");
-        graph.insert(WorldRecord::new(outside.clone(), "o1", None)).unwrap();
+        graph
+            .insert(WorldRecord::new(outside.clone(), "o1", None))
+            .unwrap();
         let computer = CentralComputerProjection::new(
             "computer-projection:personal",
             "cp1",
@@ -511,8 +579,12 @@ mod tests {
             "computer-access:outside",
             "co1",
             computer.relation_ref.clone(),
-            ComputerAccessSubject::Agent { agent_ref: "agent:outside".into() },
-            vec![ComputerAccessScope::World { world_ref: outside.clone() }],
+            ComputerAccessSubject::Agent {
+                agent_ref: "agent:outside".into(),
+            },
+            vec![ComputerAccessScope::World {
+                world_ref: outside.clone(),
+            }],
             WorkspaceIntent::SharedComputer,
         )
         .unwrap();

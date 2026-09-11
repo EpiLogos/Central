@@ -1,8 +1,8 @@
 use central_ctrl::projectcentral_ops::initialize_projectcentral;
 use central_ctrl::{
-    DEFAULT_FLOW_DIR, adopt_flow, create_flow, initialize_now, read_flow,
-    read_project_change_horizon, reconcile_project_sources, rename_flow, rollover_now,
-    set_flow_lifecycle, write_flow,
+    adopt_flow, create_flow, initialize_now, read_flow, read_project_change_horizon,
+    reconcile_project_sources, rename_flow, rollover_now, set_flow_lifecycle, write_flow,
+    DEFAULT_FLOW_DIR,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -272,20 +272,16 @@ fn flow_role_composes_with_retained_wiki_role_without_reclassifying_the_source()
         .iter()
         .find(|source| source.binding.path == "notes/shared.md")
         .unwrap();
-    assert!(
-        observed
-            .binding
-            .roles
-            .iter()
-            .any(|role| role == "adopted-agent-wiki-source")
-    );
-    assert!(
-        observed
-            .binding
-            .roles
-            .iter()
-            .any(|role| role == "flow-source")
-    );
+    assert!(observed
+        .binding
+        .roles
+        .iter()
+        .any(|role| role == "adopted-agent-wiki-source"));
+    assert!(observed
+        .binding
+        .roles
+        .iter()
+        .any(|role| role == "flow-source"));
     assert_eq!(
         observed.binding.source_ref,
         "central:source:project:example/project:notes/shared.md"
@@ -300,7 +296,7 @@ fn flow_role_composes_with_retained_wiki_role_without_reclassifying_the_source()
 // ---- Wave-4 cell W4-B: U4.1 owner-side acceptance proofs + W1.3 read models ----
 
 use central_ctrl::{
-    CliEnvironment, flow_now_view, initialize_central, inspect_flow, list_flows, run_cli,
+    flow_now_view, initialize_central, inspect_flow, list_flows, run_cli, CliEnvironment,
 };
 
 fn cli(root: &PathBuf) -> CliEnvironment {
@@ -740,8 +736,7 @@ fn w13_now_view_groups_multiple_live_flows_and_honours_date_boundary_law() {
     let mut expected_begun = vec![second_today.flow_ref.as_str(), today.flow_ref.as_str()];
     expected_begun.sort_unstable();
     assert_eq!(
-        begun,
-        expected_begun,
+        begun, expected_begun,
         "both Flows begun today are deterministic DAY facts, whatever their later lifecycle"
     );
     let continuing: Vec<&str> = facts
@@ -840,10 +835,8 @@ fn the_central_root_register_holds_a_flow_of_its_own() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let central = std::env::temp_dir().join(format!(
-        "central-root-flow-{}-{nonce}",
-        std::process::id()
-    ));
+    let central =
+        std::env::temp_dir().join(format!("central-root-flow-{}-{nonce}", std::process::id()));
     fs::create_dir_all(central.join("Control/agents/now/flows")).unwrap();
     fs::create_dir_all(central.join("Control/user")).unwrap();
     fs::create_dir_all(central.join("Work")).unwrap();
@@ -871,7 +864,9 @@ fn the_central_root_register_holds_a_flow_of_its_own() {
         record.flow_ref
     );
     assert!(
-        record.source_ref.starts_with("central:source:control:root:"),
+        record
+            .source_ref
+            .starts_with("central:source:control:root:"),
         "the source names the root register: {}",
         record.source_ref
     );
@@ -888,7 +883,10 @@ fn the_central_root_register_holds_a_flow_of_its_own() {
     )
     .expect("the root register accepts a revision");
     let reading = read_flow(&central, &record.flow_ref).expect("the root Flow reads back");
-    assert_eq!(reading.content, "A thought that belongs to no one project.\n");
+    assert_eq!(
+        reading.content,
+        "A thought that belongs to no one project.\n"
+    );
     assert_ne!(written.current_revision, record.current_revision);
     assert!(written.revisions.len() >= 2, "history accrues at the root");
 

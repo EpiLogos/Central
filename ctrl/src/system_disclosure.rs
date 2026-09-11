@@ -71,7 +71,8 @@ const K: [u32; 64] = [
 
 fn sha256(data: &[u8]) -> [u8; 32] {
     let mut h: [u32; 8] = [
-        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+        0x5be0cd19,
     ];
     // Padding: 0x80, then zeros, then 64-bit big-endian bit length.
     let bit_len = (data.len() as u64).wrapping_mul(8);
@@ -248,7 +249,9 @@ fn find_deny_markers(root: &Path, max_depth: usize) -> Vec<String> {
         if depth > max_depth {
             return;
         }
-        let Ok(entries) = fs::read_dir(dir) else { return };
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
         for entry in entries.flatten() {
             let Ok(ft) = entry.file_type() else { continue };
             if entry.file_name() == AGENT_RETRIEVAL_DENY_MARKER && ft.is_file() {
@@ -309,7 +312,9 @@ fn scan_proposals(root: &Path) -> (usize, usize, usize, usize) {
             .join("Work")
             .join(&project)
             .join(".central/source-returns");
-        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
             if !name.starts_with("return-") || !name.ends_with(".json") {
@@ -824,7 +829,11 @@ fn build_descriptor(
     // Compute the time-independent digest and stamp it into the owner block.
     let mut canonical = descriptor.clone();
     zero_timestamps(&mut canonical);
-    let digest = sha256_hex(serde_json::to_string(&canonical).unwrap_or_default().as_bytes());
+    let digest = sha256_hex(
+        serde_json::to_string(&canonical)
+            .unwrap_or_default()
+            .as_bytes(),
+    );
     descriptor["owner"]["reading_digest"] = json!(digest);
 
     Ok(descriptor)
@@ -838,9 +847,7 @@ fn disclosed_actions(observed: u64) -> Value {
             .collect::<Vec<_>>()
             .into()
     };
-    let expose = |ui: bool| -> Value {
-        json!({"ui": ui, "agent": true, "headless": true})
-    };
+    let expose = |ui: bool| -> Value { json!({"ui": ui, "agent": true, "headless": true}) };
     // The human-accepted authority that Central's native layer cannot yet attest.
     let human_accept_authority = || -> Value {
         json!({
@@ -1022,7 +1029,8 @@ mod tests {
         assert_eq!(v["disclosed_at_unix_ms"], 0);
         assert_eq!(v["owner"]["observed_at_unix_ms"], 0);
         assert_eq!(
-            v["sections"][0]["settings"][0]["axes"]["declared"]["provenance"]["observed_at_unix_ms"],
+            v["sections"][0]["settings"][0]["axes"]["declared"]["provenance"]
+                ["observed_at_unix_ms"],
             0
         );
         assert_eq!(v["name"], "kept");
@@ -1037,8 +1045,15 @@ mod tests {
             root: PathBuf::from("/central"),
             root_state: "directory".to_owned(),
             valid: true,
-            checks: vec![DirectoryCheck { path: "Control/user".to_owned(), valid: true }],
-            mixed_root: MixedRootDiagnostic { detected: false, signals: vec![], message: None },
+            checks: vec![DirectoryCheck {
+                path: "Control/user".to_owned(),
+                valid: true,
+            }],
+            mixed_root: MixedRootDiagnostic {
+                detected: false,
+                signals: vec![],
+                message: None,
+            },
         };
         let (state, reason, degradations) = derive_availability(&healthy);
         assert_eq!(state, "available");
@@ -1051,7 +1066,11 @@ mod tests {
             root_state: "missing".to_owned(),
             valid: false,
             checks: vec![],
-            mixed_root: MixedRootDiagnostic { detected: false, signals: vec![], message: None },
+            mixed_root: MixedRootDiagnostic {
+                detected: false,
+                signals: vec![],
+                message: None,
+            },
         };
         let (state, reason, degradations) = derive_availability(&missing);
         assert_eq!(state, "unavailable");
@@ -1065,11 +1084,18 @@ mod tests {
             root_state: "not_directory".to_owned(),
             valid: false,
             checks: vec![],
-            mixed_root: MixedRootDiagnostic { detected: false, signals: vec![], message: None },
+            mixed_root: MixedRootDiagnostic {
+                detected: false,
+                signals: vec![],
+                message: None,
+            },
         };
         let (state, _, degradations) = derive_availability(&not_directory);
         assert_eq!(state, "unavailable");
-        assert_eq!(degradations[0]["reason"], "Central root path is not a directory");
+        assert_eq!(
+            degradations[0]["reason"],
+            "Central root path is not a directory"
+        );
 
         // A mixed root degrades the reading with the mixed-root reason.
         let mixed = CentralHealth {
@@ -1079,7 +1105,10 @@ mod tests {
             checks: vec![],
             mixed_root: MixedRootDiagnostic {
                 detected: true,
-                signals: vec![MixedRootSignal::CargoManifest, MixedRootSignal::CtrlSourceDirectory],
+                signals: vec![
+                    MixedRootSignal::CargoManifest,
+                    MixedRootSignal::CtrlSourceDirectory,
+                ],
                 message: Some("mixed root message".to_owned()),
             },
         };
@@ -1094,8 +1123,15 @@ mod tests {
             root: PathBuf::from("/central"),
             root_state: "directory".to_owned(),
             valid: false,
-            checks: vec![DirectoryCheck { path: "Work".to_owned(), valid: false }],
-            mixed_root: MixedRootDiagnostic { detected: false, signals: vec![], message: None },
+            checks: vec![DirectoryCheck {
+                path: "Work".to_owned(),
+                valid: false,
+            }],
+            mixed_root: MixedRootDiagnostic {
+                detected: false,
+                signals: vec![],
+                message: None,
+            },
         };
         let (state, reason, degradations) = derive_availability(&invalid);
         assert_eq!(state, "degraded");

@@ -81,7 +81,9 @@ pub struct MachineAccount {
 }
 
 fn timestamp() -> String {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
     format!("{}", now.as_secs())
 }
 
@@ -119,12 +121,21 @@ fn load_or_create_identity(root: &Path) -> MachineIdentity {
     };
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
-        let _ = fs::write(&path, serde_json::to_string_pretty(&identity).unwrap_or_default());
+        let _ = fs::write(
+            &path,
+            serde_json::to_string_pretty(&identity).unwrap_or_default(),
+        );
     }
     identity
 }
 
-fn save_observation(root: &Path, identity: &MachineIdentity, connector_id: &str, connector_version: &str, observation: &MachineInspectionOutput) {
+fn save_observation(
+    root: &Path,
+    identity: &MachineIdentity,
+    connector_id: &str,
+    connector_version: &str,
+    observation: &MachineInspectionOutput,
+) {
     let dir = observation_dir(root);
     let _ = fs::create_dir_all(&dir);
     let record = MachineObservationRecord {
@@ -136,7 +147,10 @@ fn save_observation(root: &Path, identity: &MachineIdentity, connector_id: &str,
         observation: observation.clone(),
     };
     let path = dir.join(format!("{}.json", identity.machine_id));
-    let _ = fs::write(&path, serde_json::to_string_pretty(&record).unwrap_or_default());
+    let _ = fs::write(
+        &path,
+        serde_json::to_string_pretty(&record).unwrap_or_default(),
+    );
 }
 
 fn latest_observation(root: &Path, identity: &MachineIdentity) -> Option<MachineObservationRecord> {
@@ -178,7 +192,10 @@ fn authored_roles(root: &Path) -> Vec<AuthoredRoleSummary> {
 }
 
 fn capability_present(observation: &MachineInspectionOutput, capability: &str) -> bool {
-    observation.capabilities.iter().any(|value| value == capability)
+    observation
+        .capabilities
+        .iter()
+        .any(|value| value == capability)
 }
 
 fn package_present(observation: &MachineInspectionOutput, id: &str) -> bool {
@@ -186,7 +203,10 @@ fn package_present(observation: &MachineInspectionOutput, id: &str) -> bool {
 }
 
 fn configuration_present(observation: &MachineInspectionOutput, id: &str) -> bool {
-    observation.configurations.iter().any(|configuration| configuration.id == id)
+    observation
+        .configurations
+        .iter()
+        .any(|configuration| configuration.id == id)
 }
 
 fn service_present(observation: &MachineInspectionOutput, id: &str) -> bool {
@@ -215,7 +235,8 @@ fn drift_for_role(
     for package in &declaration.requirements.packages {
         let observed = package_present(observation, &package.id);
         let status = match (&package.state, observed) {
-            (crate::machine::PresenceState::Present, true) | (crate::machine::PresenceState::Absent, false) => DriftStatus::Present,
+            (crate::machine::PresenceState::Present, true)
+            | (crate::machine::PresenceState::Absent, false) => DriftStatus::Present,
             (crate::machine::PresenceState::Present, false) => DriftStatus::Missing,
             (crate::machine::PresenceState::Absent, true) => DriftStatus::Changeable,
         };
@@ -233,7 +254,8 @@ fn drift_for_role(
     for configuration in &declaration.requirements.configurations {
         let observed = configuration_present(observation, &configuration.id);
         let status = match (&configuration.state, observed) {
-            (crate::machine::PresenceState::Present, true) | (crate::machine::PresenceState::Absent, false) => DriftStatus::Present,
+            (crate::machine::PresenceState::Present, true)
+            | (crate::machine::PresenceState::Absent, false) => DriftStatus::Present,
             (crate::machine::PresenceState::Present, false) => DriftStatus::Missing,
             (crate::machine::PresenceState::Absent, true) => DriftStatus::Changeable,
         };
@@ -250,7 +272,11 @@ fn drift_for_role(
     }
     for service in &declaration.requirements.services {
         let observed = service_present(observation, &service.id);
-        let mut status = if observed { DriftStatus::Present } else { DriftStatus::Missing };
+        let mut status = if observed {
+            DriftStatus::Present
+        } else {
+            DriftStatus::Missing
+        };
         if let Some(running) = service.running {
             let running_observed = observation
                 .services
@@ -293,7 +319,13 @@ pub fn compose_account(
                 connector_version,
                 observation,
             };
-            save_observation(root, &identity, &record.connector_id, &record.connector_version, &record.observation);
+            save_observation(
+                root,
+                &identity,
+                &record.connector_id,
+                &record.connector_version,
+                &record.observation,
+            );
             (Some(record), false)
         }
         None => (latest_observation(root, &identity), true),
@@ -323,7 +355,9 @@ pub fn compose_account(
     }
 
     let reconciliation_available = !authored.is_empty()
-        && drift.iter().any(|entry| entry.status != DriftStatus::Present);
+        && drift
+            .iter()
+            .any(|entry| entry.status != DriftStatus::Present);
 
     MachineAccount {
         current: identity,
@@ -361,14 +395,17 @@ fn account_action(
         let resolution = context
             .connectors
             .resolve(&MACHINE_INSPECTOR_PORT, context.connector_context);
-        match resolution.connector.and_then(|connector| connector.machine_inspector()) {
-            Some(inspector) => match inspector.inspect(&central_connector_sdk::MachineInspectionInput::default()) {
-                Ok(observation) => {
-                    let manifest = resolution
-                        .connector
-                        .map(|connector| connector.manifest().clone())
-                        .unwrap_or_else(|| {
-                            central_connector_sdk::ConnectorManifest {
+        match resolution
+            .connector
+            .and_then(|connector| connector.machine_inspector())
+        {
+            Some(inspector) => {
+                match inspector.inspect(&central_connector_sdk::MachineInspectionInput::default()) {
+                    Ok(observation) => {
+                        let manifest = resolution
+                            .connector
+                            .map(|connector| connector.manifest().clone())
+                            .unwrap_or_else(|| central_connector_sdk::ConnectorManifest {
                                 api_version: String::new(),
                                 id: "unknown".to_owned(),
                                 version: String::new(),
@@ -380,12 +417,12 @@ fn account_action(
                                 dependency_probes: Vec::new(),
                                 configuration_requirements: Vec::new(),
                                 mutation_scope: String::new(),
-                            }
-                        });
-                    Some((observation, manifest.id, manifest.version))
+                            });
+                        Some((observation, manifest.id, manifest.version))
+                    }
+                    Err(_) => None,
                 }
-                Err(_) => None,
-            },
+            }
             None => None,
         }
     } else {
@@ -402,20 +439,44 @@ fn account_action(
 pub fn explain_account(data: &Value) -> String {
     let mut lines = Vec::new();
     if let Some(current) = data.get("current") {
-        let id = current.get("machine_id").and_then(Value::as_str).unwrap_or_default();
-        let host = current.get("hostname").and_then(Value::as_str).unwrap_or_default();
+        let id = current
+            .get("machine_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let host = current
+            .get("hostname")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         lines.push(format!("Machine: {host} ({id})"));
     }
     if let Some(observation) = data.get("last_observation") {
-        let at = observation.get("observed_at").and_then(Value::as_str).unwrap_or_default();
-        let platform = observation.get("observation").and_then(|value| value.get("platform")).and_then(Value::as_str).unwrap_or_default();
-        let architecture = observation.get("observation").and_then(|value| value.get("architecture")).and_then(Value::as_str).unwrap_or_default();
+        let at = observation
+            .get("observed_at")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let platform = observation
+            .get("observation")
+            .and_then(|value| value.get("platform"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let architecture = observation
+            .get("observation")
+            .and_then(|value| value.get("architecture"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         lines.push(format!("Observed: {platform}/{architecture} at {at}"));
     } else {
         lines.push("Observed: none".to_owned());
     }
-    if data.get("observation_stale").and_then(Value::as_bool).unwrap_or(false) {
-        lines.push("Observation: stale (no MachineInspector Connector available; showing last capture)".to_owned());
+    if data
+        .get("observation_stale")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        lines.push(
+            "Observation: stale (no MachineInspector Connector available; showing last capture)"
+                .to_owned(),
+        );
     }
     if let Some(authored) = data.get("authored").and_then(Value::as_array) {
         if authored.is_empty() {
@@ -423,8 +484,13 @@ pub fn explain_account(data: &Value) -> String {
         } else {
             for role in authored {
                 let name = role.get("role").and_then(Value::as_str).unwrap_or_default();
-                let requirements = role.get("requirement_count").and_then(Value::as_u64).unwrap_or(0);
-                lines.push(format!("Authored role: {name} ({requirements} requirements)"));
+                let requirements = role
+                    .get("requirement_count")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                lines.push(format!(
+                    "Authored role: {name} ({requirements} requirements)"
+                ));
             }
         }
     }
@@ -432,20 +498,36 @@ pub fn explain_account(data: &Value) -> String {
         if !drift.is_empty() {
             lines.push(format!("Drift: {} entries", drift.len()));
             for entry in drift.iter().take(8) {
-                let role = entry.get("role").and_then(Value::as_str).unwrap_or_default();
-                let kind = entry.get("kind").and_then(Value::as_str).unwrap_or_default();
+                let role = entry
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let kind = entry
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 let id = entry.get("id").and_then(Value::as_str).unwrap_or_default();
-                let status = entry.get("status").and_then(Value::as_str).unwrap_or_default();
+                let status = entry
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 lines.push(format!("  {role} {kind} {id}: {status}"));
             }
         } else {
             lines.push("Drift: none".to_owned());
         }
     }
-    let reconciliation = data.get("reconciliation_available").and_then(Value::as_bool).unwrap_or(false);
+    let reconciliation = data
+        .get("reconciliation_available")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     lines.push(format!(
         "Reconciliation: {}",
-        if reconciliation { "available via machine.plan/machine.apply" } else { "not currently needed" }
+        if reconciliation {
+            "available via machine.plan/machine.apply"
+        } else {
+            "not currently needed"
+        }
     ));
     lines.join("\n")
 }

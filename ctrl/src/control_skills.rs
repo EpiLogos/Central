@@ -155,9 +155,7 @@ impl SkillLocation {
     }
 
     fn body_source_ref(&self, name: &str) -> String {
-        source_ref(&self.world_ref, &self.skill_world_relative(name))
-            + "/"
-            + SKILL_BODY
+        source_ref(&self.world_ref, &self.skill_world_relative(name)) + "/" + SKILL_BODY
     }
 }
 
@@ -243,7 +241,10 @@ pub fn read_skill_manifest(skill_dir: &Path) -> io::Result<Option<SkillManifest>
     if manifest.schema != SKILL_MANIFEST_SCHEMA {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("skill manifest schema must be {SKILL_MANIFEST_SCHEMA}: {}", path.display()),
+            format!(
+                "skill manifest schema must be {SKILL_MANIFEST_SCHEMA}: {}",
+                path.display()
+            ),
         ));
     }
     Ok(Some(manifest))
@@ -304,13 +305,12 @@ fn resolve_skill_location(
             })
         }
         SkillScope::ControlMachine => {
-            let machine =
-                machine.ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "control-machine scope requires a machine role name",
-                    )
-                })?;
+            let machine = machine.ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "control-machine scope requires a machine role name",
+                )
+            })?;
             validate_segment(machine, "machine")?;
             if project.is_some() {
                 return Err(io::Error::new(
@@ -475,8 +475,12 @@ pub fn inspect_control_skills(central_root: &Path) -> io::Result<SkillsInspectio
         });
     } else {
         for machine in machines {
-            let location =
-                resolve_skill_location(central_root, SkillScope::ControlMachine, Some(&machine), None)?;
+            let location = resolve_skill_location(
+                central_root,
+                SkillScope::ControlMachine,
+                Some(&machine),
+                None,
+            )?;
             scopes.push(scope_surface(&location)?);
             skills.extend(
                 child_directories(&location.skills_root)?
@@ -489,9 +493,12 @@ pub fn inspect_control_skills(central_root: &Path) -> io::Result<SkillsInspectio
     let work_root = central_root.join("Work");
     let mut project_scopes = Vec::new();
     for project in child_directories(&work_root)? {
-        let Ok(location) =
-            resolve_skill_location(central_root, SkillScope::ProjectcentralUser, None, Some(&project))
-        else {
+        let Ok(location) = resolve_skill_location(
+            central_root,
+            SkillScope::ProjectcentralUser,
+            None,
+            Some(&project),
+        ) else {
             continue;
         };
         if !location.skills_root.is_dir() {
@@ -516,8 +523,14 @@ pub fn inspect_control_skills(central_root: &Path) -> io::Result<SkillsInspectio
     }
     scopes.extend(project_scopes);
 
-    let active_skills = skills.iter().filter(|skill| skill.standing == "active").count();
-    let retired_skills = skills.iter().filter(|skill| skill.standing == "retired").count();
+    let active_skills = skills
+        .iter()
+        .filter(|skill| skill.standing == "active")
+        .count();
+    let retired_skills = skills
+        .iter()
+        .filter(|skill| skill.standing == "retired")
+        .count();
     let unresolved_skills = skills
         .iter()
         .filter(|skill| skill.standing == "unresolved")
@@ -577,7 +590,10 @@ pub fn retire_skill(
     if !skill_dir.is_dir() {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
-            format!("skill ground does not exist: {}", location.skill_display_path(&name)),
+            format!(
+                "skill ground does not exist: {}",
+                location.skill_display_path(&name)
+            ),
         ));
     }
     let mut manifest = read_skill_manifest(&skill_dir)?.ok_or_else(|| {
@@ -601,7 +617,10 @@ pub fn retire_skill(
     if manifest.name != name {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("manifest name {} does not match directory {name}", manifest.name),
+            format!(
+                "manifest name {} does not match directory {name}",
+                manifest.name
+            ),
         ));
     }
     if manifest.standing == SkillStanding::Retired {
@@ -612,7 +631,10 @@ pub fn retire_skill(
                 manifest
                     .retirement
                     .as_ref()
-                    .map(|record| format!(" (by {} at unix {})", record.retired_by, record.retired_at_unix_seconds))
+                    .map(|record| format!(
+                        " (by {} at unix {})",
+                        record.retired_by, record.retired_at_unix_seconds
+                    ))
                     .unwrap_or_default()
             ),
         ));
@@ -654,7 +676,10 @@ pub fn restore_skill(
     if !skill_dir.is_dir() {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
-            format!("skill ground does not exist: {}", location.skill_display_path(&name)),
+            format!(
+                "skill ground does not exist: {}",
+                location.skill_display_path(&name)
+            ),
         ));
     }
     let mut manifest = read_skill_manifest(&skill_dir)?.ok_or_else(|| {
@@ -676,7 +701,10 @@ pub fn restore_skill(
     if manifest.name != name {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("manifest name {} does not match directory {name}", manifest.name),
+            format!(
+                "manifest name {} does not match directory {name}",
+                manifest.name
+            ),
         ));
     }
     if manifest.standing != SkillStanding::Retired {
@@ -809,22 +837,31 @@ fn optional(input: &Value, field: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn central_root(action: &str, context: &ActionExecutionContext<'_>) -> Result<PathBuf, ActionResult> {
-    resolve_central_root(context.root_options).map_err(|message| {
-        ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None)
-    }).map(|root| root.path)
+fn central_root(
+    action: &str,
+    context: &ActionExecutionContext<'_>,
+) -> Result<PathBuf, ActionResult> {
+    resolve_central_root(context.root_options)
+        .map_err(|message| {
+            ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None)
+        })
+        .map(|root| root.path)
 }
 
 fn skill_target(
     action: &str,
     input: &Value,
 ) -> Result<(SkillScope, Option<String>, Option<String>, String), ActionResult> {
-    let scope = required(input, "scope", action)
-        .and_then(|value| {
-            SkillScope::from_input(&value).map_err(|error| {
-                ActionResult::failure(Some(action), ResultStatus::InvalidInput, error.to_string(), None)
-            })
-        });
+    let scope = required(input, "scope", action).and_then(|value| {
+        SkillScope::from_input(&value).map_err(|error| {
+            ActionResult::failure(
+                Some(action),
+                ResultStatus::InvalidInput,
+                error.to_string(),
+                None,
+            )
+        })
+    });
     let scope = match scope {
         Ok(value) => value,
         Err(result) => return Err(result),
@@ -934,7 +971,11 @@ fn restore_action(
 }
 
 pub fn register_control_skills_actions(registry: &mut ActionRegistry) {
-    let scope_choices = [SCOPE_CONTROL_USER, SCOPE_CONTROL_MACHINE, SCOPE_PROJECTCENTRAL_USER];
+    let scope_choices = [
+        SCOPE_CONTROL_USER,
+        SCOPE_CONTROL_MACHINE,
+        SCOPE_PROJECTCENTRAL_USER,
+    ];
     registry
         .register(
             descriptor(
@@ -996,7 +1037,10 @@ mod tests {
         let path = std::env::temp_dir().join(format!(
             "central-skills-{label}-{}-{}",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         fs::create_dir_all(&path).unwrap();
         path
@@ -1005,7 +1049,11 @@ mod tests {
     fn seed_skill(root: &Path, relative_skill_dir: &str) -> PathBuf {
         let skill_dir = root.join(relative_skill_dir);
         fs::create_dir_all(&skill_dir).unwrap();
-        fs::write(skill_dir.join(SKILL_BODY), "---\nname: seeded\n---\nBody.\n").unwrap();
+        fs::write(
+            skill_dir.join(SKILL_BODY),
+            "---\nname: seeded\n---\nBody.\n",
+        )
+        .unwrap();
         let manifest = SkillManifest {
             schema: SKILL_MANIFEST_SCHEMA.to_owned(),
             name: skill_dir
@@ -1023,7 +1071,10 @@ mod tests {
         // against real authored bytes, not the typed round-trip alone.
         let raw = serde_json::to_value(&manifest).unwrap();
         let mut authored = raw.as_object().unwrap().clone();
-        authored.insert("authored_note".to_owned(), Value::String("keep me".to_owned()));
+        authored.insert(
+            "authored_note".to_owned(),
+            Value::String("keep me".to_owned()),
+        );
         fs::write(
             skill_dir.join(SKILL_MANIFEST),
             serde_json::to_vec_pretty(&Value::Object(authored)).unwrap(),
@@ -1134,17 +1185,22 @@ mod tests {
 
         // The manifest on disk carries the record, and authored extras survive.
         let disk: Value = serde_json::from_slice(
-            &fs::read(central.join("Control/user/skills/central-ground-keeping/skill.json")).unwrap(),
+            &fs::read(central.join("Control/user/skills/central-ground-keeping/skill.json"))
+                .unwrap(),
         )
         .unwrap();
         assert_eq!(disk["schema"], SKILL_MANIFEST_SCHEMA);
         assert_eq!(disk["standing"], "retired");
         assert_eq!(disk["retirement"]["retired_by"], "owner-in-session");
-        assert_eq!(disk["retirement"]["retirement_reason"], "superseded by the ontology skill");
+        assert_eq!(
+            disk["retirement"]["retirement_reason"],
+            "superseded by the ontology skill"
+        );
         assert_eq!(disk["authored_note"], "keep me");
         // The skill body is untouched.
         assert_eq!(
-            fs::read_to_string(central.join("Control/user/skills/central-ground-keeping/SKILL.md")).unwrap(),
+            fs::read_to_string(central.join("Control/user/skills/central-ground-keeping/SKILL.md"))
+                .unwrap(),
             "---\nname: seeded\n---\nBody.\n"
         );
 
@@ -1183,8 +1239,14 @@ mod tests {
         let central = temp_central("restore");
         seed_skill(&central, "Control/user/skills/central-ground-keeping");
 
-        let refusal = restore_skill(&central, SkillScope::ControlUser, None, None, "central-ground-keeping")
-            .unwrap_err();
+        let refusal = restore_skill(
+            &central,
+            SkillScope::ControlUser,
+            None,
+            None,
+            "central-ground-keeping",
+        )
+        .unwrap_err();
         assert_eq!(refusal.kind(), io::ErrorKind::InvalidInput);
         assert!(refusal.to_string().contains("active"));
 
@@ -1198,16 +1260,29 @@ mod tests {
             "superseded",
         )
         .unwrap();
-        let receipt =
-            restore_skill(&central, SkillScope::ControlUser, None, None, "central-ground-keeping")
-                .unwrap();
+        let receipt = restore_skill(
+            &central,
+            SkillScope::ControlUser,
+            None,
+            None,
+            "central-ground-keeping",
+        )
+        .unwrap();
         assert_eq!(receipt.previous_standing, "retired");
         assert_eq!(receipt.standing, "active");
-        assert_eq!(receipt.removed_retirement.as_ref().unwrap().retirement_reason, "superseded");
+        assert_eq!(
+            receipt
+                .removed_retirement
+                .as_ref()
+                .unwrap()
+                .retirement_reason,
+            "superseded"
+        );
         assert!(receipt.skill.retirement.is_none());
 
         let disk: Value = serde_json::from_slice(
-            &fs::read(central.join("Control/user/skills/central-ground-keeping/skill.json")).unwrap(),
+            &fs::read(central.join("Control/user/skills/central-ground-keeping/skill.json"))
+                .unwrap(),
         )
         .unwrap();
         assert_eq!(disk["standing"], "active");
@@ -1237,19 +1312,25 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(scope_mismatch.kind(), io::ErrorKind::InvalidData);
-        assert!(scope_mismatch.to_string().contains("does not match location"));
+        assert!(scope_mismatch
+            .to_string()
+            .contains("does not match location"));
 
         let inspection = inspect_control_skills(&central).unwrap();
         let skill = inspection.skills[0].clone();
         assert_eq!(skill.scope, "control-machine");
-        assert!(skill.faults.iter().any(|fault| fault.contains("does not match location")));
+        assert!(skill
+            .faults
+            .iter()
+            .any(|fault| fault.contains("does not match location")));
         let _ = fs::remove_dir_all(&central);
     }
 
     #[test]
     fn ref_grammar_addresses_every_scope_through_the_canonical_source_ref() {
         let central = temp_central("refs");
-        let personal = resolve_skill_location(&central, SkillScope::ControlUser, None, None).unwrap();
+        let personal =
+            resolve_skill_location(&central, SkillScope::ControlUser, None, None).unwrap();
         assert_eq!(
             personal.body_source_ref("central-ground-keeping"),
             "central:source:control:root:Control/user/skills/central-ground-keeping/SKILL.md"
@@ -1281,8 +1362,13 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let location =
-            resolve_skill_location(&project, SkillScope::ProjectcentralUser, None, Some("Suite")).unwrap();
+        let location = resolve_skill_location(
+            &project,
+            SkillScope::ProjectcentralUser,
+            None,
+            Some("Suite"),
+        )
+        .unwrap();
         assert_eq!(location.world_ref, "project:example/suite");
         assert_eq!(
             location.body_source_ref("suite-operator"),
@@ -1291,8 +1377,13 @@ mod tests {
         // Without a manifest the ref falls back to the project directory name,
         // exactly as ProjectCentral ground inspection does.
         fs::remove_file(project_root.join("ProjectCentral/project.json")).unwrap();
-        let fallback =
-            resolve_skill_location(&project, SkillScope::ProjectcentralUser, None, Some("Suite")).unwrap();
+        let fallback = resolve_skill_location(
+            &project,
+            SkillScope::ProjectcentralUser,
+            None,
+            Some("Suite"),
+        )
+        .unwrap();
         assert_eq!(fallback.world_ref, "project:Suite");
         let _ = fs::remove_dir_all(&central);
         let _ = fs::remove_dir_all(&project);

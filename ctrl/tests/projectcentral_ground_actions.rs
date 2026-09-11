@@ -8,7 +8,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 static NEXT_TEMP_ROOT: AtomicU64 = AtomicU64::new(0);
 
 fn temporary_root() -> PathBuf {
-    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let sequence = NEXT_TEMP_ROOT.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!(
         "central-ground-actions-{}-{nonce}-{sequence}",
@@ -54,19 +57,39 @@ fn actions_establish_one_small_human_ground_without_generated_documents() {
     );
     assert_eq!(pc.exit_code, 0, "{}", pc.output);
     assert!(project.join("ProjectCentral/user").is_dir());
-    assert_eq!(fs::read_dir(project.join("ProjectCentral/user")).unwrap().count(), 0);
+    assert_eq!(
+        fs::read_dir(project.join("ProjectCentral/user"))
+            .unwrap()
+            .count(),
+        0
+    );
     assert!(!project.join("ProjectCentral/README.md").exists());
 
-    let empty = run(&root, "projectcentral.ground.inspect", r#"{"project":"example"}"#);
+    let empty = run(
+        &root,
+        "projectcentral.ground.inspect",
+        r#"{"project":"example"}"#,
+    );
     assert_eq!(empty.exit_code, 0, "{}", empty.output);
     let empty_value: Value = serde_json::from_str(&empty.output).unwrap();
     assert_eq!(empty_value["data"]["status"], "empty");
 
-    fs::write(project.join("ProjectCentral/user/note.md"), "A small human-authored Project note.\n").unwrap();
-    let unresolved = run(&root, "projectcentral.ground.inspect", r#"{"project":"example"}"#);
+    fs::write(
+        project.join("ProjectCentral/user/note.md"),
+        "A small human-authored Project note.\n",
+    )
+    .unwrap();
+    let unresolved = run(
+        &root,
+        "projectcentral.ground.inspect",
+        r#"{"project":"example"}"#,
+    );
     let unresolved_value: Value = serde_json::from_str(&unresolved.output).unwrap();
     assert_eq!(unresolved_value["data"]["status"], "partial");
-    assert_eq!(unresolved_value["data"]["recognised_sources"][0]["provenance"], "unresolved");
+    assert_eq!(
+        unresolved_value["data"]["recognised_sources"][0]["provenance"],
+        "unresolved"
+    );
 
     let apply = run(
         &root,
@@ -78,9 +101,16 @@ fn actions_establish_one_small_human_ground_without_generated_documents() {
     assert_eq!(apply_value["data"]["ground_status"], "established");
     assert_eq!(apply_value["data"]["source_bytes_mutated"], false);
     assert_eq!(apply_value["data"]["source_path_mutated"], false);
-    assert_eq!(fs::read_to_string(project.join("ProjectCentral/user/note.md")).unwrap(), "A small human-authored Project note.\n");
-    assert!(project.join("ProjectCentral/agents/wiki/wiki.json").is_file());
-    assert!(project.join("ProjectCentral/relations/source-relations.json").is_file());
+    assert_eq!(
+        fs::read_to_string(project.join("ProjectCentral/user/note.md")).unwrap(),
+        "A small human-authored Project note.\n"
+    );
+    assert!(project
+        .join("ProjectCentral/agents/wiki/wiki.json")
+        .is_file());
+    assert!(project
+        .join("ProjectCentral/relations/source-relations.json")
+        .is_file());
 
     let _ = fs::remove_dir_all(root);
 }
@@ -117,6 +147,8 @@ fn apply_rejects_missing_explicit_human_acceptance() {
         r#"{"project":"example","source":"ProjectCentral/user/note.md","provenance":"human-authored","standing":"authored-human-position","treatment":"projectcentral-user","roles":"purpose","acceptance":"agent-assumed"}"#,
     );
     assert_eq!(apply.exit_code, 2);
-    assert!(!project.join("ProjectCentral/relations/source-relations.json").exists());
+    assert!(!project
+        .join("ProjectCentral/relations/source-relations.json")
+        .exists());
     let _ = fs::remove_dir_all(root);
 }

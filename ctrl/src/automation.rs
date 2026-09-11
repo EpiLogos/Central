@@ -78,7 +78,10 @@ fn run_automation(
         Err(error) => ActionResult::failure(
             Some("automation.run"),
             ResultStatus::ConnectorFailure,
-            format!("Connector failed while executing {}: {error}", AUTOMATION_PORT.id),
+            format!(
+                "Connector failed while executing {}: {error}",
+                AUTOMATION_PORT.id
+            ),
             Some(json!({
                 "automation": automation,
                 "port": AUTOMATION_PORT.id,
@@ -96,8 +99,9 @@ pub fn register_automation_actions(registry: &mut ActionRegistry) {
             ActionDescriptor {
                 id: "automation.run".to_owned(),
                 title: "Run automation".to_owned(),
-                description: "Invoke a named native automation through the provider-neutral Automation Port."
-                    .to_owned(),
+                description:
+                    "Invoke a named native automation through the provider-neutral Automation Port."
+                        .to_owned(),
                 inputs: vec![ActionInputDefinition {
                     name: "automation".to_owned(),
                     input_type: "string".to_owned(),

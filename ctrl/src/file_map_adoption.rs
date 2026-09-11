@@ -3,8 +3,8 @@
 use super::file_map::*;
 use crate::file_map_backend::{self as native, Backend};
 use crate::projectcentral_flow::content_revision_bytes;
-use rusqlite::{Connection, OpenFlags, backup::Backup};
-use serde_json::{Value, json};
+use rusqlite::{backup::Backup, Connection, OpenFlags};
+use serde_json::{json, Value};
 use std::os::unix::fs::PermissionsExt;
 use std::{fs, io, path::Path, time::Duration};
 

@@ -433,9 +433,9 @@ fn action_list_has_human_and_structured_cli_renderings() {
     assert!(human
         .output
         .contains("projectcentral.self.inspect\tInspect Project self-description field"));
-    assert!(human
-        .output
-        .contains("projectcentral.self.retain-tier\tRelate retained native source into Project tier"));
+    assert!(human.output.contains(
+        "projectcentral.self.retain-tier\tRelate retained native source into Project tier"
+    ));
     assert!(human
         .output
         .contains("agent-profile.list\tList Agent Profiles"));
@@ -479,10 +479,14 @@ fn action_list_has_human_and_structured_cli_renderings() {
     central_ctrl::continuous_work::register_actions(&mut continuous);
     assert_eq!(actions.len(), 128 + continuous.list().len());
     for descriptor in continuous.list() {
-        let actual = actions.iter().find(|action| action["id"] == descriptor.id)
+        let actual = actions
+            .iter()
+            .find(|action| action["id"] == descriptor.id)
             .unwrap_or_else(|| panic!("missing native continuous-work Action {}", descriptor.id));
         assert_eq!(*actual, serde_json::to_value(&descriptor).unwrap());
-        assert!(human.output.contains(&format!("{}\t{}", descriptor.id, descriptor.title)));
+        assert!(human
+            .output
+            .contains(&format!("{}\t{}", descriptor.id, descriptor.title)));
     }
     let ids = actions
         .iter()
@@ -619,6 +623,6 @@ fn binary_is_the_stable_development_entrypoint() {
         .join("Control/agents/wiki/wiki.json")
         .is_file());
     assert!(!Path::new(root.to_str().unwrap())
-    .join("Control/self")
-    .exists());
+        .join("Control/self")
+        .exists());
 }

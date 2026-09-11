@@ -119,10 +119,15 @@ fn oi_watch_availability_invokes_native_personal_notify_port_without_acknowledge
         connector_context: &connector_context,
     };
     let registry = create_personal_action_registry();
-    let descriptor = registry.get("personal.notify").expect("personal.notify Action");
+    let descriptor = registry
+        .get("personal.notify")
+        .expect("personal.notify Action");
 
     assert_eq!(descriptor.mutation_class, MutationClass::ExternallyMutating);
-    assert_eq!(descriptor.required_ports, vec![USER_NOTIFICATION_PORT.id.to_owned()]);
+    assert_eq!(
+        descriptor.required_ports,
+        vec![USER_NOTIFICATION_PORT.id.to_owned()]
+    );
     assert_eq!(USER_NOTIFICATION_PORT.id, "UserNotification");
     assert_eq!(USER_NOTIFICATION_PORT.version, "1.0.0");
 
@@ -146,17 +151,29 @@ fn oi_watch_availability_invokes_native_personal_notify_port_without_acknowledge
         &context,
     );
 
-    assert!(result.ok, "personal.notify should execute through the registered UserNotification Port");
+    assert!(
+        result.ok,
+        "personal.notify should execute through the registered UserNotification Port"
+    );
     let data = result.data.as_ref().expect("notification data");
-    assert_eq!(data["delivery"]["provider"], "fixture.oi-watch-notification");
+    assert_eq!(
+        data["delivery"]["provider"],
+        "fixture.oi-watch-notification"
+    );
     assert_eq!(data["delivery"]["subject_ref"], "agent:remote");
-    assert_eq!(data["delivery"]["action_ref"], "oi.watch-availability.notify");
+    assert_eq!(
+        data["delivery"]["action_ref"],
+        "oi.watch-availability.notify"
+    );
     assert_eq!(
         data["delivery"]["caller_ref"],
         "notification-decision:watch-availability:42"
     );
     assert_eq!(data["delivery"]["human_acknowledgement_observed"], false);
-    assert_eq!(data["notification_delivery_is_human_acknowledgement"], false);
+    assert_eq!(
+        data["notification_delivery_is_human_acknowledgement"],
+        false
+    );
 
     let request = seen
         .lock()
@@ -164,8 +181,14 @@ fn oi_watch_availability_invokes_native_personal_notify_port_without_acknowledge
         .clone()
         .expect("Port delivery request");
     assert_eq!(request.subject_ref.as_deref(), Some("agent:remote"));
-    assert_eq!(request.action_ref.as_deref(), Some("oi.watch-availability.notify"));
-    assert_eq!(request.caller_ref, "notification-decision:watch-availability:42");
+    assert_eq!(
+        request.action_ref.as_deref(),
+        Some("oi.watch-availability.notify")
+    );
+    assert_eq!(
+        request.caller_ref,
+        "notification-decision:watch-availability:42"
+    );
     assert_eq!(request.provenance_refs.len(), 5);
     assert!(request
         .provenance_refs

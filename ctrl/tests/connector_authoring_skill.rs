@@ -14,7 +14,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const SKILL: &str = include_str!("../../skills/connector-authoring/SKILL.md");
 
 fn temporary_directory(label: &str) -> PathBuf {
-    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let path = std::env::temp_dir().join(format!(
         "central-connector-skill-{label}-{}-{nonce}",
         std::process::id()
@@ -37,7 +40,10 @@ fn skill_requires_the_public_contract_and_correct_architecture_boundary() {
         "real-target acceptance",
         "macOS hardening lessons carried forward",
     ] {
-        assert!(SKILL.contains(required), "Connector-authoring Skill is missing: {required}");
+        assert!(
+            SKILL.contains(required),
+            "Connector-authoring Skill is missing: {required}"
+        );
     }
 
     assert!(SKILL.contains("connectors/template"));

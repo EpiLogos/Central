@@ -15,7 +15,10 @@ struct TempRoot(PathBuf);
 
 impl TempRoot {
     fn new() -> Self {
-        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let sequence = NEXT_TEMP_ROOT.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
             "central-now-{}-{nonce}-{sequence}",
@@ -79,7 +82,9 @@ fn project_without_now_remains_valid_and_now_inspection_is_non_mutating() {
     assert_eq!(data["exists"], false);
     assert!(!project.join(NOW_DIR).exists());
     assert!(project.join("ProjectCentral/project.json").is_file());
-    assert!(project.join("ProjectCentral/agents/wiki/wiki.json").is_file());
+    assert!(project
+        .join("ProjectCentral/agents/wiki/wiki.json")
+        .is_file());
 }
 
 #[test]
@@ -106,7 +111,12 @@ fn real_work_project_flow_survives_sessions_rolls_day_and_returns_meaning() {
     let mut registry = create_core_action_registry();
     register_projectcentral_actions(&mut registry);
 
-    execute(&registry, &context, "projectcentral.now.init", json!({"project":"lived-project"}));
+    execute(
+        &registry,
+        &context,
+        "projectcentral.now.init",
+        json!({"project":"lived-project"}),
+    );
 
     // Human writes directly: no schema or Action ceremony is required for their scratch.
     let scratch = project.join(NOW_USER_DIR).join("current.md");
@@ -195,7 +205,10 @@ fn real_work_project_flow_survives_sessions_rolls_day_and_returns_meaning() {
         .as_str()
         .unwrap()
         .starts_with(WIKI_RETURN_DIR));
-    assert!(project.join(WIKI_RETURN_DIR).join("now-day/returned-learning.json").is_file());
+    assert!(project
+        .join(WIKI_RETURN_DIR)
+        .join("now-day/returned-learning.json")
+        .is_file());
 
     // Human scratch only becomes durable Project ground through explicit human acceptance.
     let human_promotion = execute(
@@ -226,21 +239,39 @@ fn real_work_project_flow_survives_sessions_rolls_day_and_returns_meaning() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|value| value.as_str().unwrap().ends_with(&format!("{question_id}.json"))));
+        .any(|value| value
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("{question_id}.json"))));
     assert!(rollover["removed"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|value| value.as_str().unwrap().ends_with(&format!("{resolved_id}.json"))));
+        .any(|value| value
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("{resolved_id}.json"))));
     assert!(rollover["removed"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|value| value.as_str().unwrap().ends_with(&format!("{learning_id}.json"))));
+        .any(|value| value
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("{learning_id}.json"))));
 
-    assert!(project.join(NOW_AGENT_DIR).join(format!("{question_id}.json")).is_file());
-    assert!(!project.join(NOW_AGENT_DIR).join(format!("{resolved_id}.json")).exists());
-    assert!(!project.join(NOW_AGENT_DIR).join(format!("{learning_id}.json")).exists());
+    assert!(project
+        .join(NOW_AGENT_DIR)
+        .join(format!("{question_id}.json"))
+        .is_file());
+    assert!(!project
+        .join(NOW_AGENT_DIR)
+        .join(format!("{resolved_id}.json"))
+        .exists());
+    assert!(!project
+        .join(NOW_AGENT_DIR)
+        .join(format!("{learning_id}.json"))
+        .exists());
 
     let next_now = execute(
         &registry,
@@ -251,7 +282,10 @@ fn real_work_project_flow_survives_sessions_rolls_day_and_returns_meaning() {
     assert_eq!(next_now["open_questions"].as_array().unwrap().len(), 1);
     assert_eq!(next_now["open_questions"][0]["status"], "carried");
     assert_eq!(next_now["open_questions"][0]["run_ref"], "factory:run:74");
-    assert_eq!(next_now["open_questions"][0]["session_ref"], "aikit:session:later");
+    assert_eq!(
+        next_now["open_questions"][0]["session_ref"],
+        "aikit:session:later"
+    );
 
     let day = fs::read_to_string(project.join(NOW_DAY_DIR).join("2026-08-19.md")).unwrap();
     assert!(day.contains("Open design question"));
@@ -264,5 +298,7 @@ fn real_work_project_flow_survives_sessions_rolls_day_and_returns_meaning() {
     assert!(!project.join("ProjectCentral/now/sessions").exists());
     assert!(!project.join("ProjectCentral/now/runs").exists());
     assert!(!project.join("ProjectCentral/now/focus").exists());
-    assert!(project.join("ProjectCentral/agents/wiki/wiki.json").is_file());
+    assert!(project
+        .join("ProjectCentral/agents/wiki/wiki.json")
+        .is_file());
 }

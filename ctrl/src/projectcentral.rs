@@ -72,7 +72,10 @@ impl ProjectCentralManifest {
             errors.push(format!("schema must be {PROJECT_SCHEMA}"));
         }
         if self.project_id.trim().is_empty() || self.project_id != self.project_id.trim() {
-            errors.push("project_id must be a non-empty stable identity without surrounding whitespace".to_owned());
+            errors.push(
+                "project_id must be a non-empty stable identity without surrounding whitespace"
+                    .to_owned(),
+            );
         }
         if self.human_source != HUMAN_SOURCE_DIR {
             errors.push(format!("human_source must be the canonical fractal human-authorship root {HUMAN_SOURCE_DIR}"));
@@ -81,18 +84,30 @@ impl ProjectCentralManifest {
             errors.push(format!("wiki.profile must be {WIKI_PROFILE}"));
         }
         if self.wiki.source != WIKI_SOURCE {
-            errors.push(format!("wiki.source must be the canonical Agent Wiki source {WIKI_SOURCE}"));
+            errors.push(format!(
+                "wiki.source must be the canonical Agent Wiki source {WIKI_SOURCE}"
+            ));
         }
         validate_project_member("human_source", &self.human_source, &mut errors);
         validate_project_member("wiki.source", &self.wiki.source, &mut errors);
         for (index, source) in self.wiki.adopted_sources.iter().enumerate() {
-            validate_project_member(&format!("wiki.adopted_sources[{index}]"), source, &mut errors);
+            validate_project_member(
+                &format!("wiki.adopted_sources[{index}]"),
+                source,
+                &mut errors,
+            );
         }
-        ManifestValidation { valid: errors.is_empty(), errors }
+        ManifestValidation {
+            valid: errors.is_empty(),
+            errors,
+        }
     }
 }
 
-pub fn projectcentral_paths(project_root: &Path, manifest: &ProjectCentralManifest) -> ProjectCentralPaths {
+pub fn projectcentral_paths(
+    project_root: &Path,
+    manifest: &ProjectCentralManifest,
+) -> ProjectCentralPaths {
     let projectcentral_root = project_root.join(PROJECTCENTRAL_DIR);
     ProjectCentralPaths {
         project_root: project_root.to_path_buf(),
@@ -110,20 +125,32 @@ pub fn read_project_manifest(project_root: &Path) -> io::Result<ProjectCentralMa
     let path = project_root.join(PROJECTCENTRAL_DIR).join(PROJECT_MANIFEST);
     let bytes = fs::read(&path)?;
     serde_json::from_slice(&bytes).map_err(|error| {
-        io::Error::new(io::ErrorKind::InvalidData, format!("{} is not a valid ProjectCentral manifest: {error}", path.display()))
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{} is not a valid ProjectCentral manifest: {error}",
+                path.display()
+            ),
+        )
     })
 }
 
 fn validate_project_member(field: &str, raw: &str, errors: &mut Vec<String>) {
     if raw.trim().is_empty() || raw != raw.trim() {
-        errors.push(format!("{field} must be a non-empty project-root-relative path without surrounding whitespace"));
+        errors.push(format!(
+            "{field} must be a non-empty project-root-relative path without surrounding whitespace"
+        ));
         return;
     }
     let path = Path::new(raw);
     let safe = !path.is_absolute()
-        && path.components().all(|component| matches!(component, Component::Normal(_)));
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)));
     if !safe {
-        errors.push(format!("{field} must remain inside the Project and may not contain parent/root components"));
+        errors.push(format!(
+            "{field} must remain inside the Project and may not contain parent/root components"
+        ));
     }
 }
 
@@ -144,12 +171,18 @@ mod tests {
     #[test]
     fn manifest_keeps_canonical_human_and_agent_roots_but_allows_safe_adopted_sources() {
         let mut manifest = ProjectCentralManifest::new("epilogos/example");
-        manifest.wiki.adopted_sources.push("docs/wiki.json".to_owned());
+        manifest
+            .wiki
+            .adopted_sources
+            .push("docs/wiki.json".to_owned());
         assert!(manifest.validate().valid);
 
         manifest.human_source = "README.md".to_owned();
         manifest.wiki.source = "docs/wiki.json".to_owned();
-        manifest.wiki.adopted_sources.push("../wiki.json".to_owned());
+        manifest
+            .wiki
+            .adopted_sources
+            .push("../wiki.json".to_owned());
         let validation = manifest.validate();
         assert!(!validation.valid);
         assert_eq!(validation.errors.len(), 3);
@@ -159,10 +192,22 @@ mod tests {
     fn projectcentral_paths_are_the_control_fractal() {
         let manifest = ProjectCentralManifest::new("epilogos/example");
         let paths = projectcentral_paths(Path::new("/central/Work/example"), &manifest);
-        assert_eq!(paths.projectcentral_root, Path::new("/central/Work/example/ProjectCentral"));
-        assert_eq!(paths.human_source, Path::new("/central/Work/example/ProjectCentral/user"));
-        assert_eq!(paths.agent_governance, Path::new("/central/Work/example/ProjectCentral/agents/governance"));
-        assert_eq!(paths.wiki_source, Path::new("/central/Work/example/ProjectCentral/agents/wiki/wiki.json"));
+        assert_eq!(
+            paths.projectcentral_root,
+            Path::new("/central/Work/example/ProjectCentral")
+        );
+        assert_eq!(
+            paths.human_source,
+            Path::new("/central/Work/example/ProjectCentral/user")
+        );
+        assert_eq!(
+            paths.agent_governance,
+            Path::new("/central/Work/example/ProjectCentral/agents/governance")
+        );
+        assert_eq!(
+            paths.wiki_source,
+            Path::new("/central/Work/example/ProjectCentral/agents/wiki/wiki.json")
+        );
         assert_eq!(ROOT_WIKI_SOURCE, "Control/agents/wiki/wiki.json");
     }
 }

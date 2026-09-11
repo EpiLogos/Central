@@ -8,7 +8,7 @@ use crate::file_map_backend::{self as native, Backend};
 use crate::projectcentral_flow::reject_symlink_components;
 use crate::result::{ActionResult, ResultStatus};
 use crate::source_horizon;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::os::unix::fs::MetadataExt;
 use std::{
     collections::BTreeSet,

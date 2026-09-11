@@ -10,23 +10,42 @@ pub mod receiving;
 pub mod source;
 pub mod temporal;
 
-use crate::action::{ActionAvailability, ActionDescriptor, ActionExecutionContext, ActionInputDefinition, ActionOutputDefinition, ActionRegistry, MutationClass};
+use crate::action::{
+    ActionAvailability, ActionDescriptor, ActionExecutionContext, ActionInputDefinition,
+    ActionOutputDefinition, ActionRegistry, MutationClass,
+};
 use crate::result::{ActionResult, ResultStatus};
 use serde_json::{json, Value};
-use std::{io, path::Path, time::{SystemTime, UNIX_EPOCH}};
 use source::{invalid, Scope};
+use std::{
+    io,
+    path::Path,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 /// Controlled-clock native execution. Authenticated operations need the separate
 /// credential channel; JSON actor labels never establish a principal.
 pub fn execute_at(central: &Path, operation: &str, input: &Value, now: u64) -> io::Result<Value> {
     execute_with_token_at(central, operation, input, None, now)
 }
-pub fn execute_with_token_at(central: &Path, operation: &str, input: &Value, token: Option<&str>, now: u64) -> io::Result<Value> {
-    if !input.is_object() { return Err(invalid("native operation requires an object")); }
+pub fn execute_with_token_at(
+    central: &Path,
+    operation: &str,
+    input: &Value,
+    token: Option<&str>,
+    now: u64,
+) -> io::Result<Value> {
+    if !input.is_object() {
+        return Err(invalid("native operation requires an object"));
+    }
     let project = match input.get("project") {
         None | Some(Value::Null) => None,
         Some(Value::String(project)) => Some(project.as_str()),
-        _ => return Err(invalid("project must be a string or absent for root agency")),
+        _ => {
+            return Err(invalid(
+                "project must be a string or absent for root agency",
+            ))
+        }
     };
     let scope = Scope::resolve(central, project)?;
     // Receiving retains the existing return-lock -> source-lock order. Never
@@ -34,12 +53,16 @@ pub fn execute_with_token_at(central: &Path, operation: &str, input: &Value, tok
     match operation {
         "allocate" => return placement::allocate(&scope, input, now),
         "validate" => return placement::validate(&scope, input, now),
-        operation if operation.starts_with("receiving_") => return receiving::dispatch(&scope, operation, input, token, now),
-        _ => {},
+        operation if operation.starts_with("receiving_") => {
+            return receiving::dispatch(&scope, operation, input, token, now)
+        }
+        _ => {}
     }
     let _locks = source::lock(&scope)?;
     match operation {
-        "policy" => Ok(serde_json::to_value(placement::effective_policy(&scope, now)?)?),
+        "policy" => Ok(serde_json::to_value(placement::effective_policy(
+            &scope, now,
+        )?)?),
         "now_read" => {
             let (record, reading) = placement::read_now(&scope, source::text(input, "now_ref")?)?;
             match input.get("with_placement") {
@@ -50,13 +73,19 @@ pub fn execute_with_token_at(central: &Path, operation: &str, input: &Value, tok
                     // directory; this read never allocates, re-enters or renews
                     // an already-issued material authority lease.
                     let policy = placement::effective_policy(&scope, now)?;
-                    let mut result = placement::allocation_reading(&scope, &record, &reading, policy, false)?;
+                    let mut result =
+                        placement::allocation_reading(&scope, &record, &reading, policy, false)?;
                     result["schema"] = json!("central.now-reading/v1");
                     result["placement_included"] = json!(true);
-                    result.as_object_mut().expect("native reading object").remove("created");
+                    result
+                        .as_object_mut()
+                        .expect("native reading object")
+                        .remove("created");
                     Ok(result)
                 }
-                None | Some(Value::Bool(false)) => Ok(json!({"schema":"central.now-reading/v1","record":record,"source":reading.source,"revision":reading.revision,"automatic_agent_or_model_invocation":false})),
+                None | Some(Value::Bool(false)) => Ok(
+                    json!({"schema":"central.now-reading/v1","record":record,"source":reading.source,"revision":reading.revision,"automatic_agent_or_model_invocation":false}),
+                ),
                 _ => Err(invalid("with_placement must be a boolean")),
             }
         }
@@ -70,8 +99,15 @@ pub fn execute_with_token_at(central: &Path, operation: &str, input: &Value, tok
                 "now_lifecycle" => "central.now.lifecycle",
                 _ => "central.now.obligations",
             };
-            let principal = authority::authenticate(&scope, token, action,
-                input.get("expected_authority_revision").and_then(Value::as_str), now)?;
+            let principal = authority::authenticate(
+                &scope,
+                token,
+                action,
+                input
+                    .get("expected_authority_revision")
+                    .and_then(Value::as_str),
+                now,
+            )?;
             match operation {
                 "day_ensure" => temporal::ensure_day(&scope, input, &principal, now),
                 "day_lifecycle" => temporal::day_lifecycle(&scope, input, &principal, now),
@@ -82,33 +118,71 @@ pub fn execute_with_token_at(central: &Path, operation: &str, input: &Value, tok
         _ => extended::dispatch(&scope, operation, input, token, now),
     }
 }
-fn execute(action: &str, operation: &str, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn execute(
+    action: &str,
+    operation: &str,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let result = (|| {
         let root = crate::root::resolve_central_root(context.root_options).map_err(invalid)?;
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(io::Error::other)?.as_secs();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(io::Error::other)?
+            .as_secs();
         let token = std::env::var("CENTRAL_NATIVE_TOKEN").ok();
         execute_with_token_at(&root.path, operation, input, token.as_deref(), now)
     })();
     match result {
-        Ok(value) if value.get("allowed") == Some(&Value::Bool(false)) => ActionResult::failure_coded(
-            Some(action), ResultStatus::UnavailableCapability, "placement_rejected",
-            "Destination is outside the current task's authorised write bounds.", Some(value)),
+        Ok(value) if value.get("allowed") == Some(&Value::Bool(false)) => {
+            ActionResult::failure_coded(
+                Some(action),
+                ResultStatus::UnavailableCapability,
+                "placement_rejected",
+                "Destination is outside the current task's authorised write bounds.",
+                Some(value),
+            )
+        }
         Ok(value) => ActionResult::success(action, value),
         Err(error) => {
             let (status, code) = match error.kind() {
-                io::ErrorKind::AlreadyExists => (ResultStatus::VerificationFailure, "stale_basis_or_identity_conflict"),
-                io::ErrorKind::PermissionDenied => (ResultStatus::UnavailableCapability, "policy_or_source_denied"),
-                io::ErrorKind::NotFound => (ResultStatus::UnavailableCapability, "source_or_scope_unavailable"),
-                io::ErrorKind::InvalidInput | io::ErrorKind::InvalidData => (ResultStatus::InvalidInput, "invalid_native_source_or_request"),
+                io::ErrorKind::AlreadyExists => (
+                    ResultStatus::VerificationFailure,
+                    "stale_basis_or_identity_conflict",
+                ),
+                io::ErrorKind::PermissionDenied => (
+                    ResultStatus::UnavailableCapability,
+                    "policy_or_source_denied",
+                ),
+                io::ErrorKind::NotFound => (
+                    ResultStatus::UnavailableCapability,
+                    "source_or_scope_unavailable",
+                ),
+                io::ErrorKind::InvalidInput | io::ErrorKind::InvalidData => (
+                    ResultStatus::InvalidInput,
+                    "invalid_native_source_or_request",
+                ),
                 _ => (ResultStatus::InternalFailure, "native_operation_failed"),
             };
-            ActionResult::failure_coded(Some(action), status, code, error.to_string(), Some(json!({"retry_policy_action":"central.work.policy","automatic_authority_widening":false,"outside_writes_prevented":false})))
+            ActionResult::failure_coded(
+                Some(action),
+                status,
+                code,
+                error.to_string(),
+                Some(
+                    json!({"retry_policy_action":"central.work.policy","automatic_authority_widening":false,"outside_writes_prevented":false}),
+                ),
+            )
         }
     }
 }
 macro_rules! handler {
     ($name:ident, $action:literal, $operation:literal) => {
-        fn $name(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+        fn $name(
+            _: &ActionRegistry,
+            input: &Value,
+            context: &ActionExecutionContext<'_>,
+        ) -> ActionResult {
             execute($action, $operation, input, context)
         }
     };
@@ -120,24 +194,80 @@ handler!(now_read_action, "central.now.read", "now_read");
 handler!(time_action, "central.time.policy", "time_policy");
 handler!(day_read_action, "central.day.read", "day_read");
 handler!(day_ensure_action, "central.day.ensure", "day_ensure");
-handler!(day_lifecycle_action, "central.day.lifecycle", "day_lifecycle");
-handler!(now_lifecycle_action, "central.now.lifecycle", "now_lifecycle");
-handler!(now_obligations_action, "central.now.obligations", "now_obligations");
-handler!(history_action, "central.temporal.source-history", "source_history");
+handler!(
+    day_lifecycle_action,
+    "central.day.lifecycle",
+    "day_lifecycle"
+);
+handler!(
+    now_lifecycle_action,
+    "central.now.lifecycle",
+    "now_lifecycle"
+);
+handler!(
+    now_obligations_action,
+    "central.now.obligations",
+    "now_obligations"
+);
+handler!(
+    history_action,
+    "central.temporal.source-history",
+    "source_history"
+);
 
-type Definition<'a> = (&'a str, &'a str, &'a str, bool, crate::action::ActionHandler, &'a [(&'a str, &'a str, bool)]);
+type Definition<'a> = (
+    &'a str,
+    &'a str,
+    &'a str,
+    bool,
+    crate::action::ActionHandler,
+    &'a [(&'a str, &'a str, bool)],
+);
 pub(crate) fn register_definitions(registry: &mut ActionRegistry, definitions: &[Definition<'_>]) {
     for (id, title, description, mutates, handler, fields) in definitions {
-        let mut inputs = vec![ActionInputDefinition { name: "project".into(), input_type: "string".into(), required: false, choices: None, selection: None }];
-        inputs.extend(fields.iter().map(|(name, kind, required)| ActionInputDefinition {
-            name: (*name).into(), input_type: (*kind).into(), required: *required, choices: None, selection: None,
-        }));
-        registry.register(ActionDescriptor {
-            id: (*id).into(), title: (*title).into(), description: (*description).into(), inputs,
-            output: ActionOutputDefinition { output_type: "object".into() },
-            mutation_class: if *mutates { MutationClass::LocallyMutating } else { MutationClass::ReadOnly },
-            preview_supported: false, required_ports: vec![], availability: ActionAvailability { available: true, reason: None },
-        }, *handler).expect("continuous-work Action ids are unique");
+        let mut inputs = vec![ActionInputDefinition {
+            name: "project".into(),
+            input_type: "string".into(),
+            required: false,
+            choices: None,
+            selection: None,
+        }];
+        inputs.extend(
+            fields
+                .iter()
+                .map(|(name, kind, required)| ActionInputDefinition {
+                    name: (*name).into(),
+                    input_type: (*kind).into(),
+                    required: *required,
+                    choices: None,
+                    selection: None,
+                }),
+        );
+        registry
+            .register(
+                ActionDescriptor {
+                    id: (*id).into(),
+                    title: (*title).into(),
+                    description: (*description).into(),
+                    inputs,
+                    output: ActionOutputDefinition {
+                        output_type: "object".into(),
+                    },
+                    mutation_class: if *mutates {
+                        MutationClass::LocallyMutating
+                    } else {
+                        MutationClass::ReadOnly
+                    },
+                    preview_supported: false,
+                    required_ports: vec![],
+                    availability: ActionAvailability {
+                        available: true,
+                        reason: None,
+                    },
+                },
+                *handler,
+            )
+            .expect("continuous-work Action ids are unique");
     }
 }
 pub fn register_actions(registry: &mut ActionRegistry) {

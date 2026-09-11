@@ -134,7 +134,11 @@ impl RelationRecordStore {
 
     pub fn source_path(&self, ref_: &str) -> Result<PathBuf, RelationRecordStoreError> {
         validate_ref(ref_)?;
-        Ok(self.source_dir().join(format!("{}-{}.json", self.kind.dir_name().trim_end_matches('s'), record_key(ref_))))
+        Ok(self.source_dir().join(format!(
+            "{}-{}.json",
+            self.kind.dir_name().trim_end_matches('s'),
+            record_key(ref_)
+        )))
     }
 
     pub fn read(&self, ref_: &str) -> Result<RelationRecordReading, RelationRecordStoreError> {
@@ -210,9 +214,7 @@ impl RelationRecordStore {
         let ref_ = record
             .get("ref")
             .and_then(|value| value.as_str())
-            .ok_or_else(|| {
-                RelationRecordStoreError::InvalidRecord("record carries no ref".into())
-            })?
+            .ok_or_else(|| RelationRecordStoreError::InvalidRecord("record carries no ref".into()))?
             .to_owned();
         validate_ref(&ref_)?;
         let revision = record
@@ -321,9 +323,8 @@ impl RelationRecordStore {
             .list()?
             .into_iter()
             .map(|reading| {
-                serde_json::from_value(reading.record).map_err(|error| {
-                    RelationRecordStoreError::InvalidRecord(error.to_string())
-                })
+                serde_json::from_value(reading.record)
+                    .map_err(|error| RelationRecordStoreError::InvalidRecord(error.to_string()))
             })
             .collect::<Result<Vec<_>, _>>()?)
     }
@@ -332,16 +333,12 @@ impl RelationRecordStore {
         match self.kind {
             RelationRecordKind::AgentSet => {
                 let typed: AgentSetRecord = serde_json::from_value(record.clone())
-                    .map_err(|error| {
-                        RelationRecordStoreError::InvalidRecord(error.to_string())
-                    })?;
+                    .map_err(|error| RelationRecordStoreError::InvalidRecord(error.to_string()))?;
                 AgentSetRegistryProbe::insert(typed)?;
             }
             RelationRecordKind::World => {
                 let typed: WorldRecord = serde_json::from_value(record.clone())
-                    .map_err(|error| {
-                        RelationRecordStoreError::InvalidRecord(error.to_string())
-                    })?;
+                    .map_err(|error| RelationRecordStoreError::InvalidRecord(error.to_string()))?;
                 WorldGraphProbe::insert(typed)?;
             }
         }
@@ -405,12 +402,7 @@ impl RelationRecordStore {
         Ok(record)
     }
 
-    fn reading(
-        &self,
-        record: serde_json::Value,
-        ref_: &str,
-        path: &Path,
-    ) -> RelationRecordReading {
+    fn reading(&self, record: serde_json::Value, ref_: &str, path: &Path) -> RelationRecordReading {
         RelationRecordReading {
             kind: self.kind,
             ref_: ref_.to_owned(),
@@ -427,7 +419,9 @@ impl RelationRecordStore {
     fn validate_root(&self) -> Result<(), RelationRecordStoreError> {
         let metadata = fs::symlink_metadata(&self.owner_root)?;
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err(RelationRecordStoreError::UnsafeRoot(self.owner_root.clone()));
+            return Err(RelationRecordStoreError::UnsafeRoot(
+                self.owner_root.clone(),
+            ));
         }
         Ok(())
     }
@@ -442,9 +436,9 @@ struct AgentSetRegistryProbe;
 impl AgentSetRegistryProbe {
     fn insert(record: AgentSetRecord) -> Result<(), RelationRecordStoreError> {
         let mut registry = crate::world::AgentSetRegistry::default();
-        registry.insert(record).map_err(|error| {
-            RelationRecordStoreError::InvalidRecord(error.to_string())
-        })
+        registry
+            .insert(record)
+            .map_err(|error| RelationRecordStoreError::InvalidRecord(error.to_string()))
     }
 }
 
@@ -456,9 +450,9 @@ struct WorldGraphProbe;
 impl WorldGraphProbe {
     fn insert(record: WorldRecord) -> Result<(), RelationRecordStoreError> {
         let mut graph = crate::world::WorldGraph::default();
-        graph.insert(record).map_err(|error| {
-            RelationRecordStoreError::InvalidRecord(error.to_string())
-        })
+        graph
+            .insert(record)
+            .map_err(|error| RelationRecordStoreError::InvalidRecord(error.to_string()))
     }
 }
 
@@ -470,12 +464,32 @@ pub enum RelationRecordStoreError {
     InvalidRecord(String),
     InvalidRef(String),
     NotFound(PathBuf),
-    RefMismatch { requested: String, actual: String },
-    SourcePathMismatch { ref_: String, expected: PathBuf, actual: PathBuf },
-    AlreadyExists { ref_: String, revision: String },
-    MissingForUpdate { ref_: String, expected: String },
-    RevisionConflict { ref_: String, expected: String, actual: String },
-    RevisionNotAdvanced { ref_: String, revision: String },
+    RefMismatch {
+        requested: String,
+        actual: String,
+    },
+    SourcePathMismatch {
+        ref_: String,
+        expected: PathBuf,
+        actual: PathBuf,
+    },
+    AlreadyExists {
+        ref_: String,
+        revision: String,
+    },
+    MissingForUpdate {
+        ref_: String,
+        expected: String,
+    },
+    RevisionConflict {
+        ref_: String,
+        expected: String,
+        actual: String,
+    },
+    RevisionNotAdvanced {
+        ref_: String,
+        revision: String,
+    },
 }
 
 impl fmt::Display for RelationRecordStoreError {
@@ -496,9 +510,16 @@ impl fmt::Display for RelationRecordStoreError {
                 write!(f, "record not found at {}", path.display())
             }
             RelationRecordStoreError::RefMismatch { requested, actual } => {
-                write!(f, "record ref mismatch: requested {requested}, found {actual}")
+                write!(
+                    f,
+                    "record ref mismatch: requested {requested}, found {actual}"
+                )
             }
-            RelationRecordStoreError::SourcePathMismatch { ref_, expected, actual } => {
+            RelationRecordStoreError::SourcePathMismatch {
+                ref_,
+                expected,
+                actual,
+            } => {
                 write!(
                     f,
                     "record {ref_} is stored at {} but its ref resolves to {}",
@@ -510,10 +531,20 @@ impl fmt::Display for RelationRecordStoreError {
                 write!(f, "record {ref_} already exists at revision {revision}; updates require the current revision")
             }
             RelationRecordStoreError::MissingForUpdate { ref_, expected } => {
-                write!(f, "record {ref_} is absent; cannot update expected revision {expected}")
+                write!(
+                    f,
+                    "record {ref_} is absent; cannot update expected revision {expected}"
+                )
             }
-            RelationRecordStoreError::RevisionConflict { ref_, expected, actual } => {
-                write!(f, "record {ref_} revision conflict: expected {expected}, current {actual}")
+            RelationRecordStoreError::RevisionConflict {
+                ref_,
+                expected,
+                actual,
+            } => {
+                write!(
+                    f,
+                    "record {ref_} revision conflict: expected {expected}, current {actual}"
+                )
             }
             RelationRecordStoreError::RevisionNotAdvanced { ref_, revision } => {
                 write!(f, "record {ref_} revision must advance past {revision}")
@@ -548,10 +579,7 @@ fn record_key(ref_: &str) -> String {
     format!("{hash:016x}")
 }
 
-fn ensure_directory_path(
-    owner_root: &Path,
-    dir: &Path,
-) -> Result<(), RelationRecordStoreError> {
+fn ensure_directory_path(owner_root: &Path, dir: &Path) -> Result<(), RelationRecordStoreError> {
     let relative = dir
         .strip_prefix(owner_root)
         .map_err(|_| RelationRecordStoreError::UnsafeSource(dir.to_path_buf()))?;
@@ -566,9 +594,7 @@ fn ensure_directory_path(
                 return Err(RelationRecordStoreError::UnsafeSource(current));
             }
             Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                fs::create_dir(&current)?
-            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => fs::create_dir(&current)?,
             Err(error) => return Err(error.into()),
         }
     }
@@ -591,7 +617,9 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), RelationRecordStoreErro
     ensure_directory_not_symlink(parent)?;
     let tmp = parent.join(format!(
         ".{}-{}.tmp",
-        path.file_name().and_then(|name| name.to_str()).unwrap_or("record"),
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("record"),
         record_key(&path.to_string_lossy())
     ));
     if tmp.exists() {
@@ -632,33 +660,49 @@ mod tests {
 
         let created = store
             .save(
-                &agent_set_record("control-operators", "r1", json!([
-                    {"kind": "agent", "agent_ref": "agent:hermes"}
-                ])),
+                &agent_set_record(
+                    "control-operators",
+                    "r1",
+                    json!([
+                        {"kind": "agent", "agent_ref": "agent:hermes"}
+                    ]),
+                ),
                 None,
             )
             .unwrap();
         assert!(created.created);
         assert_eq!(created.revision, "r1");
-        assert!(created.source_path.starts_with("Control/agents/agent-sets/"));
+        assert!(created
+            .source_path
+            .starts_with("Control/agents/agent-sets/"));
 
         // Create-without-conflict is refused.
         assert!(matches!(
-            store.save(&agent_set_record("control-operators", "r2", json!([])), None),
+            store.save(
+                &agent_set_record("control-operators", "r2", json!([])),
+                None
+            ),
             Err(RelationRecordStoreError::AlreadyExists { .. })
         ));
         // Update requires the exact current revision.
         assert!(matches!(
-            store.save(&agent_set_record("control-operators", "r2", json!([])), Some("wrong")),
+            store.save(
+                &agent_set_record("control-operators", "r2", json!([])),
+                Some("wrong")
+            ),
             Err(RelationRecordStoreError::RevisionConflict { .. })
         ));
         // Update must advance the revision and never change the ref.
         let updated = store
             .save(
-                &agent_set_record("control-operators", "r2", json!([
-                    {"kind": "agent", "agent_ref": "agent:hermes"},
-                    {"kind": "agent", "agent_ref": "agent:picker"}
-                ])),
+                &agent_set_record(
+                    "control-operators",
+                    "r2",
+                    json!([
+                        {"kind": "agent", "agent_ref": "agent:hermes"},
+                        {"kind": "agent", "agent_ref": "agent:picker"}
+                    ]),
+                ),
                 Some("r1"),
             )
             .unwrap();

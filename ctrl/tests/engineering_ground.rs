@@ -16,7 +16,10 @@ struct TempRoot(PathBuf);
 
 impl TempRoot {
     fn new(label: &str) -> Self {
-        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let sequence = NEXT_TEMP_ROOT.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
             "central-engineering-ground-{label}-{}-{nonce}-{sequence}",
@@ -42,8 +45,14 @@ fn central_with_statements(name: &str) -> TempRoot {
     let dir = temp.path().join("Control/agents/governance/engineering");
     fs::create_dir_all(&dir).unwrap();
     for (file, body) in [
-        ("agent-operations.md", "You branch small and commit honestly.\n"),
-        ("coding-approach.md", "You change the smallest thing that can work.\n"),
+        (
+            "agent-operations.md",
+            "You branch small and commit honestly.\n",
+        ),
+        (
+            "coding-approach.md",
+            "You change the smallest thing that can work.\n",
+        ),
         ("verification.md", "You return with evidence of done.\n"),
         ("base-skillset.md", "You reach for the essentials first.\n"),
     ] {
@@ -63,7 +72,9 @@ fn render_emits_derived_prompt_with_pinned_provenance() {
         "central:source:control:root:Control/agents/governance/engineering/agent-operations.md"
     ));
     // Revision is pinned inline: content-fnv1a64 with the statement's hash.
-    let statement = temp.path().join("Control/agents/governance/engineering/agent-operations.md");
+    let statement = temp
+        .path()
+        .join("Control/agents/governance/engineering/agent-operations.md");
     let revision = content_revision(&statement).unwrap();
     assert!(rendered.contains(&revision.revision));
     // Statement bodies are carried verbatim.
@@ -105,7 +116,8 @@ fn render_errors_not_found_when_no_statements_exist() {
 fn render_skips_a_missing_statement_and_stays_well_formed() {
     let temp = central_with_statements("skip-missing");
     fs::remove_file(
-        temp.path().join("Control/agents/governance/engineering/base-skillset.md"),
+        temp.path()
+            .join("Control/agents/governance/engineering/base-skillset.md"),
     )
     .unwrap();
 
@@ -138,7 +150,8 @@ fn write_is_cas_stable_and_detects_statement_change() {
     assert_eq!(first.revision, second.revision);
 
     fs::write(
-        temp.path().join("Control/agents/governance/engineering/verification.md"),
+        temp.path()
+            .join("Control/agents/governance/engineering/verification.md"),
         "You return with evidence of done, and say what was not done.\n",
     )
     .unwrap();
@@ -160,12 +173,10 @@ fn adopted_distillate_participates_as_project_source() {
     // Human adoption act: copy the distillate into the project human-source
     // aperture and declare the ground relation.
     let manifest_human_source = "ProjectCentral/user"; // initialise_projectcentral's aperture
-    let adopted = project.join(manifest_human_source).join("foundational-prompt.md");
-    fs::copy(
-        central.join(ENGINEERING_GROUND_OUTPUT),
-        &adopted,
-    )
-    .unwrap();
+    let adopted = project
+        .join(manifest_human_source)
+        .join("foundational-prompt.md");
+    fs::copy(central.join(ENGINEERING_GROUND_OUTPUT), &adopted).unwrap();
     fs::create_dir_all(project.join("ProjectCentral/relations")).unwrap();
     fs::write(
         project.join(GROUND_RELATIONS_SOURCE),

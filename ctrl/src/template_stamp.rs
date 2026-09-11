@@ -7,9 +7,7 @@
 //! repeated stamp is stable. Stamping is opt-in and additive only — it
 //! never deletes, moves or rewrites source.
 
-use crate::action::{
-    ActionDescriptor, ActionExecutionContext, ActionRegistry, MutationClass,
-};
+use crate::action::{ActionDescriptor, ActionExecutionContext, ActionRegistry, MutationClass};
 use crate::projectcentral::{read_project_manifest, PROJECTCENTRAL_DIR};
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
@@ -274,7 +272,11 @@ fn io_failure(action: &str, error: io::Error) -> ActionResult {
     ActionResult::failure(Some(action), status, error.to_string(), None)
 }
 
-fn stamp_preview_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn stamp_preview_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "central.template.preview";
     let (target_root, scope) = match stamp_target(action, input, context) {
         Ok(value) => value,
@@ -288,12 +290,19 @@ fn stamp_preview_action(_: &ActionRegistry, input: &Value, context: &ActionExecu
     }();
     outcome
         .map(|value| {
-            ActionResult::success(action, serde_json::to_value(value).expect("plan serializes"))
+            ActionResult::success(
+                action,
+                serde_json::to_value(value).expect("plan serializes"),
+            )
         })
         .unwrap_or_else(|error| io_failure(action, error))
 }
 
-fn stamp_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn stamp_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "central.template.stamp";
     let (target_root, scope) = match stamp_target(action, input, context) {
         Ok(value) => value,
@@ -307,7 +316,10 @@ fn stamp_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionCont
     }();
     outcome
         .map(|value| {
-            ActionResult::success(action, serde_json::to_value(value).expect("result serializes"))
+            ActionResult::success(
+                action,
+                serde_json::to_value(value).expect("result serializes"),
+            )
         })
         .unwrap_or_else(|error| io_failure(action, error))
 }
@@ -331,11 +343,16 @@ fn descriptor(
             choices: None,
             selection: None,
         }],
-        output: crate::action::ActionOutputDefinition { output_type: output_type.to_owned() },
+        output: crate::action::ActionOutputDefinition {
+            output_type: output_type.to_owned(),
+        },
         mutation_class,
         preview_supported,
         required_ports: vec![],
-        availability: crate::action::ActionAvailability { available: true, reason: None },
+        availability: crate::action::ActionAvailability {
+            available: true,
+            reason: None,
+        },
     }
 }
 

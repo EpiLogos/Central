@@ -2,10 +2,11 @@ use central_ctrl::{
     create_core_action_registry, initialize_central, run_synchronizer_conformance,
     ActionExecutionContext, CapabilityProbe, Connector, ConnectorContext, ConnectorManifest,
     ConnectorPortDeclaration, ConnectorRegistry, InMemoryMachineConnector, MachineInspectionInput,
-    MachineInspectionOutput, MachineInspector, ObservedPackage, PackageManager, PackageStateRequest,
-    PortContract, PortError, ResultStatus, RootOptions, SharedMachineState, StateChangePreview,
-    StateChangeResult, SynchronizationRequest, Synchronizer, SynchronizerConformanceFixture,
-    CONNECTOR_API_VERSION, MACHINE_INSPECTOR_PORT, PACKAGE_MANAGER_PORT, SYNCHRONIZER_PORT,
+    MachineInspectionOutput, MachineInspector, ObservedPackage, PackageManager,
+    PackageStateRequest, PortContract, PortError, ResultStatus, RootOptions, SharedMachineState,
+    StateChangePreview, StateChangeResult, SynchronizationRequest, Synchronizer,
+    SynchronizerConformanceFixture, CONNECTOR_API_VERSION, MACHINE_INSPECTOR_PORT,
+    PACKAGE_MANAGER_PORT, SYNCHRONIZER_PORT,
 };
 use serde_json::{json, Value};
 use std::fs;
@@ -71,7 +72,10 @@ fn observation(capabilities: &[&str], package_present: bool) -> MachineInspectio
     MachineInspectionOutput {
         platform: "fixture-os".to_owned(),
         architecture: "fixture-arch".to_owned(),
-        capabilities: capabilities.iter().map(|value| (*value).to_owned()).collect(),
+        capabilities: capabilities
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect(),
         packages: vec![ObservedPackage {
             id: "git".to_owned(),
             present: package_present,
@@ -136,7 +140,10 @@ impl FixtureSynchronizer {
 impl Synchronizer for FixtureSynchronizer {
     fn preview(&self, input: &SynchronizationRequest) -> Result<StateChangePreview, PortError> {
         assert_eq!(input.id, "central-authored-source");
-        let source = input.source.as_ref().expect("fixture recovery keeps authored source");
+        let source = input
+            .source
+            .as_ref()
+            .expect("fixture recovery keeps authored source");
         assert_eq!(source.kind, "fixture");
         assert_eq!(source.reference, "fixture://central-source");
         let changed = self.state.changed();
@@ -212,7 +219,10 @@ impl LyingPackageConnector {
 }
 
 impl MachineInspector for LyingPackageConnector {
-    fn inspect(&self, _input: &MachineInspectionInput) -> Result<MachineInspectionOutput, PortError> {
+    fn inspect(
+        &self,
+        _input: &MachineInspectionInput,
+    ) -> Result<MachineInspectionOutput, PortError> {
         Ok(observation(&[], false))
     }
 }
@@ -292,8 +302,14 @@ fn synchronizer_passes_shared_preview_apply_verify_and_idempotence_conformance()
     )
     .unwrap();
     assert_eq!(report.port_id, SYNCHRONIZER_PORT.id);
-    assert!(report.checks.iter().any(|check| check == "post-apply-preview"));
-    assert!(report.checks.iter().any(|check| check == "idempotent-apply"));
+    assert!(report
+        .checks
+        .iter()
+        .any(|check| check == "post-apply-preview"));
+    assert!(report
+        .checks
+        .iter()
+        .any(|check| check == "idempotent-apply"));
     assert!(!state.changed());
     assert_eq!(state.applies(), 1);
 }
@@ -320,7 +336,10 @@ fn recovery_actions_are_canonical_and_configured_sync_is_authored_control() {
     assert_eq!(plan_descriptor.mutation_class.as_str(), "read-only");
     assert!(plan_descriptor.preview_supported);
     let recover_descriptor = registry.get("central.recover").unwrap();
-    assert_eq!(recover_descriptor.mutation_class.as_str(), "externally-mutating");
+    assert_eq!(
+        recover_descriptor.mutation_class.as_str(),
+        "externally-mutating"
+    );
     assert!(recover_descriptor.description.contains("machine.apply"));
     assert!(recover_descriptor.description.contains("machine.verify"));
 
@@ -365,7 +384,10 @@ fn unavailable_configured_synchronization_fails_before_machine_mutation() {
         "home-server",
     );
     assert_eq!(plan.status, ResultStatus::Success);
-    assert_eq!(plan.data.unwrap()["synchronization"]["status"], "unavailable");
+    assert_eq!(
+        plan.data.unwrap()["synchronization"]["status"],
+        "unavailable"
+    );
 
     let recover = execute(
         &root,
@@ -447,7 +469,10 @@ fn repeated_recovery_is_stable_on(platform: &str, role: &str) {
     assert_eq!(first_data["outcome"], "complete");
     assert_eq!(first_data["synchronization"]["changed"], true);
     assert_eq!(
-        first_data["machine_apply"]["operations"].as_array().unwrap().len(),
+        first_data["machine_apply"]["operations"]
+            .as_array()
+            .unwrap()
+            .len(),
         1
     );
     assert_eq!(first_data["verification"]["satisfied"], true);
@@ -460,7 +485,10 @@ fn repeated_recovery_is_stable_on(platform: &str, role: &str) {
     assert_eq!(second_data["outcome"], "complete");
     assert!(second_data["synchronization"].is_null());
     assert_eq!(
-        second_data["machine_apply"]["operations"].as_array().unwrap().len(),
+        second_data["machine_apply"]["operations"]
+            .as_array()
+            .unwrap()
+            .len(),
         0
     );
     assert_eq!(second_data["verification"]["satisfied"], true);
@@ -519,7 +547,10 @@ fn recovery_without_configured_sync_reuses_machine_apply_directly() {
         "home-server",
     );
     assert_eq!(plan.status, ResultStatus::Success);
-    assert_eq!(plan.data.unwrap()["synchronization"]["status"], "not_configured");
+    assert_eq!(
+        plan.data.unwrap()["synchronization"]["status"],
+        "not_configured"
+    );
 
     let recover = execute(
         &root,
@@ -530,6 +561,12 @@ fn recovery_without_configured_sync_reuses_machine_apply_directly() {
     );
     assert_eq!(recover.status, ResultStatus::Success);
     let data = recover.data.unwrap();
-    assert_eq!(data["machine_apply"]["operations"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        data["machine_apply"]["operations"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     assert_eq!(data["verification"]["satisfied"], true);
 }

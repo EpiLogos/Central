@@ -58,7 +58,10 @@ fn skill_encodes_control_ownership_audit_classification_and_acceptance_contract(
         "Generated audit advice is not authored truth",
         "Do not convert the tree into a mandatory universal profile schema",
     ] {
-        assert!(SKILL.contains(required), "Control-maintenance Skill is missing: {required}");
+        assert!(
+            SKILL.contains(required),
+            "Control-maintenance Skill is missing: {required}"
+        );
     }
 }
 
@@ -77,9 +80,14 @@ fn fixtures_cover_clean_stale_conflict_misplaced_procedure_and_verification_dial
 
     for (id, classification) in expected {
         let case = fixture(&fixtures, id);
-        assert_eq!(case["expected_findings"][0]["classification"], classification);
+        assert_eq!(
+            case["expected_findings"][0]["classification"],
+            classification
+        );
         assert_eq!(case["mutation_expected_without_acceptance"], false);
-        assert!(case["sources"].as_array().is_some_and(|sources| !sources.is_empty()));
+        assert!(case["sources"]
+            .as_array()
+            .is_some_and(|sources| !sources.is_empty()));
     }
 
     let conflict = fixture(&fixtures, "conflicting-content");
@@ -100,10 +108,18 @@ fn verification_dialogue_retains_only_cross_project_preference_in_control() {
 
     let question = case["dialogue"]["question"].as_str().unwrap();
     assert!(question.contains("tests, CI, review, evidence"));
-    assert_eq!(case["expected_findings"][0]["topic"], "verification and confidence");
+    assert_eq!(
+        case["expected_findings"][0]["topic"],
+        "verification and confidence"
+    );
 
-    let proposal = case["expected_control_proposal"]["content"].as_str().unwrap();
-    assert_eq!(case["expected_control_proposal"]["target"], "Control/agents/verification.md");
+    let proposal = case["expected_control_proposal"]["content"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        case["expected_control_proposal"]["target"],
+        "Control/agents/verification.md"
+    );
     assert!(proposal.contains("appropriate executed evidence"));
     assert!(proposal.contains("existing assurance"));
     assert!(proposal.contains("consequential product or authorial decisions"));
@@ -158,11 +174,17 @@ fn fixture_source_is_ordinary_filesystem_control_and_audit_read_does_not_mutate_
     assert_eq!(result.status, ResultStatus::Success);
     let data = result.data.unwrap();
     assert_eq!(data["matches"].as_array().unwrap().len(), 1);
-    assert_eq!(data["matches"][0]["source_path"], "Control/agents/evidence.md");
+    assert_eq!(
+        data["matches"][0]["source_path"],
+        "Control/agents/evidence.md"
+    );
     assert_eq!(data["matches"][0]["source_class"], "authored");
 
     let after = fs::read_to_string(&source_path).unwrap();
-    assert_eq!(after, before, "audit/read procedure must not mutate authored Control");
+    assert_eq!(
+        after, before,
+        "audit/read procedure must not mutate authored Control"
+    );
     assert_eq!(fs::read_dir(root.join(".central")).unwrap().count(), 0);
 
     fs::remove_dir_all(root.parent().unwrap()).unwrap();

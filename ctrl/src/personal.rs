@@ -4,9 +4,7 @@ use crate::action::{
 };
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
-use central_connector_sdk::{
-    NotificationRequest, PortErrorCode, USER_NOTIFICATION_PORT,
-};
+use central_connector_sdk::{NotificationRequest, PortErrorCode, USER_NOTIFICATION_PORT};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, to_value, Value};
 use std::fs;
@@ -44,11 +42,16 @@ fn descriptor(
         title: title.to_owned(),
         description: description.to_owned(),
         inputs: Vec::new(),
-        output: ActionOutputDefinition { output_type: output_type.to_owned() },
+        output: ActionOutputDefinition {
+            output_type: output_type.to_owned(),
+        },
         mutation_class,
         preview_supported: false,
         required_ports: Vec::new(),
-        availability: crate::action::ActionAvailability { available: true, reason: None },
+        availability: crate::action::ActionAvailability {
+            available: true,
+            reason: None,
+        },
     }
 }
 
@@ -89,7 +92,9 @@ fn optional_text(input: &Value, field: &str) -> Option<String> {
 }
 
 fn refs(input: &Value, field: &str, action: &str) -> Result<Vec<String>, ActionResult> {
-    let Some(value) = input.get(field) else { return Ok(Vec::new()); };
+    let Some(value) = input.get(field) else {
+        return Ok(Vec::new());
+    };
     let Some(values) = value.as_array() else {
         return Err(ActionResult::failure(
             Some(action),
@@ -100,7 +105,11 @@ fn refs(input: &Value, field: &str, action: &str) -> Result<Vec<String>, ActionR
     };
     let mut refs = Vec::with_capacity(values.len());
     for value in values {
-        let Some(value) = value.as_str().map(str::trim).filter(|value| !value.is_empty()) else {
+        let Some(value) = value
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
             return Err(ActionResult::failure(
                 Some(action),
                 ResultStatus::InvalidInput,
@@ -161,7 +170,11 @@ fn personal_show_action(
     )
 }
 
-fn notification_failure(action: &str, error: central_connector_sdk::PortError, diagnostics: Value) -> ActionResult {
+fn notification_failure(
+    action: &str,
+    error: central_connector_sdk::PortError,
+    diagnostics: Value,
+) -> ActionResult {
     let status = match error.code {
         PortErrorCode::InvalidInput => ResultStatus::InvalidInput,
         PortErrorCode::UnsupportedEnvironment
@@ -173,7 +186,9 @@ fn notification_failure(action: &str, error: central_connector_sdk::PortError, d
         Some(action),
         status,
         error.message.clone(),
-        Some(json!({ "port": USER_NOTIFICATION_PORT.id, "provider_error": error, "diagnostics": diagnostics })),
+        Some(
+            json!({ "port": USER_NOTIFICATION_PORT.id, "provider_error": error, "diagnostics": diagnostics }),
+        ),
     )
 }
 
@@ -207,13 +222,18 @@ fn personal_notify_action(
         return notification_failure("personal.notify", error, json!({}));
     }
 
-    let resolution = context.connectors.resolve(&USER_NOTIFICATION_PORT, context.connector_context);
+    let resolution = context
+        .connectors
+        .resolve(&USER_NOTIFICATION_PORT, context.connector_context);
     let diagnostics = to_value(&resolution.diagnostics).expect("Connector diagnostics serialise");
     let Some(connector) = resolution.connector else {
         return ActionResult::failure(
             Some("personal.notify"),
             ResultStatus::UnavailableCapability,
-            format!("No eligible Connector implements {}.", USER_NOTIFICATION_PORT.id),
+            format!(
+                "No eligible Connector implements {}.",
+                USER_NOTIFICATION_PORT.id
+            ),
             Some(json!({ "port": USER_NOTIFICATION_PORT.id, "diagnostics": diagnostics })),
         );
     };
@@ -221,8 +241,13 @@ fn personal_notify_action(
         return ActionResult::failure(
             Some("personal.notify"),
             ResultStatus::ConnectorFailure,
-            format!("Selected Connector does not expose {} implementation.", USER_NOTIFICATION_PORT.id),
-            Some(json!({ "port": USER_NOTIFICATION_PORT.id, "connector": connector.manifest().id, "diagnostics": diagnostics })),
+            format!(
+                "Selected Connector does not expose {} implementation.",
+                USER_NOTIFICATION_PORT.id
+            ),
+            Some(
+                json!({ "port": USER_NOTIFICATION_PORT.id, "connector": connector.manifest().id, "diagnostics": diagnostics }),
+            ),
         );
     };
     match notification.deliver(&request) {
@@ -241,19 +266,31 @@ fn personal_notify_action(
 fn safe_control_target(root: &Path, target: &str) -> Result<PathBuf, String> {
     let relative = Path::new(target);
     if relative.as_os_str().is_empty() || relative.is_absolute() {
-        return Err("Control proposal target must be a relative path below user, agents or machines.".to_owned());
+        return Err(
+            "Control proposal target must be a relative path below user, agents or machines."
+                .to_owned(),
+        );
     }
     let mut components = relative.components();
     let Some(Component::Normal(first)) = components.next() else {
         return Err("Control proposal target is invalid.".to_owned());
     };
     if !matches!(first.to_str(), Some("user" | "agents" | "machines")) {
-        return Err("Control proposal target must begin with user/, agents/ or machines/.".to_owned());
+        return Err(
+            "Control proposal target must begin with user/, agents/ or machines/.".to_owned(),
+        );
     }
     if components.any(|component| !matches!(component, Component::Normal(_))) {
-        return Err("Control proposal target must not contain traversal or platform-root components.".to_owned());
+        return Err(
+            "Control proposal target must not contain traversal or platform-root components."
+                .to_owned(),
+        );
     }
-    crate::projectcentral_flow::reject_symlink_components(root,&Path::new("Control").join(relative)).map_err(|e|e.to_string())?;
+    crate::projectcentral_flow::reject_symlink_components(
+        root,
+        &Path::new("Control").join(relative),
+    )
+    .map_err(|e| e.to_string())?;
     Ok(root.join("Control").join(relative))
 }
 
@@ -262,7 +299,11 @@ fn proposal_dir(root: &Path) -> PathBuf {
 }
 
 fn proposal_path(root: &Path, id: &str) -> Result<PathBuf, String> {
-    if id.is_empty() || !id.chars().all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_')) {
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
         return Err("Proposal id contains unsupported characters.".to_owned());
     }
     Ok(proposal_dir(root).join(format!("{id}.json")))
@@ -281,7 +322,7 @@ fn write_proposal(path: &Path, proposal: &ControlProposal) -> Result<(), io::Err
         fs::create_dir_all(parent)?;
     }
     let bytes = serde_json::to_vec_pretty(proposal).map_err(io::Error::other)?;
-    crate::file_mutation::atomic_record(path,&bytes)
+    crate::file_mutation::atomic_record(path, &bytes)
 }
 
 fn read_proposal(path: &Path) -> Result<ControlProposal, io::Error> {
@@ -319,25 +360,64 @@ fn control_propose_action(
     };
     let root = match resolve_central_root(context.root_options) {
         Ok(root) => root,
-        Err(message) => return ActionResult::failure(Some("control.propose-change"), ResultStatus::InvalidInput, message, None),
+        Err(message) => {
+            return ActionResult::failure(
+                Some("control.propose-change"),
+                ResultStatus::InvalidInput,
+                message,
+                None,
+            )
+        }
     };
     if let Err(message) = safe_control_target(&root.path, &target) {
-        return ActionResult::failure(Some("control.propose-change"), ResultStatus::InvalidInput, message, None);
+        return ActionResult::failure(
+            Some("control.propose-change"),
+            ResultStatus::InvalidInput,
+            message,
+            None,
+        );
     }
     let id = match new_proposal_id() {
         Ok(id) => id,
-        Err(error) => return ActionResult::failure(Some("control.propose-change"), ResultStatus::InternalFailure, error.to_string(), None),
+        Err(error) => {
+            return ActionResult::failure(
+                Some("control.propose-change"),
+                ResultStatus::InternalFailure,
+                error.to_string(),
+                None,
+            )
+        }
     };
-    if proposed_content.len()>crate::source_safety::MAX_SOURCE || proposed_content.contains('\0') {return ActionResult::failure(Some("control.propose-change"),ResultStatus::InvalidInput,"Control proposal must be bounded UTF-8 text",None);}
-    let basis_revision=match crate::source_safety::read(&root.path.join("Control"),&target) {Ok(content)=>crate::projectcentral_flow::content_revision_bytes(content.as_bytes()),Err(e) if e.kind()==io::ErrorKind::NotFound=>"central.absent/v1".into(),Err(e)=>return ActionResult::failure(Some("control.propose-change"),ResultStatus::InvalidInput,e.to_string(),None)};
+    if proposed_content.len() > crate::source_safety::MAX_SOURCE || proposed_content.contains('\0')
+    {
+        return ActionResult::failure(
+            Some("control.propose-change"),
+            ResultStatus::InvalidInput,
+            "Control proposal must be bounded UTF-8 text",
+            None,
+        );
+    }
+    let basis_revision = match crate::source_safety::read(&root.path.join("Control"), &target) {
+        Ok(content) => crate::projectcentral_flow::content_revision_bytes(content.as_bytes()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => "central.absent/v1".into(),
+        Err(e) => {
+            return ActionResult::failure(
+                Some("control.propose-change"),
+                ResultStatus::InvalidInput,
+                e.to_string(),
+                None,
+            )
+        }
+    };
     let proposal = ControlProposal {
         schema: PROPOSAL_SCHEMA.to_owned(),
         id: id.clone(),
         target,
         reason,
-        classification: optional_text(input, "classification").unwrap_or_else(|| "authored-context".to_owned()),
+        classification: optional_text(input, "classification")
+            .unwrap_or_else(|| "authored-context".to_owned()),
         proposed_content,
-        basis_revision:Some(basis_revision),
+        basis_revision: Some(basis_revision),
         evidence_refs,
         status: "proposed".to_owned(),
         accepted_by_ref: None,
@@ -348,7 +428,12 @@ fn control_propose_action(
             "control.propose-change",
             json!({ "proposal": proposal, "proposal_path": path, "authored_source_mutated": false }),
         ),
-        Err(error) => ActionResult::failure(Some("control.propose-change"), ResultStatus::InternalFailure, error.to_string(), None),
+        Err(error) => ActionResult::failure(
+            Some("control.propose-change"),
+            ResultStatus::InternalFailure,
+            error.to_string(),
+            None,
+        ),
     }
 }
 
@@ -363,18 +448,43 @@ fn control_review_proposal_action(
     };
     let root = match resolve_central_root(context.root_options) {
         Ok(root) => root,
-        Err(message) => return ActionResult::failure(Some("control.review-proposal"), ResultStatus::InvalidInput, message, None),
+        Err(message) => {
+            return ActionResult::failure(
+                Some("control.review-proposal"),
+                ResultStatus::InvalidInput,
+                message,
+                None,
+            )
+        }
     };
     let path = match proposal_path(&root.path, &id) {
         Ok(path) => path,
-        Err(message) => return ActionResult::failure(Some("control.review-proposal"), ResultStatus::InvalidInput, message, None),
+        Err(message) => {
+            return ActionResult::failure(
+                Some("control.review-proposal"),
+                ResultStatus::InvalidInput,
+                message,
+                None,
+            )
+        }
     };
     match read_proposal(&path) {
-        Ok(proposal) => ActionResult::success("control.review-proposal", json!({ "proposal": proposal, "proposal_path": path })),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => ActionResult::failure(
-            Some("control.review-proposal"), ResultStatus::InvalidInput, format!("Unknown Control proposal: {id}"), None,
+        Ok(proposal) => ActionResult::success(
+            "control.review-proposal",
+            json!({ "proposal": proposal, "proposal_path": path }),
         ),
-        Err(error) => ActionResult::failure(Some("control.review-proposal"), ResultStatus::InternalFailure, error.to_string(), None),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => ActionResult::failure(
+            Some("control.review-proposal"),
+            ResultStatus::InvalidInput,
+            format!("Unknown Control proposal: {id}"),
+            None,
+        ),
+        Err(error) => ActionResult::failure(
+            Some("control.review-proposal"),
+            ResultStatus::InternalFailure,
+            error.to_string(),
+            None,
+        ),
     }
 }
 
@@ -393,26 +503,78 @@ fn control_apply_proposal_action(
     };
     let root = match resolve_central_root(context.root_options) {
         Ok(root) => root,
-        Err(message) => return ActionResult::failure(Some("control.apply-proposal"), ResultStatus::InvalidInput, message, None),
+        Err(message) => {
+            return ActionResult::failure(
+                Some("control.apply-proposal"),
+                ResultStatus::InvalidInput,
+                message,
+                None,
+            )
+        }
     };
     let proposal_file = match proposal_path(&root.path, &id) {
         Ok(path) => path,
-        Err(message) => return ActionResult::failure(Some("control.apply-proposal"), ResultStatus::InvalidInput, message, None),
+        Err(message) => {
+            return ActionResult::failure(
+                Some("control.apply-proposal"),
+                ResultStatus::InvalidInput,
+                message,
+                None,
+            )
+        }
     };
     let proposal = match read_proposal(&proposal_file) {
         Ok(proposal) => proposal,
-        Err(error) => return ActionResult::failure(Some("control.apply-proposal"), ResultStatus::InvalidInput, error.to_string(), None),
+        Err(error) => {
+            return ActionResult::failure(
+                Some("control.apply-proposal"),
+                ResultStatus::InvalidInput,
+                error.to_string(),
+                None,
+            )
+        }
     };
     if proposal.status != "proposed" {
         return ActionResult::failure(
-            Some("control.apply-proposal"), ResultStatus::InvalidInput,
-            format!("Proposal {} is not pending.", proposal.id), None,
+            Some("control.apply-proposal"),
+            ResultStatus::InvalidInput,
+            format!("Proposal {} is not pending.", proposal.id),
+            None,
         );
     }
-    if let Err(message)=safe_control_target(&root.path,&proposal.target) {return ActionResult::failure(Some("control.apply-proposal"),ResultStatus::InvalidInput,message,None);}
-    let Some(basis)=proposal.basis_revision.as_deref() else {return ActionResult::failure(Some("control.apply-proposal"),ResultStatus::UnavailableCapability,"Legacy Control proposal has no source basis; create a fresh native proposal before review",Some(json!({"authored_source_mutated":false})));};
-    let current=match crate::source_safety::read(&root.path.join("Control"),&proposal.target){Ok(content)=>crate::projectcentral_flow::content_revision_bytes(content.as_bytes()),Err(e) if e.kind()==io::ErrorKind::NotFound=>"central.absent/v1".into(),Err(e)=>return ActionResult::failure(Some("control.apply-proposal"),ResultStatus::VerificationFailure,e.to_string(),None)};
-    if current!=basis {return ActionResult::failure(Some("control.apply-proposal"),ResultStatus::VerificationFailure,"Control proposal source basis changed; concurrent source is preserved",Some(json!({"outcome":"conflict","expected_revision":basis,"current_revision":current,"authored_source_mutated":false})));}
+    if let Err(message) = safe_control_target(&root.path, &proposal.target) {
+        return ActionResult::failure(
+            Some("control.apply-proposal"),
+            ResultStatus::InvalidInput,
+            message,
+            None,
+        );
+    }
+    let Some(basis) = proposal.basis_revision.as_deref() else {
+        return ActionResult::failure(Some("control.apply-proposal"),ResultStatus::UnavailableCapability,"Legacy Control proposal has no source basis; create a fresh native proposal before review",Some(json!({"authored_source_mutated":false})));
+    };
+    let current = match crate::source_safety::read(&root.path.join("Control"), &proposal.target) {
+        Ok(content) => crate::projectcentral_flow::content_revision_bytes(content.as_bytes()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => "central.absent/v1".into(),
+        Err(e) => {
+            return ActionResult::failure(
+                Some("control.apply-proposal"),
+                ResultStatus::VerificationFailure,
+                e.to_string(),
+                None,
+            )
+        }
+    };
+    if current != basis {
+        return ActionResult::failure(
+            Some("control.apply-proposal"),
+            ResultStatus::VerificationFailure,
+            "Control proposal source basis changed; concurrent source is preserved",
+            Some(
+                json!({"outcome":"conflict","expected_revision":basis,"current_revision":current,"authored_source_mutated":false}),
+            ),
+        );
+    }
     // This extension has no native attested human principal. A string naming a
     // person cannot turn a proposal into authority over Control source.
     ActionResult::failure(Some("control.apply-proposal"),ResultStatus::UnavailableCapability,"Control acceptance requires a native human authority route; accepted_by_ref is attribution, not that authority",Some(json!({"accepted_by_ref":accepted_by_ref,"authored_source_mutated":false})))
@@ -450,7 +612,9 @@ pub fn register_personal_actions(registry: &mut ActionRegistry) {
         string_input("caller_ref", true),
     ];
     notify.required_ports = vec![USER_NOTIFICATION_PORT.id.to_owned()];
-    registry.register(notify, personal_notify_action).expect("personal Action ids are valid");
+    registry
+        .register(notify, personal_notify_action)
+        .expect("personal Action ids are valid");
 
     let mut propose = descriptor(
         "control.propose-change",
@@ -465,7 +629,9 @@ pub fn register_personal_actions(registry: &mut ActionRegistry) {
         string_input("classification", false),
         string_input("proposed_content", true),
     ];
-    registry.register(propose, control_propose_action).expect("personal Action ids are valid");
+    registry
+        .register(propose, control_propose_action)
+        .expect("personal Action ids are valid");
 
     let mut review = descriptor(
         "control.review-proposal",
@@ -475,7 +641,9 @@ pub fn register_personal_actions(registry: &mut ActionRegistry) {
         "control-proposal",
     );
     review.inputs = vec![string_input("proposal_id", true)];
-    registry.register(review, control_review_proposal_action).expect("personal Action ids are valid");
+    registry
+        .register(review, control_review_proposal_action)
+        .expect("personal Action ids are valid");
 
     let mut apply = descriptor(
         "control.apply-proposal",
@@ -484,8 +652,13 @@ pub fn register_personal_actions(registry: &mut ActionRegistry) {
         MutationClass::LocallyMutating,
         "control-proposal-application",
     );
-    apply.inputs = vec![string_input("proposal_id", true), string_input("accepted_by_ref", true)];
-    registry.register(apply, control_apply_proposal_action).expect("personal Action ids are valid");
+    apply.inputs = vec![
+        string_input("proposal_id", true),
+        string_input("accepted_by_ref", true),
+    ];
+    registry
+        .register(apply, control_apply_proposal_action)
+        .expect("personal Action ids are valid");
 }
 
 pub fn create_personal_action_registry() -> ActionRegistry {
@@ -500,9 +673,9 @@ mod tests {
     use crate::root::{initialize_central, RootOptions};
     use central_connector_sdk::{
         CapabilityProbe, Connector, ConnectorContext, ConnectorManifest, ConnectorPortDeclaration,
-        NotificationCapabilities, NotificationCapabilityRequest, NotificationDelivery,
-        NotificationDeliveryState, NotificationAuthorizationState, PortContract, PortError,
-        UserNotification, CONNECTOR_API_VERSION,
+        NotificationAuthorizationState, NotificationCapabilities, NotificationCapabilityRequest,
+        NotificationDelivery, NotificationDeliveryState, PortContract, PortError, UserNotification,
+        CONNECTOR_API_VERSION,
     };
 
     struct NotificationFixture {
@@ -517,7 +690,10 @@ mod tests {
                     id: "fixture.notification".to_owned(),
                     version: "1".to_owned(),
                     display_name: "Notification fixture".to_owned(),
-                    ports: vec![ConnectorPortDeclaration { id: USER_NOTIFICATION_PORT.id.to_owned(), version: USER_NOTIFICATION_PORT.version.to_owned() }],
+                    ports: vec![ConnectorPortDeclaration {
+                        id: USER_NOTIFICATION_PORT.id.to_owned(),
+                        version: USER_NOTIFICATION_PORT.version.to_owned(),
+                    }],
                     platforms: vec!["test".to_owned()],
                     entrypoint: "test".to_owned(),
                     runtime_requirements: Vec::new(),
@@ -530,7 +706,10 @@ mod tests {
     }
 
     impl UserNotification for NotificationFixture {
-        fn capabilities(&self, _input: &NotificationCapabilityRequest) -> Result<NotificationCapabilities, PortError> {
+        fn capabilities(
+            &self,
+            _input: &NotificationCapabilityRequest,
+        ) -> Result<NotificationCapabilities, PortError> {
             Ok(NotificationCapabilities {
                 available: true,
                 authorization: NotificationAuthorizationState::Granted,
@@ -557,13 +736,23 @@ mod tests {
     }
 
     impl Connector for NotificationFixture {
-        fn manifest(&self) -> &ConnectorManifest { &self.manifest }
-        fn probe(&self, _port: &PortContract, _context: &ConnectorContext) -> CapabilityProbe { CapabilityProbe::available() }
-        fn user_notification(&self) -> Option<&dyn UserNotification> { Some(self) }
+        fn manifest(&self) -> &ConnectorManifest {
+            &self.manifest
+        }
+        fn probe(&self, _port: &PortContract, _context: &ConnectorContext) -> CapabilityProbe {
+            CapabilityProbe::available()
+        }
+        fn user_notification(&self) -> Option<&dyn UserNotification> {
+            Some(self)
+        }
     }
 
     fn root() -> PathBuf {
-        let root = std::env::temp_dir().join(format!("central-personal-test-{}-{}", std::process::id(), new_proposal_id().unwrap()));
+        let root = std::env::temp_dir().join(format!(
+            "central-personal-test-{}-{}",
+            std::process::id(),
+            new_proposal_id().unwrap()
+        ));
         initialize_central(&root).unwrap();
         root
     }
@@ -571,11 +760,22 @@ mod tests {
     #[test]
     fn personal_read_model_is_filesystem_projection_not_profile_database() {
         let root = root();
-        let options = RootOptions { explicit_root: Some(root.clone()), configured_root: None, home: None };
+        let options = RootOptions {
+            explicit_root: Some(root.clone()),
+            configured_root: None,
+            home: None,
+        };
         let connectors = central_connector_sdk::ConnectorRegistry::default();
-        let connector_context = ConnectorContext { platform: "test".into() };
-        let context = ActionExecutionContext { root_options: &options, connectors: &connectors, connector_context: &connector_context };
-        let result = create_personal_action_registry().execute("personal.show", &json!({}), &context);
+        let connector_context = ConnectorContext {
+            platform: "test".into(),
+        };
+        let context = ActionExecutionContext {
+            root_options: &options,
+            connectors: &connectors,
+            connector_context: &connector_context,
+        };
+        let result =
+            create_personal_action_registry().execute("personal.show", &json!({}), &context);
         assert!(result.ok);
         let data = result.data.unwrap();
         assert_eq!(data["profile_database"], false);
@@ -586,58 +786,142 @@ mod tests {
     #[test]
     fn proposal_acceptance_text_does_not_grant_control_source_authority() {
         let root = root();
-        let options = RootOptions { explicit_root: Some(root.clone()), configured_root: None, home: None };
+        let options = RootOptions {
+            explicit_root: Some(root.clone()),
+            configured_root: None,
+            home: None,
+        };
         let connectors = central_connector_sdk::ConnectorRegistry::default();
-        let connector_context = ConnectorContext { platform: "test".into() };
-        let context = ActionExecutionContext { root_options: &options, connectors: &connectors, connector_context: &connector_context };
+        let connector_context = ConnectorContext {
+            platform: "test".into(),
+        };
+        let context = ActionExecutionContext {
+            root_options: &options,
+            connectors: &connectors,
+            connector_context: &connector_context,
+        };
         let registry = create_personal_action_registry();
-        let proposed = registry.execute("control.propose-change", &json!({
-            "target": "agents/collaboration.md",
-            "reason": "Make durable collaboration preference inspectable",
-            "classification": "agent-preference",
-            "proposed_content": "Prefer evidence-backed changes.\n"
-        }), &context);
+        let proposed = registry.execute(
+            "control.propose-change",
+            &json!({
+                "target": "agents/collaboration.md",
+                "reason": "Make durable collaboration preference inspectable",
+                "classification": "agent-preference",
+                "proposed_content": "Prefer evidence-backed changes.\n"
+            }),
+            &context,
+        );
         assert!(proposed.ok);
         assert!(!root.join("Control/agents/collaboration.md").exists());
-        let id = proposed.data.as_ref().unwrap()["proposal"]["id"].as_str().unwrap().to_owned();
-        let applied = registry.execute("control.apply-proposal", &json!({
-            "proposal_id": id,
-            "accepted_by_ref": "human:local-author"
-        }), &context);
+        let id = proposed.data.as_ref().unwrap()["proposal"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let applied = registry.execute(
+            "control.apply-proposal",
+            &json!({
+                "proposal_id": id,
+                "accepted_by_ref": "human:local-author"
+            }),
+            &context,
+        );
         assert!(!applied.ok);
-        assert_eq!(applied.status,ResultStatus::UnavailableCapability);
+        assert_eq!(applied.status, ResultStatus::UnavailableCapability);
         assert!(!root.join("Control/agents/collaboration.md").exists());
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
     fn control_proposals_keep_basis_and_refuse_stale_or_legacy_application() {
-        let root=root(); let options=RootOptions{explicit_root:Some(root.clone()),configured_root:None,home:None};
-        let connectors=central_connector_sdk::ConnectorRegistry::default();let connector_context=ConnectorContext{platform:"test".into()};let context=ActionExecutionContext{root_options:&options,connectors:&connectors,connector_context:&connector_context};let registry=create_personal_action_registry();
-        let source=root.join("Control/user/intent.md");fs::write(&source,"basis").unwrap();
-        let proposal=registry.execute("control.propose-change",&json!({"target":"user/intent.md","reason":"return test","proposed_content":"proposal"}),&context);assert!(proposal.ok,"{proposal:?}");let id=proposal.data.unwrap()["proposal"]["id"].as_str().unwrap().to_owned();
-        fs::write(&source,"concurrent human text").unwrap();let stale=registry.execute("control.apply-proposal",&json!({"proposal_id":id,"accepted_by_ref":"human:claimed"}),&context);assert_eq!(stale.status,ResultStatus::VerificationFailure);assert_eq!(fs::read_to_string(&source).unwrap(),"concurrent human text");
-        let file=proposal_path(&root,&id).unwrap();let mut legacy:Value=serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();legacy.as_object_mut().unwrap().remove("basis_revision");fs::write(&file,serde_json::to_vec(&legacy).unwrap()).unwrap();
-        let legacy=registry.execute("control.apply-proposal",&json!({"proposal_id":id,"accepted_by_ref":"human:claimed"}),&context);assert_eq!(legacy.status,ResultStatus::UnavailableCapability);assert_eq!(fs::read_to_string(&source).unwrap(),"concurrent human text");let _=fs::remove_dir_all(root);
+        let root = root();
+        let options = RootOptions {
+            explicit_root: Some(root.clone()),
+            configured_root: None,
+            home: None,
+        };
+        let connectors = central_connector_sdk::ConnectorRegistry::default();
+        let connector_context = ConnectorContext {
+            platform: "test".into(),
+        };
+        let context = ActionExecutionContext {
+            root_options: &options,
+            connectors: &connectors,
+            connector_context: &connector_context,
+        };
+        let registry = create_personal_action_registry();
+        let source = root.join("Control/user/intent.md");
+        fs::write(&source, "basis").unwrap();
+        let proposal=registry.execute("control.propose-change",&json!({"target":"user/intent.md","reason":"return test","proposed_content":"proposal"}),&context);
+        assert!(proposal.ok, "{proposal:?}");
+        let id = proposal.data.unwrap()["proposal"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        fs::write(&source, "concurrent human text").unwrap();
+        let stale = registry.execute(
+            "control.apply-proposal",
+            &json!({"proposal_id":id,"accepted_by_ref":"human:claimed"}),
+            &context,
+        );
+        assert_eq!(stale.status, ResultStatus::VerificationFailure);
+        assert_eq!(
+            fs::read_to_string(&source).unwrap(),
+            "concurrent human text"
+        );
+        let file = proposal_path(&root, &id).unwrap();
+        let mut legacy: Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        legacy.as_object_mut().unwrap().remove("basis_revision");
+        fs::write(&file, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        let legacy = registry.execute(
+            "control.apply-proposal",
+            &json!({"proposal_id":id,"accepted_by_ref":"human:claimed"}),
+            &context,
+        );
+        assert_eq!(legacy.status, ResultStatus::UnavailableCapability);
+        assert_eq!(
+            fs::read_to_string(&source).unwrap(),
+            "concurrent human text"
+        );
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
     fn notification_delivery_keeps_acknowledgement_false_and_caller_lineage() {
         let root = root();
-        let options = RootOptions { explicit_root: Some(root.clone()), configured_root: None, home: None };
+        let options = RootOptions {
+            explicit_root: Some(root.clone()),
+            configured_root: None,
+            home: None,
+        };
         let mut connectors = central_connector_sdk::ConnectorRegistry::default();
         connectors.register(NotificationFixture::new()).unwrap();
-        let connector_context = ConnectorContext { platform: "test".into() };
-        let context = ActionExecutionContext { root_options: &options, connectors: &connectors, connector_context: &connector_context };
-        let result = create_personal_action_registry().execute("personal.notify", &json!({
-            "title": "Ready",
-            "body": "Candidate B",
-            "caller_ref": "factory:run:42",
-            "subject_ref": "factory:candidate:B"
-        }), &context);
+        let connector_context = ConnectorContext {
+            platform: "test".into(),
+        };
+        let context = ActionExecutionContext {
+            root_options: &options,
+            connectors: &connectors,
+            connector_context: &connector_context,
+        };
+        let result = create_personal_action_registry().execute(
+            "personal.notify",
+            &json!({
+                "title": "Ready",
+                "body": "Candidate B",
+                "caller_ref": "factory:run:42",
+                "subject_ref": "factory:candidate:B"
+            }),
+            &context,
+        );
         assert!(result.ok);
-        assert_eq!(result.data.as_ref().unwrap()["delivery"]["caller_ref"], "factory:run:42");
-        assert_eq!(result.data.as_ref().unwrap()["delivery"]["human_acknowledgement_observed"], false);
+        assert_eq!(
+            result.data.as_ref().unwrap()["delivery"]["caller_ref"],
+            "factory:run:42"
+        );
+        assert_eq!(
+            result.data.as_ref().unwrap()["delivery"]["human_acknowledgement_observed"],
+            false
+        );
         let _ = fs::remove_dir_all(root);
     }
 

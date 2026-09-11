@@ -16,7 +16,8 @@ fn repository_root() -> PathBuf {
 
 #[test]
 fn cli_reference_names_every_registered_core_action_and_complete_invocation_seam() {
-    let documentation = fs::read_to_string(repository_root().join("docs/CLI-REFERENCE.md")).unwrap();
+    let documentation =
+        fs::read_to_string(repository_root().join("docs/CLI-REFERENCE.md")).unwrap();
     assert!(documentation.contains("action run <action-id>"));
     assert!(documentation.contains("--json"));
     assert!(documentation.contains("CENTRAL_ROOT"));
@@ -32,7 +33,8 @@ fn cli_reference_names_every_registered_core_action_and_complete_invocation_seam
 
 #[test]
 fn rust_sdk_reference_names_every_published_core_port_and_version() {
-    let documentation = fs::read_to_string(repository_root().join("docs/CONNECTOR-SDK-RUST.md")).unwrap();
+    let documentation =
+        fs::read_to_string(repository_root().join("docs/CONNECTOR-SDK-RUST.md")).unwrap();
     let ports = [
         WORK_DISCOVERY_PORT,
         NATIVE_OPEN_PORT,

@@ -579,7 +579,9 @@ mod tests {
         assert!(list_files(&root, "private").is_err());
         let blocked = CentralPathRef::new(&root, "private/note.md".into()).unwrap();
         assert_eq!(
-            read_file(&root, &blocked, FileEncoding::Utf8).unwrap_err().kind(),
+            read_file(&root, &blocked, FileEncoding::Utf8)
+                .unwrap_err()
+                .kind(),
             io::ErrorKind::PermissionDenied
         );
         let other = tempfile::tempdir().unwrap();
@@ -596,9 +598,13 @@ mod tests {
         fs::write(root.join("large"), vec![b'x'; MAX_TEXT_BYTES as usize + 1]).unwrap();
         for name in ["binary", "large"] {
             assert_eq!(
-                read_file(&root, &CentralPathRef::new(&root, name.into()).unwrap(), FileEncoding::Utf8)
-                    .unwrap_err()
-                    .kind(),
+                read_file(
+                    &root,
+                    &CentralPathRef::new(&root, name.into()).unwrap(),
+                    FileEncoding::Utf8
+                )
+                .unwrap_err()
+                .kind(),
                 io::ErrorKind::InvalidData
             );
         }
@@ -624,7 +630,10 @@ mod tests {
 
         let bin_location = CentralPathRef::new(&root, "mystery.bin".into()).unwrap();
         let read = read_file(&root, &bin_location, FileEncoding::Base64).unwrap();
-        assert_eq!(read.mime_hint, None, "an unrecognised extension and no magic bytes yields no hint");
+        assert_eq!(
+            read.mime_hint, None,
+            "an unrecognised extension and no magic bytes yields no hint"
+        );
         assert!(
             read_file(&root, &bin_location, FileEncoding::Utf8).is_err(),
             "NUL bytes still refuse the default utf-8 reading"
@@ -715,7 +724,9 @@ mod tests {
         assert_eq!(refs.len(), 3);
         for entry in entries {
             assert_eq!(
-                read_file(&root, &entry.location, FileEncoding::Utf8).unwrap().content,
+                read_file(&root, &entry.location, FileEncoding::Utf8)
+                    .unwrap()
+                    .content,
                 entry.name
             );
         }

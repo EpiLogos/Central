@@ -49,17 +49,26 @@ pub struct ControlSearchResult {
 
 pub fn locate_control_root(central_root: &Path, target: &str) -> Result<ControlSourceRoot, String> {
     if !CONTROL_ROOTS.contains(&target) {
-        return Err(format!("Control root must be one of: {}.", CONTROL_ROOTS.join(", ")));
+        return Err(format!(
+            "Control root must be one of: {}.",
+            CONTROL_ROOTS.join(", ")
+        ));
     }
     let path = central_root.join("Control").join(target);
-    let exists = fs::metadata(&path).map(|metadata| metadata.is_dir()).unwrap_or(false);
+    let exists = fs::metadata(&path)
+        .map(|metadata| metadata.is_dir())
+        .unwrap_or(false);
     Ok(ControlSourceRoot {
         target: target.to_owned(),
         path,
         // Control/agents is intentionally a container of two authorities:
         // human-authored governance (plus preserved pre-split authored files) and
         // Agent-maintained Wiki knowledge. Human Control search below excludes wiki/.
-        source_class: if target == "agents" { SourceClass::Mixed } else { SourceClass::Authored },
+        source_class: if target == "agents" {
+            SourceClass::Mixed
+        } else {
+            SourceClass::Authored
+        },
         exists,
     })
 }
@@ -109,7 +118,10 @@ fn readable_files(
 pub fn search_control(central_root: &Path, query: &str) -> io::Result<ControlSearchResult> {
     let query = query.trim();
     if query.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Control search requires a non-empty query."));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Control search requires a non-empty query.",
+        ));
     }
 
     let mut roots = Vec::new();
@@ -140,7 +152,10 @@ pub fn search_control(central_root: &Path, query: &str) -> io::Result<ControlSea
             &mut skipped_sources,
         )?;
         for path in files {
-            let source_path = path.strip_prefix(central_root).unwrap_or(&path).to_path_buf();
+            let source_path = path
+                .strip_prefix(central_root)
+                .unwrap_or(&path)
+                .to_path_buf();
             let bytes = fs::read(&path)?;
             let text = match String::from_utf8(bytes) {
                 Ok(text) => text,

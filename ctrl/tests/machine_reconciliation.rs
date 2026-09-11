@@ -12,8 +12,14 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temporary_directory(label: &str) -> PathBuf {
-    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    let path = std::env::temp_dir().join(format!("central-reconcile-{label}-{}-{nonce}", std::process::id()));
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "central-reconcile-{label}-{}-{nonce}",
+        std::process::id()
+    ));
     fs::create_dir_all(&path).unwrap();
     path
 }
@@ -33,15 +39,22 @@ fn write_role(root: &PathBuf, capabilities: &[&str]) {
     fs::write(
         root.join("Control/machines/test-role.json"),
         serde_json::to_string_pretty(&declaration).unwrap(),
-    ).unwrap();
+    )
+    .unwrap();
 }
 
 fn observation(capabilities: &[&str], git_present: bool) -> MachineInspectionOutput {
     MachineInspectionOutput {
         platform: "test-os".to_owned(),
         architecture: "test-arch".to_owned(),
-        capabilities: capabilities.iter().map(|value| (*value).to_owned()).collect(),
-        packages: vec![ObservedPackage { id: "git".to_owned(), present: git_present }],
+        capabilities: capabilities
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect(),
+        packages: vec![ObservedPackage {
+            id: "git".to_owned(),
+            present: git_present,
+        }],
         configurations: Vec::new(),
         services: Vec::new(),
     }
@@ -52,8 +65,13 @@ fn execute(
     connectors: &ConnectorRegistry,
     action: &str,
 ) -> central_ctrl::ActionResult {
-    let connector_context = ConnectorContext { platform: "test".to_owned() };
-    let root_options = RootOptions { explicit_root: Some(root.clone()), ..RootOptions::default() };
+    let connector_context = ConnectorContext {
+        platform: "test".to_owned(),
+    };
+    let root_options = RootOptions {
+        explicit_root: Some(root.clone()),
+        ..RootOptions::default()
+    };
     let context = ActionExecutionContext {
         root_options: &root_options,
         connectors,
@@ -75,13 +93,24 @@ fn plan_preview_is_structured_and_non_mutating() {
     let result = execute(&root, &connectors, "machine.plan");
     assert_eq!(result.status, ResultStatus::Success);
     let data = result.data.unwrap();
-    let package = data["entries"].as_array().unwrap().iter().find(|entry| entry["kind"] == "package").unwrap();
+    let package = data["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["kind"] == "package")
+        .unwrap();
     assert_eq!(package["status"], "changeable");
     assert_eq!(package["port"], PACKAGE_MANAGER_PORT.id);
     assert_eq!(package["connector"]["id"], "reference.machine-reconciler");
     assert_eq!(package["preview"]["changed"], true);
-    assert!(package["preview"]["summary"].as_str().unwrap().contains("git"));
-    assert!(!state.snapshot().packages[0].present, "planning must not mutate observed state");
+    assert!(package["preview"]["summary"]
+        .as_str()
+        .unwrap()
+        .contains("git"));
+    assert!(
+        !state.snapshot().packages[0].present,
+        "planning must not mutate observed state"
+    );
 }
 
 #[test]
@@ -100,7 +129,10 @@ fn complete_apply_delegates_through_planned_port_verifies_and_is_repeat_stable()
     assert_eq!(data["outcome"], "complete");
     assert_eq!(data["operations"].as_array().unwrap().len(), 1);
     assert_eq!(data["operations"][0]["port"], PACKAGE_MANAGER_PORT.id);
-    assert_eq!(data["operations"][0]["connector"]["id"], "reference.machine-reconciler");
+    assert_eq!(
+        data["operations"][0]["connector"]["id"],
+        "reference.machine-reconciler"
+    );
     assert_eq!(data["verification"]["satisfied"], true);
     assert!(state.snapshot().packages[0].present);
 
@@ -138,7 +170,11 @@ fn unavailable_result_does_not_mutate_when_no_reconciliation_connector_exists() 
     initialize_central(&root).unwrap();
     write_role(&root, &[]);
     let mut connectors = ConnectorRegistry::default();
-    connectors.register(central_ctrl::StaticMachineInspectorConnector::new(observation(&[], false))).unwrap();
+    connectors
+        .register(central_ctrl::StaticMachineInspectorConnector::new(
+            observation(&[], false),
+        ))
+        .unwrap();
 
     let result = execute(&root, &connectors, "machine.apply");
     assert_eq!(result.status, ResultStatus::UnavailableCapability);
@@ -158,13 +194,21 @@ impl FaultyPackageConnector {
         Self {
             manifest: ConnectorManifest {
                 api_version: CONNECTOR_API_VERSION.to_owned(),
-                id: if fail_apply { "test.package-failure" } else { "test.package-liar" }.to_owned(),
+                id: if fail_apply {
+                    "test.package-failure"
+                } else {
+                    "test.package-liar"
+                }
+                .to_owned(),
                 version: "0.1.0".to_owned(),
                 display_name: "Faulty package test Connector".to_owned(),
-                ports: [MACHINE_INSPECTOR_PORT, PACKAGE_MANAGER_PORT].iter().map(|port| ConnectorPortDeclaration {
-                    id: port.id.to_owned(),
-                    version: port.version.to_owned(),
-                }).collect(),
+                ports: [MACHINE_INSPECTOR_PORT, PACKAGE_MANAGER_PORT]
+                    .iter()
+                    .map(|port| ConnectorPortDeclaration {
+                        id: port.id.to_owned(),
+                        version: port.version.to_owned(),
+                    })
+                    .collect(),
                 platforms: vec!["test".to_owned()],
                 entrypoint: "test:faulty-package".to_owned(),
                 runtime_requirements: Vec::new(),
@@ -178,21 +222,33 @@ impl FaultyPackageConnector {
 }
 
 impl MachineInspector for FaultyPackageConnector {
-    fn inspect(&self, _input: &MachineInspectionInput) -> Result<MachineInspectionOutput, PortError> {
+    fn inspect(
+        &self,
+        _input: &MachineInspectionInput,
+    ) -> Result<MachineInspectionOutput, PortError> {
         Ok(observation(&[], false))
     }
 }
 
 impl PackageManager for FaultyPackageConnector {
     fn preview(&self, input: &PackageStateRequest) -> Result<StateChangePreview, PortError> {
-        Ok(StateChangePreview { changed: true, summary: format!("would install {}", input.id) })
+        Ok(StateChangePreview {
+            changed: true,
+            summary: format!("would install {}", input.id),
+        })
     }
 
     fn apply(&self, input: &PackageStateRequest) -> Result<StateChangeResult, PortError> {
         if self.fail_apply {
-            Err(PortError::provider(format!("provider refused {}", input.id)))
+            Err(PortError::provider(format!(
+                "provider refused {}",
+                input.id
+            )))
         } else {
-            Ok(StateChangeResult { changed: true, summary: format!("claimed install {}", input.id) })
+            Ok(StateChangeResult {
+                changed: true,
+                summary: format!("claimed install {}", input.id),
+            })
         }
     }
 }
@@ -221,11 +277,17 @@ fn provider_failure_is_distinct_from_unavailable_and_partial() {
     initialize_central(&root).unwrap();
     write_role(&root, &[]);
     let mut connectors = ConnectorRegistry::default();
-    connectors.register(FaultyPackageConnector::new(true)).unwrap();
+    connectors
+        .register(FaultyPackageConnector::new(true))
+        .unwrap();
 
     let result = execute(&root, &connectors, "machine.apply");
     assert_eq!(result.status, ResultStatus::ConnectorFailure);
-    assert!(result.error.unwrap().message.contains("applying planned package"));
+    assert!(result
+        .error
+        .unwrap()
+        .message
+        .contains("applying planned package"));
 }
 
 #[test]
@@ -234,7 +296,9 @@ fn verification_mismatch_is_a_first_class_post_mutation_failure() {
     initialize_central(&root).unwrap();
     write_role(&root, &[]);
     let mut connectors = ConnectorRegistry::default();
-    connectors.register(FaultyPackageConnector::new(false)).unwrap();
+    connectors
+        .register(FaultyPackageConnector::new(false))
+        .unwrap();
 
     let result = execute(&root, &connectors, "machine.apply");
     assert_eq!(result.status, ResultStatus::VerificationFailure);
@@ -245,7 +309,8 @@ fn verification_mismatch_is_a_first_class_post_mutation_failure() {
 }
 
 #[test]
-fn machine_verify_reports_mismatch_without_mutation_and_actions_advertise_the_right_surface_contract() {
+fn machine_verify_reports_mismatch_without_mutation_and_actions_advertise_the_right_surface_contract(
+) {
     let root = temporary_directory("verify").join("Central");
     initialize_central(&root).unwrap();
     write_role(&root, &[]);

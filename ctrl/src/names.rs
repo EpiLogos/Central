@@ -107,12 +107,12 @@ mod tests {
         // date it is asserting rather than hardcoding one that stops being
         // today tomorrow.
         let (today, _) = local_civil_stamp();
-        let existing = vec![
-            format!("note-{today}"),
-            format!("note-{today}-2"),
-        ];
+        let existing = vec![format!("note-{today}"), format!("note-{today}-2")];
         let taken = |candidate: &str| existing.iter().any(|id| id == candidate);
-        assert_eq!(descriptive_id("", "note", &taken), format!("note-{today}-3"));
+        assert_eq!(
+            descriptive_id("", "note", &taken),
+            format!("note-{today}-3")
+        );
         let free = |_candidate: &str| false;
         let id = descriptive_id("live-smoke", "note", &free);
         assert!(id.starts_with("live-smoke-"));

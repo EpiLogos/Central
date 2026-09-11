@@ -1,6 +1,6 @@
 use central_ctrl::{
-    create_core_action_registry, initialize_central, run_cli, ActionExecutionContext, CliEnvironment,
-    ConnectorContext, ConnectorRegistry, MutationClass, ResultStatus, RootOptions,
+    create_core_action_registry, initialize_central, run_cli, ActionExecutionContext,
+    CliEnvironment, ConnectorContext, ConnectorRegistry, MutationClass, ResultStatus, RootOptions,
     MACHINE_DECLARATION_SCHEMA, MACHINE_DECLARATION_VERSION,
 };
 use serde_json::json;
@@ -9,8 +9,14 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temporary_directory(label: &str) -> PathBuf {
-    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    let path = std::env::temp_dir().join(format!("central-machine-{label}-{}-{nonce}", std::process::id()));
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "central-machine-{label}-{}-{nonce}",
+        std::process::id()
+    ));
     fs::create_dir_all(&path).unwrap();
     path
 }
@@ -19,15 +25,25 @@ fn write_role(root: &PathBuf, role: &str, declaration: serde_json::Value) {
     fs::write(
         root.join("Control/machines").join(format!("{role}.json")),
         serde_json::to_string_pretty(&declaration).unwrap(),
-    ).unwrap();
+    )
+    .unwrap();
 }
 
 fn execute(root: &PathBuf, role: &str) -> central_ctrl::ActionResult {
     let registry = create_core_action_registry();
     let connectors = ConnectorRegistry::default();
-    let connector_context = ConnectorContext { platform: "test".to_owned() };
-    let root_options = RootOptions { explicit_root: Some(root.clone()), ..RootOptions::default() };
-    let context = ActionExecutionContext { root_options: &root_options, connectors: &connectors, connector_context: &connector_context };
+    let connector_context = ConnectorContext {
+        platform: "test".to_owned(),
+    };
+    let root_options = RootOptions {
+        explicit_root: Some(root.clone()),
+        ..RootOptions::default()
+    };
+    let context = ActionExecutionContext {
+        root_options: &root_options,
+        connectors: &connectors,
+        connector_context: &connector_context,
+    };
     registry.execute("machine.declaration", &json!({ "role": role }), &context)
 }
 
@@ -102,13 +118,25 @@ fn representative_workstation_declaration_is_versioned_authored_and_provider_neu
     assert_eq!(data["declaration"]["schema"], MACHINE_DECLARATION_SCHEMA);
     assert_eq!(data["declaration"]["version"], MACHINE_DECLARATION_VERSION);
     assert_eq!(data["declaration"]["role"], "primary-workstation");
-    assert_eq!(data["declaration"]["requirements"]["packages"][0]["id"], "git");
-    assert_eq!(data["declaration"]["requirements"]["configurations"][0]["id"], "shell-profile");
+    assert_eq!(
+        data["declaration"]["requirements"]["packages"][0]["id"],
+        "git"
+    );
+    assert_eq!(
+        data["declaration"]["requirements"]["configurations"][0]["id"],
+        "shell-profile"
+    );
     assert_eq!(data["source"]["source_class"], "authored");
-    assert_eq!(data["source"]["path"], "Control/machines/primary-workstation.json");
+    assert_eq!(
+        data["source"]["path"],
+        "Control/machines/primary-workstation.json"
+    );
     assert!(data["declaration"].get("provider").is_none());
 
-    let descriptor = create_core_action_registry().get("machine.declaration").unwrap().clone();
+    let descriptor = create_core_action_registry()
+        .get("machine.declaration")
+        .unwrap()
+        .clone();
     assert_eq!(descriptor.mutation_class, MutationClass::ReadOnly);
     assert!(descriptor.required_ports.is_empty());
 }
@@ -122,8 +150,14 @@ fn representative_server_declaration_can_require_service_running_and_enablement(
     assert_eq!(result.status, ResultStatus::Success);
     let data = result.data.unwrap();
     assert_eq!(data["declaration"]["role"], "home-server");
-    assert_eq!(data["declaration"]["requirements"]["services"][0]["running"], true);
-    assert_eq!(data["declaration"]["requirements"]["services"][0]["enabled"], true);
+    assert_eq!(
+        data["declaration"]["requirements"]["services"][0]["running"],
+        true
+    );
+    assert_eq!(
+        data["declaration"]["requirements"]["services"][0]["enabled"],
+        true
+    );
 }
 
 #[test]
@@ -131,21 +165,39 @@ fn cli_reads_the_same_declaration_in_structured_and_human_forms() {
     let root = temporary_directory("cli").join("Central");
     initialize_central(&root).unwrap();
     write_role(&root, "home-server", server());
-    let environment = CliEnvironment { configured_root: None, home: None };
+    let environment = CliEnvironment {
+        configured_root: None,
+        home: None,
+    };
 
-    let structured = run_cli(&[
-        "--json".to_owned(), "--root".to_owned(), root.display().to_string(),
-        "machine".to_owned(), "declaration".to_owned(), "home-server".to_owned(),
-    ], &environment);
+    let structured = run_cli(
+        &[
+            "--json".to_owned(),
+            "--root".to_owned(),
+            root.display().to_string(),
+            "machine".to_owned(),
+            "declaration".to_owned(),
+            "home-server".to_owned(),
+        ],
+        &environment,
+    );
     assert_eq!(structured.exit_code, 0);
     let value: serde_json::Value = serde_json::from_str(&structured.output).unwrap();
     assert_eq!(value["action"], "machine.declaration");
-    assert_eq!(value["data"]["declaration"]["schema"], MACHINE_DECLARATION_SCHEMA);
+    assert_eq!(
+        value["data"]["declaration"]["schema"],
+        MACHINE_DECLARATION_SCHEMA
+    );
 
-    let human = run_cli(&[
-        "--root".to_owned(), root.display().to_string(),
-        "machine.declaration".to_owned(), "home-server".to_owned(),
-    ], &environment);
+    let human = run_cli(
+        &[
+            "--root".to_owned(),
+            root.display().to_string(),
+            "machine.declaration".to_owned(),
+            "home-server".to_owned(),
+        ],
+        &environment,
+    );
     assert_eq!(human.exit_code, 0);
     assert!(human.output.contains("Machine role: home-server"));
     assert!(human.output.contains("Declaration: central.machine v1"));
@@ -201,13 +253,19 @@ fn role_binding_rejects_traversal_mismatch_and_missing_declarations() {
     initialize_central(&root).unwrap();
 
     let traversal = execute(&root, "../user");
-    assert_eq!(traversal.error.unwrap().details.unwrap()["code"], "invalid_role");
+    assert_eq!(
+        traversal.error.unwrap().details.unwrap()["code"],
+        "invalid_role"
+    );
 
     let mut declaration = server();
     declaration["role"] = json!("other-server");
     write_role(&root, "home-server", declaration);
     let mismatch = execute(&root, "home-server");
-    assert_eq!(mismatch.error.unwrap().details.unwrap()["code"], "role_mismatch");
+    assert_eq!(
+        mismatch.error.unwrap().details.unwrap()["code"],
+        "role_mismatch"
+    );
 
     let missing = execute(&root, "portable-laptop");
     let details = missing.error.unwrap().details.unwrap();
@@ -223,7 +281,10 @@ fn direct_authored_edits_are_visible_immediately_without_generated_machine_state
     declaration["capabilities"] = json!(["project-entry"]);
     write_role(&root, "primary-workstation", declaration);
     assert_eq!(
-        execute(&root, "primary-workstation").data.unwrap()["declaration"]["capabilities"].as_array().unwrap().len(),
+        execute(&root, "primary-workstation").data.unwrap()["declaration"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .len(),
         1
     );
 
@@ -231,7 +292,10 @@ fn direct_authored_edits_are_visible_immediately_without_generated_machine_state
     declaration["capabilities"] = json!(["project-entry", "native-automation"]);
     write_role(&root, "primary-workstation", declaration);
     assert_eq!(
-        execute(&root, "primary-workstation").data.unwrap()["declaration"]["capabilities"].as_array().unwrap().len(),
+        execute(&root, "primary-workstation").data.unwrap()["declaration"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .len(),
         2
     );
     assert_eq!(fs::read_dir(root.join(".central")).unwrap().count(), 0);
