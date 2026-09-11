@@ -154,6 +154,7 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
             ("central.world.project", json!({ "project": rest[0] }))
         }
         [command] if command == "actions" => ("action.list", json!({})),
+        [command] if command == "system" => ("central.system", json!({})),
         [domain, verb] if domain == "action" && verb == "list" => ("action.list", json!({})),
         [domain, verb, action] if domain == "action" && verb == "run" => {
             (action.as_str(), json!({}))
@@ -320,6 +321,7 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
                     | "central.init"
                     | "central.doctor"
                     | "central.world"
+                    | "central.system"
                     | "central.world.project"
                     | "central.world.reproject.plan"
                     | "central.world.reproject.apply"
@@ -432,6 +434,35 @@ fn human_output(result: &ActionResult) -> String {
                     .join("\n")
             })
             .unwrap_or_default(),
+        Some(crate::system_disclosure::SYSTEM_ACTION_ID) => {
+            let mut lines = Vec::new();
+            let about = data
+                .get("about")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            lines.push(about.to_owned());
+            if let Some(availability) = data.get("availability") {
+                if let Some(state) = availability.get("state").and_then(Value::as_str) {
+                    lines.push(format!("availability: {state}"));
+                }
+            }
+            if let Some(sections) = data.get("sections").and_then(Value::as_array) {
+                for section in sections {
+                    let id = section.get("id").and_then(Value::as_str).unwrap_or_default();
+                    let title = section.get("title").and_then(Value::as_str).unwrap_or_default();
+                    let settings = section
+                        .get("settings")
+                        .and_then(Value::as_array)
+                        .map(|s| s.len())
+                        .unwrap_or_default();
+                    lines.push(format!("section {id} ({title}): {settings} setting(s)"));
+                }
+            }
+            if let Some(actions) = data.get("actions").and_then(Value::as_array) {
+                lines.push(format!("disclosed actions: {}", actions.len()));
+            }
+            lines.join("\n")
+        }
         Some("control.open") => {
             let target = data
                 .get("target")
@@ -569,6 +600,7 @@ pub fn run_cli_with_runtime(
     register_agent_profile_actions(&mut registry);
     crate::agent_set_actions::register_agent_set_actions(&mut registry);
     crate::remember_actions::register_remember_actions(&mut registry);
+    crate::system_disclosure::register_system_disclosure_action(&mut registry);
     let result = match parsed.target {
         CommandTarget::Direct { action_id, input } => {
             registry.execute(&action_id, &input, &context)
@@ -576,7 +608,19 @@ pub fn run_cli_with_runtime(
         CommandTarget::Guided => run_guided_action_picker(&registry, &context, surface),
     };
     let output = if parsed.structured {
-        serde_json::to_string(&result).expect("ActionResult serializes")
+        // The Wave 5 System disclosure is itself the output document: `ctrl system
+        // --json` returns the bare descriptor on stdout (the O:I composition kernel
+        // mount seam), not the ActionResult envelope.
+        if result.action.as_deref() == Some(crate::system_disclosure::SYSTEM_ACTION_ID)
+            && result.ok
+        {
+            match result.data.as_ref() {
+                Some(data) => serde_json::to_string(data).expect("disclosure serializes"),
+                None => serde_json::to_string(&result).expect("ActionResult serializes"),
+            }
+        } else {
+            serde_json::to_string(&result).expect("ActionResult serializes")
+        }
     } else {
         human_output(&result)
     };

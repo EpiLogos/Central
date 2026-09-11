@@ -477,7 +477,7 @@ fn action_list_has_human_and_structured_cli_renderings() {
     let actions = value["data"]["actions"].as_array().unwrap();
     let mut continuous = ActionRegistry::default();
     central_ctrl::continuous_work::register_actions(&mut continuous);
-    assert_eq!(actions.len(), 111 + continuous.list().len());
+    assert_eq!(actions.len(), 128 + continuous.list().len());
     for descriptor in continuous.list() {
         let actual = actions.iter().find(|action| action["id"] == descriptor.id)
             .unwrap_or_else(|| panic!("missing native continuous-work Action {}", descriptor.id));

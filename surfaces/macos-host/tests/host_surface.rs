@@ -74,7 +74,8 @@ mod unix_tests {
         let macos = create_macos_action_registry();
         let mut continuous = central_ctrl::ActionRegistry::default();
         central_ctrl::continuous_work::register_actions(&mut continuous);
-        assert_eq!(macos.list().len(), 91 + continuous.list().len());
+        assert_eq!(macos.list().len(), 107 + continuous.list().len());
+        assert!(macos.get("central.file-map.skill-tree").is_some());
         for descriptor in continuous.list() {
             assert_eq!(macos.get(&descriptor.id), Some(&descriptor),
                 "macOS host lost or changed native continuous-work Action {}", descriptor.id);

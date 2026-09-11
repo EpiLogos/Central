@@ -1,3 +1,11 @@
+mod file_map_moves;
+pub mod file_map;
+mod file_map_catalog;
+mod file_map_index;
+mod file_map_adoption;
+mod file_map_projection;
+mod file_map_skills;
+mod file_map_backend;
 pub mod action;
 pub mod agent_governance;
 pub mod agent_profile;
@@ -29,6 +37,7 @@ mod projectcentral_ops_base;
 pub mod source_history;
 #[path = "source_horizon_extensions.rs"]
 pub mod source_horizon;
+pub mod system_disclosure;
 pub mod template_stamp;
 pub mod wiki_read;
 pub mod world;
@@ -53,6 +62,7 @@ pub mod projectcentral_ops {
         super::projectcentral_now::register_projectcentral_now_actions(registry);
         super::projectcentral_flow::register_projectcentral_flow_actions(registry);
         super::source_horizon::register_source_horizon_actions(registry);
+        super::file_map::register(registry);
         super::source_history::register_source_history_actions(registry);
         super::world_source::register_world_source_actions(registry);
         super::wiki_read::register_projectcentral_wiki_read_action(registry);
@@ -292,6 +302,10 @@ pub use source_horizon::{
     content_revision, control_source_bindings, project_source_bindings,
     read_project_change_horizon, reconcile_control_sources, reconcile_project_source_writes,
     reconcile_project_sources,
+};
+pub use system_disclosure::{
+    SYSTEM_ACTION_ID, SYSTEM_CONTRACT_REVISION, SYSTEM_DISCLOSURE_SCHEMA, SYSTEM_OWNER_REF,
+    SYSTEM_PRODUCT_ID, SYSTEM_READING_COMMAND, register_system_disclosure_action,
 };
 pub use template_stamp::{
     StampFile, StampFileAction, StampScope, TemplateStampPlan, TemplateStampResult,

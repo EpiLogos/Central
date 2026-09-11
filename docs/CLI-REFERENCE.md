@@ -182,3 +182,11 @@ Returned work and Flow provider inspection:
 See [Source Return contract](SOURCE-RETURN.md). Flow read accepts optional `expected_revision`; source bodies are bounded to 4 MiB UTF-8 without NUL and retrieval-excluded material is refused.
 
 `central.recognize` takes an explicit absolute `path` and returns bounded structural recognition, canonical directory identity and read-only OS access observations without initialization/adoption or changing the active root. See [Chosen root recognition](ROOT-RECOGNITION.md).
+
+## Persistent file maps
+
+`central.file-map.*` provides the scoped bkmr-backed source/location operations,
+including inspect/register/refresh/search/resolve/locate, managed links and moves,
+explicit database/record adoption, skill-tree and projection receipts. The exact
+request/result contract and executable migration examples are in
+[integrations/BKMR-FILE-MAP.md](integrations/BKMR-FILE-MAP.md).
