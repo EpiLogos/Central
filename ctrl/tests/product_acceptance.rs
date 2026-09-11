@@ -32,7 +32,10 @@ fn not_agent_readable_control_subtree_is_excluded_from_stock_retrieval() {
 
     let result = search_control(&root, "needle").unwrap();
     assert_eq!(result.matches.len(), 1);
-    assert_eq!(result.matches[0].source_path, PathBuf::from("Control/user/ordinary.md"));
+    assert_eq!(
+        result.matches[0].source_path,
+        PathBuf::from("Control/user/ordinary.md")
+    );
     assert_eq!(result.files_scanned, 1);
     assert!(result.skipped_sources.iter().any(|source| {
         source.source_path == PathBuf::from("Control/user/private-context")
@@ -50,7 +53,11 @@ fn deleting_rebuildable_local_state_preserves_authored_control_and_work() {
     let root = temporary_directory("derived-state").join("Central");
     initialize_central(&root).unwrap();
 
-    fs::write(root.join("Control/user/preference.md"), "durable authored source\n").unwrap();
+    fs::write(
+        root.join("Control/user/preference.md"),
+        "durable authored source\n",
+    )
+    .unwrap();
     fs::create_dir_all(root.join("Work/project-a")).unwrap();
     fs::write(root.join("Work/project-a/README.md"), "ordinary work\n").unwrap();
     fs::write(root.join(".central/cache.json"), "{\"derived\":true}\n").unwrap();

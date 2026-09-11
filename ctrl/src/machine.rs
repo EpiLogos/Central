@@ -632,7 +632,10 @@ fn write_machine_declaration_value(
         ActionResult::failure(
             Some(action),
             ResultStatus::InternalFailure,
-            format!("Cannot write machine declaration {}: {error}", path.display()),
+            format!(
+                "Cannot write machine declaration {}: {error}",
+                path.display()
+            ),
             None,
         )
     };
@@ -705,7 +708,10 @@ fn adopt_current_action(
                 return ActionResult::failure(
                     Some(ACTION),
                     ResultStatus::InternalFailure,
-                    format!("Cannot read machine declaration {}: {error}", path.display()),
+                    format!(
+                        "Cannot read machine declaration {}: {error}",
+                        path.display()
+                    ),
                     None,
                 );
             }
@@ -2019,7 +2025,10 @@ pub fn explain_machine_declaration(data: &Value) -> String {
     if !bindings.is_empty() {
         lines.push("Bindings:".to_owned());
         for binding in bindings {
-            let kind = binding.get("kind").and_then(Value::as_str).unwrap_or_default();
+            let kind = binding
+                .get("kind")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             let reference = binding
                 .get("reference")
                 .and_then(Value::as_str)

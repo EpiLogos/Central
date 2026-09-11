@@ -1,7 +1,7 @@
 use central_ctrl::{
     create_core_action_registry, initialize_central, ActionExecutionContext, ConnectorContext,
-    ConnectorRegistry, InMemoryMachineConnector, MachineInspectionOutput, ResultStatus, RootOptions,
-    StaticMachineInspectorConnector,
+    ConnectorRegistry, InMemoryMachineConnector, MachineInspectionOutput, ResultStatus,
+    RootOptions, StaticMachineInspectorConnector,
 };
 use serde_json::{json, Value};
 use std::fs;
@@ -15,7 +15,10 @@ const SERVER_FIXTURE: &str =
     include_str!("../../skills/machine-declaration/fixtures/home-server.json");
 
 fn temporary_directory(label: &str) -> PathBuf {
-    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let path = std::env::temp_dir().join(format!(
         "central-machine-declaration-skill-{label}-{}-{nonce}",
         std::process::id()
@@ -57,9 +60,7 @@ fn plan_entry<'a>(plan: &'a Value, expected: &Value) -> &'a Value {
         .as_array()
         .unwrap()
         .iter()
-        .find(|entry| {
-            entry["kind"] == expected["kind"] && entry["id"] == expected["id"]
-        })
+        .find(|entry| entry["kind"] == expected["kind"] && entry["id"] == expected["id"])
         .expect("fixture requirement must appear in machine plan")
 }
 
@@ -85,21 +86,28 @@ fn skill_preserves_authorship_observation_ports_and_extension_handoffs() {
         "primary-workstation",
         "home-server",
     ] {
-        assert!(SKILL.contains(required), "Machine-declaration Skill is missing: {required}");
+        assert!(
+            SKILL.contains(required),
+            "Machine-declaration Skill is missing: {required}"
+        );
     }
 }
 
 #[test]
-fn workstation_fixture_keeps_authored_intent_separate_and_identifies_an_eligible_package_connector() {
+fn workstation_fixture_keeps_authored_intent_separate_and_identifies_an_eligible_package_connector()
+{
     let fixture: Value = serde_json::from_str(WORKSTATION_FIXTURE).unwrap();
     let root = prepare_root("workstation", &fixture);
-    let original = fs::read_to_string(root.join("Control/machines/primary-workstation.json")).unwrap();
+    let original =
+        fs::read_to_string(root.join("Control/machines/primary-workstation.json")).unwrap();
 
     let mut connectors = ConnectorRegistry::default();
     connectors
         .register(InMemoryMachineConnector::new(observation(&fixture)))
         .unwrap();
-    let connector_context = ConnectorContext { platform: "fixture-os".to_owned() };
+    let connector_context = ConnectorContext {
+        platform: "fixture-os".to_owned(),
+    };
     let root_options = RootOptions {
         explicit_root: Some(root.clone()),
         ..RootOptions::default()
@@ -145,12 +153,16 @@ fn workstation_fixture_keeps_authored_intent_separate_and_identifies_an_eligible
     assert_eq!(plan_data["summary"]["missing"], 0);
 
     let after = fs::read_to_string(root.join("Control/machines/primary-workstation.json")).unwrap();
-    assert_eq!(after, original, "inspection/planning must not mutate authored source");
+    assert_eq!(
+        after, original,
+        "inspection/planning must not mutate authored source"
+    );
     fs::remove_dir_all(root.parent().unwrap()).unwrap();
 }
 
 #[test]
-fn server_fixture_preserves_intent_when_configuration_port_is_missing_and_exposes_handoff_evidence() {
+fn server_fixture_preserves_intent_when_configuration_port_is_missing_and_exposes_handoff_evidence()
+{
     let fixture: Value = serde_json::from_str(SERVER_FIXTURE).unwrap();
     let root = prepare_root("server", &fixture);
     let original = fs::read_to_string(root.join("Control/machines/home-server.json")).unwrap();
@@ -159,7 +171,9 @@ fn server_fixture_preserves_intent_when_configuration_port_is_missing_and_expose
     connectors
         .register(StaticMachineInspectorConnector::new(observation(&fixture)))
         .unwrap();
-    let connector_context = ConnectorContext { platform: "fixture-os".to_owned() };
+    let connector_context = ConnectorContext {
+        platform: "fixture-os".to_owned(),
+    };
     let root_options = RootOptions {
         explicit_root: Some(root.clone()),
         ..RootOptions::default()
@@ -189,9 +203,14 @@ fn server_fixture_preserves_intent_when_configuration_port_is_missing_and_expose
         .unwrap()
         .contains("no eligible ConfigurationManager Connector is available"));
     assert_eq!(expected["handoff_skill"], "connector-authoring");
-    assert!(SKILL.contains("preserve the intended configuration requirement and create a Connector-authoring handoff"));
+    assert!(SKILL.contains(
+        "preserve the intended configuration requirement and create a Connector-authoring handoff"
+    ));
 
     let after = fs::read_to_string(root.join("Control/machines/home-server.json")).unwrap();
-    assert_eq!(after, original, "missing implementation must not rewrite authored intent");
+    assert_eq!(
+        after, original,
+        "missing implementation must not rewrite authored intent"
+    );
     fs::remove_dir_all(root.parent().unwrap()).unwrap();
 }

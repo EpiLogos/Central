@@ -1,8 +1,8 @@
 use central_ctrl::{
     apply_project_governance_relation, initialize_projectcentral, inspect_project_governance,
-    inspect_root_governance, plan_project_governance, GovernanceProvenance,
-    AGENT_GOVERNANCE_DIR, AGENT_RETRIEVAL_DENY_MARKER, GOVERNANCE_RELATIONS_SCHEMA,
-    GOVERNANCE_RELATIONS_SOURCE, ROOT_AGENT_GOVERNANCE_DIR,
+    inspect_root_governance, plan_project_governance, GovernanceProvenance, AGENT_GOVERNANCE_DIR,
+    AGENT_RETRIEVAL_DENY_MARKER, GOVERNANCE_RELATIONS_SCHEMA, GOVERNANCE_RELATIONS_SOURCE,
+    ROOT_AGENT_GOVERNANCE_DIR,
 };
 use serde_json::Value;
 use std::fs;
@@ -29,7 +29,9 @@ fn public_read_model_exposes_root_and_project_sources_without_precedence_claim()
     fs::create_dir_all(central.join(ROOT_AGENT_GOVERNANCE_DIR)).unwrap();
     fs::create_dir_all(&project).unwrap();
     fs::write(
-        central.join(ROOT_AGENT_GOVERNANCE_DIR).join("collaboration.md"),
+        central
+            .join(ROOT_AGENT_GOVERNANCE_DIR)
+            .join("collaboration.md"),
         "Use exact evidence for consequential completion claims.\n",
     )
     .unwrap();
@@ -46,7 +48,10 @@ fn public_read_model_exposes_root_and_project_sources_without_precedence_claim()
     assert_eq!(local.canonical_sources.len(), 1);
     assert_eq!(root.sources[0].scope, "cross-project");
     assert_eq!(local.canonical_sources[0].scope, "project");
-    assert_ne!(root.sources[0].source_ref, local.canonical_sources[0].source_ref);
+    assert_ne!(
+        root.sources[0].source_ref,
+        local.canonical_sources[0].source_ref
+    );
     assert_eq!(local.composition.operational_resolution_owner, "AIKit");
     assert!(!local.composition.operational_precedence_defined_by_central);
     assert!(local.composition.conflicts_must_remain_explainable);
@@ -83,10 +88,9 @@ fn project_native_instruction_can_be_adopted_in_place_with_relation_provenance()
         "Native project instruction.\n"
     );
 
-    let relation: Value = serde_json::from_slice(
-        &fs::read(project.join(GOVERNANCE_RELATIONS_SOURCE)).unwrap(),
-    )
-    .unwrap();
+    let relation: Value =
+        serde_json::from_slice(&fs::read(project.join(GOVERNANCE_RELATIONS_SOURCE)).unwrap())
+            .unwrap();
     assert_eq!(relation["schema"], GOVERNANCE_RELATIONS_SCHEMA);
     assert_eq!(relation["project_id"], "example/native");
     assert_eq!(relation["relations"][0]["path"], "AGENTS.md");
@@ -103,7 +107,11 @@ fn denied_governance_subtree_is_not_exposed_by_stock_agent_read_model() {
     let private = central.join(ROOT_AGENT_GOVERNANCE_DIR).join("private");
     fs::create_dir_all(&private).unwrap();
     fs::write(private.join(AGENT_RETRIEVAL_DENY_MARKER), "").unwrap();
-    fs::write(private.join("private.md"), "human source, not agent-readable\n").unwrap();
+    fs::write(
+        private.join("private.md"),
+        "human source, not agent-readable\n",
+    )
+    .unwrap();
 
     let inspection = inspect_root_governance(&central).unwrap();
     assert!(inspection.sources.is_empty());
@@ -119,9 +127,11 @@ fn maintenance_read_model_keeps_observation_proposal_and_skill_boundaries() {
     initialize_projectcentral(&central, &project, "example/maintenance").unwrap();
 
     let inspection = inspect_project_governance(&project).unwrap();
-    assert!(!inspection
-        .maintenance
-        .observation_automatically_mutates_governance);
+    assert!(
+        !inspection
+            .maintenance
+            .observation_automatically_mutates_governance
+    );
     assert!(inspection.maintenance.proposal_then_human_adoption);
     assert!(inspection.maintenance.pruning_is_normal_maintenance);
     assert!(inspection.maintenance.procedures_should_prefer_skills);

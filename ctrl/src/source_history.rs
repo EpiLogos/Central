@@ -166,7 +166,12 @@ fn observed_source(project_root: &Path, source_ref: &str) -> io::Result<(String,
         .sources
         .into_iter()
         .find(|source| source.binding.source_ref == source_ref)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "source_ref is not in the current Project horizon"))?;
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "source_ref is not in the current Project horizon",
+            )
+        })?;
     Ok((horizon.world_ref, source))
 }
 
@@ -181,20 +186,31 @@ fn require_retrieval(binding: &SourceBinding) -> io::Result<()> {
 }
 
 fn recognised_human_source(binding: &SourceBinding) -> bool {
-    matches!(binding.provenance.as_str(), "human-authored" | "human-adopted")
+    matches!(
+        binding.provenance.as_str(),
+        "human-authored" | "human-adopted"
+    )
 }
 
 fn port_io(error: PortError) -> io::Error {
     let kind = match error.code {
-        PortErrorCode::InvalidInput | PortErrorCode::InvalidConfiguration => io::ErrorKind::InvalidInput,
+        PortErrorCode::InvalidInput | PortErrorCode::InvalidConfiguration => {
+            io::ErrorKind::InvalidInput
+        }
         PortErrorCode::PermissionFailure => io::ErrorKind::PermissionDenied,
-        PortErrorCode::MissingDependency | PortErrorCode::CapabilityUnavailable => io::ErrorKind::NotFound,
+        PortErrorCode::MissingDependency | PortErrorCode::CapabilityUnavailable => {
+            io::ErrorKind::NotFound
+        }
         _ => io::ErrorKind::Other,
     };
     io::Error::new(kind, error.message)
 }
 
-fn project_root(action: &str, input: &Value, context: &ActionExecutionContext<'_>) -> Result<PathBuf, ActionResult> {
+fn project_root(
+    action: &str,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> Result<PathBuf, ActionResult> {
     let project = required(input, "project", action)?;
     if Path::new(&project).is_absolute()
         || !Path::new(&project)
@@ -260,7 +276,10 @@ fn resolve_provider<'a>(
         return Err(ActionResult::failure(
             Some(action),
             ResultStatus::UnavailableCapability,
-            format!("No eligible Connector implements {}.", SOURCE_HISTORY_PORT.id),
+            format!(
+                "No eligible Connector implements {}.",
+                SOURCE_HISTORY_PORT.id
+            ),
             Some(json!({ "port": SOURCE_HISTORY_PORT.id, "diagnostics": diagnostics })),
         ));
     };
@@ -284,38 +303,113 @@ fn action_failure(action: &str, error: io::Error) -> ActionResult {
     ActionResult::failure(Some(action), status, error.to_string(), None)
 }
 
-fn history_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn history_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.source.history";
-    let root = match project_root(action, input, context) { Ok(value) => value, Err(result) => return result };
-    let source_ref = match required(input, "source_ref", action) { Ok(value) => value, Err(result) => return result };
-    let provider = match resolve_provider(action, context) { Ok(value) => value, Err(result) => return result };
-    read_source_history(&root, &source_ref, number(input, "limit", 20).min(200), provider)
-        .map(|value| ActionResult::success(action, to_value(value).expect("history serialises")))
-        .unwrap_or_else(|error| action_failure(action, error))
+    let root = match project_root(action, input, context) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let source_ref = match required(input, "source_ref", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let provider = match resolve_provider(action, context) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    read_source_history(
+        &root,
+        &source_ref,
+        number(input, "limit", 20).min(200),
+        provider,
+    )
+    .map(|value| ActionResult::success(action, to_value(value).expect("history serialises")))
+    .unwrap_or_else(|error| action_failure(action, error))
 }
 
-fn compare_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn compare_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.source.compare";
-    let root = match project_root(action, input, context) { Ok(value) => value, Err(result) => return result };
-    let source_ref = match required(input, "source_ref", action) { Ok(value) => value, Err(result) => return result };
-    let from = match required(input, "from_revision", action) { Ok(value) => value, Err(result) => return result };
-    let to = match required(input, "to_revision", action) { Ok(value) => value, Err(result) => return result };
-    let provider = match resolve_provider(action, context) { Ok(value) => value, Err(result) => return result };
-    compare_source_history(&root, &source_ref, &from, &to, number(input, "max_bytes", 131_072).min(1_048_576), provider)
-        .map(|value| ActionResult::success(action, to_value(value).expect("comparison serialises")))
-        .unwrap_or_else(|error| action_failure(action, error))
+    let root = match project_root(action, input, context) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let source_ref = match required(input, "source_ref", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let from = match required(input, "from_revision", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let to = match required(input, "to_revision", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let provider = match resolve_provider(action, context) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    compare_source_history(
+        &root,
+        &source_ref,
+        &from,
+        &to,
+        number(input, "max_bytes", 131_072).min(1_048_576),
+        provider,
+    )
+    .map(|value| ActionResult::success(action, to_value(value).expect("comparison serialises")))
+    .unwrap_or_else(|error| action_failure(action, error))
 }
 
-fn recovery_preview_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn recovery_preview_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "projectcentral.source.recovery.preview";
-    let root = match project_root(action, input, context) { Ok(value) => value, Err(result) => return result };
-    let source_ref = match required(input, "source_ref", action) { Ok(value) => value, Err(result) => return result };
-    let expected = match required(input, "expected_content_revision", action) { Ok(value) => value, Err(result) => return result };
-    let historical = match required(input, "historical_revision", action) { Ok(value) => value, Err(result) => return result };
-    let provider = match resolve_provider(action, context) { Ok(value) => value, Err(result) => return result };
-    preview_source_recovery(&root, &source_ref, &expected, &historical, number(input, "max_bytes", 131_072).min(1_048_576), provider)
-        .map(|value| ActionResult::success(action, to_value(value).expect("recovery preview serialises")))
-        .unwrap_or_else(|error| action_failure(action, error))
+    let root = match project_root(action, input, context) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let source_ref = match required(input, "source_ref", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let expected = match required(input, "expected_content_revision", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let historical = match required(input, "historical_revision", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let provider = match resolve_provider(action, context) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    preview_source_recovery(
+        &root,
+        &source_ref,
+        &expected,
+        &historical,
+        number(input, "max_bytes", 131_072).min(1_048_576),
+        provider,
+    )
+    .map(|value| {
+        ActionResult::success(
+            action,
+            to_value(value).expect("recovery preview serialises"),
+        )
+    })
+    .unwrap_or_else(|error| action_failure(action, error))
 }
 
 fn text_input(name: &str, required: bool) -> ActionInputDefinition {
@@ -328,17 +422,28 @@ fn text_input(name: &str, required: bool) -> ActionInputDefinition {
     }
 }
 
-fn descriptor(id: &str, title: &str, description: &str, inputs: Vec<ActionInputDefinition>, output: &str) -> ActionDescriptor {
+fn descriptor(
+    id: &str,
+    title: &str,
+    description: &str,
+    inputs: Vec<ActionInputDefinition>,
+    output: &str,
+) -> ActionDescriptor {
     ActionDescriptor {
         id: id.to_owned(),
         title: title.to_owned(),
         description: description.to_owned(),
         inputs,
-        output: ActionOutputDefinition { output_type: output.to_owned() },
+        output: ActionOutputDefinition {
+            output_type: output.to_owned(),
+        },
         mutation_class: MutationClass::ReadOnly,
         preview_supported: false,
         required_ports: vec![SOURCE_HISTORY_PORT.id.to_owned()],
-        availability: ActionAvailability { available: true, reason: None },
+        availability: ActionAvailability {
+            available: true,
+            reason: None,
+        },
     }
 }
 
@@ -388,7 +493,9 @@ pub fn register_source_history_actions(registry: &mut ActionRegistry) {
         ),
     ];
     for (descriptor, handler) in definitions {
-        registry.register(descriptor, handler).expect("Source history Action ids are valid");
+        registry
+            .register(descriptor, handler)
+            .expect("Source history Action ids are valid");
     }
 }
 
@@ -396,7 +503,7 @@ pub fn register_source_history_actions(registry: &mut ActionRegistry) {
 mod tests {
     use super::*;
     use central_connector_sdk::{
-        SourceHistoryEntry, SourceHistoryOutput, SourceCompareOutput, SourceRevisionReadOutput,
+        SourceCompareOutput, SourceHistoryEntry, SourceHistoryOutput, SourceRevisionReadOutput,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -408,40 +515,63 @@ mod tests {
                 provider: "fake".into(),
                 source_path: input.source_path.clone(),
                 entries: vec![SourceHistoryEntry {
-                    revision: "git-a".into(), parents: vec![], subject: "initial".into(), author: None, authored_at: None,
+                    revision: "git-a".into(),
+                    parents: vec![],
+                    subject: "initial".into(),
+                    author: None,
+                    authored_at: None,
                 }],
             })
         }
         fn compare(&self, input: &SourceCompareRequest) -> Result<SourceCompareOutput, PortError> {
             Ok(SourceCompareOutput {
-                provider: "fake".into(), source_path: input.source_path.clone(),
-                from_revision: input.from_revision.clone(), to_revision: input.to_revision.clone(),
-                patch: "diff".into(), truncated: false,
+                provider: "fake".into(),
+                source_path: input.source_path.clone(),
+                from_revision: input.from_revision.clone(),
+                to_revision: input.to_revision.clone(),
+                patch: "diff".into(),
+                truncated: false,
             })
         }
-        fn read_revision(&self, input: &SourceRevisionReadRequest) -> Result<SourceRevisionReadOutput, PortError> {
+        fn read_revision(
+            &self,
+            input: &SourceRevisionReadRequest,
+        ) -> Result<SourceRevisionReadOutput, PortError> {
             Ok(SourceRevisionReadOutput {
-                provider: "fake".into(), source_path: input.source_path.clone(), revision: input.revision.clone(),
-                content: b"prior\n".to_vec(), truncated: false,
+                provider: "fake".into(),
+                source_path: input.source_path.clone(),
+                revision: input.revision.clone(),
+                content: b"prior\n".to_vec(),
+                truncated: false,
             })
         }
     }
 
     #[test]
     fn recovery_preview_refuses_to_read_candidate_after_basis_moves() {
-        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let root = std::env::temp_dir().join(format!("central-source-history-{nonce}"));
         fs::create_dir_all(root.join("ProjectCentral/user")).unwrap();
-        crate::projectcentral_ops::initialize_projectcentral(&root, &root, "example/history").unwrap();
+        crate::projectcentral_ops::initialize_projectcentral(&root, &root, "example/history")
+            .unwrap();
         let source = root.join("ProjectCentral/user/intent.md");
         fs::write(&source, "one\n").unwrap();
         let horizon = read_project_change_horizon(&root, None).unwrap();
-        let observed = horizon.sources.iter().find(|source| source.binding.path.ends_with("intent.md")).unwrap();
+        let observed = horizon
+            .sources
+            .iter()
+            .find(|source| source.binding.path.ends_with("intent.md"))
+            .unwrap();
         let source_ref = observed.binding.source_ref.clone();
         let basis = observed.revision.revision.clone();
         fs::write(&source, "two\n").unwrap();
 
-        let preview = preview_source_recovery(&root, &source_ref, &basis, "git-a", 1024, &FakeHistory).unwrap();
+        let preview =
+            preview_source_recovery(&root, &source_ref, &basis, "git-a", 1024, &FakeHistory)
+                .unwrap();
         assert!(!preview.basis_matches_current);
         assert!(preview.historical_content.is_none());
         assert!(!preview.mutation_performed);

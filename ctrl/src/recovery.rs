@@ -205,16 +205,17 @@ fn read_recovery_declaration(
     }))
 }
 
-fn synchronization_request(
-    authored: &AuthoredRecoveryDeclaration,
-) -> SynchronizationRequest {
+fn synchronization_request(authored: &AuthoredRecoveryDeclaration) -> SynchronizationRequest {
     let declaration = &authored.declaration.synchronization;
     SynchronizationRequest {
         id: declaration.id.clone(),
-        source: declaration.source.as_ref().map(|source| ReconciliationSourceReference {
-            kind: source.kind.clone(),
-            reference: source.reference.clone(),
-        }),
+        source: declaration
+            .source
+            .as_ref()
+            .map(|source| ReconciliationSourceReference {
+                kind: source.kind.clone(),
+                reference: source.reference.clone(),
+            }),
     }
 }
 
@@ -323,9 +324,8 @@ fn build_recovery_plan(
             nested_failure(action, "recovery declaration", result)
         }
     })?;
-    let synchronization = plan_synchronization(authored, context).map_err(|result| {
-        nested_failure(action, "synchronization preview", result)
-    })?;
+    let synchronization = plan_synchronization(authored, context)
+        .map_err(|result| nested_failure(action, "synchronization preview", result))?;
     Ok(RecoveryPlan {
         role,
         synchronization,
@@ -445,7 +445,11 @@ fn recover_action(
         let status = match machine_apply.status {
             ResultStatus::VerificationFailure => ResultStatus::VerificationFailure,
             ResultStatus::PartialCompletion => ResultStatus::PartialCompletion,
-            other if synchronization_result.as_ref().is_some_and(|result| result.changed) => {
+            other
+                if synchronization_result
+                    .as_ref()
+                    .is_some_and(|result| result.changed) =>
+            {
                 let _ = other;
                 ResultStatus::PartialCompletion
             }
@@ -478,7 +482,9 @@ fn recover_action(
         return ActionResult::failure(
             Some("central.recover"),
             ResultStatus::VerificationFailure,
-            format!("Recovery completed its mutation steps but final verification failed: {message}"),
+            format!(
+                "Recovery completed its mutation steps but final verification failed: {message}"
+            ),
             Some(json!({
                 "initial_plan": plan,
                 "synchronization": synchronization_result,
@@ -561,7 +567,10 @@ pub fn explain_recovery_plan(data: &Value) -> String {
 }
 
 pub fn explain_recovery(data: &Value) -> String {
-    let outcome = data.get("outcome").and_then(Value::as_str).unwrap_or("unknown");
+    let outcome = data
+        .get("outcome")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
     let sync_changed = data
         .get("synchronization")
         .and_then(|value| value.get("changed"))

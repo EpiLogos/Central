@@ -636,11 +636,9 @@ mod tests {
         );
         assert_eq!(project_profile.method_refs, personal_profile.method_refs);
         assert_eq!(project_profile.routine_refs, personal_profile.routine_refs);
-        assert!(
-            project_profile
-                .provenance_refs
-                .contains(&personal_profile.profile_ref)
-        );
+        assert!(project_profile
+            .provenance_refs
+            .contains(&personal_profile.profile_ref));
         project_profile.validate_against(&graph).unwrap();
     }
 
@@ -767,12 +765,10 @@ mod tests {
         }))
         .unwrap();
         assert!(profile.intent_provenance.is_none());
-        assert!(
-            serde_json::to_value(&profile)
-                .unwrap()
-                .get("intent_provenance")
-                .is_none()
-        );
+        assert!(serde_json::to_value(&profile)
+            .unwrap()
+            .get("intent_provenance")
+            .is_none());
     }
 
     #[test]

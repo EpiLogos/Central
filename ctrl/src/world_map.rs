@@ -29,8 +29,8 @@ use crate::action::{
 };
 use crate::control::AGENT_RETRIEVAL_DENY_MARKER;
 use crate::projectcentral::{
-    read_project_manifest, AGENT_GOVERNANCE_DIR, HUMAN_SOURCE_DIR, PROJECTCENTRAL_DIR,
-    PROJECT_MANIFEST, ProjectCentralManifest, ROOT_WIKI_SOURCE, WIKI_DIR, WIKI_PROFILE, WIKI_SOURCE,
+    read_project_manifest, ProjectCentralManifest, AGENT_GOVERNANCE_DIR, HUMAN_SOURCE_DIR,
+    PROJECTCENTRAL_DIR, PROJECT_MANIFEST, ROOT_WIKI_SOURCE, WIKI_DIR, WIKI_PROFILE, WIKI_SOURCE,
 };
 use crate::projectcentral_flow::{
     content_revision_bytes, registered_flow_records, relative_member, FLOW_HISTORY_DIR,
@@ -38,8 +38,8 @@ use crate::projectcentral_flow::{
 };
 use crate::projectcentral_now::{inspect_now, NOW_DIR};
 use crate::projectcentral_ops::{
-    project_space_ref, project_wiki_value, write_json_new, doctor_projectcentral,
-    inspect_projectcentral, DoctorCheck, ProjectCentralDoctor, ProjectCentralOutcome, WikiCandidate,
+    doctor_projectcentral, inspect_projectcentral, project_space_ref, project_wiki_value,
+    write_json_new, DoctorCheck, ProjectCentralDoctor, ProjectCentralOutcome, WikiCandidate,
     PROJECT_PROVENANCE,
 };
 use crate::result::{ActionResult, ResultStatus};
@@ -432,7 +432,9 @@ fn count_files(directory: &Path, depth: usize, excluded: &[&str], count: &mut us
     let mut entries = entries.collect::<Result<Vec<_>, _>>().unwrap_or_default();
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
-        let Ok(file_type) = entry.file_type() else { continue };
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
         if file_type.is_symlink() {
             continue;
         }
@@ -454,7 +456,11 @@ fn source_area(central_root: &Path, relative: &str) -> SourceArea {
     if exists {
         count_files(&path, 0, &[], &mut sources);
     }
-    SourceArea { path: relative.to_owned(), exists, sources }
+    SourceArea {
+        path: relative.to_owned(),
+        exists,
+        sources,
+    }
 }
 
 fn read_small_json(path: &Path) -> Result<Value, String> {
@@ -555,7 +561,10 @@ fn relations_state(
             return state;
         }
     };
-    let declared_schema = value.get("schema").and_then(Value::as_str).map(str::to_owned);
+    let declared_schema = value
+        .get("schema")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     if declared_schema.as_deref() != Some(schema) {
         state.error = Some(format!(
             "relations schema must be {schema}, found {}",
@@ -564,7 +573,10 @@ fn relations_state(
         return state;
     }
     if let Some(expected) = world_id {
-        let declared_id = value.get("project_id").and_then(Value::as_str).map(str::to_owned);
+        let declared_id = value
+            .get("project_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         if declared_id.as_deref() != Some(expected) {
             state.error = Some(format!(
                 "relations world id must be {expected}, found {}",
@@ -593,7 +605,11 @@ fn plain_relations(relative: &str) -> RelationsState {
 }
 
 fn absent_area(relative: &str) -> SourceArea {
-    SourceArea { path: relative.to_owned(), exists: false, sources: 0 }
+    SourceArea {
+        path: relative.to_owned(),
+        exists: false,
+        sources: 0,
+    }
 }
 
 fn absent_wiki_area(relative: &str) -> WikiArea {
@@ -672,7 +688,8 @@ fn map_flows(project_root: &Path) -> FlowState {
         if source_present {
             match fs::read(&source) {
                 Ok(bytes) => {
-                    uncommitted_edits = Some(content_revision_bytes(&bytes) != record.current_revision)
+                    uncommitted_edits =
+                        Some(content_revision_bytes(&bytes) != record.current_revision)
                 }
                 Err(_) => source_present = false,
             }
@@ -738,7 +755,10 @@ fn project_area(project_root: &Path, dir: &str, relative: &str) -> SourceArea {
 
 fn map_control(central_root: &Path) -> ControlMap {
     let user = source_area(central_root, crate::projectcentral::ROOT_HUMAN_SOURCE_DIR);
-    let agent_governance = source_area(central_root, crate::projectcentral::ROOT_AGENT_GOVERNANCE_DIR);
+    let agent_governance = source_area(
+        central_root,
+        crate::projectcentral::ROOT_AGENT_GOVERNANCE_DIR,
+    );
     let agent_expressions = source_area(central_root, ROOT_AGENT_EXPRESSIONS_DIR);
     let machines = source_area(central_root, ROOT_MACHINES_DIR);
     let wiki = wiki_space(&central_root.join(ROOT_WIKI_SOURCE), ROOT_WIKI_SOURCE);
@@ -767,20 +787,20 @@ fn map_control(central_root: &Path) -> ControlMap {
     // The Control tree walk is the same one the Source Change Horizon uses: the
     // tree stamps every source `unresolved`, and declared relations override it.
     let mut bindings_error = None;
-    let (source_bindings, unresolved_provenance_sources) = match control_source_bindings(central_root)
-    {
-        Ok(bindings) => (
-            bindings.len(),
-            bindings
-                .iter()
-                .filter(|binding| binding.provenance == "unresolved")
-                .count(),
-        ),
-        Err(error) => {
-            bindings_error = Some(format!("Control source bindings cannot be read: {error}"));
-            (0, 0)
-        }
-    };
+    let (source_bindings, unresolved_provenance_sources) =
+        match control_source_bindings(central_root) {
+            Ok(bindings) => (
+                bindings.len(),
+                bindings
+                    .iter()
+                    .filter(|binding| binding.provenance == "unresolved")
+                    .count(),
+            ),
+            Err(error) => {
+                bindings_error = Some(format!("Control source bindings cannot be read: {error}"));
+                (0, 0)
+            }
+        };
 
     ControlMap {
         path: "Control".to_owned(),
@@ -805,8 +825,14 @@ fn canonical_missing(project_root: &Path) -> Vec<String> {
             project_root.join(PROJECTCENTRAL_DIR).join(PROJECT_MANIFEST),
             format!("{PROJECTCENTRAL_DIR}/{PROJECT_MANIFEST}"),
         ),
-        (project_root.join(HUMAN_SOURCE_DIR), HUMAN_SOURCE_DIR.to_owned()),
-        (project_root.join(AGENT_GOVERNANCE_DIR), AGENT_GOVERNANCE_DIR.to_owned()),
+        (
+            project_root.join(HUMAN_SOURCE_DIR),
+            HUMAN_SOURCE_DIR.to_owned(),
+        ),
+        (
+            project_root.join(AGENT_GOVERNANCE_DIR),
+            AGENT_GOVERNANCE_DIR.to_owned(),
+        ),
         (project_root.join(WIKI_DIR), WIKI_DIR.to_owned()),
         (project_root.join(WIKI_SOURCE), WIKI_SOURCE.to_owned()),
     ]
@@ -880,7 +906,10 @@ fn map_projectcentral(
         .is_file();
     let (state, missing) = if !manifest_present {
         // No manifest to interpret: name what the canonical fractal is missing.
-        (ProjectCentralState::Partial, canonical_missing(project_root))
+        (
+            ProjectCentralState::Partial,
+            canonical_missing(project_root),
+        )
     } else {
         let outcome = inspection.as_ref().map(|value| value.outcome);
         let doctor_valid = doctor.as_ref().is_some_and(|report| report.valid);
@@ -895,13 +924,21 @@ fn map_projectcentral(
         }
     };
 
-    let user = project_area(project_root, HUMAN_SOURCE_DIR, &format!("{projectcentral_path}/user"));
+    let user = project_area(
+        project_root,
+        HUMAN_SOURCE_DIR,
+        &format!("{projectcentral_path}/user"),
+    );
     let agent_governance = project_area(
         project_root,
         AGENT_GOVERNANCE_DIR,
         &format!("{projectcentral_path}/agents/governance"),
     );
-    let wiki_area = project_area(project_root, WIKI_DIR, &format!("{projectcentral_path}/agents/wiki"));
+    let wiki_area = project_area(
+        project_root,
+        WIKI_DIR,
+        &format!("{projectcentral_path}/agents/wiki"),
+    );
 
     ProjectCentralMap {
         state,
@@ -909,7 +946,9 @@ fn map_projectcentral(
         missing: Some(missing).filter(|values| !values.is_empty()),
         outcome: inspection.as_ref().map(|value| value.outcome),
         reason: inspection.as_ref().map(|value| value.reason.clone()),
-        manifest_errors: inspection.as_ref().map(|value| value.manifest_errors.clone()),
+        manifest_errors: inspection
+            .as_ref()
+            .map(|value| value.manifest_errors.clone()),
         user,
         agent_governance,
         agent_wiki: WikiArea {
@@ -923,7 +962,9 @@ fn map_projectcentral(
         },
         flows: map_flows(project_root),
         now: map_now(project_root, &projectcentral_path),
-        wiki_candidates: inspection.as_ref().map(|value| value.wiki_candidates.clone()),
+        wiki_candidates: inspection
+            .as_ref()
+            .map(|value| value.wiki_candidates.clone()),
         relations: relations_state(
             &project_root.join(GROUND_RELATIONS_SOURCE),
             &format!("{relative}/{GROUND_RELATIONS_SOURCE}"),
@@ -1048,7 +1089,9 @@ fn summarize_project_sources(project_root: &Path) -> ProjectSourceSummary {
                 }
             }
         }
-        Err(error) => summary.error = Some(format!("project source bindings cannot be read: {error}")),
+        Err(error) => {
+            summary.error = Some(format!("project source bindings cannot be read: {error}"))
+        }
     }
     summary
 }
@@ -1056,7 +1099,10 @@ fn summarize_project_sources(project_root: &Path) -> ProjectSourceSummary {
 /// The world projected at Project scope, centred on one ProjectCentral.
 pub fn map_project_world(central_root: &Path, name: &str) -> io::Result<ProjectWorldMap> {
     if !central_root.join("Work").is_dir() {
-        return Err(io::Error::new(io::ErrorKind::NotFound, "Work does not exist in this Central root"));
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "Work does not exist in this Central root",
+        ));
     }
     let name = validated_project_name(name)?;
     let (project_root, _) = project_root_of(central_root, &name)?;
@@ -1113,8 +1159,14 @@ pub fn map_project_world(central_root: &Path, name: &str) -> io::Result<ProjectW
 /// provenance receipt are deliberately absent from this list — both are
 /// authored or earned, never stamped.
 fn canonical_scaffold(project: &str) -> Vec<ScaffoldStep> {
-    let directory = |path: String| ScaffoldStep { path, kind: ScaffoldKind::Directory };
-    let file = |path: String| ScaffoldStep { path, kind: ScaffoldKind::File };
+    let directory = |path: String| ScaffoldStep {
+        path,
+        kind: ScaffoldKind::Directory,
+    };
+    let file = |path: String| ScaffoldStep {
+        path,
+        kind: ScaffoldKind::File,
+    };
     vec![
         directory(format!("{project}/{PROJECTCENTRAL_DIR}")),
         file(format!("{project}/{PROJECTCENTRAL_DIR}/{PROJECT_MANIFEST}")),
@@ -1188,7 +1240,9 @@ fn classify_left_alone(
         let mut entries = entries.collect::<Result<Vec<_>, _>>().unwrap_or_default();
         entries.sort_by_key(|entry| entry.file_name());
         for entry in entries {
-            let Ok(file_type) = entry.file_type() else { continue };
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
             let path = entry.path();
             let relative = path
                 .strip_prefix(project_root)
@@ -1212,7 +1266,13 @@ fn classify_left_alone(
             } else {
                 "out-of-place inside ProjectCentral; left exactly where it is".to_owned()
             };
-            classified.push(ProvenanceClassified { path: relative, provenance, standing, treatment, note });
+            classified.push(ProvenanceClassified {
+                path: relative,
+                provenance,
+                standing,
+                treatment,
+                note,
+            });
         }
     }
     classified
@@ -1244,8 +1304,8 @@ fn disclose_blocked_manifest(
 }
 
 fn validated_project_name(name: &str) -> io::Result<String> {
-    let validated =
-        relative_member(name).map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
+    let validated = relative_member(name)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
     Ok(validated.to_string_lossy().replace('\\', "/"))
 }
 
@@ -1331,7 +1391,11 @@ fn survey_scaffold(central_root: &Path, project: &str) -> ScaffoldSurvey {
                 treatment: None,
                 note: format!(
                     "a {} occupies the canonical {} path; left exactly where it is",
-                    if kind == ScaffoldKind::Directory { "file" } else { "directory" },
+                    if kind == ScaffoldKind::Directory {
+                        "file"
+                    } else {
+                        "directory"
+                    },
                     kind.as_str()
                 ),
             }),
@@ -1342,7 +1406,8 @@ fn survey_scaffold(central_root: &Path, project: &str) -> ScaffoldSurvey {
 
 pub fn plan_reproject(central_root: &Path, name: &str) -> io::Result<ReprojectPlan> {
     let (project_root, project) = project_root_of(central_root, name)?;
-    let (project_id, project_id_source, identity_error) = reprojection_identity(&project_root, name);
+    let (project_id, project_id_source, identity_error) =
+        reprojection_identity(&project_root, name);
     let survey = survey_scaffold(central_root, &project);
     let noop = survey.missing.is_empty();
     let mut left_alone = classify_left_alone(&project_root, &project, &survey.canonical);
@@ -1384,7 +1449,8 @@ pub fn plan_reproject(central_root: &Path, name: &str) -> io::Result<ReprojectPl
 
 pub fn apply_reproject(central_root: &Path, name: &str) -> io::Result<ReprojectReceipt> {
     let (project_root, project) = project_root_of(central_root, name)?;
-    let (project_id, _project_id_source, identity_error) = reprojection_identity(&project_root, name);
+    let (project_id, _project_id_source, identity_error) =
+        reprojection_identity(&project_root, name);
     let survey = survey_scaffold(central_root, &project);
     let mut left_alone = classify_left_alone(&project_root, &project, &survey.canonical);
     disclose_blocked_manifest(&project_root, &identity_error, &mut left_alone);
@@ -1408,7 +1474,10 @@ pub fn apply_reproject(central_root: &Path, name: &str) -> io::Result<ReprojectR
                     continue;
                 }
                 let project_id = project_id.as_deref().unwrap_or_default();
-                let value = if step.path.ends_with(&format!("{PROJECTCENTRAL_DIR}/{PROJECT_MANIFEST}")) {
+                let value = if step
+                    .path
+                    .ends_with(&format!("{PROJECTCENTRAL_DIR}/{PROJECT_MANIFEST}"))
+                {
                     serde_json::to_value(ProjectCentralManifest::new(project_id))
                         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?
                 } else if step.path.ends_with(WIKI_SOURCE) {
@@ -1447,7 +1516,11 @@ fn count_phrase(area: &Value) -> String {
 }
 
 fn wiki_phrase(wiki: &Value) -> Option<String> {
-    if !wiki.get("present").and_then(Value::as_bool).unwrap_or(false) {
+    if !wiki
+        .get("present")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
         return Some("no wiki".to_owned());
     }
     if let Some(error) = wiki.get("error").and_then(Value::as_str) {
@@ -1470,14 +1543,22 @@ fn wiki_phrase(wiki: &Value) -> Option<String> {
         None => format!("wiki {space_ref}"),
     };
     if children > 0 {
-        let refs = if children == 1 { "child ref" } else { "child refs" };
+        let refs = if children == 1 {
+            "child ref"
+        } else {
+            "child refs"
+        };
         phrase.push_str(&format!("; {children} {refs}; {dangling} dangling"));
     }
     Some(phrase)
 }
 
 fn flow_phrase(flows: &Value) -> Option<String> {
-    let count = flows.get("flows").and_then(Value::as_array).map(Vec::len).unwrap_or(0);
+    let count = flows
+        .get("flows")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
     let active = flows.get("active").and_then(Value::as_u64).unwrap_or(0);
     let dirty = flows
         .get("flows")
@@ -1499,9 +1580,7 @@ fn flow_phrase(flows: &Value) -> Option<String> {
     }
     phrase.push_str(&format!(" ({active} active"));
     if dirty > 0 {
-        phrase.push_str(&format!(
-            "; {dirty} with uncommitted edits",
-        ));
+        phrase.push_str(&format!("; {dirty} with uncommitted edits",));
     }
     phrase.push(')');
     if let Some(error) = flows.get("error").and_then(Value::as_str) {
@@ -1515,10 +1594,16 @@ fn now_phrase(now: &Value) -> String {
         return "now absent".to_owned();
     }
     let active = now.get("active_items").and_then(Value::as_u64).unwrap_or(0);
-    let questions = now.get("open_questions").and_then(Value::as_u64).unwrap_or(0);
+    let questions = now
+        .get("open_questions")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let mut phrase = format!("now {active} active");
     if questions > 0 {
-        phrase.push_str(&format!(", {questions} open question{}", if questions == 1 { "" } else { "s" }));
+        phrase.push_str(&format!(
+            ", {questions} open question{}",
+            if questions == 1 { "" } else { "s" }
+        ));
     }
     if let Some(error) = now.get("error").and_then(Value::as_str) {
         phrase.push_str(&format!(" ({error})"));
@@ -1588,7 +1673,10 @@ pub fn explain_world_map(data: &Value) -> String {
         .map(Vec::as_slice)
         .unwrap_or(&[])
     {
-        let name = project.get("name").and_then(Value::as_str).unwrap_or_default();
+        let name = project
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let mut parts = vec![name.to_owned()];
         let projectcentral = project.get("projectcentral").unwrap_or(&Value::Null);
         let state = projectcentral
@@ -1635,7 +1723,9 @@ pub fn explain_world_map(data: &Value) -> String {
         if let Some(phrase) = flow_phrase(projectcentral.get("flows").unwrap_or(&Value::Null)) {
             parts.push(phrase);
         }
-        parts.push(now_phrase(projectcentral.get("now").unwrap_or(&Value::Null)));
+        parts.push(now_phrase(
+            projectcentral.get("now").unwrap_or(&Value::Null),
+        ));
         let overrides = projectcentral
             .get("relations")
             .and_then(|relations| relations.get("declared_overrides"))
@@ -1664,8 +1754,14 @@ pub fn explain_project_world_map(data: &Value) -> String {
         .and_then(Value::as_str)
         .unwrap_or("unknown");
     let project = data.get("project").unwrap_or(&Value::Null);
-    let name = project.get("name").and_then(Value::as_str).unwrap_or_default();
-    let path = project.get("path").and_then(Value::as_str).unwrap_or_default();
+    let name = project
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let path = project
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let mut lines = vec![format!(
         "{root} — Central ground {ground_state} — project {name} ({path})"
     )];
@@ -1686,10 +1782,7 @@ pub fn explain_project_world_map(data: &Value) -> String {
     }
     lines.push(head);
     for area in ["user", "agent_governance"] {
-        lines.push(format!(
-            "    {}",
-            count_phrase(&projectcentral[area])
-        ));
+        lines.push(format!("    {}", count_phrase(&projectcentral[area])));
     }
     if let Some(area) = projectcentral.get("agent_wiki") {
         match area.get("wiki").and_then(wiki_phrase) {
@@ -1711,7 +1804,10 @@ pub fn explain_project_world_map(data: &Value) -> String {
     if let Some(phrase) = flow_phrase(projectcentral.get("flows").unwrap_or(&Value::Null)) {
         lines.push(format!("    {phrase}"));
     }
-    lines.push(format!("    {}", now_phrase(projectcentral.get("now").unwrap_or(&Value::Null))));
+    lines.push(format!(
+        "    {}",
+        now_phrase(projectcentral.get("now").unwrap_or(&Value::Null))
+    ));
 
     let sources = data.get("sources").unwrap_or(&Value::Null);
     let mut sources_line = format!(
@@ -1739,12 +1835,21 @@ pub fn explain_project_world_map(data: &Value) -> String {
         .unwrap_or_else(|| "?".to_owned());
     lines.push(format!(
         "  under {} — project {index} of {}",
-        position.get("work_root").and_then(Value::as_str).unwrap_or("Work"),
-        position.get("project_count").and_then(Value::as_u64).unwrap_or(0),
+        position
+            .get("work_root")
+            .and_then(Value::as_str)
+            .unwrap_or("Work"),
+        position
+            .get("project_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
     ));
     lines.push(format!(
         "  {} project files",
-        project.get("source_files").and_then(Value::as_u64).unwrap_or(0)
+        project
+            .get("source_files")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
     ));
     lines.join("\n")
 }
@@ -1756,7 +1861,10 @@ fn stamp_phrase(step: &Value) -> String {
 }
 
 fn reproject_lines(data: &Value, stamped_key: &str) -> Vec<String> {
-    let project = data.get("project").and_then(Value::as_str).unwrap_or_default();
+    let project = data
+        .get("project")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let projectcentral = data
         .get("projectcentral")
         .and_then(Value::as_str)
@@ -1770,7 +1878,11 @@ fn reproject_lines(data: &Value, stamped_key: &str) -> Vec<String> {
     if applying {
         lines.push(format!("  {projectcentral}"));
     }
-    let step_label = if applying { "  stamped:" } else { "  would stamp:" };
+    let step_label = if applying {
+        "  stamped:"
+    } else {
+        "  would stamp:"
+    };
     let empty_label = if applying {
         "  stamped nothing — nothing was missing"
     } else {
@@ -1789,9 +1901,18 @@ fn reproject_lines(data: &Value, stamped_key: &str) -> Vec<String> {
     if let Some(alone) = data.get("left_alone").and_then(Value::as_array) {
         lines.push(format!("  left alone — {} entries", alone.len()));
         for entry in alone {
-            let path = entry.get("path").and_then(Value::as_str).unwrap_or_default();
-            let provenance = entry.get("provenance").and_then(Value::as_str).unwrap_or("?");
-            let note = entry.get("note").and_then(Value::as_str).unwrap_or_default();
+            let path = entry
+                .get("path")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let provenance = entry
+                .get("provenance")
+                .and_then(Value::as_str)
+                .unwrap_or("?");
+            let note = entry
+                .get("note")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             lines.push(format!("    - {path} [{provenance}] {note}"));
         }
     }
@@ -1895,10 +2016,17 @@ fn central_root(context: &ActionExecutionContext<'_>) -> Result<PathBuf, ActionR
 }
 
 fn serialized<T: Serialize>(action: &str, value: T) -> ActionResult {
-    ActionResult::success(action, serde_json::to_value(value).expect("world map serializes"))
+    ActionResult::success(
+        action,
+        serde_json::to_value(value).expect("world map serializes"),
+    )
 }
 
-fn world_action(_: &ActionRegistry, _: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn world_action(
+    _: &ActionRegistry,
+    _: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "central.world";
     let root = match central_root(context) {
         Ok(root) => root,
@@ -1906,67 +2034,142 @@ fn world_action(_: &ActionRegistry, _: &Value, context: &ActionExecutionContext<
     };
     match map_world(&root) {
         Ok(map) => serialized(action, map),
-        Err(error) => ActionResult::failure(Some(action), ResultStatus::InternalFailure, error.to_string(), None),
+        Err(error) => ActionResult::failure(
+            Some(action),
+            ResultStatus::InternalFailure,
+            error.to_string(),
+            None,
+        ),
     }
 }
 
-fn project_world_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn project_world_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "central.world.project";
     let root = match central_root(context) {
         Ok(root) => root,
         Err(result) => return result,
     };
     let Some(name) = input.get("project").and_then(Value::as_str) else {
-        return ActionResult::failure(Some(action), ResultStatus::InvalidInput, "central.world.project requires project.".to_owned(), None);
+        return ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            "central.world.project requires project.".to_owned(),
+            None,
+        );
     };
     match map_project_world(&root, name) {
         Ok(map) => serialized(action, map),
-        Err(error) if error.kind() == io::ErrorKind::NotFound || error.kind() == io::ErrorKind::InvalidInput => {
-            ActionResult::failure(Some(action), ResultStatus::InvalidInput, error.to_string(), None)
+        Err(error)
+            if error.kind() == io::ErrorKind::NotFound
+                || error.kind() == io::ErrorKind::InvalidInput =>
+        {
+            ActionResult::failure(
+                Some(action),
+                ResultStatus::InvalidInput,
+                error.to_string(),
+                None,
+            )
         }
-        Err(error) => ActionResult::failure(Some(action), ResultStatus::InternalFailure, error.to_string(), None),
+        Err(error) => ActionResult::failure(
+            Some(action),
+            ResultStatus::InternalFailure,
+            error.to_string(),
+            None,
+        ),
     }
 }
 
-fn reproject_plan_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn reproject_plan_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "central.world.reproject.plan";
     let root = match central_root(context) {
         Ok(root) => root,
         Err(result) => return result,
     };
     let Some(name) = input.get("project").and_then(Value::as_str) else {
-        return ActionResult::failure(Some(action), ResultStatus::InvalidInput, "central.world.reproject.plan requires project.".to_owned(), None);
+        return ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            "central.world.reproject.plan requires project.".to_owned(),
+            None,
+        );
     };
     match plan_reproject(&root, name) {
         Ok(plan) => serialized(action, plan),
-        Err(error) if error.kind() == io::ErrorKind::NotFound || error.kind() == io::ErrorKind::InvalidInput => {
-            ActionResult::failure(Some(action), ResultStatus::InvalidInput, error.to_string(), None)
+        Err(error)
+            if error.kind() == io::ErrorKind::NotFound
+                || error.kind() == io::ErrorKind::InvalidInput =>
+        {
+            ActionResult::failure(
+                Some(action),
+                ResultStatus::InvalidInput,
+                error.to_string(),
+                None,
+            )
         }
-        Err(error) => ActionResult::failure(Some(action), ResultStatus::InternalFailure, error.to_string(), None),
+        Err(error) => ActionResult::failure(
+            Some(action),
+            ResultStatus::InternalFailure,
+            error.to_string(),
+            None,
+        ),
     }
 }
 
-fn reproject_apply_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn reproject_apply_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "central.world.reproject.apply";
     let root = match central_root(context) {
         Ok(root) => root,
         Err(result) => return result,
     };
     let Some(name) = input.get("project").and_then(Value::as_str) else {
-        return ActionResult::failure(Some(action), ResultStatus::InvalidInput, "central.world.reproject.apply requires project.".to_owned(), None);
+        return ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            "central.world.reproject.apply requires project.".to_owned(),
+            None,
+        );
     };
     match apply_reproject(&root, name) {
         Ok(receipt) => serialized(action, receipt),
-        Err(error) if error.kind() == io::ErrorKind::NotFound || error.kind() == io::ErrorKind::InvalidInput => {
-            ActionResult::failure(Some(action), ResultStatus::InvalidInput, error.to_string(), None)
+        Err(error)
+            if error.kind() == io::ErrorKind::NotFound
+                || error.kind() == io::ErrorKind::InvalidInput =>
+        {
+            ActionResult::failure(
+                Some(action),
+                ResultStatus::InvalidInput,
+                error.to_string(),
+                None,
+            )
         }
-        Err(error) => ActionResult::failure(Some(action), ResultStatus::InternalFailure, error.to_string(), None),
+        Err(error) => ActionResult::failure(
+            Some(action),
+            ResultStatus::InternalFailure,
+            error.to_string(),
+            None,
+        ),
     }
 }
 
 pub fn register_world_map_actions(registry: &mut ActionRegistry) {
     let actions = [
-        (world_descriptor(), world_action as fn(&ActionRegistry, &Value, &ActionExecutionContext<'_>) -> ActionResult),
+        (
+            world_descriptor(),
+            world_action
+                as fn(&ActionRegistry, &Value, &ActionExecutionContext<'_>) -> ActionResult,
+        ),
         (project_world_descriptor(), project_world_action),
         (reproject_plan_descriptor(), reproject_plan_action),
         (reproject_apply_descriptor(), reproject_apply_action),
@@ -2034,6 +2237,9 @@ mod tests {
         assert!(wiki.dangling_child_space_refs.is_empty());
 
         mark_dangling(&mut wiki, &BTreeSet::new());
-        assert_eq!(wiki.dangling_child_space_refs, vec!["central:wiki:project:a"]);
+        assert_eq!(
+            wiki.dangling_child_space_refs,
+            vec!["central:wiki:project:a"]
+        );
     }
 }

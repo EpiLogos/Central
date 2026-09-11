@@ -12,9 +12,7 @@ use crate::action::{
 };
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
-use crate::source_horizon::{
-    content_revision, source_ref, SourceRevision, CONTROL_WORLD_REF,
-};
+use crate::source_horizon::{content_revision, source_ref, SourceRevision, CONTROL_WORLD_REF};
 use serde::Serialize;
 use serde_json::Value;
 use std::fs;
@@ -39,7 +37,10 @@ pub struct EngineeringGroundRender {
     pub revision: SourceRevision,
 }
 
-fn statement_section(central_root: &Path, file: &str) -> io::Result<Option<(String, String, String)>> {
+fn statement_section(
+    central_root: &Path,
+    file: &str,
+) -> io::Result<Option<(String, String, String)>> {
     let path = central_root.join(ENGINEERING_GROUND_DIR).join(file);
     if !path.is_file() {
         return Ok(None);
@@ -62,7 +63,10 @@ fn statement_section(central_root: &Path, file: &str) -> io::Result<Option<(Stri
     }
     let title = title.unwrap_or_else(|| file.trim_end_matches(".md").to_owned());
     let body = body_lines.join("\n");
-    let reference = source_ref(CONTROL_WORLD_REF, &format!("{ENGINEERING_GROUND_DIR}/{file}"));
+    let reference = source_ref(
+        CONTROL_WORLD_REF,
+        &format!("{ENGINEERING_GROUND_DIR}/{file}"),
+    );
     Ok(Some((title, body, reference)))
 }
 
@@ -70,9 +74,7 @@ pub fn render_engineering_ground(central_root: &Path) -> io::Result<String> {
     let mut sections = Vec::new();
     for file in ENGINEERING_GROUND_STATEMENTS {
         if let Some((title, body, reference)) = statement_section(central_root, file)? {
-            let revision = content_revision(
-                &central_root.join(ENGINEERING_GROUND_DIR).join(file),
-            )?;
+            let revision = content_revision(&central_root.join(ENGINEERING_GROUND_DIR).join(file))?;
             sections.push((title, body, reference, revision.revision));
         }
     }
@@ -121,7 +123,11 @@ pub fn write_engineering_ground(central_root: &Path) -> io::Result<EngineeringGr
     })
 }
 
-fn plan_action(_: &ActionRegistry, _: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn plan_action(
+    _: &ActionRegistry,
+    _: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "control.engineering-ground.plan";
     let root = match resolve_central_root(context.root_options) {
         Ok(root) => root.path,
@@ -144,7 +150,11 @@ fn plan_action(_: &ActionRegistry, _: &Value, context: &ActionExecutionContext<'
         .unwrap_or_else(|error| io_failure(action, error))
 }
 
-fn render_action(_: &ActionRegistry, _: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn render_action(
+    _: &ActionRegistry,
+    _: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     let action = "control.engineering-ground.render";
     let root = match resolve_central_root(context.root_options) {
         Ok(root) => root.path,
@@ -154,7 +164,10 @@ fn render_action(_: &ActionRegistry, _: &Value, context: &ActionExecutionContext
     };
     write_engineering_ground(&root)
         .map(|value| {
-            ActionResult::success(action, serde_json::to_value(value).expect("render serializes"))
+            ActionResult::success(
+                action,
+                serde_json::to_value(value).expect("render serializes"),
+            )
         })
         .unwrap_or_else(|error| io_failure(action, error))
 }
@@ -168,17 +181,28 @@ fn io_failure(action: &str, error: io::Error) -> ActionResult {
     ActionResult::failure(Some(action), status, error.to_string(), None)
 }
 
-fn descriptor(id: &str, title: &str, description: &str, mutation_class: MutationClass, output_type: &str) -> ActionDescriptor {
+fn descriptor(
+    id: &str,
+    title: &str,
+    description: &str,
+    mutation_class: MutationClass,
+    output_type: &str,
+) -> ActionDescriptor {
     ActionDescriptor {
         id: id.to_owned(),
         title: title.to_owned(),
         description: description.to_owned(),
         inputs: vec![],
-        output: ActionOutputDefinition { output_type: output_type.to_owned() },
+        output: ActionOutputDefinition {
+            output_type: output_type.to_owned(),
+        },
         mutation_class,
         preview_supported: mutation_class == MutationClass::ReadOnly,
         required_ports: vec![],
-        availability: ActionAvailability { available: true, reason: None },
+        availability: ActionAvailability {
+            available: true,
+            reason: None,
+        },
     }
 }
 

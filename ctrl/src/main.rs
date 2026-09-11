@@ -24,8 +24,13 @@ fn top_level_command_index(args: &[String]) -> Option<usize> {
 
 fn main() {
     let mut args = std::env::args().skip(1).collect::<Vec<_>>();
-    if matches!(args.as_slice(), [argument] if matches!(argument.as_str(), "--version" | "-V" | "version")) {
-        println!("ctrl {}", env!("CARGO_PKG_VERSION"));
+    if matches!(args.as_slice(), [argument] if matches!(argument.as_str(), "--version" | "-V" | "version"))
+    {
+        println!(
+            "ctrl {} ({})",
+            env!("CARGO_PKG_VERSION"),
+            option_env!("SUITE_BUILD_REVISION").unwrap_or("unknown")
+        );
         return;
     }
 

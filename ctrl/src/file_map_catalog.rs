@@ -3,7 +3,7 @@
 use crate::projectcentral_flow::{content_revision_bytes, reject_symlink_components};
 use crate::source_horizon::{self, SourceBinding};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::{
     collections::{BTreeMap, BTreeSet},

@@ -193,7 +193,10 @@ impl WorldGraph {
         Ok(path)
     }
 
-    pub fn effective_sources(&self, world: &WorldRef) -> Result<Vec<EffectiveWorldSource>, WorldError> {
+    pub fn effective_sources(
+        &self,
+        world: &WorldRef,
+    ) -> Result<Vec<EffectiveWorldSource>, WorldError> {
         let ancestry = self.ancestry(world)?;
         let mut effective: BTreeMap<String, EffectiveWorldSource> = BTreeMap::new();
 
@@ -493,10 +496,12 @@ impl AgentSetRegistry {
         let mut stack = Vec::new();
         self.collect(set_ref, &mut stack, &mut authored_agents, &mut nested_sets)?;
 
-        let (resolved_agents, unavailable_agents): (Vec<_>, Vec<_>) = authored_agents
-            .iter()
-            .cloned()
-            .partition(|agent| available_agents.map(|set| set.contains(agent)).unwrap_or(true));
+        let (resolved_agents, unavailable_agents): (Vec<_>, Vec<_>) =
+            authored_agents.iter().cloned().partition(|agent| {
+                available_agents
+                    .map(|set| set.contains(agent))
+                    .unwrap_or(true)
+            });
 
         Ok(ResolvedAgentSet {
             agent_set_ref: set_ref.clone(),
@@ -652,7 +657,9 @@ mod tests {
 
         let mut development_record =
             WorldRecord::new(development.clone(), "d1", Some(project.clone()));
-        development_record.excluded_sources.insert("source:temporary".into());
+        development_record
+            .excluded_sources
+            .insert("source:temporary".into());
         graph.insert(development_record).unwrap();
 
         let sources = graph.effective_sources(&development).unwrap();
@@ -664,7 +671,10 @@ mod tests {
         assert_eq!(governance.effective_revision, "g2");
         assert_eq!(governance.provenance.len(), 2);
         assert_eq!(governance.provenance[0].world, root);
-        assert_eq!(governance.propagation_path, vec![root.clone(), project.clone(), development.clone()]);
+        assert_eq!(
+            governance.propagation_path,
+            vec![root.clone(), project.clone(), development.clone()]
+        );
 
         let temporary = sources
             .iter()
@@ -697,7 +707,10 @@ mod tests {
 
         let available = BTreeSet::from(["agent:builder".to_string()]);
         let resolved = registry.resolve(&developers, Some(&available)).unwrap();
-        assert_eq!(resolved.authored_agents, vec!["agent:builder", "agent:reviewer"]);
+        assert_eq!(
+            resolved.authored_agents,
+            vec!["agent:builder", "agent:reviewer"]
+        );
         assert_eq!(resolved.resolved_agents, vec!["agent:builder"]);
         assert_eq!(resolved.unavailable_agents, vec!["agent:reviewer"]);
         assert_eq!(resolved.revision, "d1");
@@ -867,7 +880,13 @@ mod tests {
             Err(WorldError::InvalidRef(_))
         ));
 
-        for malformed in ["agent/", "agent/ spaced", "agent/a:b", "agent/a/b", "oi-guardian-field"] {
+        for malformed in [
+            "agent/",
+            "agent/ spaced",
+            "agent/a:b",
+            "agent/a/b",
+            "oi-guardian-field",
+        ] {
             let mut set = AgentSetRecord::new(set_ref("agent-set:malformed"), "r2");
             set.orchestrator_agent_ref = Some(malformed.into());
             let mut registry = AgentSetRegistry::default();

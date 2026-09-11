@@ -118,18 +118,18 @@ fn current_development_state_is_temporal_lifecycle_context_not_standing() {
         .expect("temporal development state examples");
     assert!(!temporal.is_empty());
 
-    let protocol = fs::read_to_string(repository_root().join("docs/PROJECT-CONTEXT-PROTOCOL.md"))
-        .unwrap();
-    assert!(protocol.contains("`current-development-state` is **not a seventh documentation standing**"));
+    let protocol =
+        fs::read_to_string(repository_root().join("docs/PROJECT-CONTEXT-PROTOCOL.md")).unwrap();
+    assert!(protocol
+        .contains("`current-development-state` is **not a seventh documentation standing**"));
     assert!(protocol.contains("**documentation standing != Project-act position**"));
 }
 
 #[test]
 fn documentation_steward_skill_consumes_the_same_ladder_and_refuses_p1_flattening() {
-    let skill = fs::read_to_string(
-        repository_root().join("skills/documentation-standing/SKILL.md"),
-    )
-    .unwrap();
+    let skill =
+        fs::read_to_string(repository_root().join("skills/documentation-standing/SKILL.md"))
+            .unwrap();
 
     let ordered_markers = [
         "authored position",

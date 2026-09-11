@@ -3,7 +3,7 @@
 //! side store — and is create-only: revision, mutation and removal are not
 //! machine-owned, and recognition (promotion) is the human owner's separate
 //! act outside every Central Action.
-use crate::remember::{REMEMBERED_NOTE_SCHEMA, RememberError, RememberedNote};
+use crate::remember::{RememberError, RememberedNote, REMEMBERED_NOTE_SCHEMA};
 use serde::Serialize;
 use std::error::Error;
 use std::fmt;

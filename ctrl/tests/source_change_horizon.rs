@@ -17,7 +17,10 @@ struct TempRoot(PathBuf);
 
 impl TempRoot {
     fn new() -> Self {
-        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let sequence = NEXT_TEMP_ROOT.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
             "central-source-horizon-{}-{nonce}-{sequence}",
@@ -88,7 +91,15 @@ fn atomic_save_burst_collapses_to_final_revision() {
     let report = reconcile_project_sources(&project).unwrap();
     assert_eq!(report.new_changes.len(), 1);
     assert_eq!(report.new_changes[0].kind, SourceChangeKind::Modified);
-    assert_eq!(report.new_changes[0].after_revision.as_deref(), report.horizon.sources.iter().find(|item| item.binding.path == "ProjectCentral/user/note.md").map(|item| item.revision.revision.as_str()));
+    assert_eq!(
+        report.new_changes[0].after_revision.as_deref(),
+        report
+            .horizon
+            .sources
+            .iter()
+            .find(|item| item.binding.path == "ProjectCentral/user/note.md")
+            .map(|item| item.revision.revision.as_str())
+    );
 }
 
 #[test]
@@ -97,7 +108,11 @@ fn restart_and_offline_edit_are_recovered_by_horizon_read() {
     let source = project.join("ProjectCentral/agents/wiki/wiki.json");
     reconcile_project_sources(&project).unwrap();
     let original = fs::read_to_string(&source).unwrap();
-    fs::write(&source, original.replace("\n}", ",\n  \"offline_marker\": true\n}" )).unwrap();
+    fs::write(
+        &source,
+        original.replace("\n}", ",\n  \"offline_marker\": true\n}"),
+    )
+    .unwrap();
 
     let horizon = read_project_change_horizon(&project, Some(0)).unwrap();
     assert_eq!(horizon.cursor, 1);
@@ -127,19 +142,34 @@ fn retained_native_ground_keeps_exact_authority_standing() {
                 "recognition":"human-accepted source relation",
                 "recorded_at_unix_seconds":1
             }]
-        })).unwrap(),
-    ).unwrap();
+        }))
+        .unwrap(),
+    )
+    .unwrap();
 
     let baseline = reconcile_project_sources(&project).unwrap();
-    let retained = baseline.horizon.sources.iter().find(|source| source.binding.source_ref == "central:ground:purpose").unwrap();
+    let retained = baseline
+        .horizon
+        .sources
+        .iter()
+        .find(|source| source.binding.source_ref == "central:ground:purpose")
+        .unwrap();
     assert_eq!(retained.binding.path, "README.md");
     assert_eq!(retained.binding.provenance, "human-adopted");
     assert_eq!(retained.binding.standing, "authored-human-position");
     assert_eq!(retained.binding.roles, vec!["purpose", "overview"]);
 
-    fs::write(project.join("README.md"), "# Purpose\n\nA changed authored source.\n").unwrap();
+    fs::write(
+        project.join("README.md"),
+        "# Purpose\n\nA changed authored source.\n",
+    )
+    .unwrap();
     let changed = reconcile_project_sources(&project).unwrap();
-    let event = changed.new_changes.iter().find(|change| change.source_ref == "central:ground:purpose").unwrap();
+    let event = changed
+        .new_changes
+        .iter()
+        .find(|change| change.source_ref == "central:ground:purpose")
+        .unwrap();
     assert_eq!(event.provenance, "human-adopted");
     assert_eq!(event.standing, "authored-human-position");
     assert_eq!(event.source_roles, vec!["purpose", "overview"]);
@@ -154,7 +184,12 @@ fn privacy_marker_changes_retrieval_eligibility_without_exposing_payloads() {
     fs::write(private.join("secret.md"), "not for retrieval\n").unwrap();
 
     let report = reconcile_project_sources(&project).unwrap();
-    let source = report.horizon.sources.iter().find(|source| source.binding.path.ends_with("secret.md")).unwrap();
+    let source = report
+        .horizon
+        .sources
+        .iter()
+        .find(|source| source.binding.path.ends_with("secret.md"))
+        .unwrap();
     assert!(!source.binding.agent_retrieval_allowed);
     let serialized = serde_json::to_string(&report.horizon).unwrap();
     assert!(!serialized.contains("not for retrieval"));
@@ -172,8 +207,14 @@ fn additions_removals_and_path_identity_are_explicit() {
     fs::rename(&source, &renamed).unwrap();
     let report = reconcile_project_sources(&project).unwrap();
     assert_eq!(report.new_changes.len(), 2);
-    assert!(report.new_changes.iter().any(|change| change.kind == SourceChangeKind::Removed && change.source_path.ends_with("a.md")));
-    assert!(report.new_changes.iter().any(|change| change.kind == SourceChangeKind::Added && change.source_path.ends_with("b.md")));
+    assert!(report
+        .new_changes
+        .iter()
+        .any(|change| change.kind == SourceChangeKind::Removed
+            && change.source_path.ends_with("a.md")));
+    assert!(report.new_changes.iter().any(
+        |change| change.kind == SourceChangeKind::Added && change.source_path.ends_with("b.md")
+    ));
 }
 
 #[test]
@@ -228,10 +269,16 @@ fn control_and_project_use_the_same_fractal_change_contract() {
     fs::write(central.join("Control/agents/wiki/wiki.json"), "{}\n").unwrap();
 
     let bindings = control_source_bindings(&central).unwrap();
-    assert!(bindings.iter().any(|binding| binding.path == "Control/user/intent.md"));
+    assert!(bindings
+        .iter()
+        .any(|binding| binding.path == "Control/user/intent.md"));
     let baseline = reconcile_control_sources(&central).unwrap();
     assert!(baseline.initialized);
-    fs::write(central.join("Control/user/intent.md"), "personal ground changed\n").unwrap();
+    fs::write(
+        central.join("Control/user/intent.md"),
+        "personal ground changed\n",
+    )
+    .unwrap();
     let changed = reconcile_control_sources(&central).unwrap();
     assert_eq!(changed.new_changes.len(), 1);
     assert_eq!(changed.new_changes[0].world_ref, "control:root");
@@ -256,16 +303,30 @@ fn action_surface_reconciles_implicitly_and_contains_no_model_operation() {
     };
     let mut registry = create_core_action_registry();
     register_projectcentral_actions(&mut registry);
-    let ids = registry.list().into_iter().map(|item| item.id).collect::<Vec<_>>();
+    let ids = registry
+        .list()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
     assert!(ids.contains(&"projectcentral.change.horizon".to_owned()));
     assert!(ids.contains(&"projectcentral.change.reconcile".to_owned()));
     assert!(ids.contains(&"projectcentral.change.ack".to_owned()));
-    assert!(!ids.iter().any(|id| id.contains("agent.run") || id.contains("model") || id.contains("contemplate")));
+    assert!(!ids
+        .iter()
+        .any(|id| id.contains("agent.run") || id.contains("model") || id.contains("contemplate")));
 
-    let first = registry.execute("projectcentral.change.horizon", &json!({"project":"action-surface"}), &context);
+    let first = registry.execute(
+        "projectcentral.change.horizon",
+        &json!({"project":"action-surface"}),
+        &context,
+    );
     assert!(first.ok, "{first:?}");
     fs::write(project.join("ProjectCentral/user/note.md"), "v2\n").unwrap();
-    let second = registry.execute("projectcentral.change.horizon", &json!({"project":"action-surface","cursor":0}), &context);
+    let second = registry.execute(
+        "projectcentral.change.horizon",
+        &json!({"project":"action-surface","cursor":0}),
+        &context,
+    );
     assert!(second.ok, "{second:?}");
     let data: Value = second.data.unwrap();
     assert_eq!(data["cursor"], 1);

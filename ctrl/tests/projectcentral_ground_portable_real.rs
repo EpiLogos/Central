@@ -1,14 +1,20 @@
 use central_ctrl::{
-    apply_accepted_ground_relation, initialize_projectcentral, inspect_project_ground, GroundStatus,
-    SourceProvenance, SourceStanding, SourceTreatment,
+    apply_accepted_ground_relation, initialize_projectcentral, inspect_project_ground,
+    GroundStatus, SourceProvenance, SourceStanding, SourceTreatment,
 };
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temporary_root() -> PathBuf {
-    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    std::env::temp_dir().join(format!("central-ground-real-copy-{}-{nonce}", std::process::id()))
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "central-ground-real-copy-{}-{nonce}",
+        std::process::id()
+    ))
 }
 
 #[test]
@@ -33,7 +39,8 @@ fn portable_exact_central_sources_preserve_authored_position_vs_current_implemen
     )
     .unwrap();
     let vision_before = fs::read(project.join("docs/CENTRAL-VISION.md")).unwrap();
-    let implementation_before = fs::read(project.join("ctrl/src/projectcentral_ground.rs")).unwrap();
+    let implementation_before =
+        fs::read(project.join("ctrl/src/projectcentral_ground.rs")).unwrap();
 
     initialize_projectcentral(&central, &project, "epilogos/central-current").unwrap();
     let discovered = inspect_project_ground(&project).unwrap();
@@ -76,16 +83,27 @@ fn portable_exact_central_sources_preserve_authored_position_vs_current_implemen
         inspection.account_handoff.other_source_relations[0].standing,
         SourceStanding::ImplementationFact
     );
-    assert!(!inspection.return_policy.difference_automatically_mutates_human_source);
+    assert!(
+        !inspection
+            .return_policy
+            .difference_automatically_mutates_human_source
+    );
 
     // Establishing the relation neither reorganises nor rewrites the real-project source copy.
-    assert_eq!(fs::read(project.join("docs/CENTRAL-VISION.md")).unwrap(), vision_before);
+    assert_eq!(
+        fs::read(project.join("docs/CENTRAL-VISION.md")).unwrap(),
+        vision_before
+    );
     assert_eq!(
         fs::read(project.join("ctrl/src/projectcentral_ground.rs")).unwrap(),
         implementation_before
     );
-    assert!(project.join("ProjectCentral/agents/wiki/wiki.json").is_file());
-    assert!(project.join("ProjectCentral/relations/source-relations.json").is_file());
+    assert!(project
+        .join("ProjectCentral/agents/wiki/wiki.json")
+        .is_file());
+    assert!(project
+        .join("ProjectCentral/relations/source-relations.json")
+        .is_file());
 
     let _ = fs::remove_dir_all(central);
 }

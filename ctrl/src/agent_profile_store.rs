@@ -1,4 +1,4 @@
-use crate::agent_profile::{AGENT_PROFILE_SCHEMA, AgentProfile, AgentProfileScope};
+use crate::agent_profile::{AgentProfile, AgentProfileScope, AGENT_PROFILE_SCHEMA};
 use serde::Serialize;
 use std::error::Error;
 use std::fmt;

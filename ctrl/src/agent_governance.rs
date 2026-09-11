@@ -201,7 +201,12 @@ pub fn inspect_project_governance(project_root: &Path) -> io::Result<ProjectGove
     let project_id = manifest.as_ref().map(|value| value.project_id.clone());
     let project_key = project_id
         .clone()
-        .or_else(|| project_root.file_name().and_then(|value| value.to_str()).map(str::to_owned))
+        .or_else(|| {
+            project_root
+                .file_name()
+                .and_then(|value| value.to_str())
+                .map(str::to_owned)
+        })
         .unwrap_or_else(|| "project".to_owned());
 
     let mut skipped_sources = Vec::new();
@@ -225,7 +230,8 @@ pub fn inspect_project_governance(project_root: &Path) -> io::Result<ProjectGove
             provenance: GovernanceProvenance::HumanAuthored,
             treatment: GovernanceTreatment::CanonicalGovernance,
             roles: Vec::new(),
-            basis: "canonical ProjectCentral/agents/governance human-authored source region".to_owned(),
+            basis: "canonical ProjectCentral/agents/governance human-authored source region"
+                .to_owned(),
         })
         .collect::<Vec<_>>();
 
@@ -248,7 +254,11 @@ pub fn inspect_project_governance(project_root: &Path) -> io::Result<ProjectGove
     let recognised_paths = canonical_sources
         .iter()
         .map(|source| source.path.clone())
-        .chain(retained_native_sources.iter().map(|source| source.path.clone()))
+        .chain(
+            retained_native_sources
+                .iter()
+                .map(|source| source.path.clone()),
+        )
         .collect::<BTreeSet<_>>();
 
     let mut native_candidates = Vec::new();
@@ -331,11 +341,13 @@ pub fn apply_project_governance_relation(
         ));
     }
 
-    let mut file = read_relations_file(project_root, Some(&manifest.project_id))?
-        .unwrap_or_else(|| GovernanceRelationsFile {
-            schema: GOVERNANCE_RELATIONS_SCHEMA.to_owned(),
-            project_id: manifest.project_id.clone(),
-            relations: Vec::new(),
+    let mut file =
+        read_relations_file(project_root, Some(&manifest.project_id))?.unwrap_or_else(|| {
+            GovernanceRelationsFile {
+                schema: GOVERNANCE_RELATIONS_SCHEMA.to_owned(),
+                project_id: manifest.project_id.clone(),
+                relations: Vec::new(),
+            }
         });
     let existing_ref = file
         .relations
@@ -379,7 +391,9 @@ fn composition_boundary() -> GovernanceCompositionBoundary {
     GovernanceCompositionBoundary {
         root_source: ROOT_AGENT_GOVERNANCE_DIR.to_owned(),
         project_source: AGENT_GOVERNANCE_DIR.to_owned(),
-        situated_instruction_layer: "task/session/Focus-specific instruction owned outside Central source hierarchy".to_owned(),
+        situated_instruction_layer:
+            "task/session/Focus-specific instruction owned outside Central source hierarchy"
+                .to_owned(),
         operational_resolution_owner: "AIKit".to_owned(),
         operational_precedence_defined_by_central: false,
         conflicts_must_remain_explainable: true,
@@ -462,14 +476,7 @@ fn collect_native_candidates(
             if should_skip_directory(&name) {
                 continue;
             }
-            collect_native_candidates(
-                &path,
-                project_root,
-                depth + 1,
-                recognised,
-                output,
-                skipped,
-            )?;
+            collect_native_candidates(&path, project_root, depth + 1, recognised, output, skipped)?;
             continue;
         }
         if !file_type.is_file() || name == AGENT_RETRIEVAL_DENY_MARKER {
@@ -535,12 +542,16 @@ fn read_relations_file(
     if !path.is_file() {
         return Ok(None);
     }
-    let value: GovernanceRelationsFile = serde_json::from_slice(&fs::read(&path)?).map_err(|error| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("{} is not a valid governance relation file: {error}", path.display()),
-        )
-    })?;
+    let value: GovernanceRelationsFile =
+        serde_json::from_slice(&fs::read(&path)?).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "{} is not a valid governance relation file: {error}",
+                    path.display()
+                ),
+            )
+        })?;
     if value.schema != GOVERNANCE_RELATIONS_SCHEMA {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -649,7 +660,9 @@ mod tests {
         fs::create_dir_all(central.join(ROOT_AGENT_GOVERNANCE_DIR)).unwrap();
         fs::create_dir_all(&project).unwrap();
         fs::write(
-            central.join(ROOT_AGENT_GOVERNANCE_DIR).join("collaboration.md"),
+            central
+                .join(ROOT_AGENT_GOVERNANCE_DIR)
+                .join("collaboration.md"),
             "Prefer evidence-backed completion claims.\n",
         )
         .unwrap();
@@ -664,7 +677,10 @@ mod tests {
         let local = inspect_project_governance(&project).unwrap();
         assert_eq!(root.sources.len(), 1);
         assert_eq!(local.canonical_sources.len(), 1);
-        assert_ne!(root.sources[0].source_ref, local.canonical_sources[0].source_ref);
+        assert_ne!(
+            root.sources[0].source_ref,
+            local.canonical_sources[0].source_ref
+        );
         assert_eq!(root.sources[0].scope, "cross-project");
         assert_eq!(local.canonical_sources[0].scope, "project");
         assert_eq!(local.composition.operational_resolution_owner, "AIKit");
@@ -735,12 +751,19 @@ mod tests {
 
         let plan = plan_project_governance(&project).unwrap();
         assert_eq!(plan.proposals.len(), 1);
-        assert!(plan.proposals[0].why.contains("does not infer human governance authority"));
+        assert!(plan.proposals[0]
+            .why
+            .contains("does not infer human governance authority"));
         assert!(plan.proposals[0]
             .changes
             .iter()
             .any(|change| change.contains("operational precedence/composition to AIKit")));
-        assert!(!plan.current.composition.operational_precedence_defined_by_central);
+        assert!(
+            !plan
+                .current
+                .composition
+                .operational_precedence_defined_by_central
+        );
     }
 
     #[test]

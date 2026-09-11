@@ -1,7 +1,7 @@
 use central_ctrl::{
     control_source_bindings, create_core_action_registry, create_default_connector_registry,
-    initialize_projectcentral, project_source_bindings, reconcile_control_sources,
-    run_cli, CliEnvironment, ConnectorContext, ActionExecutionContext, RootOptions, ResultStatus,
+    initialize_projectcentral, project_source_bindings, reconcile_control_sources, run_cli,
+    ActionExecutionContext, CliEnvironment, ConnectorContext, ResultStatus, RootOptions,
     CONTROL_GROUND_RELATIONS_SCHEMA, CONTROL_GROUND_RELATIONS_SOURCE, CONTROL_SKILL_TREATMENT,
     SKILL_BODY, SKILL_MANIFEST, SKILL_MANIFEST_SCHEMA,
 };
@@ -17,7 +17,10 @@ struct TempRoot(PathBuf);
 
 impl TempRoot {
     fn new() -> Self {
-        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let sequence = NEXT_TEMP_ROOT.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
             "central-skills-integration-{}-{nonce}-{sequence}",
@@ -42,7 +45,10 @@ fn execute(root: &Path, action: &str, input: Value) -> central_ctrl::ActionResul
     let registry = create_core_action_registry();
     let connectors = create_default_connector_registry();
     let connector_context = ConnectorContext::current();
-    let root_options = RootOptions { explicit_root: Some(root.to_path_buf()), ..RootOptions::default() };
+    let root_options = RootOptions {
+        explicit_root: Some(root.to_path_buf()),
+        ..RootOptions::default()
+    };
     let context = ActionExecutionContext {
         root_options: &root_options,
         connectors: &connectors,
@@ -54,7 +60,11 @@ fn execute(root: &Path, action: &str, input: Value) -> central_ctrl::ActionResul
 fn seed_skill(root: &Path, skill_dir: &str, scope: &str, name: &str) -> PathBuf {
     let dir = root.join(skill_dir);
     fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join(SKILL_BODY), format!("---\nname: {name}\n---\nBody of {name}.\n")).unwrap();
+    fs::write(
+        dir.join(SKILL_BODY),
+        format!("---\nname: {name}\n---\nBody of {name}.\n"),
+    )
+    .unwrap();
     fs::write(
         dir.join(SKILL_MANIFEST),
         serde_json::to_vec_pretty(&json!({
@@ -77,7 +87,12 @@ fn inspect_retire_inspect_restore_walk_through_the_owner_actions() {
     fs::create_dir_all(central.join("Control/user")).unwrap();
     fs::create_dir_all(central.join("Control/agents/governance")).unwrap();
     fs::create_dir_all(central.join("Control/agents/wiki")).unwrap();
-    seed_skill(&central, "Control/user/skills/central-ground-keeping", "control-user", "central-ground-keeping");
+    seed_skill(
+        &central,
+        "Control/user/skills/central-ground-keeping",
+        "control-user",
+        "central-ground-keeping",
+    );
 
     // inspect discloses the seed skill with correct scope and standing.
     let inspect = execute(&central, "control.skills.inspect", json!({}));
@@ -94,7 +109,10 @@ fn inspect_retire_inspect_restore_walk_through_the_owner_actions() {
     );
     assert_eq!(data["active_skills"], 1);
     assert_eq!(data["retired_skills"], 0);
-    assert_eq!(data["projection_policy"]["retired_standing_projects"], false);
+    assert_eq!(
+        data["projection_policy"]["retired_standing_projects"],
+        false
+    );
 
     // retire writes the standing change with reason and provenance.
     let retire = execute(
@@ -111,12 +129,20 @@ fn inspect_retire_inspect_restore_walk_through_the_owner_actions() {
     let receipt = retire.data.unwrap();
     assert_eq!(receipt["previous_standing"], "active");
     assert_eq!(receipt["standing"], "retired");
-    assert_eq!(receipt["skill"]["retirement"]["retired_by"], "owner-in-session");
+    assert_eq!(
+        receipt["skill"]["retirement"]["retired_by"],
+        "owner-in-session"
+    );
     assert_eq!(
         receipt["skill"]["retirement"]["retirement_reason"],
         "walk rehearsal: superseded by the ontology skill"
     );
-    assert!(receipt["skill"]["retirement"]["retired_at_unix_seconds"].as_u64().unwrap() > 0);
+    assert!(
+        receipt["skill"]["retirement"]["retired_at_unix_seconds"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
     assert_eq!(receipt["skill_bytes_mutated"], false);
     assert_eq!(receipt["skill_directory_mutated"], false);
 
@@ -136,7 +162,10 @@ fn inspect_retire_inspect_restore_walk_through_the_owner_actions() {
     assert_eq!(skill["standing"], "retired");
     assert_eq!(data["retired_skills"], 1);
     assert_eq!(data["active_skills"], 0);
-    assert_eq!(skill["retirement"]["retirement_reason"], "walk rehearsal: superseded by the ontology skill");
+    assert_eq!(
+        skill["retirement"]["retirement_reason"],
+        "walk rehearsal: superseded by the ontology skill"
+    );
 
     // retiring again refuses.
     let double = execute(
@@ -164,7 +193,11 @@ fn inspect_retire_inspect_restore_walk_through_the_owner_actions() {
         }),
     );
     assert_eq!(missing.status, ResultStatus::InvalidInput);
-    assert!(missing.error.unwrap().message.contains("skill ground does not exist"));
+    assert!(missing
+        .error
+        .unwrap()
+        .message
+        .contains("skill ground does not exist"));
 
     // restore reverses to active.
     let restore = execute(
@@ -175,7 +208,10 @@ fn inspect_retire_inspect_restore_walk_through_the_owner_actions() {
     assert_eq!(restore.status, ResultStatus::Success);
     let receipt = restore.data.unwrap();
     assert_eq!(receipt["standing"], "active");
-    assert_eq!(receipt["removed_retirement"]["retirement_reason"], "walk rehearsal: superseded by the ontology skill");
+    assert_eq!(
+        receipt["removed_retirement"]["retirement_reason"],
+        "walk rehearsal: superseded by the ontology skill"
+    );
     assert_eq!(receipt["skill"]["standing"], "active");
     let final_inspect = execute(&central, "control.skills.inspect", json!({}));
     assert_eq!(final_inspect.status, ResultStatus::Success);
@@ -187,9 +223,17 @@ fn cli_action_run_supports_the_skills_surface() {
     let temp = TempRoot::new();
     let central = temp.path().join("Central");
     fs::create_dir_all(central.join("Control/user")).unwrap();
-    seed_skill(&central, "Control/user/skills/central-ground-keeping", "control-user", "central-ground-keeping");
+    seed_skill(
+        &central,
+        "Control/user/skills/central-ground-keeping",
+        "control-user",
+        "central-ground-keeping",
+    );
 
-    let environment = CliEnvironment { configured_root: None, home: None };
+    let environment = CliEnvironment {
+        configured_root: None,
+        home: None,
+    };
     let inspect = run_cli(
         &[
             "--json".to_owned(),
@@ -215,11 +259,25 @@ fn skills_participate_in_ground_relations_with_control_skill_treatment_and_manif
     fs::create_dir_all(central.join("Control/agents/governance")).unwrap();
     fs::create_dir_all(central.join("Control/agents/wiki")).unwrap();
     fs::create_dir_all(central.join("Control/machines/primary-workstation")).unwrap();
-    let personal = seed_skill(&central, "Control/user/skills/central-ground-keeping", "control-user", "central-ground-keeping");
-    let machine = seed_skill(&central, "Control/machines/primary-workstation/skills/brandkit", "control-machine", "brandkit");
+    let personal = seed_skill(
+        &central,
+        "Control/user/skills/central-ground-keeping",
+        "control-user",
+        "central-ground-keeping",
+    );
+    let machine = seed_skill(
+        &central,
+        "Control/machines/primary-workstation/skills/brandkit",
+        "control-machine",
+        "brandkit",
+    );
     // A skill directory without a manifest participates unresolved, never inferred.
     fs::create_dir_all(central.join("Control/user/skills/anonymous")).unwrap();
-    fs::write(central.join("Control/user/skills/anonymous/SKILL.md"), "no manifest\n").unwrap();
+    fs::write(
+        central.join("Control/user/skills/anonymous/SKILL.md"),
+        "no manifest\n",
+    )
+    .unwrap();
 
     let bindings = control_source_bindings(central).unwrap();
     let body = bindings
@@ -229,7 +287,10 @@ fn skills_participate_in_ground_relations_with_control_skill_treatment_and_manif
     assert_eq!(body.treatment, CONTROL_SKILL_TREATMENT);
     assert_eq!(body.provenance, "human-authored");
     assert_eq!(body.standing, "active");
-    assert_eq!(body.source_ref, "central:source:control:root:Control/user/skills/central-ground-keeping/SKILL.md");
+    assert_eq!(
+        body.source_ref,
+        "central:source:control:root:Control/user/skills/central-ground-keeping/SKILL.md"
+    );
     assert!(body.roles.iter().any(|role| role == "skill-source"));
     // one physical source, one logical binding: the Control/user aperture
     // fallback did not duplicate the skill file.
@@ -243,7 +304,9 @@ fn skills_participate_in_ground_relations_with_control_skill_treatment_and_manif
 
     let machine_body = bindings
         .iter()
-        .find(|binding| binding.path == "Control/machines/primary-workstation/skills/brandkit/SKILL.md")
+        .find(|binding| {
+            binding.path == "Control/machines/primary-workstation/skills/brandkit/SKILL.md"
+        })
         .expect("machine skill body participates in Control ground");
     assert_eq!(machine_body.treatment, CONTROL_SKILL_TREATMENT);
 
@@ -258,7 +321,8 @@ fn skills_participate_in_ground_relations_with_control_skill_treatment_and_manif
     // observed as a logical modification of the same source ref.
     let baseline = reconcile_control_sources(central).unwrap();
     assert!(baseline.initialized);
-    let manifest: Value = serde_json::from_slice(&fs::read(personal.join(SKILL_MANIFEST)).unwrap()).unwrap();
+    let manifest: Value =
+        serde_json::from_slice(&fs::read(personal.join(SKILL_MANIFEST)).unwrap()).unwrap();
     let mut retired = manifest.clone();
     retired["standing"] = json!("retired");
     retired["retirement"] = json!({
@@ -266,10 +330,17 @@ fn skills_participate_in_ground_relations_with_control_skill_treatment_and_manif
         "retired_at_unix_seconds": 1757097600u64,
         "retirement_reason": "rehearsal"
     });
-    fs::write(personal.join(SKILL_MANIFEST), serde_json::to_vec_pretty(&retired).unwrap()).unwrap();
+    fs::write(
+        personal.join(SKILL_MANIFEST),
+        serde_json::to_vec_pretty(&retired).unwrap(),
+    )
+    .unwrap();
     let changed = reconcile_control_sources(central).unwrap();
     assert_eq!(changed.new_changes.len(), 1);
-    assert_eq!(changed.new_changes[0].source_path, "Control/user/skills/central-ground-keeping/skill.json");
+    assert_eq!(
+        changed.new_changes[0].source_path,
+        "Control/user/skills/central-ground-keeping/skill.json"
+    );
     assert_eq!(changed.new_changes[0].standing, "retired");
     let bindings = control_source_bindings(central).unwrap();
     let body = bindings
@@ -323,7 +394,12 @@ fn projectcentral_user_skills_participate_in_the_project_horizon() {
     let project = central.join("Work/suite");
     fs::create_dir_all(&project).unwrap();
     initialize_projectcentral(&central, &project, "example/suite").unwrap();
-    seed_skill(&project, "ProjectCentral/user/skills/suite-operator", "projectcentral-user", "suite-operator");
+    seed_skill(
+        &project,
+        "ProjectCentral/user/skills/suite-operator",
+        "projectcentral-user",
+        "suite-operator",
+    );
 
     let bindings = project_source_bindings(&project).unwrap();
     let body = bindings

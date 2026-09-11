@@ -4,7 +4,7 @@ use super::file_map::*;
 use crate::projectcentral_flow::content_revision_bytes;
 use crate::source_horizon;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::os::unix::fs::MetadataExt;
 use std::{
     fs, io,

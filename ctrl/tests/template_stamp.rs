@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const ROOT_PROTOCOL_DEFAULT: &str = "Control/agents/governance/repos/repo-content-and-structure.md";
-const ROOT_PLACEMENT_STATEMENT: &str = "Control/agents/governance/field-and-now/session-work-placement.md";
+const ROOT_PLACEMENT_STATEMENT: &str =
+    "Control/agents/governance/field-and-now/session-work-placement.md";
 const ROOT_DAY_CLOSE_STATEMENT: &str = "Control/agents/governance/field-and-now/day-close.md";
 const ROOT_WIKI_LAW_STATEMENT: &str = "Control/agents/governance/field-and-now/wiki-field-law.md";
 const ROOT_NOW_POLICY: &str = "Control/agents/now/policy.json";
@@ -118,9 +119,9 @@ fn root_scope_stamps_now_field_and_field_and_now_governance() {
     assert!(placement.contains("Work that has nowhere to land lands everywhere."));
 
     let day_close = fs::read_to_string(central.join(ROOT_DAY_CLOSE_STATEMENT)).unwrap();
-    assert!(day_close.contains(
-        "a partial close that names its failure beats a clean claim that lied"
-    ));
+    assert!(
+        day_close.contains("a partial close that names its failure beats a clean claim that lied")
+    );
 
     let wiki_law = fs::read_to_string(central.join(ROOT_WIKI_LAW_STATEMENT)).unwrap();
     assert!(wiki_law.contains("A wiki is agent-maintained knowledge, never source."));
@@ -223,9 +224,16 @@ fn stamp_actions_are_registered_with_honest_mutation_classes() {
     let mut registry = central_ctrl::create_core_action_registry();
     central_ctrl::register_template_stamp_actions(&mut registry);
 
-    let preview = registry.get("central.template.preview").expect("preview registered");
-    assert_eq!(preview.mutation_class, central_ctrl::MutationClass::ReadOnly);
-    let stamp = registry.get("central.template.stamp").expect("stamp registered");
+    let preview = registry
+        .get("central.template.preview")
+        .expect("preview registered");
+    assert_eq!(
+        preview.mutation_class,
+        central_ctrl::MutationClass::ReadOnly
+    );
+    let stamp = registry
+        .get("central.template.stamp")
+        .expect("stamp registered");
     assert_eq!(
         stamp.mutation_class,
         central_ctrl::MutationClass::LocallyMutating

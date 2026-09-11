@@ -92,7 +92,10 @@ pub fn search_action_descriptors(registry: &ActionRegistry, query: &str) -> Vec<
     actions.into_iter().map(|(_, action)| action).collect()
 }
 
-fn select_action(registry: &ActionRegistry, surface: &mut dyn TerminalSurface) -> Flow<ActionDescriptor> {
+fn select_action(
+    registry: &ActionRegistry,
+    surface: &mut dyn TerminalSurface,
+) -> Flow<ActionDescriptor> {
     loop {
         let Some(raw_query) = surface.prompt("Search Actions (/cancel): ") else {
             return Flow::Cancelled(cancel(None));
@@ -117,7 +120,8 @@ fn select_action(registry: &ActionRegistry, surface: &mut dyn TerminalSurface) -
         }
 
         loop {
-            let Some(raw) = surface.prompt("Select Action by number or id (/back, /cancel): ") else {
+            let Some(raw) = surface.prompt("Select Action by number or id (/back, /cancel): ")
+            else {
                 return Flow::Cancelled(cancel(None));
             };
             let choice = raw.trim();
@@ -150,16 +154,28 @@ fn dynamic_choices(
         return Vec::new();
     };
     let Some(source) = registry.get(&selection.action) else {
-        surface.write_line(&format!("Selection source Action is unavailable: {}", selection.action));
+        surface.write_line(&format!(
+            "Selection source Action is unavailable: {}",
+            selection.action
+        ));
         return Vec::new();
     };
-    if source.mutation_class != MutationClass::ReadOnly || source.inputs.iter().any(|candidate| candidate.required) {
-        surface.write_line(&format!("Selection source Action is not safe for guided discovery: {}", selection.action));
+    if source.mutation_class != MutationClass::ReadOnly
+        || source.inputs.iter().any(|candidate| candidate.required)
+    {
+        surface.write_line(&format!(
+            "Selection source Action is not safe for guided discovery: {}",
+            selection.action
+        ));
         return Vec::new();
     }
     let result = registry.execute(&selection.action, &Value::Object(Map::new()), context);
     if !result.ok {
-        let message = result.error.as_ref().map(|error| error.message.as_str()).unwrap_or("selection source failed");
+        let message = result
+            .error
+            .as_ref()
+            .map(|error| error.message.as_str())
+            .unwrap_or("selection source failed");
         surface.write_line(&format!("Selection source unavailable: {message}"));
         return Vec::new();
     }
@@ -174,7 +190,11 @@ fn dynamic_choices(
     };
     items
         .iter()
-        .filter_map(|item| item.get(&selection.value_field).and_then(Value::as_str).map(str::to_owned))
+        .filter_map(|item| {
+            item.get(&selection.value_field)
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
         .collect()
 }
 
@@ -186,7 +206,11 @@ fn prompt_input(
 ) -> Flow<Value> {
     let static_choices = input.choices.clone().unwrap_or_default();
     let dynamic = dynamic_choices(input, registry, context, surface);
-    let displayed = if !static_choices.is_empty() { static_choices } else { dynamic };
+    let displayed = if !static_choices.is_empty() {
+        static_choices
+    } else {
+        dynamic
+    };
 
     if !displayed.is_empty() {
         surface.write_line(&format!("Choices for {}:", input.name));
@@ -212,7 +236,10 @@ fn prompt_input(
         }
 
         let selected = if let Ok(number) = value.parse::<usize>() {
-            number.checked_sub(1).and_then(|index| displayed.get(index)).cloned()
+            number
+                .checked_sub(1)
+                .and_then(|index| displayed.get(index))
+                .cloned()
         } else {
             None
         };

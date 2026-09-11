@@ -108,11 +108,7 @@ fn test_connectors() -> ConnectorRegistry {
     connectors
 }
 
-fn execute(
-    root: &PathBuf,
-    action: &str,
-    input: serde_json::Value,
-) -> central_ctrl::ActionResult {
+fn execute(root: &PathBuf, action: &str, input: serde_json::Value) -> central_ctrl::ActionResult {
     let registry = create_core_action_registry();
     let connectors = test_connectors();
     let connector_context = ConnectorContext {
@@ -180,10 +176,7 @@ fn search_open_and_reveal_operate_on_ordinary_directories_without_project_metada
 
     let reveal = execute(&root, "work.reveal", json!({ "query": "alpha-notes" }));
     assert_eq!(reveal.status, ResultStatus::Success);
-    assert_eq!(
-        reveal.data.as_ref().unwrap()["item"]["name"],
-        "alpha-notes"
-    );
+    assert_eq!(reveal.data.as_ref().unwrap()["item"]["name"], "alpha-notes");
     assert_eq!(
         reveal.data.as_ref().unwrap()["native"]["port"],
         NATIVE_REVEAL_PORT.id
@@ -226,11 +219,7 @@ fn ambiguous_and_missing_work_selection_return_structured_invalid_input_before_n
     let ambiguous = execute(&root, "work.open", json!({ "query": "alpha" }));
     assert_eq!(ambiguous.status, ResultStatus::InvalidInput);
     assert_eq!(
-        ambiguous
-            .error
-            .unwrap()
-            .details
-            .unwrap()["matches"]
+        ambiguous.error.unwrap().details.unwrap()["matches"]
             .as_array()
             .unwrap()
             .len(),
@@ -240,11 +229,7 @@ fn ambiguous_and_missing_work_selection_return_structured_invalid_input_before_n
     let missing = execute(&root, "work.reveal", json!({ "query": "omega" }));
     assert_eq!(missing.status, ResultStatus::InvalidInput);
     assert_eq!(
-        missing
-            .error
-            .unwrap()
-            .details
-            .unwrap()["matches"]
+        missing.error.unwrap().details.unwrap()["matches"]
             .as_array()
             .unwrap()
             .len(),

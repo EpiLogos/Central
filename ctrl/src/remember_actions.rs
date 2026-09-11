@@ -10,12 +10,12 @@ use crate::action::{
 use crate::files::CentralPathRef;
 use crate::projectcentral::read_project_manifest;
 use crate::remember::{
-    REMEMBERED_DESTINATION, REMEMBERED_NOTE_PROVENANCE_SCHEMA, RememberError, RememberedNote,
+    RememberError, RememberedNote, REMEMBERED_DESTINATION, REMEMBERED_NOTE_PROVENANCE_SCHEMA,
 };
 use crate::remember_store::{RememberStore, RememberStoreError, RememberedNoteReceipt};
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::path::{Component, Path};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -488,7 +488,7 @@ pub fn register_remember_actions(registry: &mut ActionRegistry) {
 mod tests {
     use super::*;
     use crate::projectcentral_ops::initialize_projectcentral;
-    use crate::root::{RootOptions, initialize_central};
+    use crate::root::{initialize_central, RootOptions};
     use crate::{ConnectorContext, ConnectorRegistry};
     use std::fs;
     use std::path::PathBuf;
@@ -606,12 +606,10 @@ mod tests {
             &context,
         );
         assert!(read.ok, "{read:?}");
-        assert!(
-            read.data.as_ref().unwrap()["content"]
-                .as_str()
-                .unwrap()
-                .contains(SELECTION)
-        );
+        assert!(read.data.as_ref().unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .contains(SELECTION));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -776,12 +774,10 @@ mod tests {
         assert_eq!(result.status, ResultStatus::VerificationFailure);
         let details = result.error.as_ref().unwrap().details.as_ref().unwrap();
         assert_eq!(details["state"], "target-ground-absent-or-unwritable");
-        assert!(
-            details["note_ref"]
-                .as_str()
-                .unwrap()
-                .starts_with("remembered-note:")
-        );
+        assert!(details["note_ref"]
+            .as_str()
+            .unwrap()
+            .starts_with("remembered-note:"));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -806,14 +802,12 @@ mod tests {
             result.error.as_ref().unwrap().details.as_ref().unwrap()["state"],
             "invalid-project-ground"
         );
-        assert!(
-            result
-                .error
-                .as_ref()
-                .unwrap()
-                .message
-                .contains("Project directory does not exist in Central Work.")
-        );
+        assert!(result
+            .error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("Project directory does not exist in Central Work."));
         fs::remove_dir_all(root).unwrap();
     }
 

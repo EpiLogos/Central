@@ -1,7 +1,7 @@
 //! Incremental native bkmr maintenance and scoped query federation.
 use super::file_map::*;
 use crate::file_map_backend::{self as native, Backend};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
     io,

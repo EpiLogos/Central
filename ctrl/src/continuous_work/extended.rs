@@ -1,4 +1,7 @@
-use super::{authority, documents, migration, source::{self, Scope}};
+use super::{
+    authority, documents, migration,
+    source::{self, Scope},
+};
 use crate::action::{ActionExecutionContext, ActionRegistry};
 use crate::result::ActionResult;
 use serde_json::Value;
@@ -6,12 +9,18 @@ use std::io;
 
 /// The parent dispatcher holds existing root-before-Project source locks.
 /// Receiving is routed separately before those locks to preserve v1 lock order.
-pub(crate) fn dispatch(scope: &Scope, operation: &str, input: &Value, token: Option<&str>, now: u64) -> io::Result<Value> {
+pub(crate) fn dispatch(
+    scope: &Scope,
+    operation: &str,
+    input: &Value,
+    token: Option<&str>,
+    now: u64,
+) -> io::Result<Value> {
     match operation {
-        "migration_read"=>return migration::read(scope,input),
-        "document_read"=>return documents::read(scope,input),
-        "document_export"=>return documents::export(scope,input),
-        _=>{},
+        "migration_read" => return migration::read(scope, input),
+        "document_read" => return documents::read(scope, input),
+        "document_export" => return documents::export(scope, input),
+        _ => {}
     }
     let action = match operation {
         "migration_plan" => "central.migration.plan",
@@ -22,40 +31,93 @@ pub(crate) fn dispatch(scope: &Scope, operation: &str, input: &Value, token: Opt
         "document_mutate" => "central.document.mutate",
         _ => return Err(source::invalid("unknown continuous-work operation")),
     };
-    let principal = authority::authenticate(scope,token,action,input.get("expected_authority_revision").and_then(Value::as_str),now)?;
+    let principal = authority::authenticate(
+        scope,
+        token,
+        action,
+        input
+            .get("expected_authority_revision")
+            .and_then(Value::as_str),
+        now,
+    )?;
     match operation {
-        "migration_plan"=>migration::plan(scope,input,&principal,now),
-        "document_create"=>documents::create(scope,input,&principal,now),
-        "document_mutate"=>documents::mutate(scope,input,&principal,now),
-        _=>migration::transition(scope,operation,input,&principal,now),
+        "migration_plan" => migration::plan(scope, input, &principal, now),
+        "document_create" => documents::create(scope, input, &principal, now),
+        "document_mutate" => documents::mutate(scope, input, &principal, now),
+        _ => migration::transition(scope, operation, input, &principal, now),
     }
 }
 macro_rules! handler {
     ($name:ident,$action:literal,$operation:literal) => {
-        fn $name(_: &ActionRegistry,input: &Value,context: &ActionExecutionContext<'_>) -> ActionResult {
-            super::execute($action,$operation,input,context)
+        fn $name(
+            _: &ActionRegistry,
+            input: &Value,
+            context: &ActionExecutionContext<'_>,
+        ) -> ActionResult {
+            super::execute($action, $operation, input, context)
         }
     };
 }
-handler!(plan,"central.migration.plan","migration_plan");
-handler!(read,"central.migration.read","migration_read");
-handler!(apply,"central.migration.apply","migration_apply");
-handler!(recover,"central.migration.recover","migration_recover");
-handler!(rollback,"central.migration.rollback","migration_rollback");
-handler!(document_create,"central.document.create","document_create");
-handler!(document_read,"central.document.read","document_read");
-handler!(document_mutate,"central.document.mutate","document_mutate");
-handler!(document_export,"central.document.export","document_export");
-handler!(receiving_submit,"central.receiving.submit","receiving_submit");
-handler!(receiving_list,"central.receiving.list","receiving_list");
-handler!(receiving_read,"central.receiving.read","receiving_read");
-handler!(receiving_review,"central.receiving.review","receiving_review");
-handler!(receiving_include,"central.receiving.include","receiving_include");
-handler!(receiving_recover,"central.receiving.recover","receiving_recover");
+handler!(plan, "central.migration.plan", "migration_plan");
+handler!(read, "central.migration.read", "migration_read");
+handler!(apply, "central.migration.apply", "migration_apply");
+handler!(recover, "central.migration.recover", "migration_recover");
+handler!(rollback, "central.migration.rollback", "migration_rollback");
+handler!(
+    document_create,
+    "central.document.create",
+    "document_create"
+);
+handler!(document_read, "central.document.read", "document_read");
+handler!(
+    document_mutate,
+    "central.document.mutate",
+    "document_mutate"
+);
+handler!(
+    document_export,
+    "central.document.export",
+    "document_export"
+);
+handler!(
+    receiving_submit,
+    "central.receiving.submit",
+    "receiving_submit"
+);
+handler!(receiving_list, "central.receiving.list", "receiving_list");
+handler!(receiving_read, "central.receiving.read", "receiving_read");
+handler!(
+    receiving_review,
+    "central.receiving.review",
+    "receiving_review"
+);
+handler!(
+    receiving_include,
+    "central.receiving.include",
+    "receiving_include"
+);
+handler!(
+    receiving_recover,
+    "central.receiving.recover",
+    "receiving_recover"
+);
 pub(crate) fn register_actions(registry: &mut ActionRegistry) {
-    let transition = &[("plan_ref","string",true),("expected_plan_revision","string",true),("expected_policy_revision","string",true),("expected_authority_revision","string",false)];
-    let document = &[("source_ref","string",true),("document_id","string",true)];
-    let inclusion = &[("return_ref","string",true),("expected_return_revision","string",true),("expected_source_revision","string",false),("expected_authority_revision","string",false)];
+    let transition = &[
+        ("plan_ref", "string", true),
+        ("expected_plan_revision", "string", true),
+        ("expected_policy_revision", "string", true),
+        ("expected_authority_revision", "string", false),
+    ];
+    let document = &[
+        ("source_ref", "string", true),
+        ("document_id", "string", true),
+    ];
+    let inclusion = &[
+        ("return_ref", "string", true),
+        ("expected_return_revision", "string", true),
+        ("expected_source_revision", "string", false),
+        ("expected_authority_revision", "string", false),
+    ];
     super::register_definitions(registry,&[
         ("central.migration.plan","Plan selected temporal source migration","Persist inspectable exact-source/metadata intent without moving source bytes or resetting a repository.",true,plan,&[("request_id","string",true),("moves","array",true),("expected_policy_revision","string",true),("expected_authority_revision","string",false)]),
         ("central.migration.read","Read temporal migration state","Read the immutable plan and current recovery phase, not an inferred success receipt.",false,read,&[("plan_ref","string",true)]),

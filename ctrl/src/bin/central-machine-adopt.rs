@@ -111,8 +111,9 @@ fn run(args: Args) -> Result<String, String> {
     let relative_path = PathBuf::from("Control/machines").join(format!("{}.json", args.role));
 
     let (outcome, mut declaration) = if path.exists() {
-        read_machine_declaration(&args.root, &args.role)
-            .map_err(|error| format!("existing machine declaration is invalid: {}", error.message))?;
+        read_machine_declaration(&args.root, &args.role).map_err(|error| {
+            format!("existing machine declaration is invalid: {}", error.message)
+        })?;
         let text = fs::read_to_string(&path)
             .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
         let mut value: Value = serde_json::from_str(&text)
@@ -122,7 +123,10 @@ fn run(args: Args) -> Result<String, String> {
             BindingChange::Added => {
                 write_declaration(&path, &value)?;
                 read_machine_declaration(&args.root, &args.role).map_err(|error| {
-                    format!("machine declaration failed validation after binding: {}", error.message)
+                    format!(
+                        "machine declaration failed validation after binding: {}",
+                        error.message
+                    )
                 })?;
                 ("bound", value)
             }
@@ -153,7 +157,10 @@ fn run(args: Args) -> Result<String, String> {
         normalize_binding_order(&mut value);
         write_declaration(&path, &value)?;
         read_machine_declaration(&args.root, &args.role).map_err(|error| {
-            format!("new machine declaration failed validation: {}", error.message)
+            format!(
+                "new machine declaration failed validation: {}",
+                error.message
+            )
         })?;
         ("created", value)
     };
@@ -281,7 +288,8 @@ fn normalize_binding_order(value: &mut Value) {
                 .unwrap_or_default(),
         );
         let right = (
-            right.get("kind")
+            right
+                .get("kind")
                 .and_then(Value::as_str)
                 .unwrap_or_default(),
             right

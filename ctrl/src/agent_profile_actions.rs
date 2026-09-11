@@ -3,14 +3,14 @@ use crate::action::{
     ActionOutputDefinition, ActionRegistry, MutationClass,
 };
 use crate::agent_profile::{
-    AGENT_PROFILE_PROVENANCE_SCHEMA, AGENT_PROFILE_SCHEMA, AgentProfile, AgentProfileError,
-    AgentProfileScope,
+    AgentProfile, AgentProfileError, AgentProfileScope, AGENT_PROFILE_PROVENANCE_SCHEMA,
+    AGENT_PROFILE_SCHEMA,
 };
 use crate::agent_profile_store::{AgentProfileStore, AgentProfileStoreError};
 use crate::projectcentral::read_project_manifest;
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
-use serde_json::{Value, json, to_value};
+use serde_json::{json, to_value, Value};
 use std::collections::BTreeSet;
 use std::path::{Component, Path};
 
@@ -756,7 +756,7 @@ mod tests {
     use super::*;
     use crate::projectcentral::ProjectCentralManifest;
     use crate::projectcentral_ops::initialize_projectcentral;
-    use crate::root::{RootOptions, initialize_central};
+    use crate::root::{initialize_central, RootOptions};
     use central_connector_sdk::{ConnectorContext, ConnectorRegistry};
     use serde_json::json;
     use std::fs;
@@ -1240,14 +1240,12 @@ mod tests {
         );
         assert!(!result.ok);
         assert_eq!(result.status, ResultStatus::InvalidInput);
-        assert!(
-            result
-                .error
-                .as_ref()
-                .unwrap()
-                .message
-                .contains("Project directory does not exist in Central Work.")
-        );
+        assert!(result
+            .error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("Project directory does not exist in Central Work."));
         fs::remove_dir_all(root).unwrap();
     }
 

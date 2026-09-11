@@ -238,7 +238,11 @@ fn string_array(input: &Value, field: &str, action: &str) -> Result<Vec<String>,
     let Some(value) = input.get(field) else {
         return Ok(vec![]);
     };
-    if let Some(value) = value.as_str().map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(value) = value
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         return Ok(vec![value.to_owned()]);
     }
     let Some(values) = value.as_array() else {
@@ -251,7 +255,11 @@ fn string_array(input: &Value, field: &str, action: &str) -> Result<Vec<String>,
     };
     let mut output = Vec::with_capacity(values.len());
     for value in values {
-        let Some(value) = value.as_str().map(str::trim).filter(|value| !value.is_empty()) else {
+        let Some(value) = value
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
             return Err(ActionResult::failure(
                 Some(action),
                 ResultStatus::InvalidInput,
@@ -337,12 +345,7 @@ fn project_context(
     })?;
     let root = resolve_central_root(context.root_options)
         .map_err(|message| {
-            ActionResult::failure(
-                Some(action),
-                ResultStatus::InvalidInput,
-                message,
-                None,
-            )
+            ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None)
         })?
         .path;
     let project_root = root.join("Work").join(project);
@@ -395,19 +398,20 @@ fn unique_id(prefix: &str) -> String {
 /// Default handoff id per the naming law: slug of the subject + local civil
 /// date, counter-disambiguated against ids already present in the field.
 fn default_handoff_id(project_root: &Path, subject: &str, kind: &str) -> String {
-    let existing: std::collections::HashSet<String> = fs::read_dir(project_root.join(NOW_AGENT_DIR))
-        .map(|entries| {
-            entries
-                .filter_map(|entry| entry.ok())
-                .filter_map(|entry| {
-                    entry
-                        .path()
-                        .file_stem()
-                        .map(|stem| stem.to_string_lossy().into_owned())
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let existing: std::collections::HashSet<String> =
+        fs::read_dir(project_root.join(NOW_AGENT_DIR))
+            .map(|entries| {
+                entries
+                    .filter_map(|entry| entry.ok())
+                    .filter_map(|entry| {
+                        entry
+                            .path()
+                            .file_stem()
+                            .map(|stem| stem.to_string_lossy().into_owned())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
     let taken = |candidate: &str| existing.contains(candidate);
     crate::names::descriptive_id(&crate::names::slugify(subject, 6), kind, &taken)
 }
@@ -660,7 +664,11 @@ fn validate_kind(kind: &str) -> io::Result<()> {
     }
 }
 
-fn create_handoff(input: &Value, project_root: &Path, action: &str) -> Result<NowHandoff, ActionResult> {
+fn create_handoff(
+    input: &Value,
+    project_root: &Path,
+    action: &str,
+) -> Result<NowHandoff, ActionResult> {
     let actor = required(input, "actor", action)?;
     let kind = required(input, "kind", action)?;
     let subject = required(input, "subject", action)?;
@@ -683,8 +691,8 @@ fn create_handoff(input: &Value, project_root: &Path, action: &str) -> Result<No
         )
     })?;
 
-    let id = optional(input, "id")
-        .unwrap_or_else(|| default_handoff_id(project_root, &subject, &kind));
+    let id =
+        optional(input, "id").unwrap_or_else(|| default_handoff_id(project_root, &subject, &kind));
     validate_id(&id).map_err(|error| {
         ActionResult::failure(
             Some(action),
@@ -693,9 +701,7 @@ fn create_handoff(input: &Value, project_root: &Path, action: &str) -> Result<No
             None,
         )
     })?;
-    let path = project_root
-        .join(NOW_AGENT_DIR)
-        .join(format!("{id}.json"));
+    let path = project_root.join(NOW_AGENT_DIR).join(format!("{id}.json"));
     if path.exists() {
         return Err(ActionResult::failure(
             Some(action),
@@ -754,15 +760,15 @@ fn parse_day(value: &str) -> io::Result<(u32, u32, u32)> {
             "day must use YYYY-MM-DD local civil date form",
         ));
     }
-    let year = value[0..4].parse::<u32>().map_err(|_| {
-        io::Error::new(io::ErrorKind::InvalidInput, "invalid DAY year")
-    })?;
-    let month = value[5..7].parse::<u32>().map_err(|_| {
-        io::Error::new(io::ErrorKind::InvalidInput, "invalid DAY month")
-    })?;
-    let day = value[8..10].parse::<u32>().map_err(|_| {
-        io::Error::new(io::ErrorKind::InvalidInput, "invalid DAY day")
-    })?;
+    let year = value[0..4]
+        .parse::<u32>()
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid DAY year"))?;
+    let month = value[5..7]
+        .parse::<u32>()
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid DAY month"))?;
+    let day = value[8..10]
+        .parse::<u32>()
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid DAY day"))?;
     if year == 0 || !(1..=12).contains(&month) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -961,7 +967,11 @@ fn render_day(
         for flow in flows {
             output.push_str(&format!(
                 "- `{}` @ `{}` — source `{}`; DAY snapshot `{}`; lifecycle `{}`\n",
-                flow.flow_ref, flow.revision, flow.source_path, flow.snapshot_source, flow.lifecycle
+                flow.flow_ref,
+                flow.revision,
+                flow.source_path,
+                flow.snapshot_source,
+                flow.lifecycle
             ));
         }
     }
@@ -976,7 +986,9 @@ fn render_day(
         }
     }
 
-    output.push_str("\n## Resolved / expired / promoted transient records removed from moving NOW\n\n");
+    output.push_str(
+        "\n## Resolved / expired / promoted transient records removed from moving NOW\n\n",
+    );
     if removed.is_empty() {
         output.push_str("- none\n");
     } else {
@@ -1075,13 +1087,8 @@ pub fn rollover(project_root: &Path, day: &str, next_day: &str) -> io::Result<Ro
         ));
     }
 
-    let (snapshot_root, flows) = snapshot_day_sources(
-        project_root,
-        &paths.day,
-        day,
-        &human_scratch,
-        &handoffs,
-    )?;
+    let (snapshot_root, flows) =
+        snapshot_day_sources(project_root, &paths.day, day, &human_scratch, &handoffs)?;
     let day_text = match render_day(
         project_root,
         &snapshot_root,
@@ -1386,9 +1393,7 @@ fn update_action(
         return io_failure(action, error);
     }
 
-    let path = project_root
-        .join(NOW_AGENT_DIR)
-        .join(format!("{id}.json"));
+    let path = project_root.join(NOW_AGENT_DIR).join(format!("{id}.json"));
     let mut handoff = match read_handoff(&path) {
         Ok(value) => value,
         Err(error) => return io_failure(action, error),
@@ -1439,20 +1444,14 @@ fn promote_action(
         Ok(value) => value,
         Err(result) => return result,
     };
-    promote(
-        &project_root,
-        &source,
-        &target,
-        &destination,
-        &acceptance,
-    )
-    .map(|value| {
-        ActionResult::success(
-            action,
-            serde_json::to_value(value).expect("NOW promotion serializes"),
-        )
-    })
-    .unwrap_or_else(|error| io_failure(action, error))
+    promote(&project_root, &source, &target, &destination, &acceptance)
+        .map(|value| {
+            ActionResult::success(
+                action,
+                serde_json::to_value(value).expect("NOW promotion serializes"),
+            )
+        })
+        .unwrap_or_else(|error| io_failure(action, error))
 }
 
 fn rollover_action(
@@ -1637,7 +1636,9 @@ mod tests {
         assert!(project.join(NOW_AGENT_DIR).is_dir());
         assert!(project.join(NOW_DAY_DIR).is_dir());
         assert!(project.join(HUMAN_SOURCE_DIR).is_dir());
-        assert!(project.join("ProjectCentral/agents/wiki/wiki.json").is_file());
+        assert!(project
+            .join("ProjectCentral/agents/wiki/wiki.json")
+            .is_file());
     }
 
     #[test]
@@ -1679,10 +1680,7 @@ mod tests {
             .protected
             .iter()
             .any(|source| source.ends_with("protected.json")));
-        assert!(project
-            .join(NOW_AGENT_DIR)
-            .join("protected.json")
-            .is_file());
+        assert!(project.join(NOW_AGENT_DIR).join("protected.json").is_file());
     }
 
     #[test]

@@ -252,7 +252,12 @@ pub fn inspect_project_ground(project_root: &Path) -> io::Result<GroundInspectio
         .unwrap_or_else(|| HUMAN_SOURCE_DIR.to_owned());
     let project_key = project_id
         .clone()
-        .or_else(|| project_root.file_name().and_then(|name| name.to_str()).map(str::to_owned))
+        .or_else(|| {
+            project_root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_owned)
+        })
         .unwrap_or_else(|| "project".to_owned());
 
     let explicit_relations = read_ground_relations(project_root, project_id.as_deref())?;
@@ -313,9 +318,9 @@ pub fn inspect_project_ground(project_root: &Path) -> io::Result<GroundInspectio
     native_candidates.dedup_by(|a, b| a.path == b.path);
 
     let recognised_sources = recognised_by_path.into_values().collect::<Vec<_>>();
-    let accepted_human_source = recognised_sources.iter().any(|source| {
-        source.exists && source.provenance.is_recognised_human_source()
-    });
+    let accepted_human_source = recognised_sources
+        .iter()
+        .any(|source| source.exists && source.provenance.is_recognised_human_source());
     let status = if accepted_human_source {
         GroundStatus::Established
     } else if recognised_sources.is_empty() {
@@ -328,7 +333,9 @@ pub fn inspect_project_ground(project_root: &Path) -> io::Result<GroundInspectio
         .as_ref()
         .map(|manifest| {
             let source = manifest.wiki.source.clone();
-            let space_ref = read_wiki_space_ref(&project_root.join(&source)).ok().flatten();
+            let space_ref = read_wiki_space_ref(&project_root.join(&source))
+                .ok()
+                .flatten();
             (Some(source), space_ref)
         })
         .unwrap_or((None, None));
@@ -348,7 +355,8 @@ pub fn inspect_project_ground(project_root: &Path) -> io::Result<GroundInspectio
         .is_file()
         .then(|| GROUND_RELATIONS_SOURCE.to_owned());
 
-    let next_actions = ground_next_actions(projectcentral_ready, status, !native_candidates.is_empty());
+    let next_actions =
+        ground_next_actions(projectcentral_ready, status, !native_candidates.is_empty());
     Ok(GroundInspection {
         project_root: project_root.to_path_buf(),
         projectcentral_ready,
@@ -372,7 +380,9 @@ pub fn inspect_project_ground(project_root: &Path) -> io::Result<GroundInspectio
         return_policy: GroundReturnPolicy {
             difference_automatically_mutates_human_source: false,
             agent_wiki_may_be_maintained_independently: true,
-            human_source_return: "direct human authorship or an explicit proposal/review/accepted source mutation".to_owned(),
+            human_source_return:
+                "direct human authorship or an explicit proposal/review/accepted source mutation"
+                    .to_owned(),
         },
         next_actions,
     })
@@ -481,7 +491,9 @@ pub fn apply_accepted_ground_relation(
             "projectcentral-user treatment requires a source already inside ProjectCentral/user; this Action does not move files",
         ));
     }
-    if treatment == SourceTreatment::RetainNativeInPlace && source.starts_with(&format!("{PROJECTCENTRAL_DIR}/")) {
+    if treatment == SourceTreatment::RetainNativeInPlace
+        && source.starts_with(&format!("{PROJECTCENTRAL_DIR}/"))
+    {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "retain-native-in-place is for ordinary Project source outside ProjectCentral",
@@ -544,7 +556,11 @@ pub fn apply_accepted_ground_relation(
 }
 
 fn read_manifest_if_present(project_root: &Path) -> io::Result<Option<ProjectCentralManifest>> {
-    if !project_root.join(PROJECTCENTRAL_DIR).join(PROJECT_MANIFEST).is_file() {
+    if !project_root
+        .join(PROJECTCENTRAL_DIR)
+        .join(PROJECT_MANIFEST)
+        .is_file()
+    {
         return Ok(None);
     }
     let manifest = read_project_manifest(project_root)?;
@@ -589,12 +605,16 @@ fn read_relations_file(
     if !path.is_file() {
         return Ok(None);
     }
-    let value: GroundRelationsFile = serde_json::from_slice(&fs::read(&path)?).map_err(|error| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("{} is not a valid ground relation file: {error}", path.display()),
-        )
-    })?;
+    let value: GroundRelationsFile =
+        serde_json::from_slice(&fs::read(&path)?).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "{} is not a valid ground relation file: {error}",
+                    path.display()
+                ),
+            )
+        })?;
     if value.schema != GROUND_RELATIONS_SCHEMA {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -819,7 +839,10 @@ fn parse_roles(raw: Option<&str>) -> Vec<String> {
 /// grammar; the irreversible path-hash form it previously disclosed could not
 /// be resolved by any owner operation.
 fn source_ref(project_id: &str, path: &str) -> String {
-    let escaped = path.replace('%', "%25").replace(':', "%3A").replace(' ', "%20");
+    let escaped = path
+        .replace('%', "%25")
+        .replace(':', "%3A")
+        .replace(' ', "%20");
     format!("central:source:project:{project_id}:{escaped}")
 }
 
@@ -856,7 +879,10 @@ fn ground_next_actions(
 ) -> Vec<String> {
     let mut actions = Vec::new();
     if !projectcentral_ready {
-        actions.push("Initialize ProjectCentral; initialization will not generate a human document.".to_owned());
+        actions.push(
+            "Initialize ProjectCentral; initialization will not generate a human document."
+                .to_owned(),
+        );
         return actions;
     }
     match status {
@@ -882,7 +908,10 @@ fn ensure_project_directory(project_root: &Path) -> io::Result<()> {
     } else {
         Err(io::Error::new(
             io::ErrorKind::NotFound,
-            format!("Project root does not exist as a directory: {}", project_root.display()),
+            format!(
+                "Project root does not exist as a directory: {}",
+                project_root.display()
+            ),
         ))
     }
 }
@@ -983,14 +1012,24 @@ fn project_context(
 ) -> Result<PathBuf, ActionResult> {
     let project = required(input, "project", action)?;
     ensure_project_member(&project).map_err(|error| {
-        ActionResult::failure(Some(action), ResultStatus::InvalidInput, error.to_string(), None)
+        ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            error.to_string(),
+            None,
+        )
     })?;
     let root = resolve_central_root(context.root_options).map_err(|message| {
         ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None)
     })?;
     let project_root = root.path.join("Work").join(project);
     ensure_project_directory(&project_root).map_err(|error| {
-        ActionResult::failure(Some(action), ResultStatus::InvalidInput, error.to_string(), None)
+        ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            error.to_string(),
+            None,
+        )
     })?;
     Ok(project_root)
 }
@@ -1060,24 +1099,42 @@ fn apply_action(
         Ok(value) => value,
         Err(result) => return result,
     };
-    let provenance = match required(input, "provenance", action)
-        .and_then(|value| SourceProvenance::from_input(&value).map_err(|error| {
-            ActionResult::failure(Some(action), ResultStatus::InvalidInput, error.to_string(), None)
-        })) {
+    let provenance = match required(input, "provenance", action).and_then(|value| {
+        SourceProvenance::from_input(&value).map_err(|error| {
+            ActionResult::failure(
+                Some(action),
+                ResultStatus::InvalidInput,
+                error.to_string(),
+                None,
+            )
+        })
+    }) {
         Ok(value) => value,
         Err(result) => return result,
     };
-    let standing = match required(input, "standing", action)
-        .and_then(|value| SourceStanding::from_input(&value).map_err(|error| {
-            ActionResult::failure(Some(action), ResultStatus::InvalidInput, error.to_string(), None)
-        })) {
+    let standing = match required(input, "standing", action).and_then(|value| {
+        SourceStanding::from_input(&value).map_err(|error| {
+            ActionResult::failure(
+                Some(action),
+                ResultStatus::InvalidInput,
+                error.to_string(),
+                None,
+            )
+        })
+    }) {
         Ok(value) => value,
         Err(result) => return result,
     };
-    let treatment = match required(input, "treatment", action)
-        .and_then(|value| SourceTreatment::from_input(&value).map_err(|error| {
-            ActionResult::failure(Some(action), ResultStatus::InvalidInput, error.to_string(), None)
-        })) {
+    let treatment = match required(input, "treatment", action).and_then(|value| {
+        SourceTreatment::from_input(&value).map_err(|error| {
+            ActionResult::failure(
+                Some(action),
+                ResultStatus::InvalidInput,
+                error.to_string(),
+                None,
+            )
+        })
+    }) {
         Ok(value) => value,
         Err(result) => return result,
     };
@@ -1221,12 +1278,24 @@ mod tests {
         assert_eq!(empty.status, GroundStatus::Empty);
         assert!(empty.recognised_sources.is_empty());
         assert!(project.join(WIKI_SOURCE).is_file());
-        assert_eq!(fs::read_dir(project.join(HUMAN_SOURCE_DIR)).unwrap().count(), 0);
+        assert_eq!(
+            fs::read_dir(project.join(HUMAN_SOURCE_DIR))
+                .unwrap()
+                .count(),
+            0
+        );
 
-        fs::write(project.join(HUMAN_SOURCE_DIR).join("note.md"), "What this small project is for.\n").unwrap();
+        fs::write(
+            project.join(HUMAN_SOURCE_DIR).join("note.md"),
+            "What this small project is for.\n",
+        )
+        .unwrap();
         let unresolved = inspect_project_ground(&project).unwrap();
         assert_eq!(unresolved.status, GroundStatus::Partial);
-        assert_eq!(unresolved.recognised_sources[0].provenance, SourceProvenance::Unresolved);
+        assert_eq!(
+            unresolved.recognised_sources[0].provenance,
+            SourceProvenance::Unresolved
+        );
 
         apply_accepted_ground_relation(
             &project,
@@ -1239,7 +1308,10 @@ mod tests {
         .unwrap();
         let established = inspect_project_ground(&project).unwrap();
         assert_eq!(established.status, GroundStatus::Established);
-        assert_eq!(established.account_handoff.recognised_human_sources.len(), 1);
+        assert_eq!(
+            established.account_handoff.recognised_human_sources.len(),
+            1
+        );
     }
 
     #[test]
@@ -1250,7 +1322,11 @@ mod tests {
         fs::create_dir_all(project.join("docs/design")).unwrap();
         fs::write(project.join("README.md"), "native overview\n").unwrap();
         fs::write(project.join("docs/VISION.md"), "native vision\n").unwrap();
-        fs::write(project.join("docs/design/interaction.md"), "native interaction\n").unwrap();
+        fs::write(
+            project.join("docs/design/interaction.md"),
+            "native interaction\n",
+        )
+        .unwrap();
         initialize_projectcentral(&central, &project, "example/deep").unwrap();
 
         let before = inspect_project_ground(&project).unwrap();
@@ -1272,13 +1348,17 @@ mod tests {
             vec!["vision".to_owned(), "purpose".to_owned()],
         )
         .unwrap();
-        assert_eq!(fs::read_to_string(project.join("docs/VISION.md")).unwrap(), "native vision\n");
+        assert_eq!(
+            fs::read_to_string(project.join("docs/VISION.md")).unwrap(),
+            "native vision\n"
+        );
         let after = inspect_project_ground(&project).unwrap();
         assert_eq!(after.status, GroundStatus::Established);
         assert!(after
             .recognised_sources
             .iter()
-            .any(|source| source.path == "docs/VISION.md" && source.provenance == SourceProvenance::HumanAuthored));
+            .any(|source| source.path == "docs/VISION.md"
+                && source.provenance == SourceProvenance::HumanAuthored));
     }
 
     #[test]
@@ -1288,11 +1368,18 @@ mod tests {
         let project = central.join("Work/assisted");
         fs::create_dir_all(&project).unwrap();
         initialize_projectcentral(&central, &project, "example/assisted").unwrap();
-        fs::write(project.join(HUMAN_SOURCE_DIR).join("suggested-vision.md"), "agent suggestion\n").unwrap();
+        fs::write(
+            project.join(HUMAN_SOURCE_DIR).join("suggested-vision.md"),
+            "agent suggestion\n",
+        )
+        .unwrap();
 
         let unresolved = inspect_project_ground(&project).unwrap();
         assert_eq!(unresolved.status, GroundStatus::Partial);
-        assert_eq!(unresolved.recognised_sources[0].provenance, SourceProvenance::Unresolved);
+        assert_eq!(
+            unresolved.recognised_sources[0].provenance,
+            SourceProvenance::Unresolved
+        );
 
         apply_accepted_ground_relation(
             &project,
@@ -1303,7 +1390,10 @@ mod tests {
             vec!["vision".to_owned()],
         )
         .unwrap();
-        assert_eq!(inspect_project_ground(&project).unwrap().status, GroundStatus::Partial);
+        assert_eq!(
+            inspect_project_ground(&project).unwrap().status,
+            GroundStatus::Partial
+        );
 
         apply_accepted_ground_relation(
             &project,
@@ -1314,7 +1404,10 @@ mod tests {
             vec!["vision".to_owned()],
         )
         .unwrap();
-        assert_eq!(inspect_project_ground(&project).unwrap().status, GroundStatus::Established);
+        assert_eq!(
+            inspect_project_ground(&project).unwrap().status,
+            GroundStatus::Established
+        );
     }
 
     #[test]
@@ -1354,8 +1447,16 @@ mod tests {
         assert!(!inspection.account_handoff.account_is_source);
         assert!(!inspection.account_handoff.html_is_source);
         assert!(!inspection.account_handoff.projection_is_source);
-        assert!(!inspection.return_policy.difference_automatically_mutates_human_source);
-        assert!(inspection.return_policy.agent_wiki_may_be_maintained_independently);
+        assert!(
+            !inspection
+                .return_policy
+                .difference_automatically_mutates_human_source
+        );
+        assert!(
+            inspection
+                .return_policy
+                .agent_wiki_may_be_maintained_independently
+        );
         assert_eq!(
             fs::read_to_string(authored).unwrap(),
             "The intended experience stays human-authored.\n"
@@ -1376,7 +1477,13 @@ mod tests {
             .iter()
             .find(|item| item.source.as_deref() == Some("docs/vision.md"))
             .unwrap();
-        assert!(source.changes.iter().any(|change| change.contains("source bytes and source path remain unchanged")));
-        assert!(source.changes.iter().any(|change| change.contains("separate reviewed source mutation")));
+        assert!(source
+            .changes
+            .iter()
+            .any(|change| change.contains("source bytes and source path remain unchanged")));
+        assert!(source
+            .changes
+            .iter()
+            .any(|change| change.contains("separate reviewed source mutation")));
     }
 }

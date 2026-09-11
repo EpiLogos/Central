@@ -243,20 +243,39 @@ fn validate_relations(value: &DevelopmentSourceRelations, scope_ref: &str) -> io
                 format!("development-field tier {} occurs more than once", tier.tier),
             ));
         }
-        if tier.source_refs.iter().any(|reference| reference.trim().is_empty()) {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "tier source refs must be non-empty"));
+        if tier
+            .source_refs
+            .iter()
+            .any(|reference| reference.trim().is_empty())
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "tier source refs must be non-empty",
+            ));
         }
     }
     let mut ux = BTreeSet::new();
     for binding in &value.ux {
-        if binding.ux_ref.trim().is_empty() || binding.source_ref.trim().is_empty() || !ux.insert(&binding.ux_ref) {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "UX relations require unique non-empty ux_ref and source_ref values"));
+        if binding.ux_ref.trim().is_empty()
+            || binding.source_ref.trim().is_empty()
+            || !ux.insert(&binding.ux_ref)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "UX relations require unique non-empty ux_ref and source_ref values",
+            ));
         }
     }
     let mut ex = BTreeSet::new();
     for binding in &value.ex {
-        if binding.ex_ref.trim().is_empty() || binding.source_ref.trim().is_empty() || !ex.insert(&binding.ex_ref) {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "EX relations require unique non-empty ex_ref and source_ref values"));
+        if binding.ex_ref.trim().is_empty()
+            || binding.source_ref.trim().is_empty()
+            || !ex.insert(&binding.ex_ref)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "EX relations require unique non-empty ex_ref and source_ref values",
+            ));
         }
     }
     Ok(())
@@ -276,12 +295,16 @@ fn read_relations(path: &Path, scope_ref: &str) -> io::Result<DevelopmentSourceR
     if !path.is_file() {
         return Ok(empty_relations(scope_ref));
     }
-    let value: DevelopmentSourceRelations = serde_json::from_slice(&fs::read(path)?).map_err(|error| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("{} is not a valid Development Field source relation file: {error}", path.display()),
-        )
-    })?;
+    let value: DevelopmentSourceRelations =
+        serde_json::from_slice(&fs::read(path)?).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "{} is not a valid Development Field source relation file: {error}",
+                    path.display()
+                ),
+            )
+        })?;
     validate_relations(&value, scope_ref)?;
     Ok(value)
 }
@@ -298,16 +321,31 @@ fn write_relations(path: &Path, value: &DevelopmentSourceRelations) -> io::Resul
 
 fn safe_member(raw: &str) -> io::Result<PathBuf> {
     if raw.trim().is_empty() || raw != raw.trim() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "path must be a non-empty relative member"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "path must be a non-empty relative member",
+        ));
     }
     let path = Path::new(raw);
-    if path.is_absolute() || !path.components().all(|component| matches!(component, Component::Normal(_))) {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "path must not escape its self-description aperture"));
+    if path.is_absolute()
+        || !path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "path must not escape its self-description aperture",
+        ));
     }
     Ok(path.to_path_buf())
 }
 
-fn collect_self_files(current: &Path, world_root: &Path, depth: usize, output: &mut Vec<PathBuf>) -> io::Result<()> {
+fn collect_self_files(
+    current: &Path,
+    world_root: &Path,
+    depth: usize,
+    output: &mut Vec<PathBuf>,
+) -> io::Result<()> {
     if depth > MAX_SELF_DEPTH || !current.is_dir() {
         return Ok(());
     }
@@ -342,7 +380,8 @@ fn resolve_source(
         return Ok(None);
     };
     let revision = content_revision(&world_root.join(&binding.path))?;
-    let self_member = binding.path == self_prefix || binding.path.starts_with(&format!("{self_prefix}/"));
+    let self_member =
+        binding.path == self_prefix || binding.path.starts_with(&format!("{self_prefix}/"));
     Ok(Some(ResolvedDevelopmentSource {
         source_ref: binding.source_ref.clone(),
         path: binding.path.clone(),
@@ -368,14 +407,22 @@ fn inspect_scope(
     let metadata = fs::symlink_metadata(&self_path);
     let mut issues = Vec::new();
     let mut status = match metadata {
-        Err(error) if error.kind() == io::ErrorKind::NotFound && !relation_path.exists() => SelfApertureStatus::LegacyMigratableAbsence,
+        Err(error) if error.kind() == io::ErrorKind::NotFound && !relation_path.exists() => {
+            SelfApertureStatus::LegacyMigratableAbsence
+        }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            issues.push("Development Field relations exist while the self-description aperture is absent.".to_owned());
+            issues.push(
+                "Development Field relations exist while the self-description aperture is absent."
+                    .to_owned(),
+            );
             SelfApertureStatus::InvalidBrokenSourceState
         }
         Err(error) => return Err(error),
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-            issues.push("self-description aperture must be an ordinary directory, not a file or symlink".to_owned());
+            issues.push(
+                "self-description aperture must be an ordinary directory, not a file or symlink"
+                    .to_owned(),
+            );
             SelfApertureStatus::InvalidBrokenSourceState
         }
         Ok(_) => SelfApertureStatus::Present,
@@ -419,7 +466,12 @@ fn inspect_scope(
     for tier in &relations.tiers {
         let mut sources = Vec::new();
         for reference in &tier.source_refs {
-            sources.push(resolve_source(world_root, self_prefix, &bindings, reference)?);
+            sources.push(resolve_source(
+                world_root,
+                self_prefix,
+                &bindings,
+                reference,
+            )?);
         }
         tier_bindings.push(TierReading {
             tier: tier.tier,
@@ -466,7 +518,9 @@ fn inspect_scope(
     for binding in bindings.values() {
         if binding.path == self_prefix || binding.path.starts_with(&format!("{self_prefix}/")) {
             if linked_paths.insert(binding.path.clone()) {
-                if let Some(source) = resolve_source(world_root, self_prefix, &bindings, &binding.source_ref)? {
+                if let Some(source) =
+                    resolve_source(world_root, self_prefix, &bindings, &binding.source_ref)?
+                {
                     linked_sources.push(source);
                 }
             }
@@ -481,7 +535,9 @@ fn inspect_scope(
         for file in files {
             let relative = file
                 .strip_prefix(world_root)
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "self source escaped its world"))?
+                .map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidData, "self source escaped its world")
+                })?
                 .to_string_lossy()
                 .replace('\\', "/");
             if linked_paths.contains(&relative) {
@@ -529,11 +585,16 @@ pub fn inspect_root_development_field(central_root: &Path) -> io::Result<Develop
     )
 }
 
-pub fn inspect_project_development_field(project_root: &Path) -> io::Result<DevelopmentFieldReading> {
+pub fn inspect_project_development_field(
+    project_root: &Path,
+) -> io::Result<DevelopmentFieldReading> {
     let manifest = read_project_manifest(project_root)?;
     let validation = manifest.validate();
     if !validation.valid {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, validation.errors.join("; ")));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            validation.errors.join("; "),
+        ));
     }
     inspect_scope(
         project_root,
@@ -548,7 +609,10 @@ fn ensure_self(world_root: &Path, self_prefix: &str) -> io::Result<()> {
     let path = world_root.join(self_prefix);
     if let Ok(metadata) = fs::symlink_metadata(&path) {
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "self-description aperture exists but is not an ordinary directory"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "self-description aperture exists but is not an ordinary directory",
+            ));
         }
         return Ok(());
     }
@@ -557,9 +621,13 @@ fn ensure_self(world_root: &Path, self_prefix: &str) -> io::Result<()> {
 }
 
 pub fn ensure_root_self(central_root: &Path) -> io::Result<SelfEnsureReceipt> {
-    let before = inspect_root_development_field(central_root)?.self_aperture.status;
+    let before = inspect_root_development_field(central_root)?
+        .self_aperture
+        .status;
     ensure_self(central_root, ROOT_SELF_DIR)?;
-    let after = inspect_root_development_field(central_root)?.self_aperture.status;
+    let after = inspect_root_development_field(central_root)?
+        .self_aperture
+        .status;
     Ok(SelfEnsureReceipt {
         scope_ref: CONTROL_WORLD_REF.to_owned(),
         path: ROOT_SELF_DIR.to_owned(),
@@ -572,9 +640,13 @@ pub fn ensure_root_self(central_root: &Path) -> io::Result<SelfEnsureReceipt> {
 
 pub fn ensure_project_self(project_root: &Path) -> io::Result<SelfEnsureReceipt> {
     let manifest = read_project_manifest(project_root)?;
-    let before = inspect_project_development_field(project_root)?.self_aperture.status;
+    let before = inspect_project_development_field(project_root)?
+        .self_aperture
+        .status;
     ensure_self(project_root, PROJECT_SELF_DIR)?;
-    let after = inspect_project_development_field(project_root)?.self_aperture.status;
+    let after = inspect_project_development_field(project_root)?
+        .self_aperture
+        .status;
     Ok(SelfEnsureReceipt {
         scope_ref: format!("project:{}", manifest.project_id),
         path: PROJECT_SELF_DIR.to_owned(),
@@ -595,7 +667,10 @@ fn parse_standing(raw: &str) -> io::Result<SourceStanding> {
         "observed-evidence" => Ok(SourceStanding::ObservedEvidence),
         "current-development-state" => Ok(SourceStanding::CurrentDevelopmentState),
         "agent-inference" => Ok(SourceStanding::AgentInference),
-        _ => Err(io::Error::new(io::ErrorKind::InvalidInput, format!("unsupported source standing: {raw}"))),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unsupported source standing: {raw}"),
+        )),
     }
 }
 
@@ -610,7 +685,10 @@ fn parse_provenance(raw: &str) -> io::Result<SourceProvenance> {
         "observed" => Ok(SourceProvenance::Observed),
         "inference" => Ok(SourceProvenance::Inference),
         "unresolved" => Ok(SourceProvenance::Unresolved),
-        _ => Err(io::Error::new(io::ErrorKind::InvalidInput, format!("unsupported source provenance: {raw}"))),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unsupported source provenance: {raw}"),
+        )),
     }
 }
 
@@ -618,7 +696,13 @@ fn recognised_human(provenance: &str) -> bool {
     matches!(provenance, "human-authored" | "human-adopted")
 }
 
-fn bind_tier(relations: &mut DevelopmentSourceRelations, tier: u8, source_reference: &str, label: Option<String>, path: Option<String>) -> io::Result<()> {
+fn bind_tier(
+    relations: &mut DevelopmentSourceRelations,
+    tier: u8,
+    source_reference: &str,
+    label: Option<String>,
+    path: Option<String>,
+) -> io::Result<()> {
     semantic_office(tier)?;
     let entry = if let Some(entry) = relations.tiers.iter_mut().find(|entry| entry.tier == tier) {
         entry
@@ -641,7 +725,11 @@ fn bind_tier(relations: &mut DevelopmentSourceRelations, tier: u8, source_refere
             entry.canonical_path = Some(path.trim().to_owned());
         }
     }
-    if !entry.source_refs.iter().any(|reference| reference == source_reference) {
+    if !entry
+        .source_refs
+        .iter()
+        .any(|reference| reference == source_reference)
+    {
         entry.source_refs.push(source_reference.to_owned());
         entry.source_refs.sort();
     }
@@ -649,27 +737,56 @@ fn bind_tier(relations: &mut DevelopmentSourceRelations, tier: u8, source_refere
     Ok(())
 }
 
-fn relate_ux(relations: &mut DevelopmentSourceRelations, ux_ref: &str, source_reference: &str) -> io::Result<()> {
+fn relate_ux(
+    relations: &mut DevelopmentSourceRelations,
+    ux_ref: &str,
+    source_reference: &str,
+) -> io::Result<()> {
     if ux_ref.trim().is_empty() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "ux_ref must be non-empty"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "ux_ref must be non-empty",
+        ));
     }
     if let Some(existing) = relations.ux.iter().find(|binding| binding.ux_ref == ux_ref) {
         if existing.source_ref != source_reference {
-            return Err(io::Error::new(io::ErrorKind::AlreadyExists, "ux_ref is already bound to another source"));
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "ux_ref is already bound to another source",
+            ));
         }
     } else {
-        relations.ux.push(UxBinding { ux_ref: ux_ref.to_owned(), source_ref: source_reference.to_owned() });
+        relations.ux.push(UxBinding {
+            ux_ref: ux_ref.to_owned(),
+            source_ref: source_reference.to_owned(),
+        });
         relations.ux.sort_by(|a, b| a.ux_ref.cmp(&b.ux_ref));
     }
     bind_tier(relations, 1, source_reference, None, None)
 }
 
-fn relate_ex(relations: &mut DevelopmentSourceRelations, ex_ref: &str, source_reference: &str, ux_refs: Vec<String>, artifact_refs: Vec<String>) -> io::Result<()> {
+fn relate_ex(
+    relations: &mut DevelopmentSourceRelations,
+    ex_ref: &str,
+    source_reference: &str,
+    ux_refs: Vec<String>,
+    artifact_refs: Vec<String>,
+) -> io::Result<()> {
     if ex_ref.trim().is_empty() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "ex_ref must be non-empty"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "ex_ref must be non-empty",
+        ));
     }
-    if relations.ex.iter().any(|binding| binding.ex_ref == ex_ref && binding.source_ref != source_reference) {
-        return Err(io::Error::new(io::ErrorKind::AlreadyExists, "ex_ref is already bound to another source"));
+    if relations
+        .ex
+        .iter()
+        .any(|binding| binding.ex_ref == ex_ref && binding.source_ref != source_reference)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "ex_ref is already bound to another source",
+        ));
     }
     let record = ExBinding {
         ex_ref: ex_ref.to_owned(),
@@ -678,7 +795,11 @@ fn relate_ex(relations: &mut DevelopmentSourceRelations, ex_ref: &str, source_re
         artifact_refs: normalise_refs(artifact_refs),
         recorded_at_unix_seconds: unix_seconds(),
     };
-    if let Some(existing) = relations.ex.iter_mut().find(|binding| binding.ex_ref == ex_ref) {
+    if let Some(existing) = relations
+        .ex
+        .iter_mut()
+        .find(|binding| binding.ex_ref == ex_ref)
+    {
         *existing = record;
     } else {
         relations.ex.push(record);
@@ -697,7 +818,8 @@ fn write_root_ground_relation(
 ) -> io::Result<String> {
     let relation_path = central_root.join(CONTROL_GROUND_RELATIONS_SOURCE);
     let mut value = if relation_path.is_file() {
-        serde_json::from_slice::<Value>(&fs::read(&relation_path)?).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?
+        serde_json::from_slice::<Value>(&fs::read(&relation_path)?)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?
     } else {
         json!({
             "schema": CONTROL_GROUND_RELATIONS_SCHEMA,
@@ -708,16 +830,29 @@ fn write_root_ground_relation(
     if value.get("schema").and_then(Value::as_str) != Some(CONTROL_GROUND_RELATIONS_SCHEMA)
         || value.get("project_id").and_then(Value::as_str) != Some(CONTROL_WORLD_REF)
     {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "Control ground relations have an unsupported schema or world id"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Control ground relations have an unsupported schema or world id",
+        ));
     }
     let source_reference = source_ref(CONTROL_WORLD_REF, relative);
     let relations = value
         .as_object_mut()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Control ground relation file must be an object"))?
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Control ground relation file must be an object",
+            )
+        })?
         .entry("relations")
         .or_insert_with(|| json!([]))
         .as_array_mut()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Control ground relations must be an array"))?;
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Control ground relations must be an array",
+            )
+        })?;
     relations.retain(|relation| relation.get("path").and_then(Value::as_str) != Some(relative));
     relations.push(json!({
         "ref": source_reference,
@@ -729,7 +864,12 @@ fn write_root_ground_relation(
         "recognition": "explicit self-description source relation",
         "recorded_at_unix_seconds": unix_seconds()
     }));
-    relations.sort_by(|a, b| a.get("path").and_then(Value::as_str).unwrap_or_default().cmp(b.get("path").and_then(Value::as_str).unwrap_or_default()));
+    relations.sort_by(|a, b| {
+        a.get("path")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .cmp(b.get("path").and_then(Value::as_str).unwrap_or_default())
+    });
     if let Some(parent) = relation_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -739,9 +879,17 @@ fn write_root_ground_relation(
     Ok(source_reference)
 }
 
-fn create_text_source(world_root: &Path, self_prefix: &str, member: &str, content: &str) -> io::Result<String> {
+fn create_text_source(
+    world_root: &Path,
+    self_prefix: &str,
+    member: &str,
+    content: &str,
+) -> io::Result<String> {
     if content.len() > crate::source_safety::MAX_SOURCE || content.contains('\0') {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "self-description source exceeds bounded UTF-8 text constraints"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "self-description source exceeds bounded UTF-8 text constraints",
+        ));
     }
     ensure_self(world_root, self_prefix)?;
     let member = safe_member(member)?;
@@ -749,37 +897,71 @@ fn create_text_source(world_root: &Path, self_prefix: &str, member: &str, conten
     reject_symlink_components(world_root, &relative)?;
     let path = world_root.join(&relative);
     if path.exists() {
-        return Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("self-description source already exists: {}", relative.display())));
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!(
+                "self-description source already exists: {}",
+                relative.display()
+            ),
+        ));
     }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    reject_symlink_components(world_root, relative.parent().unwrap_or(Path::new(self_prefix)))?;
+    reject_symlink_components(
+        world_root,
+        relative.parent().unwrap_or(Path::new(self_prefix)),
+    )?;
     crate::file_mutation::atomic_record(&path, content.as_bytes())?;
     Ok(relative.to_string_lossy().replace('\\', "/"))
 }
 
-fn source_create_authority(provenance: &str, actor_kind: &str, agent_session_ref: Option<&str>, acceptance: Option<&str>) -> io::Result<()> {
+fn source_create_authority(
+    provenance: &str,
+    actor_kind: &str,
+    agent_session_ref: Option<&str>,
+    acceptance: Option<&str>,
+) -> io::Result<()> {
     match provenance {
         "human-authored" | "human-adopted" => {
-            if actor_kind != "human" || agent_session_ref.is_some() || acceptance != Some("human-accepted") {
+            if actor_kind != "human"
+                || agent_session_ref.is_some()
+                || acceptance != Some("human-accepted")
+            {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
                     "human-authored/adopted self source requires a declared human caller, no agent_session_ref, and explicit human-accepted source recognition",
                 ));
             }
         }
-        "generated-suggestion" | "generated-derived" | "agent-maintained" | "observed" | "inference" | "unresolved" | "human-edited-draft" => {
+        "generated-suggestion"
+        | "generated-derived"
+        | "agent-maintained"
+        | "observed"
+        | "inference"
+        | "unresolved"
+        | "human-edited-draft" => {
             if actor_kind == "human" && agent_session_ref.is_some() {
-                return Err(io::Error::new(io::ErrorKind::InvalidInput, "a declared human caller cannot also carry an agent_session_ref"));
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "a declared human caller cannot also carry an agent_session_ref",
+                ));
             }
         }
-        _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, "unsupported source provenance")),
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "unsupported source provenance",
+            ))
+        }
     }
     Ok(())
 }
 
-pub fn read_machine_oi_suite_policy(central_root: &Path, role: &str) -> Result<MachineOiSuitePolicyReading, crate::machine::MachineDeclarationError> {
+pub fn read_machine_oi_suite_policy(
+    central_root: &Path,
+    role: &str,
+) -> Result<MachineOiSuitePolicyReading, crate::machine::MachineDeclarationError> {
     let authored = read_machine_declaration(central_root, role)?;
     let refs = authored
         .declaration
@@ -813,22 +995,50 @@ fn required(input: &Value, field: &str, action: &str) -> Result<String, ActionRe
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
-        .ok_or_else(|| ActionResult::failure(Some(action), ResultStatus::InvalidInput, format!("{action} requires {field}."), None))
+        .ok_or_else(|| {
+            ActionResult::failure(
+                Some(action),
+                ResultStatus::InvalidInput,
+                format!("{action} requires {field}."),
+                None,
+            )
+        })
 }
 
 fn optional(input: &Value, field: &str) -> Option<String> {
-    input.get(field).and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty()).map(str::to_owned)
+    input
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
 }
 
 fn string_array(input: &Value, field: &str, action: &str) -> Result<Vec<String>, ActionResult> {
-    let Some(raw) = input.get(field) else { return Ok(Vec::new()); };
+    let Some(raw) = input.get(field) else {
+        return Ok(Vec::new());
+    };
     let Some(values) = raw.as_array() else {
-        return Err(ActionResult::failure(Some(action), ResultStatus::InvalidInput, format!("{action} {field} must be an array of refs."), None));
+        return Err(ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            format!("{action} {field} must be an array of refs."),
+            None,
+        ));
     };
     let mut refs = Vec::new();
     for value in values {
-        let Some(value) = value.as_str().map(str::trim).filter(|value| !value.is_empty()) else {
-            return Err(ActionResult::failure(Some(action), ResultStatus::InvalidInput, format!("{action} {field} must contain only non-empty strings."), None));
+        let Some(value) = value
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return Err(ActionResult::failure(
+                Some(action),
+                ResultStatus::InvalidInput,
+                format!("{action} {field} must contain only non-empty strings."),
+                None,
+            ));
         };
         refs.push(value.to_owned());
     }
@@ -840,32 +1050,76 @@ fn tier_input(input: &Value, action: &str) -> Result<u8, ActionResult> {
         .get("tier")
         .and_then(Value::as_u64)
         .filter(|tier| *tier <= 5)
-        .ok_or_else(|| ActionResult::failure(Some(action), ResultStatus::InvalidInput, format!("{action} requires integer tier 0..5."), None))?;
+        .ok_or_else(|| {
+            ActionResult::failure(
+                Some(action),
+                ResultStatus::InvalidInput,
+                format!("{action} requires integer tier 0..5."),
+                None,
+            )
+        })?;
     Ok(tier as u8)
 }
 
-fn root_context(action: &str, context: &ActionExecutionContext<'_>) -> Result<PathBuf, ActionResult> {
+fn root_context(
+    action: &str,
+    context: &ActionExecutionContext<'_>,
+) -> Result<PathBuf, ActionResult> {
     resolve_central_root(context.root_options)
         .map(|root| root.path)
-        .map_err(|message| ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None))
+        .map_err(|message| {
+            ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None)
+        })
 }
 
-fn project_context(action: &str, input: &Value, context: &ActionExecutionContext<'_>) -> Result<PathBuf, ActionResult> {
+fn project_context(
+    action: &str,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> Result<PathBuf, ActionResult> {
     let project = required(input, "project", action)?;
-    let member = relative_member(&project).map_err(|error| ActionResult::failure(Some(action), ResultStatus::InvalidInput, error.to_string(), None))?;
+    let member = relative_member(&project).map_err(|error| {
+        ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            error.to_string(),
+            None,
+        )
+    })?;
     let root = root_context(action, context)?;
-    reject_symlink_components(&root, &Path::new("Work").join(&member)).map_err(|error| ActionResult::failure(Some(action), ResultStatus::InvalidInput, error.to_string(), None))?;
+    reject_symlink_components(&root, &Path::new("Work").join(&member)).map_err(|error| {
+        ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            error.to_string(),
+            None,
+        )
+    })?;
     let project_root = root.join("Work").join(member);
     if !project_root.is_dir() {
-        return Err(ActionResult::failure(Some(action), ResultStatus::InvalidInput, format!("Project root does not exist: {}", project_root.display()), None));
+        return Err(ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            format!("Project root does not exist: {}", project_root.display()),
+            None,
+        ));
     }
-    read_project_manifest(&project_root).map_err(|error| ActionResult::failure(Some(action), ResultStatus::InvalidCentralStructure, error.to_string(), None))?;
+    read_project_manifest(&project_root).map_err(|error| {
+        ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidCentralStructure,
+            error.to_string(),
+            None,
+        )
+    })?;
     Ok(project_root)
 }
 
 fn io_failure(action: &str, error: io::Error) -> ActionResult {
     let status = match error.kind() {
-        io::ErrorKind::InvalidInput | io::ErrorKind::NotFound | io::ErrorKind::AlreadyExists => ResultStatus::InvalidInput,
+        io::ErrorKind::InvalidInput | io::ErrorKind::NotFound | io::ErrorKind::AlreadyExists => {
+            ResultStatus::InvalidInput
+        }
         io::ErrorKind::PermissionDenied => ResultStatus::UnavailableCapability,
         io::ErrorKind::InvalidData => ResultStatus::VerificationFailure,
         _ => ResultStatus::InternalFailure,
@@ -873,7 +1127,11 @@ fn io_failure(action: &str, error: io::Error) -> ActionResult {
     ActionResult::failure(Some(action), status, error.to_string(), None)
 }
 
-fn mutate_relations<F>(path: &Path, scope_ref: &str, update: F) -> io::Result<DevelopmentSourceRelations>
+fn mutate_relations<F>(
+    path: &Path,
+    scope_ref: &str,
+    update: F,
+) -> io::Result<DevelopmentSourceRelations>
 where
     F: FnOnce(&mut DevelopmentSourceRelations) -> io::Result<()>,
 {
@@ -888,192 +1146,595 @@ fn ensure_source(bindings: &[SourceBinding], source_reference: &str) -> io::Resu
         .iter()
         .find(|binding| binding.source_ref == source_reference)
         .cloned()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "source_ref is not a participating source of this scoped World"))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "source_ref is not a participating source of this scoped World",
+            )
+        })
 }
 
-fn root_inspect_action(_: &ActionRegistry, _: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn root_inspect_action(
+    _: &ActionRegistry,
+    _: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     const ACTION: &str = "central.self.inspect";
-    let root = match root_context(ACTION, context) { Ok(root) => root, Err(result) => return result };
+    let root = match root_context(ACTION, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
     inspect_root_development_field(&root)
-        .map(|reading| ActionResult::success(ACTION, serde_json::to_value(reading).expect("development reading serialises")))
+        .map(|reading| {
+            ActionResult::success(
+                ACTION,
+                serde_json::to_value(reading).expect("development reading serialises"),
+            )
+        })
         .unwrap_or_else(|error| io_failure(ACTION, error))
 }
 
-fn project_inspect_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn project_inspect_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     const ACTION: &str = "projectcentral.self.inspect";
-    let root = match project_context(ACTION, input, context) { Ok(root) => root, Err(result) => return result };
+    let root = match project_context(ACTION, input, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
     inspect_project_development_field(&root)
-        .map(|reading| ActionResult::success(ACTION, serde_json::to_value(reading).expect("development reading serialises")))
+        .map(|reading| {
+            ActionResult::success(
+                ACTION,
+                serde_json::to_value(reading).expect("development reading serialises"),
+            )
+        })
         .unwrap_or_else(|error| io_failure(ACTION, error))
 }
 
-fn root_ensure_action(_: &ActionRegistry, _: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn root_ensure_action(
+    _: &ActionRegistry,
+    _: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     const ACTION: &str = "central.self.ensure";
-    let root = match root_context(ACTION, context) { Ok(root) => root, Err(result) => return result };
+    let root = match root_context(ACTION, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
     ensure_root_self(&root)
-        .map(|receipt| ActionResult::success(ACTION, serde_json::to_value(receipt).expect("ensure receipt serialises")))
+        .map(|receipt| {
+            ActionResult::success(
+                ACTION,
+                serde_json::to_value(receipt).expect("ensure receipt serialises"),
+            )
+        })
         .unwrap_or_else(|error| io_failure(ACTION, error))
 }
 
-fn project_ensure_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn project_ensure_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     const ACTION: &str = "projectcentral.self.ensure";
-    let root = match project_context(ACTION, input, context) { Ok(root) => root, Err(result) => return result };
+    let root = match project_context(ACTION, input, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
     ensure_project_self(&root)
-        .map(|receipt| ActionResult::success(ACTION, serde_json::to_value(receipt).expect("ensure receipt serialises")))
+        .map(|receipt| {
+            ActionResult::success(
+                ACTION,
+                serde_json::to_value(receipt).expect("ensure receipt serialises"),
+            )
+        })
         .unwrap_or_else(|error| io_failure(ACTION, error))
 }
 
-fn root_source_create_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn root_source_create_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     const ACTION: &str = "central.self.source.create";
-    let root = match root_context(ACTION, context) { Ok(root) => root, Err(result) => return result };
-    let member = match required(input, "path", ACTION) { Ok(value) => value, Err(result) => return result };
+    let root = match root_context(ACTION, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
+    let member = match required(input, "path", ACTION) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
     let content = input.get("content").and_then(Value::as_str).unwrap_or("");
-    let provenance = match required(input, "provenance", ACTION) { Ok(value) => value, Err(result) => return result };
-    let standing = match required(input, "standing", ACTION) { Ok(value) => value, Err(result) => return result };
-    if let Err(error) = parse_standing(&standing).and_then(|_| parse_provenance(&provenance).map(|_| ())) { return io_failure(ACTION, error); }
-    let actor_kind = match required(input, "actor_kind", ACTION) { Ok(value) => value, Err(result) => return result };
-    if let Err(error) = source_create_authority(&provenance, &actor_kind, optional(input, "agent_session_ref").as_deref(), optional(input, "acceptance").as_deref()) { return io_failure(ACTION, error); }
-    let tier = input.get("tier").and_then(Value::as_u64).map(|value| value as u8);
-    if let Some(tier) = tier { if let Err(error) = semantic_office(tier) { return io_failure(ACTION, error); } }
+    let provenance = match required(input, "provenance", ACTION) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let standing = match required(input, "standing", ACTION) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    if let Err(error) =
+        parse_standing(&standing).and_then(|_| parse_provenance(&provenance).map(|_| ()))
+    {
+        return io_failure(ACTION, error);
+    }
+    let actor_kind = match required(input, "actor_kind", ACTION) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    if let Err(error) = source_create_authority(
+        &provenance,
+        &actor_kind,
+        optional(input, "agent_session_ref").as_deref(),
+        optional(input, "acceptance").as_deref(),
+    ) {
+        return io_failure(ACTION, error);
+    }
+    let tier = input
+        .get("tier")
+        .and_then(Value::as_u64)
+        .map(|value| value as u8);
+    if let Some(tier) = tier {
+        if let Err(error) = semantic_office(tier) {
+            return io_failure(ACTION, error);
+        }
+    }
     let result = (|| {
         let relative = create_text_source(&root, ROOT_SELF_DIR, &member, content)?;
-        let mut roles = vec!["self-description-source".to_owned(), "root-self-source-aperture".to_owned()];
-        if let Some(tier) = tier { roles.push(format!("document-tier-{tier}")); }
-        let source_reference = write_root_ground_relation(&root, &relative, &provenance, &standing, roles, "control-self")?;
+        let mut roles = vec![
+            "self-description-source".to_owned(),
+            "root-self-source-aperture".to_owned(),
+        ];
         if let Some(tier) = tier {
-            mutate_relations(&root.join(ROOT_DEVELOPMENT_RELATIONS), CONTROL_WORLD_REF, |relations| bind_tier(relations, tier, &source_reference, optional(input, "canonical_label"), optional(input, "canonical_path")))?;
+            roles.push(format!("document-tier-{tier}"));
+        }
+        let source_reference = write_root_ground_relation(
+            &root,
+            &relative,
+            &provenance,
+            &standing,
+            roles,
+            "control-self",
+        )?;
+        if let Some(tier) = tier {
+            mutate_relations(
+                &root.join(ROOT_DEVELOPMENT_RELATIONS),
+                CONTROL_WORLD_REF,
+                |relations| {
+                    bind_tier(
+                        relations,
+                        tier,
+                        &source_reference,
+                        optional(input, "canonical_label"),
+                        optional(input, "canonical_path"),
+                    )
+                },
+            )?;
         }
         inspect_root_development_field(&root)
     })();
-    result.map(|reading| ActionResult::success(ACTION, serde_json::to_value(reading).expect("reading serialises"))).unwrap_or_else(|error| io_failure(ACTION, error))
+    result
+        .map(|reading| {
+            ActionResult::success(
+                ACTION,
+                serde_json::to_value(reading).expect("reading serialises"),
+            )
+        })
+        .unwrap_or_else(|error| io_failure(ACTION, error))
 }
 
-fn project_source_create_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn project_source_create_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     const ACTION: &str = "projectcentral.self.source.create";
-    let root = match project_context(ACTION, input, context) { Ok(root) => root, Err(result) => return result };
-    let member = match required(input, "path", ACTION) { Ok(value) => value, Err(result) => return result };
+    let root = match project_context(ACTION, input, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
+    let member = match required(input, "path", ACTION) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
     let content = input.get("content").and_then(Value::as_str).unwrap_or("");
-    let provenance_raw = match required(input, "provenance", ACTION) { Ok(value) => value, Err(result) => return result };
-    let standing_raw = match required(input, "standing", ACTION) { Ok(value) => value, Err(result) => return result };
-    let provenance = match parse_provenance(&provenance_raw) { Ok(value) => value, Err(error) => return io_failure(ACTION, error) };
-    let standing = match parse_standing(&standing_raw) { Ok(value) => value, Err(error) => return io_failure(ACTION, error) };
-    let actor_kind = match required(input, "actor_kind", ACTION) { Ok(value) => value, Err(result) => return result };
-    if let Err(error) = source_create_authority(&provenance_raw, &actor_kind, optional(input, "agent_session_ref").as_deref(), optional(input, "acceptance").as_deref()) { return io_failure(ACTION, error); }
-    let tier = input.get("tier").and_then(Value::as_u64).map(|value| value as u8);
-    if let Some(tier) = tier { if let Err(error) = semantic_office(tier) { return io_failure(ACTION, error); } }
+    let provenance_raw = match required(input, "provenance", ACTION) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let standing_raw = match required(input, "standing", ACTION) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let provenance = match parse_provenance(&provenance_raw) {
+        Ok(value) => value,
+        Err(error) => return io_failure(ACTION, error),
+    };
+    let standing = match parse_standing(&standing_raw) {
+        Ok(value) => value,
+        Err(error) => return io_failure(ACTION, error),
+    };
+    let actor_kind = match required(input, "actor_kind", ACTION) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    if let Err(error) = source_create_authority(
+        &provenance_raw,
+        &actor_kind,
+        optional(input, "agent_session_ref").as_deref(),
+        optional(input, "acceptance").as_deref(),
+    ) {
+        return io_failure(ACTION, error);
+    }
+    let tier = input
+        .get("tier")
+        .and_then(Value::as_u64)
+        .map(|value| value as u8);
+    if let Some(tier) = tier {
+        if let Err(error) = semantic_office(tier) {
+            return io_failure(ACTION, error);
+        }
+    }
     let result = (|| {
         let relative = create_text_source(&root, PROJECT_SELF_DIR, &member, content)?;
-        let mut roles = vec!["self-description-source".to_owned(), "project-self-source-aperture".to_owned()];
-        if let Some(tier) = tier { roles.push(format!("document-tier-{tier}")); }
-        let applied = apply_accepted_ground_relation(&root, &relative, provenance, standing, SourceTreatment::OrdinaryProjectSource, roles)?;
+        let mut roles = vec![
+            "self-description-source".to_owned(),
+            "project-self-source-aperture".to_owned(),
+        ];
+        if let Some(tier) = tier {
+            roles.push(format!("document-tier-{tier}"));
+        }
+        let applied = apply_accepted_ground_relation(
+            &root,
+            &relative,
+            provenance,
+            standing,
+            SourceTreatment::OrdinaryProjectSource,
+            roles,
+        )?;
         let manifest = read_project_manifest(&root)?;
         if let Some(tier) = tier {
-            mutate_relations(&root.join(PROJECT_DEVELOPMENT_RELATIONS), &format!("project:{}", manifest.project_id), |relations| bind_tier(relations, tier, &applied.relation.source_ref, optional(input, "canonical_label"), optional(input, "canonical_path")))?;
+            mutate_relations(
+                &root.join(PROJECT_DEVELOPMENT_RELATIONS),
+                &format!("project:{}", manifest.project_id),
+                |relations| {
+                    bind_tier(
+                        relations,
+                        tier,
+                        &applied.relation.source_ref,
+                        optional(input, "canonical_label"),
+                        optional(input, "canonical_path"),
+                    )
+                },
+            )?;
         }
         inspect_project_development_field(&root)
     })();
-    result.map(|reading| ActionResult::success(ACTION, serde_json::to_value(reading).expect("reading serialises"))).unwrap_or_else(|error| io_failure(ACTION, error))
+    result
+        .map(|reading| {
+            ActionResult::success(
+                ACTION,
+                serde_json::to_value(reading).expect("reading serialises"),
+            )
+        })
+        .unwrap_or_else(|error| io_failure(ACTION, error))
 }
 
-fn tier_relate(world_root: &Path, project: bool, input: &Value, action: &str) -> io::Result<DevelopmentFieldReading> {
-    let source_reference = input.get("source_ref").and_then(Value::as_str).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("{action} requires source_ref")))?;
-    let tier = input.get("tier").and_then(Value::as_u64).filter(|value| *value <= 5).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("{action} requires integer tier 0..5")))? as u8;
-    let label = input.get("canonical_label").and_then(Value::as_str).map(str::to_owned);
-    let path = input.get("canonical_path").and_then(Value::as_str).map(str::to_owned);
+fn tier_relate(
+    world_root: &Path,
+    project: bool,
+    input: &Value,
+    action: &str,
+) -> io::Result<DevelopmentFieldReading> {
+    let source_reference = input
+        .get("source_ref")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{action} requires source_ref"),
+            )
+        })?;
+    let tier = input
+        .get("tier")
+        .and_then(Value::as_u64)
+        .filter(|value| *value <= 5)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{action} requires integer tier 0..5"),
+            )
+        })? as u8;
+    let label = input
+        .get("canonical_label")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let path = input
+        .get("canonical_path")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     if project {
         let manifest = read_project_manifest(world_root)?;
         let bindings = project_source_bindings(world_root)?;
         ensure_source(&bindings, source_reference)?;
         let scope_ref = format!("project:{}", manifest.project_id);
-        mutate_relations(&world_root.join(PROJECT_DEVELOPMENT_RELATIONS), &scope_ref, |relations| bind_tier(relations, tier, source_reference, label, path))?;
+        mutate_relations(
+            &world_root.join(PROJECT_DEVELOPMENT_RELATIONS),
+            &scope_ref,
+            |relations| bind_tier(relations, tier, source_reference, label, path),
+        )?;
         inspect_project_development_field(world_root)
     } else {
         let bindings = control_source_bindings(world_root)?;
         ensure_source(&bindings, source_reference)?;
-        mutate_relations(&world_root.join(ROOT_DEVELOPMENT_RELATIONS), CONTROL_WORLD_REF, |relations| bind_tier(relations, tier, source_reference, label, path))?;
+        mutate_relations(
+            &world_root.join(ROOT_DEVELOPMENT_RELATIONS),
+            CONTROL_WORLD_REF,
+            |relations| bind_tier(relations, tier, source_reference, label, path),
+        )?;
         inspect_root_development_field(world_root)
     }
 }
 
-fn root_tier_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn root_tier_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     const ACTION: &str = "central.self.tier.relate";
-    let root = match root_context(ACTION, context) { Ok(root) => root, Err(result) => return result };
-    if optional(input, "acceptance").as_deref() != Some("human-accepted") { return ActionResult::failure(Some(ACTION), ResultStatus::InvalidInput, "tier relation changes require explicit human-accepted relation acknowledgement", None); }
-    tier_relate(&root, false, input, ACTION).map(|reading| ActionResult::success(ACTION, serde_json::to_value(reading).unwrap())).unwrap_or_else(|error| io_failure(ACTION, error))
+    let root = match root_context(ACTION, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
+    if optional(input, "acceptance").as_deref() != Some("human-accepted") {
+        return ActionResult::failure(
+            Some(ACTION),
+            ResultStatus::InvalidInput,
+            "tier relation changes require explicit human-accepted relation acknowledgement",
+            None,
+        );
+    }
+    tier_relate(&root, false, input, ACTION)
+        .map(|reading| ActionResult::success(ACTION, serde_json::to_value(reading).unwrap()))
+        .unwrap_or_else(|error| io_failure(ACTION, error))
 }
 
-fn project_tier_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn project_tier_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     const ACTION: &str = "projectcentral.self.tier.relate";
-    let root = match project_context(ACTION, input, context) { Ok(root) => root, Err(result) => return result };
-    if optional(input, "acceptance").as_deref() != Some("human-accepted") { return ActionResult::failure(Some(ACTION), ResultStatus::InvalidInput, "tier relation changes require explicit human-accepted relation acknowledgement", None); }
-    tier_relate(&root, true, input, ACTION).map(|reading| ActionResult::success(ACTION, serde_json::to_value(reading).unwrap())).unwrap_or_else(|error| io_failure(ACTION, error))
+    let root = match project_context(ACTION, input, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
+    if optional(input, "acceptance").as_deref() != Some("human-accepted") {
+        return ActionResult::failure(
+            Some(ACTION),
+            ResultStatus::InvalidInput,
+            "tier relation changes require explicit human-accepted relation acknowledgement",
+            None,
+        );
+    }
+    tier_relate(&root, true, input, ACTION)
+        .map(|reading| ActionResult::success(ACTION, serde_json::to_value(reading).unwrap()))
+        .unwrap_or_else(|error| io_failure(ACTION, error))
 }
 
-fn project_retain_tier_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn project_retain_tier_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     const ACTION: &str = "projectcentral.self.retain-tier";
-    let root = match project_context(ACTION, input, context) { Ok(root) => root, Err(result) => return result };
-    if optional(input, "acceptance").as_deref() != Some("human-accepted") { return ActionResult::failure(Some(ACTION), ResultStatus::InvalidInput, "retained-native source relation requires explicit human-accepted acknowledgement", None); }
-    let source = match required(input, "source", ACTION) { Ok(value) => value, Err(result) => return result };
-    let tier = match tier_input(input, ACTION) { Ok(value) => value, Err(result) => return result };
-    let provenance = match required(input, "provenance", ACTION).and_then(|value| parse_provenance(&value).map_err(|error| io_failure(ACTION, error))) { Ok(value) => value, Err(result) => return result };
-    let standing = match required(input, "standing", ACTION).and_then(|value| parse_standing(&value).map_err(|error| io_failure(ACTION, error))) { Ok(value) => value, Err(result) => return result };
+    let root = match project_context(ACTION, input, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
+    if optional(input, "acceptance").as_deref() != Some("human-accepted") {
+        return ActionResult::failure(
+            Some(ACTION),
+            ResultStatus::InvalidInput,
+            "retained-native source relation requires explicit human-accepted acknowledgement",
+            None,
+        );
+    }
+    let source = match required(input, "source", ACTION) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let tier = match tier_input(input, ACTION) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let provenance = match required(input, "provenance", ACTION)
+        .and_then(|value| parse_provenance(&value).map_err(|error| io_failure(ACTION, error)))
+    {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let standing = match required(input, "standing", ACTION)
+        .and_then(|value| parse_standing(&value).map_err(|error| io_failure(ACTION, error)))
+    {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
     let result = (|| {
-        let applied = apply_accepted_ground_relation(&root, &source, provenance, standing, SourceTreatment::RetainNativeInPlace, vec!["self-description-source".to_owned(), format!("document-tier-{tier}")])?;
+        let applied = apply_accepted_ground_relation(
+            &root,
+            &source,
+            provenance,
+            standing,
+            SourceTreatment::RetainNativeInPlace,
+            vec![
+                "self-description-source".to_owned(),
+                format!("document-tier-{tier}"),
+            ],
+        )?;
         let manifest = read_project_manifest(&root)?;
         let scope_ref = format!("project:{}", manifest.project_id);
-        mutate_relations(&root.join(PROJECT_DEVELOPMENT_RELATIONS), &scope_ref, |relations| bind_tier(relations, tier, &applied.relation.source_ref, optional(input, "canonical_label"), optional(input, "canonical_path")))?;
+        mutate_relations(
+            &root.join(PROJECT_DEVELOPMENT_RELATIONS),
+            &scope_ref,
+            |relations| {
+                bind_tier(
+                    relations,
+                    tier,
+                    &applied.relation.source_ref,
+                    optional(input, "canonical_label"),
+                    optional(input, "canonical_path"),
+                )
+            },
+        )?;
         inspect_project_development_field(&root)
     })();
-    result.map(|reading| ActionResult::success(ACTION, serde_json::to_value(reading).unwrap())).unwrap_or_else(|error| io_failure(ACTION, error))
+    result
+        .map(|reading| ActionResult::success(ACTION, serde_json::to_value(reading).unwrap()))
+        .unwrap_or_else(|error| io_failure(ACTION, error))
 }
 
-fn experience_relate(world_root: &Path, project: bool, input: &Value, ex: bool) -> io::Result<DevelopmentFieldReading> {
-    let source_reference = input.get("source_ref").and_then(Value::as_str).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "source_ref is required"))?;
-    let bindings = if project { project_source_bindings(world_root)? } else { control_source_bindings(world_root)? };
+fn experience_relate(
+    world_root: &Path,
+    project: bool,
+    input: &Value,
+    ex: bool,
+) -> io::Result<DevelopmentFieldReading> {
+    let source_reference = input
+        .get("source_ref")
+        .and_then(Value::as_str)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "source_ref is required"))?;
+    let bindings = if project {
+        project_source_bindings(world_root)?
+    } else {
+        control_source_bindings(world_root)?
+    };
     let source = ensure_source(&bindings, source_reference)?;
     if !recognised_human(&source.provenance) {
         return Err(io::Error::new(io::ErrorKind::PermissionDenied, "UX/EX source must already carry human-authored or human-adopted provenance; location alone and generated/Agent/observed provenance are insufficient"));
     }
     let (scope_ref, path) = if project {
         let manifest = read_project_manifest(world_root)?;
-        (format!("project:{}", manifest.project_id), world_root.join(PROJECT_DEVELOPMENT_RELATIONS))
+        (
+            format!("project:{}", manifest.project_id),
+            world_root.join(PROJECT_DEVELOPMENT_RELATIONS),
+        )
     } else {
-        (CONTROL_WORLD_REF.to_owned(), world_root.join(ROOT_DEVELOPMENT_RELATIONS))
+        (
+            CONTROL_WORLD_REF.to_owned(),
+            world_root.join(ROOT_DEVELOPMENT_RELATIONS),
+        )
     };
     if ex {
         if source.standing != "observed-evidence" {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "EX source must carry observed-evidence standing while preserving its human authorship/adoption provenance"));
         }
-        let ex_ref = input.get("ex_ref").and_then(Value::as_str).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "ex_ref is required"))?;
-        let ux_refs = input.get("ux_refs").and_then(Value::as_array).map(|values| values.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default();
-        let artifact_refs = input.get("artifact_refs").and_then(Value::as_array).map(|values| values.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default();
-        mutate_relations(&path, &scope_ref, |relations| relate_ex(relations, ex_ref, source_reference, ux_refs, artifact_refs))?;
+        let ex_ref = input
+            .get("ex_ref")
+            .and_then(Value::as_str)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "ex_ref is required"))?;
+        let ux_refs = input
+            .get("ux_refs")
+            .and_then(Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let artifact_refs = input
+            .get("artifact_refs")
+            .and_then(Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        mutate_relations(&path, &scope_ref, |relations| {
+            relate_ex(relations, ex_ref, source_reference, ux_refs, artifact_refs)
+        })?;
     } else {
-        if !matches!(source.standing.as_str(), "authored-human-position" | "design-commitment") {
+        if !matches!(
+            source.standing.as_str(),
+            "authored-human-position" | "design-commitment"
+        ) {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "UX intended-experience source must carry authored-human-position or design-commitment standing, not implementation/evidence/inference standing"));
         }
-        let ux_ref = input.get("ux_ref").and_then(Value::as_str).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "ux_ref is required"))?;
-        mutate_relations(&path, &scope_ref, |relations| relate_ux(relations, ux_ref, source_reference))?;
+        let ux_ref = input
+            .get("ux_ref")
+            .and_then(Value::as_str)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "ux_ref is required"))?;
+        mutate_relations(&path, &scope_ref, |relations| {
+            relate_ux(relations, ux_ref, source_reference)
+        })?;
     }
-    if project { inspect_project_development_field(world_root) } else { inspect_root_development_field(world_root) }
+    if project {
+        inspect_project_development_field(world_root)
+    } else {
+        inspect_root_development_field(world_root)
+    }
 }
 
-fn root_ux_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn root_ux_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     const ACTION: &str = "central.self.ux.relate";
-    let root = match root_context(ACTION, context) { Ok(root) => root, Err(result) => return result };
-    if optional(input, "acceptance").as_deref() != Some("human-accepted") { return ActionResult::failure(Some(ACTION), ResultStatus::InvalidInput, "UX relation requires explicit human-accepted acknowledgement", None); }
-    experience_relate(&root, false, input, false).map(|reading| ActionResult::success(ACTION, serde_json::to_value(reading).unwrap())).unwrap_or_else(|error| io_failure(ACTION, error))
+    let root = match root_context(ACTION, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
+    if optional(input, "acceptance").as_deref() != Some("human-accepted") {
+        return ActionResult::failure(
+            Some(ACTION),
+            ResultStatus::InvalidInput,
+            "UX relation requires explicit human-accepted acknowledgement",
+            None,
+        );
+    }
+    experience_relate(&root, false, input, false)
+        .map(|reading| ActionResult::success(ACTION, serde_json::to_value(reading).unwrap()))
+        .unwrap_or_else(|error| io_failure(ACTION, error))
 }
 
-fn project_ux_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn project_ux_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     const ACTION: &str = "projectcentral.self.ux.relate";
-    let root = match project_context(ACTION, input, context) { Ok(root) => root, Err(result) => return result };
-    if optional(input, "acceptance").as_deref() != Some("human-accepted") { return ActionResult::failure(Some(ACTION), ResultStatus::InvalidInput, "UX relation requires explicit human-accepted acknowledgement", None); }
-    experience_relate(&root, true, input, false).map(|reading| ActionResult::success(ACTION, serde_json::to_value(reading).unwrap())).unwrap_or_else(|error| io_failure(ACTION, error))
+    let root = match project_context(ACTION, input, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
+    if optional(input, "acceptance").as_deref() != Some("human-accepted") {
+        return ActionResult::failure(
+            Some(ACTION),
+            ResultStatus::InvalidInput,
+            "UX relation requires explicit human-accepted acknowledgement",
+            None,
+        );
+    }
+    experience_relate(&root, true, input, false)
+        .map(|reading| ActionResult::success(ACTION, serde_json::to_value(reading).unwrap()))
+        .unwrap_or_else(|error| io_failure(ACTION, error))
 }
 
 fn ex_authority(input: &Value, action: &str) -> Result<(), ActionResult> {
-    if optional(input, "actor_kind").as_deref() != Some("human") || optional(input, "agent_session_ref").is_some() || optional(input, "acceptance").as_deref() != Some("human-accepted") {
+    if optional(input, "actor_kind").as_deref() != Some("human")
+        || optional(input, "agent_session_ref").is_some()
+        || optional(input, "acceptance").as_deref() != Some("human-accepted")
+    {
         return Err(ActionResult::failure(
             Some(action),
             ResultStatus::UnavailableCapability,
@@ -1084,18 +1745,40 @@ fn ex_authority(input: &Value, action: &str) -> Result<(), ActionResult> {
     Ok(())
 }
 
-fn root_ex_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn root_ex_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     const ACTION: &str = "central.self.ex.relate";
-    if let Err(result) = ex_authority(input, ACTION) { return result; }
-    let root = match root_context(ACTION, context) { Ok(root) => root, Err(result) => return result };
-    experience_relate(&root, false, input, true).map(|reading| ActionResult::success(ACTION, serde_json::to_value(reading).unwrap())).unwrap_or_else(|error| io_failure(ACTION, error))
+    if let Err(result) = ex_authority(input, ACTION) {
+        return result;
+    }
+    let root = match root_context(ACTION, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
+    experience_relate(&root, false, input, true)
+        .map(|reading| ActionResult::success(ACTION, serde_json::to_value(reading).unwrap()))
+        .unwrap_or_else(|error| io_failure(ACTION, error))
 }
 
-fn project_ex_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn project_ex_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     const ACTION: &str = "projectcentral.self.ex.relate";
-    if let Err(result) = ex_authority(input, ACTION) { return result; }
-    let root = match project_context(ACTION, input, context) { Ok(root) => root, Err(result) => return result };
-    experience_relate(&root, true, input, true).map(|reading| ActionResult::success(ACTION, serde_json::to_value(reading).unwrap())).unwrap_or_else(|error| io_failure(ACTION, error))
+    if let Err(result) = ex_authority(input, ACTION) {
+        return result;
+    }
+    let root = match project_context(ACTION, input, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
+    experience_relate(&root, true, input, true)
+        .map(|reading| ActionResult::success(ACTION, serde_json::to_value(reading).unwrap()))
+        .unwrap_or_else(|error| io_failure(ACTION, error))
 }
 
 fn resolve_reading(reading: DevelopmentFieldReading, reference: &str) -> io::Result<Value> {
@@ -1108,7 +1791,9 @@ fn resolve_reading(reading: DevelopmentFieldReading, reference: &str) -> io::Res
     for tier in &reading.tier_bindings {
         for source in tier.sources.iter().flatten() {
             if source.source_ref == reference {
-                return Ok(json!({"kind":"source","scope_ref":reading.scope_ref,"tier":tier.tier,"reading":source}));
+                return Ok(
+                    json!({"kind":"source","scope_ref":reading.scope_ref,"tier":tier.tier,"reading":source}),
+                );
             }
         }
     }
@@ -1117,67 +1802,182 @@ fn resolve_reading(reading: DevelopmentFieldReading, reference: &str) -> io::Res
             return Ok(json!({"kind":"source","scope_ref":reading.scope_ref,"reading":source}));
         }
     }
-    Err(io::Error::new(io::ErrorKind::NotFound, "reference is not a Development Field UX/EX/source relation in this scope"))
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        "reference is not a Development Field UX/EX/source relation in this scope",
+    ))
 }
 
-fn root_resolve_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn root_resolve_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     const ACTION: &str = "central.self.resolve";
-    let reference = match required(input, "ref", ACTION) { Ok(value) => value, Err(result) => return result };
-    let root = match root_context(ACTION, context) { Ok(root) => root, Err(result) => return result };
-    inspect_root_development_field(&root).and_then(|reading| resolve_reading(reading, &reference)).map(|value| ActionResult::success(ACTION, value)).unwrap_or_else(|error| io_failure(ACTION, error))
+    let reference = match required(input, "ref", ACTION) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let root = match root_context(ACTION, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
+    inspect_root_development_field(&root)
+        .and_then(|reading| resolve_reading(reading, &reference))
+        .map(|value| ActionResult::success(ACTION, value))
+        .unwrap_or_else(|error| io_failure(ACTION, error))
 }
 
-fn project_resolve_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn project_resolve_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     const ACTION: &str = "projectcentral.self.resolve";
-    let reference = match required(input, "ref", ACTION) { Ok(value) => value, Err(result) => return result };
-    let root = match project_context(ACTION, input, context) { Ok(root) => root, Err(result) => return result };
-    inspect_project_development_field(&root).and_then(|reading| resolve_reading(reading, &reference)).map(|value| ActionResult::success(ACTION, value)).unwrap_or_else(|error| io_failure(ACTION, error))
+    let reference = match required(input, "ref", ACTION) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let root = match project_context(ACTION, input, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
+    inspect_project_development_field(&root)
+        .and_then(|reading| resolve_reading(reading, &reference))
+        .map(|value| ActionResult::success(ACTION, value))
+        .unwrap_or_else(|error| io_failure(ACTION, error))
 }
 
-fn machine_policy_action(_: &ActionRegistry, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+fn machine_policy_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
     const ACTION: &str = "machine.oi-suite-policy";
-    let role = match required(input, "role", ACTION) { Ok(value) => value, Err(result) => return result };
-    let root = match root_context(ACTION, context) { Ok(root) => root, Err(result) => return result };
+    let role = match required(input, "role", ACTION) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let root = match root_context(ACTION, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
     match read_machine_oi_suite_policy(&root, &role) {
-        Ok(reading) => ActionResult::success(ACTION, serde_json::to_value(reading).expect("machine suite policy reading serialises")),
-        Err(error) => ActionResult::failure(Some(ACTION), ResultStatus::InvalidInput, error.message, None),
+        Ok(reading) => ActionResult::success(
+            ACTION,
+            serde_json::to_value(reading).expect("machine suite policy reading serialises"),
+        ),
+        Err(error) => ActionResult::failure(
+            Some(ACTION),
+            ResultStatus::InvalidInput,
+            error.message,
+            None,
+        ),
     }
 }
 
 fn text_input(name: &str, required: bool) -> ActionInputDefinition {
-    ActionInputDefinition { name: name.to_owned(), input_type: "string".to_owned(), required, choices: None, selection: None }
+    ActionInputDefinition {
+        name: name.to_owned(),
+        input_type: "string".to_owned(),
+        required,
+        choices: None,
+        selection: None,
+    }
 }
 
 fn array_input(name: &str) -> ActionInputDefinition {
-    ActionInputDefinition { name: name.to_owned(), input_type: "array".to_owned(), required: false, choices: None, selection: None }
+    ActionInputDefinition {
+        name: name.to_owned(),
+        input_type: "array".to_owned(),
+        required: false,
+        choices: None,
+        selection: None,
+    }
 }
 
-fn descriptor(id: &str, title: &str, description: &str, mutation_class: MutationClass, output_type: &str, inputs: Vec<ActionInputDefinition>) -> ActionDescriptor {
+fn descriptor(
+    id: &str,
+    title: &str,
+    description: &str,
+    mutation_class: MutationClass,
+    output_type: &str,
+    inputs: Vec<ActionInputDefinition>,
+) -> ActionDescriptor {
     ActionDescriptor {
         id: id.to_owned(),
         title: title.to_owned(),
         description: description.to_owned(),
         inputs,
-        output: ActionOutputDefinition { output_type: output_type.to_owned() },
+        output: ActionOutputDefinition {
+            output_type: output_type.to_owned(),
+        },
         mutation_class,
         preview_supported: false,
         required_ports: Vec::new(),
-        availability: ActionAvailability { available: true, reason: None },
+        availability: ActionAvailability {
+            available: true,
+            reason: None,
+        },
     }
 }
 
 pub fn register_development_field_actions(registry: &mut ActionRegistry) {
     type Handler = fn(&ActionRegistry, &Value, &ActionExecutionContext<'_>) -> ActionResult;
     let project = || text_input("project", true);
-    let source_create_inputs = || vec![
-        text_input("path", true), text_input("content", false), text_input("provenance", true),
-        text_input("standing", true), text_input("actor_kind", true), text_input("agent_session_ref", false),
-        text_input("acceptance", false), ActionInputDefinition { name: "tier".to_owned(), input_type: "integer".to_owned(), required: false, choices: None, selection: None },
-        text_input("canonical_label", false), text_input("canonical_path", false),
-    ];
-    let tier_inputs = || vec![text_input("source_ref", true), ActionInputDefinition { name: "tier".to_owned(), input_type: "integer".to_owned(), required: true, choices: None, selection: None }, text_input("canonical_label", false), text_input("canonical_path", false), text_input("acceptance", true)];
-    let ux_inputs = || vec![text_input("ux_ref", true), text_input("source_ref", true), text_input("acceptance", true)];
-    let ex_inputs = || vec![text_input("ex_ref", true), text_input("source_ref", true), array_input("ux_refs"), array_input("artifact_refs"), text_input("actor_kind", true), text_input("agent_session_ref", false), text_input("acceptance", true)];
+    let source_create_inputs = || {
+        vec![
+            text_input("path", true),
+            text_input("content", false),
+            text_input("provenance", true),
+            text_input("standing", true),
+            text_input("actor_kind", true),
+            text_input("agent_session_ref", false),
+            text_input("acceptance", false),
+            ActionInputDefinition {
+                name: "tier".to_owned(),
+                input_type: "integer".to_owned(),
+                required: false,
+                choices: None,
+                selection: None,
+            },
+            text_input("canonical_label", false),
+            text_input("canonical_path", false),
+        ]
+    };
+    let tier_inputs = || {
+        vec![
+            text_input("source_ref", true),
+            ActionInputDefinition {
+                name: "tier".to_owned(),
+                input_type: "integer".to_owned(),
+                required: true,
+                choices: None,
+                selection: None,
+            },
+            text_input("canonical_label", false),
+            text_input("canonical_path", false),
+            text_input("acceptance", true),
+        ]
+    };
+    let ux_inputs = || {
+        vec![
+            text_input("ux_ref", true),
+            text_input("source_ref", true),
+            text_input("acceptance", true),
+        ]
+    };
+    let ex_inputs = || {
+        vec![
+            text_input("ex_ref", true),
+            text_input("source_ref", true),
+            array_input("ux_refs"),
+            array_input("artifact_refs"),
+            text_input("actor_kind", true),
+            text_input("agent_session_ref", false),
+            text_input("acceptance", true),
+        ]
+    };
 
     let registrations: Vec<(ActionDescriptor, Handler)> = vec![
         (descriptor("central.self.inspect", "Inspect root self-description field", "Read the root self aperture, six stable tier bindings, UX/EX relations and their live Central source provenance/revisions without exposing source payloads.", MutationClass::ReadOnly, "development-field-reading", vec![]), root_inspect_action),
@@ -1198,7 +1998,9 @@ pub fn register_development_field_actions(registry: &mut ActionRegistry) {
         (descriptor("projectcentral.self.resolve", "Resolve Project Development Field ref", "Resolve one Project ux_ref, ex_ref or linked SourceRef through live Central source/provenance/revision relations.", MutationClass::ReadOnly, "development-field-reference", vec![project(), text_input("ref", true)]), project_resolve_action),
     ];
     for (descriptor, handler) in registrations {
-        registry.register(descriptor, handler).expect("Development Field Action ids are valid and unique");
+        registry
+            .register(descriptor, handler)
+            .expect("Development Field Action ids are valid and unique");
     }
 }
 
@@ -1223,7 +2025,10 @@ mod tests {
     fn legacy_project_is_valid_but_self_absence_is_migratable() {
         let (_temp, _central, project) = project_fixture();
         let reading = inspect_project_development_field(&project).unwrap();
-        assert_eq!(reading.self_aperture.status, SelfApertureStatus::LegacyMigratableAbsence);
+        assert_eq!(
+            reading.self_aperture.status,
+            SelfApertureStatus::LegacyMigratableAbsence
+        );
         let receipt = ensure_project_self(&project).unwrap();
         assert_eq!(receipt.current_status, SelfApertureStatus::Present);
         assert!(!receipt.documentation_moved);
@@ -1241,23 +2046,44 @@ mod tests {
             SourceStanding::AuthoredHumanPosition,
             SourceTreatment::RetainNativeInPlace,
             vec!["self-description-source".into()],
-        ).unwrap();
+        )
+        .unwrap();
         let manifest = read_project_manifest(&project).unwrap();
         let scope_ref = format!("project:{}", manifest.project_id);
-        mutate_relations(&project.join(PROJECT_DEVELOPMENT_RELATIONS), &scope_ref, |relations| bind_tier(relations, 1, &applied.relation.source_ref, None, None)).unwrap();
+        mutate_relations(
+            &project.join(PROJECT_DEVELOPMENT_RELATIONS),
+            &scope_ref,
+            |relations| bind_tier(relations, 1, &applied.relation.source_ref, None, None),
+        )
+        .unwrap();
         let reading = inspect_project_development_field(&project).unwrap();
         assert_eq!(reading.tier_bindings[0].tier, 1);
         assert!(reading.tier_bindings[0].canonical_label.is_none());
-        assert_eq!(reading.tier_bindings[0].sources[0].as_ref().unwrap().path, "VISION.md");
-        assert!(reading.tier_bindings[0].sources[0].as_ref().unwrap().retained_native);
-        assert_eq!(fs::read_to_string(project.join("VISION.md")).unwrap(), "human vision");
+        assert_eq!(
+            reading.tier_bindings[0].sources[0].as_ref().unwrap().path,
+            "VISION.md"
+        );
+        assert!(
+            reading.tier_bindings[0].sources[0]
+                .as_ref()
+                .unwrap()
+                .retained_native
+        );
+        assert_eq!(
+            fs::read_to_string(project.join("VISION.md")).unwrap(),
+            "human vision"
+        );
     }
 
     #[test]
     fn unbound_file_near_self_gains_no_human_authority() {
         let (_temp, _central, project) = project_fixture();
         ensure_project_self(&project).unwrap();
-        fs::write(project.join(PROJECT_SELF_DIR).join("account.html"), "generated").unwrap();
+        fs::write(
+            project.join(PROJECT_SELF_DIR).join("account.html"),
+            "generated",
+        )
+        .unwrap();
         let reading = inspect_project_development_field(&project).unwrap();
         assert_eq!(reading.self_aperture.unbound_sources.len(), 1);
         let source = &reading.self_aperture.unbound_sources[0];
@@ -1270,14 +2096,41 @@ mod tests {
         let (_temp, _central, project) = project_fixture();
         fs::write(project.join("UX.md"), "intended experience").unwrap();
         fs::write(project.join("EX.md"), "actual human return").unwrap();
-        let ux_source = apply_accepted_ground_relation(&project, "UX.md", SourceProvenance::HumanAdopted, SourceStanding::AuthoredHumanPosition, SourceTreatment::RetainNativeInPlace, vec![]).unwrap();
-        let ex_source = apply_accepted_ground_relation(&project, "EX.md", SourceProvenance::HumanAdopted, SourceStanding::ObservedEvidence, SourceTreatment::RetainNativeInPlace, vec![]).unwrap();
+        let ux_source = apply_accepted_ground_relation(
+            &project,
+            "UX.md",
+            SourceProvenance::HumanAdopted,
+            SourceStanding::AuthoredHumanPosition,
+            SourceTreatment::RetainNativeInPlace,
+            vec![],
+        )
+        .unwrap();
+        let ex_source = apply_accepted_ground_relation(
+            &project,
+            "EX.md",
+            SourceProvenance::HumanAdopted,
+            SourceStanding::ObservedEvidence,
+            SourceTreatment::RetainNativeInPlace,
+            vec![],
+        )
+        .unwrap();
         let manifest = read_project_manifest(&project).unwrap();
         let scope_ref = format!("project:{}", manifest.project_id);
-        mutate_relations(&project.join(PROJECT_DEVELOPMENT_RELATIONS), &scope_ref, |relations| {
-            relate_ux(relations, "ux:example:main", &ux_source.relation.source_ref)?;
-            relate_ex(relations, "ex:example:1", &ex_source.relation.source_ref, vec!["ux:example:main".into()], vec!["artifact:screenshot:1".into()])
-        }).unwrap();
+        mutate_relations(
+            &project.join(PROJECT_DEVELOPMENT_RELATIONS),
+            &scope_ref,
+            |relations| {
+                relate_ux(relations, "ux:example:main", &ux_source.relation.source_ref)?;
+                relate_ex(
+                    relations,
+                    "ex:example:1",
+                    &ex_source.relation.source_ref,
+                    vec!["ux:example:main".into()],
+                    vec!["artifact:screenshot:1".into()],
+                )
+            },
+        )
+        .unwrap();
         let reading = inspect_project_development_field(&project).unwrap();
         assert_eq!(reading.ux.len(), 1);
         assert_eq!(reading.ex.len(), 1);
@@ -1300,7 +2153,11 @@ mod tests {
         assert_eq!(reading.desired_policy_refs, vec!["mainline"]);
         assert!(!reading.installed_suite_receipt_owned_by_central);
         let machine = read_machine_declaration(&central, "current").unwrap();
-        assert!(machine.declaration.bindings.iter().any(|binding| binding.kind == "workcell" && binding.reference == "workcell:local"));
+        assert!(machine
+            .declaration
+            .bindings
+            .iter()
+            .any(|binding| binding.kind == "workcell" && binding.reference == "workcell:local"));
     }
 
     #[test]
