@@ -34,6 +34,7 @@ pub mod projectcentral_now;
 mod projectcentral_ops_base;
 pub mod source_history;
 pub mod source_horizon;
+pub mod system_disclosure;
 pub mod template_stamp;
 pub mod wiki_read;
 pub mod world;
@@ -297,6 +298,10 @@ pub use source_horizon::{
     content_revision, control_source_bindings, project_source_bindings,
     read_project_change_horizon, reconcile_control_sources, reconcile_project_source_writes,
     reconcile_project_sources,
+};
+pub use system_disclosure::{
+    SYSTEM_ACTION_ID, SYSTEM_CONTRACT_REVISION, SYSTEM_DISCLOSURE_SCHEMA, SYSTEM_OWNER_REF,
+    SYSTEM_PRODUCT_ID, SYSTEM_READING_COMMAND, register_system_disclosure_action,
 };
 pub use template_stamp::{
     StampFile, StampFileAction, StampScope, TemplateStampPlan, TemplateStampResult,
