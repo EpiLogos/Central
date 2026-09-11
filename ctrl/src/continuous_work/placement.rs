@@ -292,7 +292,7 @@ fn check_allocation_protection(scope: &Scope, source_path: &str, policy: &Effect
     }
     Ok(())
 }
-fn allocation_reading(scope: &Scope, record: &NowRecord, source: &source::SourceReading, mut policy: EffectivePolicy, created: bool) -> io::Result<Value> {
+pub(super) fn allocation_reading(scope: &Scope, record: &NowRecord, source: &source::SourceReading, mut policy: EffectivePolicy, created: bool) -> io::Result<Value> {
     check_allocation_protection(scope, &source.source.path, &policy)?;
     let destination = now_destination(scope, &source.source.path)?;
     crate::file_mutation::directory(&scope.root, destination.strip_prefix(&scope.root).map_err(io::Error::other)?)?;

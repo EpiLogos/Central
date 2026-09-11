@@ -12,6 +12,10 @@ impl World {
     fn new() -> Self {
         let root = std::env::temp_dir().join(format!("central-joined-admission-{}-{}",std::process::id(),SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
         central_ctrl::initialize_central(&root).unwrap();
+        // Scope::resolve canonicalises the world root (/var -> /private/var on
+        // macOS); every path this fixture hands to public operations must live
+        // under the canonical root or the membership checks refuse it.
+        let root = fs::canonicalize(&root).unwrap();
         fs::create_dir_all(root.join("Work/existing-repository/src")).unwrap();
         let scope = Scope::resolve(&root,None).unwrap();
         let mut relations = vec![];
