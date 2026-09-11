@@ -1,0 +1,37 @@
+name: BKMR joined verification
+on:
+  push:
+    branches: [agent/bkmr-154-persistent]
+    paths: [.github/workflows/bkmr-joined.yml]
+  pull_request:
+    paths: [.github/workflows/bkmr-joined.yml]
+permissions:
+  contents: read
+jobs:
+  sources:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: Central
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: EpiLogos/ai-kit
+          path: ai-kit
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Record exact source revisions
+        run: |
+          git -C Central rev-parse HEAD
+          git -C Central branch -r --list '*bkmr*'
+          git -C ai-kit rev-parse HEAD
+          git -C ai-kit branch -r --list '*bkmr*'
+          tar -czf bkmr-joined-sources.tar.gz Central ai-kit
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bkmr-joined-sources
+          path: bkmr-joined-sources.tar.gz
+          retention-days: 3
