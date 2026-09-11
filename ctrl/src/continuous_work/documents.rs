@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{collections::{BTreeSet, HashSet}, io, path::Path};
 
+#[path = "document_extensions.rs"]
+mod extensions;
+
 pub const SCHEMA: &str = "central.contribution-document/v1";
 pub const ROLE: &str = "protected-contribution-document";
 const INTENTS: &str = ".central/source-returns/document-mutations";
@@ -35,6 +38,7 @@ fn parse(reading: &SourceReading) -> io::Result<Value> {
             if !ids.insert((collection,id)) {return Err(invalid("duplicate document-local identity requires explicit reconciliation"));}
         }
     }
+    extensions::validate(&value)?;
     Ok(value)
 }
 fn relation(scope: &Scope,reference: &str) -> io::Result<Value> {
@@ -77,6 +81,7 @@ fn result(source: &SourceReading,document: Value,meta: &Value) -> Value {
     json!({"schema":"central.document-reading/v1","source":source.source,"revision":source.revision,
         "document_id":document["document_id"],"document":document,
         "unreviewed_external_revision":meta["last_native_revision"]!=source.revision.revision,
+        "last_native_revision":meta["last_native_revision"],
         "source_authority":"live-native-source","automatic_agent_or_model_invocation":false,
         "media_support":"text and sanitised rich text; embedded image/audio admission is not implemented in this cut"})
 }
@@ -163,8 +168,8 @@ fn append(document: &mut Value,input: &Value,author: &ContributionAuthor,reviewe
     if document["contributions"].as_array().unwrap().iter().any(|c|c["id"]==id) {return Err(conflict("ContributionId already exists"));}
     let html=clean(input.get("html").and_then(Value::as_str).ok_or_else(||invalid("contribution html required"))?)?;
     array_mut(document,"contributions")?.push(json!({"id":id,"entry_id":entry,"field_id":field,"html":html,
-        "author_ref":author.principal_ref,"actor_kind":author.actor_kind,"display_role":if author.actor_kind=="human" {"H"} else {"Agent"},
-        "occurred_at_unix_seconds":input.get("occurred_at_unix_seconds").and_then(Value::as_u64).unwrap_or(now),"received_at_unix_seconds":now,
+        "author_ref":author.principal_ref,"actor_kind":author.actor_kind,"display_role":if author.actor_kind=="human" {"F"} else {"H"},
+        "occurred_at_unix_seconds":input.get("occurred_at_unix_seconds").cloned().unwrap_or(json!(now)),"received_at_unix_seconds":input.get("received_at_unix_seconds").and_then(Value::as_u64).unwrap_or(now),
         "locked":author.actor_kind=="human","human_touched":author.actor_kind=="human","removed":false,
         "reviewed_by":reviewer.map(|p|p.principal_ref.clone())}));
     Ok(())
@@ -180,7 +185,7 @@ fn edit(document: &mut Value,input: &Value,author: &ContributionAuthor,reviewer:
             if document["entries"].as_array().unwrap().iter().any(|e|e["id"]==id) {return Err(conflict("EntryId already exists"));}
             let reply=optional_text(input,"reply_to")?;
             if reply.is_some_and(|reference|!document["entries"].as_array().unwrap().iter().any(|e|e["id"]==reference)) {return Err(invalid("reply anchor is not an existing document-local EntryId"));}
-            array_mut(document,"entries")?.push(json!({"id":id,"reply_to":reply,"author_ref":author.principal_ref,"occurred_at_unix_seconds":input.get("occurred_at_unix_seconds").and_then(Value::as_u64).unwrap_or(now),"received_at_unix_seconds":now}));
+            array_mut(document,"entries")?.push(json!({"id":id,"reply_to":reply,"author_ref":author.principal_ref,"occurred_at_unix_seconds":input.get("occurred_at_unix_seconds").cloned().unwrap_or(json!(now)),"received_at_unix_seconds":input.get("received_at_unix_seconds").and_then(Value::as_u64).unwrap_or(now)}));
             if input.get("html").is_some() {append(document,input,author,reviewer,now,Some(id.into()),None)?;}
         }
         "entry.append"=>{
@@ -221,7 +226,7 @@ fn edit(document: &mut Value,input: &Value,author: &ContributionAuthor,reviewer:
             if key=="lifecycle" && !matches!(value,"open"|"closed") {return Err(invalid("document lifecycle is open or closed"));}
             document[key]=json!(value);
         }
-        _=>return Err(invalid("unsupported native contribution operation")),
+        _=>extensions::edit(document,input,author,reviewer,now)?,
     }
     Ok(())
 }
@@ -237,6 +242,8 @@ struct Intent {
     actor: ContributionAuthor,
     reviewer_ref: Option<String>,
     previous_revision: String,
+    #[serde(default)]
+    previous_metadata_revision: Option<String>,
     next_revision: String,
     content: String,
     operation_at_unix_seconds: u64,
@@ -264,7 +271,7 @@ fn finish(scope: &Scope,intent: &mut Intent) -> io::Result<Value> {
     }
     let committed=scope.read(&intent.source_ref)?;
     if committed.revision.revision!=intent.next_revision {return Err(conflict("native document commit did not match its intended revision"));}
-    retain_metadata(scope,&committed,&document,Some(&intent.previous_revision))?;
+    retain_metadata(scope,&committed,&document,Some(intent.previous_metadata_revision.as_deref().unwrap_or(&intent.previous_revision)))?;
     intent.status="committed".into();save_intent(scope,intent)?;
     let mut response=read(scope,&json!({"source_ref":intent.source_ref,"document_id":intent.document_id}))?;
     response["operation_receipt"]=json!({"request_key":intent.request_key,"status":intent.status,"actor":intent.actor,"reviewed_by":intent.reviewer_ref,"previous_revision":intent.previous_revision,"revision":intent.next_revision});
@@ -278,6 +285,11 @@ pub(crate) fn mutate_reviewed(scope: &Scope,input: &Value,author: &ContributionA
     mutate_as(scope,input,author,Some(reviewer),now)
 }
 fn mutate_as(scope: &Scope,input: &Value,author: &ContributionAuthor,reviewer: Option<&Principal>,now: u64) -> io::Result<Value> {
+    for key in ["occurred_at_unix_seconds","received_at_unix_seconds"] {
+        if input.get(key).is_some_and(|v| !v.is_null() && v.as_u64().is_none()) {
+            return Err(invalid(format!("{key} must be an integer or absent")));
+        }
+    }
     let reference=text(input,"source_ref")?;
     let id=text(input,"document_id")?;
     let request_key=format!("{}:{}:{}:{}",scope.world_ref,reference,author.principal_ref,text(input,"request_id")?);
@@ -300,24 +312,26 @@ fn mutate_as(scope: &Scope,input: &Value,author: &ContributionAuthor,reviewer: O
     }
     let (current,mut document,meta)=reading(scope,input)?;
     if current.revision.revision!=text(input,"expected_revision")? {return Err(conflict("document source revision changed"));}
-    if meta["last_native_revision"]!=current.revision.revision {return Err(denied("external human/source edit is protected; reconcile its exact retained revision before further native contribution mutation"));}
-    // Reopening is the sole metadata operation permitted against a closed doc.
-    if input["operation"]=="lifecycle.set" && input["value"]=="open" && author.actor_kind=="human" {document["lifecycle"]=json!("open");}
-    edit(&mut document,input,author,reviewer,now)?;
+    let external = meta["last_native_revision"]!=current.revision.revision;
+    if input["operation"]=="external.reconcile" {
+        if !external {return Err(conflict("document has no external revision to reconcile"));}
+        if meta["last_native_revision"]!=text(input,"expected_native_revision")? {return Err(conflict("last native document basis changed"));}
+        extensions::reconcile(&mut document,input,author,now)?;
+    } else {
+        if external {return Err(denied("external human/source edit is protected; reconcile its exact retained revision before further native contribution mutation"));}
+        // Reopening is explicit; restoration never silently changes lifecycle.
+        if input["operation"]=="lifecycle.set" && input["value"]=="open" && author.actor_kind=="human" {document["lifecycle"]=json!("open");}
+        edit(&mut document,input,author,reviewer,now)?;
+    }
+    extensions::refresh_anchors(&mut document)?;
+    extensions::validate(&document)?;
     document["saved_at_unix_seconds"]=json!(now);
     array_mut(&mut document,"operations")?.push(json!({"request_key":request_key,"digest":digest,"actor_ref":author.principal_ref,"reviewed_by":reviewer.map(|p|p.principal_ref.clone()),"recorded_at_unix_seconds":now}));
     let content=encoded(&document)?;
-    let mut intent=Intent {schema:"central.document-mutation/v1".into(),scope_ref:scope.world_ref.clone(),source_ref:reference.into(),source_path:current.source.path,document_id:id.into(),request_key,digest,actor:author.clone(),reviewer_ref:reviewer.map(|p|p.principal_ref.clone()),previous_revision:current.revision.revision,next_revision:source::revision(&content),content,operation_at_unix_seconds:now,status:"prepared".into()};
+    let mut intent=Intent {schema:"central.document-mutation/v1".into(),scope_ref:scope.world_ref.clone(),source_ref:reference.into(),source_path:current.source.path,document_id:id.into(),request_key,digest,actor:author.clone(),reviewer_ref:reviewer.map(|p|p.principal_ref.clone()),previous_revision:current.revision.revision,previous_metadata_revision:meta["last_native_revision"].as_str().map(str::to_owned),next_revision:source::revision(&content),content,operation_at_unix_seconds:now,status:"prepared".into()};
     save_intent(scope,&intent)?;
     finish(scope,&mut intent)
 }
 pub fn export(scope: &Scope,input: &Value) -> io::Result<Value> {
-    let (source,document,meta)=reading(scope,input)?;
-    let snapshot=json!({"schema":"central.document-retained-snapshot/v1","source_ref":source.source.source_ref,"revision":source.revision,"document":document,"source_authority":"retained-snapshot-not-live-authority"});
-    let escaped=serde_json::to_string(&snapshot)?.replace('<',"\\u003c").replace('>',"\\u003e").replace('&',"\\u0026");
-    let title=document["title"].as_str().unwrap_or("").replace('&',"&amp;").replace('<',"&lt;").replace('>',"&gt;").replace('"',"&quot;");
-    let body=document["contributions"].as_array().unwrap().iter().filter(|c|c["removed"]!=true)
-        .map(|c|clean(c["html"].as_str().unwrap_or(""))).collect::<io::Result<Vec<_>>>()?.join("\n");
-    let html=format!("<!doctype html><html><head><meta charset=\"utf-8\"><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; base-uri 'none'; form-action 'none'\"><title>{title}</title></head><body><h1>{title}</h1>{body}<script type=\"application/json\" id=\"central-retained-document\">{escaped}</script></body></html>");
-    Ok(json!({"schema":"central.document-export/v1","snapshot":snapshot,"html":html,"unreviewed_external_revision":meta["last_native_revision"]!=source.revision.revision,"executable_scripts":false,"automatic_network_or_model_calls":false,"original_HTML_fidelity":"not asserted; original fixture required for that independent test"}))
+    extensions::export(scope,input)
 }
