@@ -1,0 +1,75 @@
+name: continuous-work-proof
+
+on:
+  push:
+    branches: ['agent/caw-temporal-documents-receiving']
+  pull_request:
+    paths:
+      - 'ctrl/**'
+      - 'Cargo.lock'
+      - 'tests/continuous-work/**'
+      - 'scripts/prove-continuous-work.py'
+      - '.github/workflows/continuous-work-proof.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: caw-proof-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  controlled-worlds:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          cache-on-failure: true
+      - name: Execute native workspace tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --workspace --locked --no-fail-fast -- --nocapture 2>&1 | tee "$RUNNER_TEMP/caw-native-tests.log"
+      - name: Build the native consumer binary
+        id: build
+        run: cargo build -p ctrl --locked
+      - name: Exercise concurrent native consumer requests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/prove-continuous-work.py --ctrl "$GITHUB_WORKSPACE/target/debug/ctrl" | tee "$RUNNER_TEMP/caw-native-consumer-proof.json"
+      - name: Exercise native exclusion and lifecycle boundaries
+        shell: bash
+        env:
+          CENTRAL_CAW_CTRL: ${{ github.workspace }}/target/debug/ctrl
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests/continuous-work -p 'test_native_placement_boundary.py' -v 2>&1 | tee "$RUNNER_TEMP/caw-native-boundary-proof.log"
+      - name: Preserve the exact public source and binary exercised
+        if: always()
+        shell: bash
+        env:
+          NATIVE_BUILD_OUTCOME: ${{ steps.build.outcome }}
+        run: |
+          git rev-parse HEAD > "$RUNNER_TEMP/caw-source-sha.txt"
+          tar --exclude=.git --exclude=target -czf "$RUNNER_TEMP/caw-source.tar.gz" .
+          # A failed test/build must not publish a leftover cached binary as evidence.
+          if test "$NATIVE_BUILD_OUTCOME" = success; then cp target/debug/ctrl "$RUNNER_TEMP/caw-ctrl"; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: caw-native-proof-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/caw-native-tests.log
+            ${{ runner.temp }}/caw-native-consumer-proof.json
+            ${{ runner.temp }}/caw-native-boundary-proof.log
+            ${{ runner.temp }}/caw-source-sha.txt
+            ${{ runner.temp }}/caw-source.tar.gz
+            ${{ runner.temp }}/caw-ctrl
+          retention-days: 14

@@ -16,6 +16,7 @@ pub mod agent_set_store;
 pub mod automation;
 pub mod central_computer;
 pub mod cli;
+pub mod continuous_work;
 pub mod control;
 pub mod control_skills;
 pub mod development_field;
@@ -27,12 +28,14 @@ pub mod pasu;
 pub mod personal;
 pub mod picker;
 pub mod projectcentral;
+#[path = "projectcentral_flow_extensions.rs"]
 pub mod projectcentral_flow;
 pub mod projectcentral_ground;
 pub mod projectcentral_now;
 #[path = "projectcentral_ops.rs"]
 mod projectcentral_ops_base;
 pub mod source_history;
+#[path = "source_horizon_extensions.rs"]
 pub mod source_horizon;
 pub mod system_disclosure;
 pub mod template_stamp;
@@ -63,6 +66,7 @@ pub mod projectcentral_ops {
         super::source_history::register_source_history_actions(registry);
         super::world_source::register_world_source_actions(registry);
         super::wiki_read::register_projectcentral_wiki_read_action(registry);
+        super::continuous_work::register_actions(registry);
     }
 }
 pub mod recovery;
