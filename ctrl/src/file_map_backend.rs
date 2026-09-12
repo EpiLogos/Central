@@ -106,6 +106,10 @@ impl Backend {
                 "Persistent bkmr map is not initialized",
             ));
         }
+        // bkmr's hybrid path feeds the limit straight into a sqlite-vec knn
+        // query, which rejects k above 4096. Full-text search has no such
+        // ceiling, so only the hybrid invocation is capped.
+        let limit = if hybrid { limit.min(100) } else { limit };
         let mut args = vec![
             if hybrid { "hsearch" } else { "search" }.into(),
             "--json".into(),
