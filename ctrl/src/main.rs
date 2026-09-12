@@ -1,7 +1,7 @@
 use central_ctrl::{run_cli_with_surface, CliEnvironment, StdioTerminalSurface};
 use std::process;
 
-const HELP: &str = "Central ctrl\n\nUsage:\n  ctrl --version\n  ctrl help\n  ctrl capabilities [--json]\n  ctrl actions [--json]\n  ctrl action run <ACTION> [JSON] [--json]\n  ctrl root | init | doctor\n  ctrl system [--json]        (Wave 5 owner System disclosure)\n  ctrl work <list|search|open|reveal> ...\n  ctrl control <open|search> ...\n  ctrl machine <inspect|account|adopt-current|declaration|plan|apply|verify> ...\n  ctrl recovery plan <ROLE>\n  ctrl recover <ROLE>\n  ctrl pick\n\nUse `ctrl capabilities` (or `ctrl actions`) for the complete current native Action field. Product operations remain owned by Central's Action registry; this help is only the stable command doorway.";
+const HELP: &str = "Central ctrl\n\nUsage:\n  ctrl --version\n  ctrl help\n  ctrl capabilities [--json]\n  ctrl actions [--json]\n  ctrl action run <ACTION> [JSON] [--json]\n  ctrl root | init | doctor\n  ctrl system [--json]        (Wave 5 owner System disclosure)\n  ctrl work <list|search|open|reveal> ...\n  ctrl control <open|search|index> ...\n  ctrl machine <inspect|account|adopt-current|declaration|plan|apply|verify> ...\n  ctrl recovery plan <ROLE>\n  ctrl recover <ROLE>\n  ctrl pick\n\nUse `ctrl capabilities` (or `ctrl actions`) for the complete current native Action field. Product operations remain owned by Central's Action registry; this help is only the stable command doorway.";
 
 fn top_level_command_index(args: &[String]) -> Option<usize> {
     let mut positional = Vec::new();

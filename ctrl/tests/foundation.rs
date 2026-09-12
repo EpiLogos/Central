@@ -271,6 +271,7 @@ fn registry_has_stable_ids_and_complete_descriptors() {
             "central.world.project",
             "central.world.reproject.apply",
             "central.world.reproject.plan",
+            "control.index",
             "control.open",
             "control.search",
             "control.skills.inspect",
@@ -477,7 +478,7 @@ fn action_list_has_human_and_structured_cli_renderings() {
     let actions = value["data"]["actions"].as_array().unwrap();
     let mut continuous = ActionRegistry::default();
     central_ctrl::continuous_work::register_actions(&mut continuous);
-    assert_eq!(actions.len(), 128 + continuous.list().len());
+    assert_eq!(actions.len(), 129 + continuous.list().len());
     for descriptor in continuous.list() {
         let actual = actions
             .iter()
