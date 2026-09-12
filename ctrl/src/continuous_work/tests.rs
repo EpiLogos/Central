@@ -349,3 +349,55 @@ fn same_task_different_purpose_is_a_conflict_not_a_shared_scratch_overwrite() {
         io::ErrorKind::AlreadyExists
     );
 }
+#[test]
+fn now_listing_lists_allocations_and_filters_by_participant() {
+    let temp = world();
+    let root = temp.path();
+    let alpha = execute_at(root, "allocate", &request(root, None, "task:alpha"), 100).unwrap();
+    let mut beta_input = request(root, None, "task:beta");
+    beta_input["participant_refs"] = serde_json::json!(["agent:beta", "agent:test"]);
+    let beta = execute_at(root, "allocate", &beta_input, 100).unwrap();
+
+    let all = execute_at(root, "now_list", &serde_json::json!({}), 100).unwrap();
+    assert_eq!(all["schema"], "central.now-listing/v1");
+    let records = all["records"].as_array().unwrap();
+    assert_eq!(records.len(), 2);
+    let now_refs: Vec<&str> = records
+        .iter()
+        .map(|r| r["now_ref"].as_str().unwrap())
+        .collect();
+    assert!(now_refs.contains(&alpha["now_ref"].as_str().unwrap()));
+    assert!(now_refs.contains(&beta["now_ref"].as_str().unwrap()));
+    let alpha_row = records
+        .iter()
+        .find(|r| r["now_ref"] == alpha["now_ref"])
+        .unwrap();
+    assert_eq!(alpha_row["task_ref"], "task:alpha");
+    assert_eq!(alpha_row["participant_refs"], serde_json::json!(["agent:test"]));
+    assert_eq!(alpha_row["revision"]["revision"], alpha["revision"]["revision"]);
+
+    let filtered = execute_at(
+        root,
+        "now_list",
+        &serde_json::json!({"participant_refs": ["agent:beta"]}),
+        100,
+    )
+    .unwrap();
+    let filtered_refs: Vec<&str> = filtered["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["now_ref"].as_str().unwrap())
+        .collect();
+    assert_eq!(filtered_refs, vec![beta["now_ref"].as_str().unwrap()]);
+
+    let none = execute_at(
+        root,
+        "now_list",
+        &serde_json::json!({"participant_refs": ["agent:nobody"]}),
+        100,
+    )
+    .unwrap();
+    assert_eq!(none["schema"], "central.now-listing/v1");
+    assert_eq!(none["records"].as_array().unwrap().len(), 0);
+}
