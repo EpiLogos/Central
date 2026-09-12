@@ -84,7 +84,8 @@ pub fn execute_with_token_at(
                     Ok(result)
                 }
                 None | Some(Value::Bool(false)) => Ok(
-                    json!({"schema":"central.now-reading/v1","record":record,"source":reading.source,"revision":reading.revision,"automatic_agent_or_model_invocation":false}),
+                    json!({"schema":"central.now-reading/v1","record":record,"source":reading.source,"revision":reading.revision,"automatic_agent_or_model_invocation":false,
+                        "pointer_note":"Records are pointers, not authority: follow the governing guidance, and search the native surface before building anything new."}),
                 ),
                 _ => Err(invalid("with_placement must be a boolean")),
             }
@@ -92,7 +93,8 @@ pub fn execute_with_token_at(
         "now_list" => Ok(json!({
             "schema": "central.now-listing/v1",
             "records": placement::list_now(&scope, input)?,
-            "automatic_agent_or_model_invocation": false
+            "automatic_agent_or_model_invocation": false,
+            "pointer_note":"Records are pointers, not authority: follow the governing guidance, and search the native surface before building anything new."
         })),
         "time_policy" => Ok(serde_json::to_value(temporal::time_policy(&scope, now)?)?),
         "day_read" => temporal::day_read(&scope, input),
