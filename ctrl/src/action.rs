@@ -437,6 +437,42 @@ fn control_search_action(
     }
 }
 
+fn control_index_action(
+    _registry: &ActionRegistry,
+    _input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    let root = match resolve_central_root(context.root_options) {
+        Ok(root) => root,
+        Err(message) => {
+            return ActionResult::failure(
+                Some("control.index"),
+                ResultStatus::InvalidInput,
+                message,
+                None,
+            );
+        }
+    };
+    match crate::control::index_governance(&root.path) {
+        Ok(result) => ActionResult::success(
+            "control.index",
+            to_value(result).expect("Control governance index serializes"),
+        ),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => ActionResult::failure(
+            Some("control.index"),
+            ResultStatus::InvalidCentralStructure,
+            error.to_string(),
+            None,
+        ),
+        Err(error) => ActionResult::failure(
+            Some("control.index"),
+            ResultStatus::InternalFailure,
+            error.to_string(),
+            None,
+        ),
+    }
+}
+
 fn discover_work(
     action_id: &str,
     context: &ActionExecutionContext<'_>,
@@ -826,6 +862,17 @@ pub fn create_core_action_registry() -> ActionRegistry {
     control_search.inputs = vec![string_input("query")];
     registry
         .register(control_search, control_search_action)
+        .expect("core Action ids are valid");
+
+    let control_index = descriptor(
+        "control.index",
+        "Flash the governance field",
+        "Session-start index of the governance statements: file, topic and standing per statement, never the content.",
+        MutationClass::ReadOnly,
+        "control-governance-index",
+    );
+    registry
+        .register(control_index, control_index_action)
         .expect("core Action ids are valid");
 
     crate::control_skills::register_control_skills_actions(&mut registry);

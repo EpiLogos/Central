@@ -46,6 +46,7 @@ The current composed registry exposes 68 Actions:
 | `central.recover` | reconcile supported recovery for an authored machine role | `recover <role>` |
 | `control.open` | resolve one authored Control source root | `control open <user|agents|machines>` |
 | `control.search` | search readable authored Control source | `control search <query>` |
+| `control.index` | flash the governance field at session start: file, topic and standing per statement, never the content | `control index` |
 | `control.skills.inspect` | disclose the authored skill surface at every Control scope with scope, standing, provenance and retirement records; empty scopes are disclosed honestly as absent | `action run control.skills.inspect` |
 | `control.skills.retire` | write standing retired into a skill's ground manifest with who/when/why provenance; the directory and body are never deleted | `action run control.skills.retire` |
 | `control.skills.restore` | reverse a retirement: return the manifest to standing active and clear the retirement record | `action run control.skills.restore` |

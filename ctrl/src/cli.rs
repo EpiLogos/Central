@@ -204,6 +204,9 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         {
             ("control.search", json!({ "query": rest.join(" ") }))
         }
+        [domain, verb] if domain == "control" && verb == "index" => {
+            ("control.index", json!({}))
+        }
         [domain, verb] if domain == "control" && verb == "open" => {
             return Err((
                 structured,

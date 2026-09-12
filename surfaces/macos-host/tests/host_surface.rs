@@ -56,7 +56,7 @@ mod unix_tests {
     #[test]
     fn macos_action_registry_extends_current_projectcentral_without_mutating_core_identity() {
         let core = create_core_action_registry();
-        assert_eq!(core.list().len(), 34);
+        assert_eq!(core.list().len(), 35);
         assert!(core.get("automation.run").is_none());
         assert!(core.get("central.files.list").is_some());
         assert_eq!(core.get("central.recognize").unwrap().mutation_class.as_str(),"read-only");
@@ -74,7 +74,7 @@ mod unix_tests {
         let macos = create_macos_action_registry();
         let mut continuous = central_ctrl::ActionRegistry::default();
         central_ctrl::continuous_work::register_actions(&mut continuous);
-        assert_eq!(macos.list().len(), 107 + continuous.list().len());
+        assert_eq!(macos.list().len(), 108 + continuous.list().len());
         assert!(macos.get("central.file-map.skill-tree").is_some());
         for descriptor in continuous.list() {
             assert_eq!(macos.get(&descriptor.id), Some(&descriptor),
