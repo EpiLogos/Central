@@ -327,7 +327,7 @@ fn inspect(all: &[Scope], input: &Value) -> io::Result<Value> {
         "scopes":all.iter().map(|s|json!({"world_ref":s.world,"project":s.project,"path":s.root})).collect::<Vec<_>>(),
         "resources":resources,"links":scope.ground()?.links,"database":backend.db(),
         "provider":{"available":available,"version":version.as_ref().ok().map(|v|v.trim()),
-        "tested_version":native::VERSION,"fulltext":available,"hybrid":hybrid,"semantic":false,
+        "tested_version":native::VERSION,"fulltext":available,"hybrid":hybrid,"semantic":hybrid,
         "reason":version.err().map(|e|e.to_string())}}),
     )
 }
