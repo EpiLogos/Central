@@ -89,6 +89,11 @@ pub fn execute_with_token_at(
                 _ => Err(invalid("with_placement must be a boolean")),
             }
         }
+        "now_list" => Ok(json!({
+            "schema": "central.now-listing/v1",
+            "records": placement::list_now(&scope, input)?,
+            "automatic_agent_or_model_invocation": false
+        })),
         "time_policy" => Ok(serde_json::to_value(temporal::time_policy(&scope, now)?)?),
         "day_read" => temporal::day_read(&scope, input),
         "source_history" => history::read(&scope, input),
@@ -191,6 +196,7 @@ handler!(policy_action, "central.work.policy", "policy");
 handler!(allocate_action, "central.now.allocate", "allocate");
 handler!(validate_action, "central.work.validate", "validate");
 handler!(now_read_action, "central.now.read", "now_read");
+handler!(now_list_action, "central.now.list", "now_list");
 handler!(time_action, "central.time.policy", "time_policy");
 handler!(day_read_action, "central.day.read", "day_read");
 handler!(day_ensure_action, "central.day.ensure", "day_ensure");
@@ -276,6 +282,7 @@ pub fn register_actions(registry: &mut ActionRegistry) {
         ("central.now.allocate", "Allocate an agent NOW clearing", "Idempotently allocate one source-owned NOW and T destination per task; preserve ordinary authorised repository writes.", true, allocate_action, &[("task_ref","string",true),("purpose","string",true),("expected_policy_revision","string",true),("participant_refs","array",false),("source_refs","array",false)]),
         ("central.work.validate", "Validate current task write placement", "Revalidate policy, NOW and destination anchors. Return a usable NOW retry destination; do not claim OS enforcement.", false, validate_action, &[("now_ref","string",true),("expected_now_revision","string",true),("expected_policy_revision","string",true),("destination","string",true),("expected_destination_anchor","object",false)]),
         ("central.now.read", "Read allocated NOW source", "Read exact NOW identity, lifecycle and source revision; optionally include current native placement without allocating or re-entering the task.", false, now_read_action, &[("now_ref","string",true),("with_placement","boolean",false)]),
+        ("central.now.list", "List allocated NOWs by participant", "List the World's allocated NOW clearings with identity, lifecycle and source revision, optionally filtered to records carrying any of the given participant refs; read-only.", false, now_list_action, &[("participant_refs","array",false)]),
         ("central.time.policy", "Read native civil-time policy", "Read the recognised root IANA timezone and local Day boundary, never the harness timezone.", false, time_action, &[]),
         ("central.day.read", "Read human Day source", "Read a stable DayRef or the current today pointer without replacing the open editor.", false, day_read_action, &[("day_ref","string",false)]),
         ("central.day.ensure", "Ensure the current blank Day", "Create a blank native Day and advance today only under the current authenticated human time policy; never close old writing or clear NOW.", true, day_ensure_action, &[("expected_time_policy_revision","string",true),("expected_authority_revision","string",false)]),

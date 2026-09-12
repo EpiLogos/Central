@@ -422,6 +422,61 @@ pub(crate) fn read_now(
         "NOW ref is not allocated in this World",
     ))
 }
+/// List the World's allocated NOW clearings, optionally filtered to records
+/// carrying any of the given participant refs. An empty filter lists every
+/// allocated clearing. Same identity law as `read_now`: every source bound
+/// with the now-clearing role must parse and co-refer, or the listing fails.
+/// A now_ref bound more than once lists once — the first binding, exactly
+/// what `read_now` would return.
+pub(crate) fn list_now(scope: &Scope, input: &Value) -> io::Result<Vec<Value>> {
+    let participant_filter = refs(input, "participant_refs")?;
+    let mut seen = std::collections::BTreeSet::new();
+    let mut rows = Vec::new();
+    for binding in scope
+        .bindings()?
+        .into_iter()
+        .filter(|b| b.roles.iter().any(|r| r == "now-clearing"))
+    {
+        let source = scope.read(&binding.source_ref)?;
+        let record: NowRecord = serde_json::from_str(&source.content)?;
+        if record.schema != NOW_SCHEMA
+            || record.scope_ref != scope.world_ref
+            || record.source_ref != binding.source_ref
+        {
+            return Err(invalid("NOW source identity/schema mismatch"));
+        }
+        if !seen.insert(record.now_ref.clone()) {
+            continue;
+        }
+        if !participant_filter.is_empty()
+            && !record
+                .participant_refs
+                .iter()
+                .any(|p| participant_filter.contains(p))
+        {
+            continue;
+        }
+        rows.push(json!({
+            "now_ref": record.now_ref,
+            "source_ref": record.source_ref,
+            "scope_ref": record.scope_ref,
+            "task_ref": record.task_ref,
+            "purpose": record.purpose,
+            "participant_refs": record.participant_refs,
+            "source_refs": record.source_refs,
+            "lifecycle": record.lifecycle,
+            "created_at_unix_seconds": record.created_at_unix_seconds,
+            "revision": source.revision,
+        }));
+    }
+    rows.sort_by(|a, b| {
+        a["now_ref"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(b["now_ref"].as_str().unwrap_or(""))
+    });
+    Ok(rows)
+}
 pub(crate) fn now_destination(scope: &Scope, source_path: &str) -> io::Result<PathBuf> {
     let parent = Path::new(source_path)
         .parent()
