@@ -35,7 +35,7 @@ impl Backend {
     pub fn prepare(&self) -> io::Result<()> {
         super::file_map::safe_directory(&self.root, Path::new(".central/bkmr/home/.config/bkmr"))?;
         let config = format!(
-            "db_url = {}\n[base_paths]\nWORLD = {}\n\n[embeddings]\nmodel = \"EmbeddingGemma300MQ4\"\n",
+            "db_url = {}\n[base_paths]\nWORLD = {}\n\n[embeddings]\nmodel = \"NomicEmbedTextV15\"\n",
             serde_json::to_string(&self.db().to_string_lossy())?,
             serde_json::to_string(&self.root.to_string_lossy())?
         );
