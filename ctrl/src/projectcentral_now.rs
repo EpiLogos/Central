@@ -549,6 +549,7 @@ fn boundaries() -> Vec<String> {
         "NOW is a moving session-independent working horizon, not a Session, Run, Focus, Wiki, or authored Project canon.".into(),
         "DAY is a dated aggregation/rollover boundary, not a Project history database or automatic truth promotion mechanism.".into(),
         "Run, Session, Focus, source, evidence, and other external identities remain refs owned by their native systems.".into(),
+        "Records are pointers, not authority: follow the governing guidance, and search the native surface before building anything new.".into(),
     ]
 }
 
@@ -882,7 +883,7 @@ fn render_day(
     flows: &[FlowDaySnapshot],
 ) -> io::Result<String> {
     let mut output = format!(
-        "# DAY — {day}\n\nDerived closure reading for the ProjectCentral NOW horizon. Human and Agent authorship remain attached to separately snapshotted source records; this aggregation is not Project canon.\n\n- next local civil day: `{next_day}`\n- DAY source snapshot: `{}`\n- NOW remains the moving working horizon after this boundary\n\n## Human current source at close\n\n",
+        "# DAY — {day}\n\nDerived closure reading for the ProjectCentral NOW horizon. Human and Agent authorship remain attached to separately snapshotted source records; this aggregation is not Project canon. Records are pointers, not authority: follow the governing guidance, and search the native surface before building anything new.\n\n- next local civil day: `{next_day}`\n- DAY source snapshot: `{}`\n- NOW remains the moving working horizon after this boundary\n\n## Human current source at close\n\n",
         relative(project_root, snapshot_root)
     );
 
