@@ -1,5 +1,5 @@
 use central_ctrl::{
-    apply_reproject, create_flow, explain_project_world_map, explain_world_map, initialize_central,
+    apply_reproject, explain_project_world_map, explain_world_map, initialize_central,
     initialize_now, initialize_projectcentral, map_project_world, map_world, plan_reproject,
     read_project_manifest, run_cli, CliEnvironment, GroundState, ProjectCentralState, ResultStatus,
     REPROJECT_PLAN_SCHEMA, REPROJECT_RECEIPT_SCHEMA, ROOT_AGENT_GOVERNANCE_DIR,
@@ -415,24 +415,14 @@ fn ground_fingerprint(root: &Path) -> Vec<(String, u64)> {
 }
 
 #[test]
-fn flows_and_now_are_disclosed_and_absence_is_data() {
+fn retired_flow_registry_is_disclosed_as_absence_and_leftovers_stay_visible() {
     let temp = healthy_ground("flows");
     let root = temp.path();
     let project = root.join("Work/garden");
 
     initialize_now(&project).unwrap();
-    let flow = create_flow(
-        &project,
-        Some("2026-09-05-0900"),
-        None,
-        Some("Garden log".to_owned()),
-        "human:test",
-        "human",
-        None,
-    )
-    .unwrap();
-    let registry_bytes = fs::read(project.join(".central/flows.json")).unwrap();
 
+    // The registry is retired: the map discloses its absence as data.
     let map = map_world(root).unwrap();
     let garden = map
         .work
@@ -440,20 +430,8 @@ fn flows_and_now_are_disclosed_and_absence_is_data() {
         .iter()
         .find(|project| project.name == "garden")
         .expect("garden is mapped");
-
-    // The Flow is disclosed with its identity, revision and lifecycle.
-    assert!(garden.projectcentral.flows.present);
-    assert_eq!(garden.projectcentral.flows.flows.len(), 1);
-    let entry = &garden.projectcentral.flows.flows[0];
-    assert_eq!(entry.flow_ref, flow.flow_ref);
-    assert_eq!(entry.source_ref, flow.source_ref);
-    assert_eq!(entry.path, flow.path);
-    assert_eq!(entry.lifecycle, "active");
-    assert_eq!(entry.title.as_deref(), Some("Garden log"));
-    assert!(entry.revision.starts_with("central.content-fnv1a64/v1:"));
-    assert_eq!(entry.revisions_recorded, 1);
-    assert_eq!(entry.uncommitted_edits, Some(false));
-    assert_eq!(garden.projectcentral.flows.active, 1);
+    assert!(!garden.projectcentral.flows.present);
+    assert!(garden.projectcentral.flows.flows.is_empty());
 
     // The NOW folder is disclosed by counts, not contents.
     assert!(garden.projectcentral.now.present);
@@ -465,25 +443,24 @@ fn flows_and_now_are_disclosed_and_absence_is_data() {
     assert_eq!(garden.projectcentral.now.active_items, 0);
     assert_eq!(garden.projectcentral.now.day_records, 0);
 
-    // An external edit shows as uncommitted work, and reading the map never
-    // absorbs it: the registry keeps its bytes.
-    fs::write(project.join(&flow.path), "an external editor was here\n").unwrap();
-    let after_edit = map_world(root).unwrap();
-    let entry = &after_edit
+    // A leftover registry from the retired era stays visible: a ground with
+    // residue is never silently reported clean, and mapping never writes it.
+    fs::create_dir_all(project.join(".central")).unwrap();
+    fs::write(project.join(".central/flows.json"), "{\"stale\": true\n").unwrap();
+    let bytes = fs::read(project.join(".central/flows.json")).unwrap();
+    let map = map_world(root).unwrap();
+    let garden = map
         .work
         .projects
         .iter()
         .find(|project| project.name == "garden")
-        .unwrap()
-        .projectcentral
-        .flows
-        .flows[0];
-    assert_eq!(entry.uncommitted_edits, Some(true));
-    map_world(root).unwrap();
+        .unwrap();
+    assert!(garden.projectcentral.flows.present);
+    assert!(garden.projectcentral.flows.flows.is_empty());
     assert_eq!(
-        registry_bytes,
+        bytes,
         fs::read(project.join(".central/flows.json")).unwrap(),
-        "mapping must not reconcile or rewrite the Flow registry"
+        "mapping must not reconcile or rewrite the retired Flow registry"
     );
 
     // A Project with no ProjectCentral reports the absence as data.
@@ -498,15 +475,6 @@ fn flows_and_now_are_disclosed_and_absence_is_data() {
         .unwrap();
     assert!(!native.projectcentral.flows.present);
     assert!(native.projectcentral.flows.flows.is_empty());
-    assert!(native.projectcentral.flows.error.is_none());
-    assert!(!native.projectcentral.now.present);
-
-    let human = explain_world_map(&serde_json::to_value(&map).unwrap());
-    assert!(
-        human.contains("flows 1 (1 active; 1 with uncommitted edits)"),
-        "{human}"
-    );
-    assert!(human.contains("now absent"), "{human}");
 }
 
 #[test]

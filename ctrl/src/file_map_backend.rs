@@ -172,7 +172,7 @@ pub(crate) fn record_revision(value: &Value) -> io::Result<String> {
     set.sort();
     set.dedup();
     row["tags"] = serde_json::to_value(set)?;
-    Ok(crate::projectcentral_flow::content_revision_bytes(
+    Ok(crate::source_safety::content_revision_bytes(
         &serde_json::to_vec(&row)?,
     ))
 }

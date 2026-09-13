@@ -282,32 +282,55 @@ pub fn create(scope: &Scope, input: &Value, principal: &Principal, now: u64) -> 
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
         }
-        let flow = crate::projectcentral_flow::publish_native_document(
+        let source_ref = publish_document_source(
             scope,
-            id,
             &path,
             &encoded(&document)?,
-            optional_text(input, "title")?,
             principal,
             document["created_at_unix_seconds"].as_u64().unwrap_or(now),
         )?;
-        let binding = crate::source_horizon::SourceBinding {
-            source_ref: flow.source_ref,
-            path: flow.path,
-            roles: vec!["flow-transcript".into(), ROLE.into()],
-            provenance: "agent-maintained".into(),
-            standing: "current-development-state".into(),
-            treatment: "generated-derived".into(),
-            agent_retrieval_allowed: true,
-        };
-        scope.bind(&binding, now)?;
-        scope.read(&binding.source_ref)?
+        scope.read(&source_ref)?
     };
     retain_metadata(scope, &source, &document, None)?;
     read(
         scope,
         &json!({"source_ref":source.source.source_ref,"document_id":id}),
     )
+}
+
+/// Publish one document's underlying source without any Flow registry: the
+/// document identity is its document_id and creation digest, the bytes are
+/// created atomically (a conflicting existing file is a conflict), and the
+/// source joins the horizon with the document roles. Replayed publication of
+/// identical bytes is idempotent.
+fn publish_document_source(
+    scope: &Scope,
+    path: &str,
+    content: &str,
+    principal: &Principal,
+    now: u64,
+) -> io::Result<String> {
+    let relative = crate::source_safety::relative_member(path)?;
+    let parent = relative
+        .parent()
+        .ok_or_else(|| invalid("document source parent missing"))?;
+    source::directories(&scope.root, parent)?;
+    source::put_new(&scope.root, path, content)?;
+    let binding = crate::source_horizon::SourceBinding {
+        source_ref: scope.source_ref(path),
+        path: path.to_owned(),
+        roles: vec!["flow-transcript".into(), ROLE.into()],
+        provenance: "agent-maintained".into(),
+        standing: "current-development-state".into(),
+        treatment: "generated-derived".into(),
+        agent_retrieval_allowed: true,
+    };
+    scope.bind(&binding, now)?;
+    scope.reconcile(
+        Some((&principal.principal_ref, &principal.actor_kind, None)),
+        std::slice::from_ref(&binding.source_ref),
+    )?;
+    Ok(binding.source_ref)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -584,13 +607,17 @@ fn finish(scope: &Scope, intent: &mut Intent) -> io::Result<Value> {
                 intent.operation_at_unix_seconds,
             )?;
         } else {
-            crate::projectcentral_flow::write_native_document(
-                scope,
-                &current,
+            // The document's own operations log is its history: the source
+            // commits by exact-revision CAS and nothing else records it.
+            crate::source_safety::replace(
+                &scope.root,
+                &current.source.path,
+                &intent.previous_revision,
                 &intent.content,
-                &intent.actor.principal_ref,
-                &intent.actor.actor_kind,
-                intent.operation_at_unix_seconds,
+            )?;
+            scope.reconcile(
+                Some((&intent.actor.principal_ref, &intent.actor.actor_kind, None)),
+                std::slice::from_ref(&current.source.source_ref),
             )?;
         }
     } else if current.revision.revision != intent.next_revision {

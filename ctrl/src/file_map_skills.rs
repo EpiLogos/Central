@@ -1,7 +1,7 @@
 //! Exact owner-authorised skill bundles. Files remain ordinary source; the
 //! returned tree is a bounded snapshot, not a second source registry.
 use crate::file_map::*;
-use crate::projectcentral_flow::content_revision_bytes;
+use crate::source_safety::content_revision_bytes;
 use base64::Engine;
 use serde_json::{json, Value};
 use std::os::unix::fs::MetadataExt;

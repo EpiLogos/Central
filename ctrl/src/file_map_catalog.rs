@@ -1,7 +1,7 @@
 //! Persistent Central/ProjectCentral file maps. bkmr owns its records and search;
 //! existing source relations own source identity, locations and managed links.
-use crate::projectcentral_flow::{content_revision_bytes, reject_symlink_components};
 use crate::source_horizon::{self, SourceBinding};
+use crate::source_safety::{content_revision_bytes, reject_symlink_components};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};

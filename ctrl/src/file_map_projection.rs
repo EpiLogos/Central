@@ -1,7 +1,7 @@
 //! Receipts for observed AIKit copies. A snapshot binding is not a live harness
 //! or permission grant. Source identity remains in the existing source ground.
 use super::file_map::*;
-use crate::projectcentral_flow::content_revision_bytes;
+use crate::source_safety::content_revision_bytes;
 use serde_json::{json, Value};
 use std::{fs, io, path::Path};
 const RECEIPTS: &str = ".central/bkmr/projections.json";

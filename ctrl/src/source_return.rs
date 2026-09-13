@@ -2,9 +2,9 @@
 //! Declared acceptance fields never confer human source authority.
 use crate::{
     action::*,
-    projectcentral_flow::content_revision_bytes,
     result::{ActionResult, ResultStatus},
     root::resolve_central_root,
+    source_safety::content_revision_bytes,
     world_source::{enforce_write_authority, read_world_source, write_world_source},
 };
 use serde::{Deserialize, Serialize};
@@ -45,10 +45,7 @@ fn directory(project: &Path) -> io::Result<PathBuf> {
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
         Err(e) => return Err(e),
     };
-    crate::projectcentral_flow::reject_symlink_components(
-        project,
-        Path::new(".central/source-returns"),
-    )?;
+    crate::source_safety::reject_symlink_components(project, Path::new(".central/source-returns"))?;
     Ok(dir)
 }
 fn prefix(project: &Path) -> io::Result<String> {
@@ -243,42 +240,23 @@ fn run(project: &Path, op: &str, input: &Value) -> io::Result<Value> {
     r.accepted_by_ref = Some(accepted.into());
     r.status = "applying".into();
     save(project, &dir, &r)?;
-    let flow = crate::projectcentral_flow::registered_flow_records(project)?
-        .into_iter()
-        .find(|f| f.source_ref == r.source_ref);
-    let applied = if let Some(flow) = flow {
-        crate::projectcentral_flow::write_flow(
-            project,
-            &flow.flow_ref,
-            &r.basis_revision,
-            &r.proposed_content,
-            &r.agent_session_ref,
-            "agent",
-            Some(r.agent_session_ref.clone()),
+    // The retired Flow registry played no authority here: every retained
+    // source applies as the ordinary world source it always was.
+    let applied = write_world_source(
+        project,
+        &r.source_ref,
+        &r.basis_revision,
+        &r.proposed_content,
+        &r.agent_session_ref,
+        "agent",
+        Some(r.agent_session_ref.clone()),
+    )
+    .map(|receipt| {
+        (
+            receipt.revision.revision.clone(),
+            json!({"owner_operation":"projectcentral.source.write","source":receipt}),
         )
-        .map(|receipt| {
-            (
-                receipt.current_revision.clone(),
-                json!({"owner_operation":"projectcentral.flow.write","flow":receipt}),
-            )
-        })
-    } else {
-        write_world_source(
-            project,
-            &r.source_ref,
-            &r.basis_revision,
-            &r.proposed_content,
-            &r.agent_session_ref,
-            "agent",
-            Some(r.agent_session_ref.clone()),
-        )
-        .map(|receipt| {
-            (
-                receipt.revision.revision.clone(),
-                json!({"owner_operation":"projectcentral.source.write","source":receipt}),
-            )
-        })
-    };
+    });
     match applied {
         Ok((revision, receipt)) => {
             r.status = "accepted".into();
@@ -309,11 +287,8 @@ fn action(op: &str, input: &Value, context: &ActionExecutionContext<'_>) -> Acti
             .map_err(io::Error::other)?
             .path;
         let project = text(input, "project")?;
-        let rel = crate::projectcentral_flow::relative_member(project)?;
-        crate::projectcentral_flow::reject_symlink_components(
-            &root,
-            &Path::new("Work").join(&rel),
-        )?;
+        let rel = crate::source_safety::relative_member(project)?;
+        crate::source_safety::reject_symlink_components(&root, &Path::new("Work").join(&rel))?;
         let project = root.join("Work").join(rel);
         let manifest = crate::projectcentral::read_project_manifest(&project)?;
         if !manifest.validate().valid {

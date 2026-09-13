@@ -28,8 +28,6 @@ pub mod pasu;
 pub mod personal;
 pub mod picker;
 pub mod projectcentral;
-#[path = "projectcentral_flow_extensions.rs"]
-pub mod projectcentral_flow;
 pub mod projectcentral_ground;
 pub mod projectcentral_now;
 #[path = "projectcentral_ops.rs"]
@@ -59,7 +57,6 @@ pub mod projectcentral_ops {
         super::development_field::register_development_field_actions(registry);
         super::projectcentral_ground::register_projectcentral_ground_actions(registry);
         super::projectcentral_now::register_projectcentral_now_actions(registry);
-        super::projectcentral_flow::register_projectcentral_flow_actions(registry);
         super::source_horizon::register_source_horizon_actions(registry);
         super::file_map::register(registry);
         super::source_history::register_source_history_actions(registry);
@@ -240,14 +237,7 @@ pub use projectcentral::{
     ROOT_AGENT_GOVERNANCE_DIR, ROOT_HUMAN_SOURCE_DIR, ROOT_WIKI_DIR, ROOT_WIKI_SOURCE, WIKI_DIR,
     WIKI_PROFILE, WIKI_SOURCE,
 };
-pub use projectcentral_flow::{
-    adopt_flow, create_flow, flow_now_view, inspect_flow, list_flows, read_flow,
-    registered_flow_records, rename_flow, set_flow_lifecycle, snapshot_flows_for_day, write_flow,
-    FlowAtRestDisclosure, FlowDayFacts, FlowDayGroup, FlowDaySnapshot, FlowEngagement, FlowList,
-    FlowNowEntry, FlowNowView, FlowReading, FlowRecord, FlowRevisionReceipt,
-    FlowThinkingDisclosure, DEFAULT_FLOW_DIR, FLOW_DATE_BOUNDARY_LAW, FLOW_DAY_SCHEMA,
-    FLOW_HISTORY_DIR, FLOW_REGISTRY, FLOW_REGISTRY_SCHEMA,
-};
+
 pub use projectcentral_ground::{
     apply_accepted_ground_relation, inspect_project_ground, plan_project_ground,
     register_projectcentral_ground_actions, GroundAccountHandoff, GroundApplyResult,

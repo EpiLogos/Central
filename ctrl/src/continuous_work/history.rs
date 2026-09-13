@@ -20,7 +20,7 @@ fn read_json(scope: &Scope, path: &str) -> io::Result<Value> {
     Ok(serde_json::from_reader(file.take(bound))?)
 }
 fn write_json(scope: &Scope, path: &str, value: &Value) -> io::Result<()> {
-    let relative = crate::projectcentral_flow::relative_member(path)?;
+    let relative = crate::source_safety::relative_member(path)?;
     source::directories(
         &scope.root,
         relative

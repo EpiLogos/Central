@@ -1,6 +1,6 @@
 use super::source::{self, conflict, denied, encoded, invalid, key, text, Scope};
-use crate::projectcentral_flow::{reject_symlink_components, relative_member};
 use crate::source_horizon::SourceBinding;
+use crate::source_safety::{reject_symlink_components, relative_member};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;

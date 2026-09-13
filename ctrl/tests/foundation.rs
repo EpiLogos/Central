@@ -418,18 +418,6 @@ fn action_list_has_human_and_structured_cli_renderings() {
         .contains("projectcentral.now.rollover\tClose DAY and roll NOW"));
     assert!(human
         .output
-        .contains("projectcentral.flow.create\tCreate Project Flow"));
-    assert!(human
-        .output
-        .contains("projectcentral.flow.write\tWrite Project Flow revision"));
-    assert!(human
-        .output
-        .contains("projectcentral.flow.history\tRead Project Flow history"));
-    assert!(human
-        .output
-        .contains("projectcentral.flow.now\tRead Project Flow NOW view"));
-    assert!(human
-        .output
         .contains("central.self.inspect\tInspect root self-description field"));
     assert!(human
         .output
@@ -478,7 +466,7 @@ fn action_list_has_human_and_structured_cli_renderings() {
     let actions = value["data"]["actions"].as_array().unwrap();
     let mut continuous = ActionRegistry::default();
     central_ctrl::continuous_work::register_actions(&mut continuous);
-    assert_eq!(actions.len(), 129 + continuous.list().len());
+    assert_eq!(actions.len(), 119 + continuous.list().len());
     for descriptor in continuous.list() {
         let actual = actions
             .iter()
@@ -523,14 +511,6 @@ fn action_list_has_human_and_structured_cli_renderings() {
         "projectcentral.now.update",
         "projectcentral.now.promote",
         "projectcentral.now.rollover",
-        "projectcentral.flow.list",
-        "projectcentral.flow.read",
-        "projectcentral.flow.create",
-        "projectcentral.flow.adopt",
-        "projectcentral.flow.write",
-        "projectcentral.flow.rename",
-        "projectcentral.flow.lifecycle",
-        "projectcentral.flow.history",
         "projectcentral.source.history",
         "projectcentral.source.compare",
         "projectcentral.source.recovery.preview",

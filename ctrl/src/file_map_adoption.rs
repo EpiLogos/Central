@@ -2,7 +2,7 @@
 //! bookmark semantics, mutation and search remain in the actual bkmr CLI.
 use super::file_map::*;
 use crate::file_map_backend::{self as native, Backend};
-use crate::projectcentral_flow::content_revision_bytes;
+use crate::source_safety::content_revision_bytes;
 use rusqlite::{backup::Backup, Connection, OpenFlags};
 use serde_json::{json, Value};
 use std::os::unix::fs::PermissionsExt;

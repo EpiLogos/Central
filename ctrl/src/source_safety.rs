@@ -1,5 +1,7 @@
-//! Shared native source serialization and atomic publication. Authority remains
-//! with source/Flow owners; this module never decides that a caller may write.
+//! Shared native source serialization and atomic publication, plus the
+//! source-path and revision-identity helpers every native writer shares.
+//! Authority remains with source owners; this module never decides that a
+//! caller may write.
 use std::os::unix::{
     fs::{MetadataExt, OpenOptionsExt},
     io::AsRawFd,
@@ -7,7 +9,7 @@ use std::os::unix::{
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
-    path::Path,
+    path::{Component, Path, PathBuf},
 };
 pub(crate) const MAX_SOURCE: usize = 4 * 1024 * 1024;
 pub(crate) struct SourceLock(File);
@@ -25,7 +27,7 @@ pub(crate) fn lock(root: &Path, name: &str) -> io::Result<SourceLock> {
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
         Err(e) => return Err(e),
     };
-    crate::projectcentral_flow::reject_symlink_components(root, Path::new(".central"))?;
+    reject_symlink_components(root, Path::new(".central"))?;
     let f = OpenOptions::new()
         .read(true)
         .write(true)
@@ -122,8 +124,7 @@ pub(crate) fn replace(root: &Path, relative: &str, basis: &str, content: &str) -
             || now.ino() != metadata.ino()
             || now_parent.dev() != held_parent.dev()
             || now_parent.ino() != held_parent.ino()
-            || crate::projectcentral_flow::content_revision_bytes(read(root, relative)?.as_bytes())
-                != basis
+            || content_revision_bytes(read(root, relative)?.as_bytes()) != basis
         {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
@@ -144,4 +145,110 @@ pub(crate) fn replace(root: &Path, relative: &str, basis: &str, content: &str) -
         libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), 0);
     }
     result
+}
+
+// --- Shared source-path and revision-identity helpers, re-homed from the
+// retired flow store: they never belonged to Flows alone. ---
+
+pub(crate) fn relative_member(raw: &str) -> io::Result<PathBuf> {
+    if raw.trim().is_empty() || raw != raw.trim() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "source path must be non-empty without surrounding whitespace",
+        ));
+    }
+    let path = Path::new(raw);
+    if path.is_absolute()
+        || !path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "source path must stay inside its owner world and contain no parent/root components",
+        ));
+    }
+    Ok(path.to_path_buf())
+}
+
+pub(crate) fn reject_symlink_components(project_root: &Path, relative: &Path) -> io::Result<()> {
+    let mut current = project_root.to_path_buf();
+    for component in relative.components() {
+        let Component::Normal(component) = component else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "non-normal source path",
+            ));
+        };
+        current.push(component);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "refusing symlink source path component: {}",
+                        current.display()
+                    ),
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => break,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn safe_source_member_path(
+    project_root: &Path,
+    raw: &str,
+    must_exist: bool,
+) -> io::Result<PathBuf> {
+    let relative = relative_member(raw)?;
+    reject_symlink_components(project_root, &relative)?;
+    let path = project_root.join(&relative);
+    if must_exist {
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "source must be an ordinary file",
+            ));
+        }
+        let root = fs::canonicalize(project_root)?;
+        let source = fs::canonicalize(&path)?;
+        if !source.starts_with(root) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "source escaped its Project world",
+            ));
+        }
+    } else if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+        reject_symlink_components(project_root, relative.parent().unwrap_or(Path::new("")))?;
+    }
+    Ok(path)
+}
+
+/// The content revision of a byte span: the scheme every recorded source
+/// revision uses, exposed so read-only callers can compare a retained source
+/// against its recorded revision without reconciling anything.
+pub(crate) fn content_revision_bytes(bytes: &[u8]) -> String {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("central.content-fnv1a64/v1:{}:{hash:016x}", bytes.len())
+}
+
+pub(crate) fn validate_actor_kind(kind: &str) -> io::Result<()> {
+    if matches!(kind, "human" | "agent" | "system") {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "actor_kind must be human, agent, or system",
+        ))
+    }
 }

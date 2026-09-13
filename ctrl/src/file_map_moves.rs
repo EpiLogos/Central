@@ -1,8 +1,8 @@
 //! Reversible, no-overwrite file-map moves. A durable plan owns both before and
 //! after links; replay/rollback never identify a link by its spelling alone.
 use super::file_map::*;
-use crate::projectcentral_flow::content_revision_bytes;
 use crate::source_horizon;
+use crate::source_safety::content_revision_bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::os::unix::fs::MetadataExt;
@@ -72,7 +72,8 @@ fn document_text(scope: &Scope) -> io::Result<Option<String>> {
     document_at(scope, scope.relations_path())
 }
 fn document_at(scope: &Scope, relative: &str) -> io::Result<Option<String>> {
-    if relative != scope.relations_path() && relative != crate::projectcentral_flow::FLOW_REGISTRY {
+    const RETIRED_FLOW_REGISTRY: &str = ".central/flows.json";
+    if relative != scope.relations_path() && relative != RETIRED_FLOW_REGISTRY {
         return Err(invalid("Move journal names an unsupported owner document"));
     }
     let p = safe_member(&scope.root, relative, false)?;
@@ -321,18 +322,9 @@ pub(crate) fn plan(root: &Path, all: &[Scope], input: &Value) -> io::Result<Valu
             });
         }
     }
-    if let Some((before, after)) = crate::projectcentral_flow::plan_file_relocation(
-        &owner.root,
-        Path::new(&from),
-        Path::new(&to),
-    )? {
-        plan.documents.push(Document {
-            world: owner.world.clone(),
-            path: Some(crate::projectcentral_flow::FLOW_REGISTRY.into()),
-            before: Some(before),
-            after,
-        });
-    }
+    // The retired Flow registry needs no relocation planning: a leftover
+    // registry file, if any, simply stays where it is and stays refused as a
+    // move target.
     save(root, &plan)?;
     Ok(
         json!({"plan_id":id,"source_ref":entry.source.source_ref,"from":from,"destination":to,"state":"prepared","links":plan.links.len(),"requires_quiesced":true,"source_bytes_changed":false}),
