@@ -35,6 +35,20 @@ preview=good('recovery_preview',{'location':loc,'expected_revision':written['rev
 restored=good('restore',dict(base,expected_revision=written['revision'],revision=basis));check(restored['revision']==basis and file.read_text()=='before\n','restore commits historical bytes by CAS')
 page=good('history',{'location':loc,'limit':1});check(page['more'] and page['next_before']==2,'history bounded newest-first cursor')
 older=good('history',{'location':loc,'limit':1,'before':page['next_before']});check(older['entries'][0]['cursor']==1 and not older['more'],'history continuation exact no repeats')
+# The ratified flow-instance creation door: an absent file under
+# Control/user/flows/ is created by an explicit write with an empty
+# expected revision; everywhere else absent files are refused.
+flowloc={'schema':'central.path-ref/v1','ref':f"central:path:{root}:Control/user/flows/flow-2026-09-13-1200.html",'root':str(root),'path':'Control/user/flows/flow-2026-09-13-1200.html'}
+created=good('write',{'location':flowloc,'expected_revision':'','content':'<p>flow instance</p>','actor':'native-test','actor_kind':'human'})
+check(created['outcome']=='created' and (root/'Control/user/flows/flow-2026-09-13-1200.html').read_text()=='<p>flow instance</p>','absent flow instance created with journal-seeded revision')
+check(good('read',{'location':flowloc})['revision']==created['revision'],'created revision is the live owner revision')
+refused=run('write',{'location':{'schema':'central.path-ref/v1','ref':f"central:path:{root}:Control/agents/now/flows/x.md",'root':str(root),'path':'Control/agents/now/flows/x.md'},'expected_revision':'','content':'x','actor':'native-test','actor_kind':'human'})
+check(not refused['ok'] and not (root/'Control/agents/now/flows/x.md').exists(),'creation outside Control/user/flows is refused and creates nothing')
+claimed=run('write',{'location':flowloc,'expected_revision':'','content':'second','actor':'native-test','actor_kind':'human'})
+check(claimed['data']['outcome']=='conflict' and (root/'Control/user/flows/flow-2026-09-13-1200.html').read_text()=='<p>flow instance</p>','a second creation is a conflict; original bytes preserved')
+bumped=good('write',{'location':flowloc,'expected_revision':created['revision'],'content':'<p>flow instance, revised</p>','actor':'native-test','actor_kind':'human'})
+check(bumped['outcome']=='written' and bumped['revision']!=created['revision'],'the created instance then writes like any ordinary file')
+
 with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
     results=list(pool.map(lambda n:good('write',dict(base,content=f'writer {n}\n')),range(8)))
 check(sum(x['outcome']=='written' for x in results)==1,'eight native processes serialize one successful same-basis commit')

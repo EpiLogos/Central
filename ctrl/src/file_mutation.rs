@@ -130,7 +130,13 @@ pub(crate) fn ordinary_address(root: &Path, loc: &CentralPathRef) -> io::Result<
         .components()
         .map(|p| p.as_os_str().to_string_lossy().into_owned())
         .collect();
-    if components.first().is_some_and(|p| p == "Control")
+    // Control is protected ground with one ratified exception: the
+    // user-section flows area (Control/user/flows/) holds the owner's dated,
+    // self-contained Flow documents and accepts ordinary attributed writes.
+    let user_flows_instance = components.first().is_some_and(|p| p == "Control")
+        && components.get(1).is_some_and(|p| p == "user")
+        && components.get(2).is_some_and(|p| p == "flows");
+    if components.first().is_some_and(|p| p == "Control") && !user_flows_instance
         || components
             .iter()
             .any(|p| matches!(p.as_str(), "ProjectCentral" | ".central" | ".git"))
@@ -355,7 +361,19 @@ fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
     let root = root.canonicalize()?;
     let loc: CentralPathRef =
         serde_json::from_value(input.get("location").cloned().unwrap_or(Value::Null))?;
-    let path = ordinary(&root, &loc)?;
+    // The create door: an absent file under Control/user/flows/ is created
+    // by an explicit write with an empty expected revision. resolve()
+    // canonicalizes the final component and cannot name an absent file, so
+    // the absent case is validated by hand before the ordinary route.
+    let absent = op == "write"
+        && fs::symlink_metadata(root.join(&loc.path)).is_err()
+        && loc.path.starts_with("Control/user/flows/");
+    let path = if absent {
+        validate_absent_instance_location(&root, &loc)?;
+        root.join(&loc.path)
+    } else {
+        ordinary(&root, &loc)?
+    };
     if op == "history"
         && !root
             .join(".central/file-history")
@@ -379,6 +397,9 @@ fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
     }
     let (dir, _lock) = state(&root)?;
     let area = area(&dir, &loc)?;
+    if absent {
+        return create_user_flow_instance(&root, &loc, &path, input, &area);
+    }
     // Revalidate after the cross-process owner lock: another writer may have
     // changed the source or introduced authored participation while waiting.
     ordinary(&root, &loc)?;
@@ -578,6 +599,138 @@ fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
         result
     }
 }
+
+/// Bounding for an absent flow instance location: relative normal
+/// components, no symlink components on the existing prefix, the ref naming
+/// exactly this root and path, and the path inside the user-section flows
+/// area. `resolve()` cannot run here — it canonicalizes the final component
+/// and an absent file has none.
+fn validate_absent_instance_location(root: &Path, loc: &CentralPathRef) -> io::Result<()> {
+    if !loc.path.starts_with("Control/user/flows/") {
+        return Err(denied(
+            "An absent ordinary file is created only as a flow instance under Control/user/flows/",
+        ));
+    }
+    let relative = Path::new(&loc.path);
+    if relative.is_absolute()
+        || !relative
+            .components()
+            .all(|part| matches!(part, std::path::Component::Normal(_)))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Central location must contain only relative path components",
+        ));
+    }
+    reject_symlink_components(root, relative)?;
+    let expected = format!("central:path:{}:{}", root.display(), loc.path);
+    if loc.ref_id != expected {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Central location belongs to another root or an unsupported schema",
+        ));
+    }
+    Ok(())
+}
+
+/// An absent ordinary file is created only as a flow instance under
+/// `Control/user/flows/` — the user-section home of the ground's dated,
+/// self-contained Flow documents. The creation is an explicit CAS event:
+/// empty expected revision, bounded bytes, one journal event seeded at the
+/// next cursor, staged and renamed like every other commit.
+fn create_user_flow_instance(
+    root: &Path,
+    loc: &CentralPathRef,
+    path: &Path,
+    input: &Value,
+    area: &Path,
+) -> io::Result<Value> {
+    if !loc.path.starts_with("Control/user/flows/") {
+        return Err(denied(
+            "An absent ordinary file is created only as a flow instance under Control/user/flows/",
+        ));
+    }
+    if !text(input, "expected_revision")?.is_empty() {
+        return Err(conflict(
+            "Expected revision names a file that does not exist",
+        ));
+    }
+    let content: String = text(input, "content")?.into();
+    if content.len() > MAX || content.contains('\0') {
+        return Err(invalid("Content must be bounded UTF-8 text without NUL"));
+    }
+    let (actor, actor_kind, agent_session_ref) = attribution(input)?;
+    let revision = content_revision_bytes(content.as_bytes());
+    let relative_parent = Path::new(&loc.path)
+        .parent()
+        .ok_or_else(|| invalid("Missing parent"))?
+        .to_path_buf();
+    fs::create_dir_all(root.join(&relative_parent))?;
+    let parent = directory(root, &relative_parent)?;
+    let name = format!(
+        ".central-write-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(io::Error::other)?
+            .as_nanos()
+    );
+    let mut staged = create_in(&parent, &name, 0o644)?;
+    staged.write_all(content.as_bytes())?;
+    staged.sync_all()?;
+    let cursor = events(area, 1, None)?
+        .first()
+        .map(|e| e.cursor)
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| invalid("History cursor exhausted"))?;
+    let event = Change {
+        cursor,
+        previous_revision: String::new(),
+        revision: revision.clone(),
+        actor,
+        actor_kind,
+        agent_session_ref,
+        restored_from: None,
+    };
+    if area.join("pending.json").exists() {
+        return Err(io::Error::other(
+            "Interrupted creation receipt is unresolved; owner recovery is required; do not resend.",
+        ));
+    }
+    let mut committed = false;
+    let result = (|| {
+        snapshot(area, &content)?;
+        atomic_record(&area.join("pending.json"), &serde_json::to_vec(&event)?)?;
+        File::open(area)?.sync_all()?;
+        rename_in(
+            &parent,
+            &name,
+            path.file_name()
+                .and_then(|s| s.to_str())
+                .ok_or_else(|| invalid("Invalid filename"))?,
+        )?;
+        committed = true;
+        parent.sync_all()?;
+        fs::rename(
+            area.join("pending.json"),
+            area.join(format!("event-{}.json", event.cursor)),
+        )?;
+        File::open(area)?.sync_all()?;
+        Ok(
+            json!({"schema":"central.file-mutation/v1","outcome":"created","location":loc,"revision":revision,"changed":true,"change":event,"automatic_agent_or_model_invocation":false}),
+        )
+    })();
+    let c_name = std::ffi::CString::new(name).map_err(io::Error::other)?;
+    unsafe {
+        libc::unlinkat(parent.as_raw_fd(), c_name.as_ptr(), 0);
+    }
+    if committed {
+        result.map_err(|e:io::Error|io::Error::other(format!("File was committed but durable receipt finalization failed: {e}; do not automatically resend. Next owner read reconciles the journal.")))
+    } else {
+        result
+    }
+}
 fn action(op: &str, id: &str, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
     let result = resolve_central_root(context.root_options)
         .map_err(io::Error::other)
@@ -658,6 +811,6 @@ pub fn register(registry: &mut ActionRegistry) {
                     selection: None,
                 }),
         );
-        registry.register(ActionDescriptor{id:format!("central.files.{op}"),title:format!("Ordinary file {op}"),description:"Native ordinary-file history and CAS. Protected ground and participating SourceRefs must use their authored operations. Attribution is declared, not an authentication credential.".into(),inputs,output:ActionOutputDefinition{output_type:format!("central-file-{op}")},mutation_class:if op=="history" || op=="recovery_preview" {MutationClass::ReadOnly}else{MutationClass::LocallyMutating},preview_supported:false,required_ports:vec![],availability:ActionAvailability{available:true,reason:None}},handler).expect("unique file mutation action");
+        registry.register(ActionDescriptor{id:format!("central.files.{op}"),title:format!("Ordinary file {op}"),description:"Native ordinary-file history and CAS. Protected ground and participating SourceRefs must use their authored operations. An absent file is created only as a flow instance under Control/user/flows/ with an empty expected revision. Attribution is declared, not an authentication credential.".into(),inputs,output:ActionOutputDefinition{output_type:format!("central-file-{op}")},mutation_class:if op=="history" || op=="recovery_preview" {MutationClass::ReadOnly}else{MutationClass::LocallyMutating},preview_supported:false,required_ports:vec![],availability:ActionAvailability{available:true,reason:None}},handler).expect("unique file mutation action");
     }
 }
