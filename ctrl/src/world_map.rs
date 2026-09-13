@@ -770,7 +770,11 @@ fn map_control(central_root: &Path) -> ControlMap {
 
 /// Names the canonical fractal pieces a ProjectCentral is missing, by their
 /// ground-relative path.
-fn canonical_missing(project_root: &Path) -> Vec<String> {
+///
+/// The one classifier for "which canonical pieces are absent": the world map
+/// renders it and the NOW Actions classify incomplete ProjectCentrals with it,
+/// so the two cannot diverge.
+pub(crate) fn canonical_missing(project_root: &Path) -> Vec<String> {
     [
         (
             project_root.join(PROJECTCENTRAL_DIR).join(PROJECT_MANIFEST),

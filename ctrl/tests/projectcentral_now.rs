@@ -1,11 +1,13 @@
 use central_ctrl::{
     create_core_action_registry, create_default_connector_registry, initialize_projectcentral,
-    projectcentral_ops::register_projectcentral_actions, ActionExecutionContext, ConnectorContext,
-    RootOptions, NOW_AGENT_DIR, NOW_DAY_DIR, NOW_DIR, NOW_USER_DIR, WIKI_RETURN_DIR,
+    projectcentral_ops::register_projectcentral_actions, ActionExecutionContext, ActionResult,
+    ConnectorContext, RootOptions, NOW_AGENT_DIR, NOW_DAY_DIR, NOW_DIR, NOW_USER_DIR,
+    WIKI_RETURN_DIR,
 };
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -301,4 +303,331 @@ fn real_work_project_flow_survives_sessions_rolls_day_and_returns_meaning() {
     assert!(project
         .join("ProjectCentral/agents/wiki/wiki.json")
         .is_file());
+}
+
+fn attempt(
+    registry: &central_ctrl::ActionRegistry,
+    context: &ActionExecutionContext<'_>,
+    action: &str,
+    input: Value,
+) -> ActionResult {
+    registry.execute(action, &input, context)
+}
+
+/// The field a NOW Action runs in, owned so a context can borrow it locally.
+struct Field {
+    root_options: RootOptions,
+    connectors: central_ctrl::ConnectorRegistry,
+    connector_context: ConnectorContext,
+}
+
+impl Field {
+    fn new(central: &Path) -> Self {
+        Self {
+            root_options: RootOptions {
+                explicit_root: Some(central.to_path_buf()),
+                configured_root: None,
+                home: None,
+            },
+            connectors: create_default_connector_registry(),
+            connector_context: ConnectorContext::current(),
+        }
+    }
+
+    fn context(&self) -> ActionExecutionContext<'_> {
+        ActionExecutionContext {
+            root_options: &self.root_options,
+            connectors: &self.connectors,
+            connector_context: &self.connector_context,
+        }
+    }
+}
+
+fn now_registry() -> central_ctrl::ActionRegistry {
+    let mut registry = create_core_action_registry();
+    register_projectcentral_actions(&mut registry);
+    registry
+}
+
+#[test]
+fn absent_project_central_is_classified_and_pointed_at_repair() {
+    let temp = TempRoot::new();
+    let central = temp.path().join("Central");
+    let project = central.join("Work/unstrapped");
+    fs::create_dir_all(&project).unwrap();
+    let project_central = project.join("ProjectCentral");
+
+    let field = Field::new(&central);
+    let context = field.context();
+    let registry = now_registry();
+
+    let result = attempt(
+        &registry,
+        &context,
+        "projectcentral.now.inspect",
+        json!({"project":"unstrapped"}),
+    );
+    assert!(!result.ok);
+    // The status (and therefore the CLI exit code) is unchanged; the code
+    // carries the new classification.
+    assert_eq!(
+        result.status,
+        central_ctrl::ResultStatus::InvalidCentralStructure
+    );
+    let error = result.error.expect("failure names its error");
+    assert_eq!(error.code, "project_central_not_found");
+    assert!(
+        error.message.contains("unstrapped"),
+        "message names the project: {}",
+        error.message
+    );
+    assert!(
+        error
+            .message
+            .contains(project_central.display().to_string().as_str()),
+        "message names the expected ProjectCentral path: {}",
+        error.message
+    );
+    let hint = error.repair_hint.expect("absent scaffolding is repairable");
+    assert!(hint.contains("central.world.reproject.plan"));
+    assert!(hint.contains("central.world.reproject.apply"));
+    assert!(hint.contains("projectcentral.now.init"));
+    let details = error.details.expect("details carry the project facts");
+    assert_eq!(details["project"], "unstrapped");
+    assert_eq!(
+        details["project_central"],
+        project_central.display().to_string()
+    );
+}
+
+#[test]
+fn incomplete_project_central_names_the_pieces_it_is_missing() {
+    let temp = TempRoot::new();
+    let central = temp.path().join("Central");
+    let project = central.join("Work/half-built");
+    fs::create_dir_all(project.join("ProjectCentral/user")).unwrap();
+
+    let field = Field::new(&central);
+    let context = field.context();
+    let registry = now_registry();
+
+    let result = attempt(
+        &registry,
+        &context,
+        "projectcentral.now.inspect",
+        json!({"project":"half-built"}),
+    );
+    assert!(!result.ok);
+    let error = result.error.expect("failure names its error");
+    assert_eq!(error.code, "project_central_incomplete");
+    let missing = error.details.expect("details")["missing"]
+        .as_array()
+        .expect("missing pieces are listed")
+        .iter()
+        .map(|value| value.as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    for piece in [
+        "ProjectCentral/project.json",
+        "ProjectCentral/agents/governance",
+        "ProjectCentral/agents/wiki/wiki.json",
+    ] {
+        assert!(
+            missing.iter().any(|named| named == piece),
+            "{piece} is named as missing: {missing:?}"
+        );
+        assert!(
+            error.message.contains(piece),
+            "message names {piece}: {}",
+            error.message
+        );
+    }
+    assert!(error.repair_hint.is_some());
+}
+
+#[test]
+fn project_central_missing_only_secondary_pieces_is_still_incomplete() {
+    let temp = TempRoot::new();
+    let central = temp.path().join("Central");
+    let project = central.join("Work/barely-there");
+    fs::create_dir_all(&project).unwrap();
+    initialize_projectcentral(&central, &project, "example/barely-there").unwrap();
+    fs::remove_dir_all(project.join("ProjectCentral/agents/wiki")).unwrap();
+
+    let field = Field::new(&central);
+    let context = field.context();
+    let registry = now_registry();
+
+    let result = attempt(
+        &registry,
+        &context,
+        "projectcentral.now.inspect",
+        json!({"project":"barely-there"}),
+    );
+    assert!(!result.ok);
+    let error = result.error.expect("failure names its error");
+    assert_eq!(error.code, "project_central_incomplete");
+    let details = error.details.expect("details");
+    let missing = details["missing"].as_array().unwrap();
+    assert!(missing
+        .iter()
+        .any(|value| value == "ProjectCentral/agents/wiki"));
+    assert!(missing
+        .iter()
+        .any(|value| value == "ProjectCentral/agents/wiki/wiki.json"));
+}
+
+#[test]
+fn malformed_manifest_keeps_invalid_central_structure_without_a_mechanical_hint() {
+    let temp = TempRoot::new();
+    let central = temp.path().join("Central");
+    let project = central.join("Work/hand-authored");
+    fs::create_dir_all(&project).unwrap();
+    initialize_projectcentral(&central, &project, "example/hand-authored").unwrap();
+    fs::write(project.join("ProjectCentral/project.json"), "{ not json").unwrap();
+
+    let field = Field::new(&central);
+    let context = field.context();
+    let registry = now_registry();
+
+    let result = attempt(
+        &registry,
+        &context,
+        "projectcentral.now.inspect",
+        json!({"project":"hand-authored"}),
+    );
+    assert!(!result.ok);
+    // Genuinely malformed authored content: the original classification
+    // stands, and no stamper is offered as a fix.
+    let error = result.error.expect("failure names its error");
+    assert_eq!(error.code, "invalid_central_structure");
+    assert!(error.repair_hint.is_none());
+}
+
+#[test]
+fn now_init_straps_only_missing_scaffolding_and_discloses_what_it_stamped() {
+    let temp = TempRoot::new();
+    let central = temp.path().join("Central");
+    let project = central.join("Work/strapped");
+    fs::create_dir_all(&project).unwrap();
+    fs::write(project.join("notes.txt"), "ordinary project material\n").unwrap();
+    fs::create_dir_all(project.join("ProjectCentral")).unwrap();
+    fs::write(
+        project.join("ProjectCentral/existing.txt"),
+        "left exactly where it is\n",
+    )
+    .unwrap();
+
+    let field = Field::new(&central);
+    let context = field.context();
+    let registry = now_registry();
+
+    let data = execute(
+        &registry,
+        &context,
+        "projectcentral.now.init",
+        json!({"project":"strapped"}),
+    );
+    let strapped = data["strapped"]
+        .as_array()
+        .expect("strap is disclosed")
+        .iter()
+        .map(|value| value.as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    assert!(
+        strapped.contains(&"Work/strapped/ProjectCentral/project.json".to_owned()),
+        "manifest is disclosed as stamped: {strapped:?}"
+    );
+    assert!(project.join("ProjectCentral/project.json").is_file());
+    assert!(project
+        .join("ProjectCentral/agents/wiki/wiki.json")
+        .is_file());
+    assert!(project.join(NOW_DIR).is_dir());
+    assert_eq!(
+        fs::read_to_string(project.join("notes.txt")).unwrap(),
+        "ordinary project material\n"
+    );
+    assert_eq!(
+        fs::read_to_string(project.join("ProjectCentral/existing.txt")).unwrap(),
+        "left exactly where it is\n"
+    );
+
+    // A second init finds nothing to strap: no disclosure, no writes.
+    let again = attempt(
+        &registry,
+        &context,
+        "projectcentral.now.init",
+        json!({"project":"strapped"}),
+    );
+    assert!(again.ok, "second init succeeds: {:?}", again.error);
+    assert!(again.data.unwrap().get("strapped").is_none());
+}
+
+#[test]
+fn now_init_still_refuses_a_malformed_manifest() {
+    let temp = TempRoot::new();
+    let central = temp.path().join("Central");
+    let project = central.join("Work/corrupt");
+    fs::create_dir_all(&project).unwrap();
+    initialize_projectcentral(&central, &project, "example/corrupt").unwrap();
+    fs::write(project.join("ProjectCentral/project.json"), "{ not json").unwrap();
+
+    let field = Field::new(&central);
+    let context = field.context();
+    let registry = now_registry();
+
+    let result = attempt(
+        &registry,
+        &context,
+        "projectcentral.now.init",
+        json!({"project":"corrupt"}),
+    );
+    assert!(!result.ok);
+    assert_eq!(
+        result.error.expect("failure names its error").code,
+        "invalid_central_structure"
+    );
+    assert_eq!(
+        fs::read_to_string(project.join("ProjectCentral/project.json")).unwrap(),
+        "{ not json",
+        "the malformed manifest was never touched"
+    );
+}
+
+#[test]
+fn cli_inspect_reports_an_absent_project_central_with_exit_three_and_valid_json() {
+    let temp = TempRoot::new();
+    let central = temp.path().join("Central");
+    let project = central.join("Work/cli-absent");
+    fs::create_dir_all(&project).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_ctrl"))
+        .args([
+            "--root",
+            central.to_str().unwrap(),
+            "--json",
+            "action",
+            "run",
+            "projectcentral.now.inspect",
+            r#"{"project":"cli-absent"}"#,
+        ])
+        .output()
+        .expect("ctrl binary should run");
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(3));
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("valid JSON on stdout");
+    assert_eq!(parsed["ok"], false);
+    assert_eq!(parsed["status"], "invalid_central_structure");
+    assert_eq!(parsed["action"], "projectcentral.now.inspect");
+    assert_eq!(parsed["error"]["code"], "project_central_not_found");
+    let message = parsed["error"]["message"].as_str().unwrap();
+    assert!(message.contains("cli-absent"), "project named: {message}");
+    assert!(
+        message.contains("ProjectCentral"),
+        "expected path named: {message}"
+    );
+    assert_eq!(parsed["error"]["details"]["project"], json!("cli-absent"));
+    let hint = parsed["error"]["repair_hint"].as_str().unwrap();
+    assert!(hint.contains("central.world.reproject.plan"));
+    assert!(hint.contains("central.world.reproject.apply"));
+    assert!(hint.contains("projectcentral.now.init"));
 }
