@@ -2,6 +2,7 @@ use crate::action::{
     ActionAvailability, ActionDescriptor, ActionExecutionContext, ActionInputDefinition,
     ActionOutputDefinition, ActionRegistry, MutationClass,
 };
+use crate::continuous_work::thoughts::{snapshot_streams, StreamDaySnapshot};
 use crate::projectcentral::{read_project_manifest, HUMAN_SOURCE_DIR};
 use crate::projectcentral_flow::{snapshot_flows_for_day, FlowDaySnapshot};
 use crate::result::{ActionResult, ResultStatus};
@@ -155,6 +156,7 @@ pub struct RolloverReport {
     pub human_scratch: Vec<String>,
     pub promotions: Vec<PromotionReceipt>,
     pub flows: Vec<FlowDaySnapshot>,
+    pub streams: Vec<StreamDaySnapshot>,
     pub cleanup_failures: Vec<String>,
 }
 
@@ -810,7 +812,7 @@ fn snapshot_day_sources(
     day: &str,
     human_scratch: &[String],
     handoffs: &[(String, NowHandoff)],
-) -> io::Result<(PathBuf, Vec<FlowDaySnapshot>)> {
+) -> io::Result<(PathBuf, Vec<FlowDaySnapshot>, Vec<StreamDaySnapshot>)> {
     let snapshot_root = day_root.join(format!("{day}.sources"));
     if snapshot_root.exists() {
         return Err(io::Error::new(
@@ -853,7 +855,27 @@ fn snapshot_day_sources(
             return Err(error);
         }
     };
-    Ok((snapshot_root, flows))
+    // The NOW clearings' contemplative streams (T fixtures and T-prime
+    // learnings) ride the close like every other fixture: byte-exact copy,
+    // taken before anything is cleaned.
+    let clearings_root = project_root.join(continuous_work_clearings_dir(project_root));
+    let streams = match snapshot_streams(&clearings_root, &snapshot_root, day) {
+        Ok(streams) => streams,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&snapshot_root);
+            return Err(error);
+        }
+    };
+    Ok((snapshot_root, flows, streams))
+}
+
+/// The clearings directory of the register this rollover runs in. The close
+/// is a project-register Action, so the prefix is ProjectCentral; a clearing
+/// tree that does not exist snapshots as empty.
+fn continuous_work_clearings_dir(project_root: &Path) -> std::path::PathBuf {
+    project_root
+        .join("ProjectCentral")
+        .join("agents/now/clearings")
 }
 
 fn indented(text: &str) -> String {
@@ -881,6 +903,7 @@ fn render_day(
     protected: &[String],
     promotions: &[PromotionReceipt],
     flows: &[FlowDaySnapshot],
+    streams: &[StreamDaySnapshot],
 ) -> io::Result<String> {
     let mut output = format!(
         "# DAY — {day}\n\nDerived closure reading for the ProjectCentral NOW horizon. Human and Agent authorship remain attached to separately snapshotted source records; this aggregation is not Project canon. Records are pointers, not authority: follow the governing guidance, and search the native surface before building anything new.\n\n- next local civil day: `{next_day}`\n- DAY source snapshot: `{}`\n- NOW remains the moving working horizon after this boundary\n\n## Human current source at close\n\n",
@@ -977,6 +1000,27 @@ fn render_day(
         }
     }
     output.push_str("\nFlowRef remains the continuity identity across this DAY boundary; DAY records the exact revision present at close.\n\n");
+
+    output.push_str("## Contemplative streams at close\n\n");
+    if streams.is_empty() {
+        output.push_str("- none\n");
+    } else {
+        for stream in streams {
+            output.push_str(&format!(
+                "- clearing `{}` — T: {} fixture(s), T-prime: {} learning(s); DAY snapshot `{}`\n",
+                stream.clearing,
+                stream.fixtures,
+                stream.learnings,
+                snapshot_ref(
+                    project_root,
+                    snapshot_root,
+                    "clearings",
+                    Path::new(&stream.clearing)
+                ),
+            ));
+        }
+    }
+    output.push_str("\nThe raw stream and its distilled learnings outlive this DAY boundary; the snapshot is the byte-exact close.\n\n");
 
     output.push_str("## Carry forward by stable NOW source ref\n\n");
     if carried.is_empty() {
@@ -1088,7 +1132,7 @@ pub fn rollover(project_root: &Path, day: &str, next_day: &str) -> io::Result<Ro
         ));
     }
 
-    let (snapshot_root, flows) =
+    let (snapshot_root, flows, streams) =
         snapshot_day_sources(project_root, &paths.day, day, &human_scratch, &handoffs)?;
     let day_text = match render_day(
         project_root,
@@ -1102,6 +1146,7 @@ pub fn rollover(project_root: &Path, day: &str, next_day: &str) -> io::Result<Ro
         &protected,
         &promotions,
         &flows,
+        &streams,
     ) {
         Ok(text) => text,
         Err(error) => {
@@ -1147,6 +1192,7 @@ pub fn rollover(project_root: &Path, day: &str, next_day: &str) -> io::Result<Ro
         human_scratch,
         promotions,
         flows,
+        streams,
         cleanup_failures,
     })
 }
@@ -1660,6 +1706,57 @@ mod tests {
         let day = fs::read_to_string(project.join(&report.day_record)).unwrap();
         assert!(day.contains("state A"));
         assert!(!day.contains("state B"));
+    }
+
+    #[test]
+    fn day_snapshots_contemplative_streams_before_any_cleanup() {
+        let temp = tempdir().unwrap();
+        let central = temp.path().join("Central");
+        let project = central.join("Work/example");
+        fs::create_dir_all(&project).unwrap();
+        initialize_projectcentral(&central, &project, "example/project").unwrap();
+        initialize_now(&project).unwrap();
+
+        let clearing = project.join("ProjectCentral/agents/now/clearings/test-clearing-id");
+        fs::create_dir_all(clearing.join("T")).unwrap();
+        fs::create_dir_all(clearing.join("T-prime")).unwrap();
+        fs::write(
+            clearing.join("T/raw-fixture-2026-08-19.md"),
+            "---\n{\"schema\":\"central.t-fixture/v1\"}\n---\nraw body\n",
+        )
+        .unwrap();
+        fs::write(
+            clearing.join("T-prime/learning-2026-08-19.md"),
+            "---\n{\"schema\":\"central.t-learning/v1\"}\n---\nlearning body\n",
+        )
+        .unwrap();
+
+        let report = rollover(&project, "2026-08-19", "2026-08-20").unwrap();
+        assert_eq!(report.streams.len(), 1);
+        assert_eq!(report.streams[0].clearing, "test-clearing-id");
+        assert_eq!(report.streams[0].fixtures, 1);
+        assert_eq!(report.streams[0].learnings, 1);
+        let snapshot_dir = project.join(&report.day_sources).join("clearings");
+        assert_eq!(
+            fs::read_to_string(
+                snapshot_dir
+                    .join("test-clearing-id")
+                    .join("T/raw-fixture-2026-08-19.md")
+            )
+            .unwrap(),
+            "---\n{\"schema\":\"central.t-fixture/v1\"}\n---\nraw body\n"
+        );
+        assert!(project
+            .join(&report.day_sources)
+            .join("clearings.json")
+            .is_file());
+        let day = fs::read_to_string(project.join(&report.day_record)).unwrap();
+        assert!(day.contains("Contemplative streams at close"));
+        assert!(day.contains("test-clearing-id"));
+
+        // A double close of the same day is refused; the streams stay.
+        assert!(rollover(&project, "2026-08-19", "2026-08-20").is_err());
+        assert!(clearing.join("T/raw-fixture-2026-08-19.md").is_file());
     }
 
     #[test]
