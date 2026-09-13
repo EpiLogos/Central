@@ -26,7 +26,13 @@ fn temporary_ground(label: &str) -> PathBuf {
         ..RootOptions::default()
     };
     let result = run(&registry, &options, "central.init", &json!({}));
-    assert_eq!(result.status, ResultStatus::Success, "status={status:?} error={error:?}", status = result.status, error = result.error);
+    assert_eq!(
+        result.status,
+        ResultStatus::Success,
+        "status={status:?} error={error:?}",
+        status = result.status,
+        error = result.error
+    );
     let _ = &result;
     root
 }
@@ -79,7 +85,13 @@ fn an_absent_flow_instance_is_created_with_empty_expected_revision() {
             "actor_kind": "human",
         }),
     );
-    assert_eq!(result.status, ResultStatus::Success, "status={status:?} error={error:?}", status = result.status, error = result.error);
+    assert_eq!(
+        result.status,
+        ResultStatus::Success,
+        "status={status:?} error={error:?}",
+        status = result.status,
+        error = result.error
+    );
     let _ = &result;
     let data = result.data.expect("created data");
     assert_eq!(data["outcome"], "created");
@@ -87,7 +99,10 @@ fn an_absent_flow_instance_is_created_with_empty_expected_revision() {
     let revision = data["revision"].as_str().expect("revision").to_owned();
     let on_disk =
         fs::read_to_string(root.join("Control/user/flows/flow-2026-09-13-1200.html")).unwrap();
-    assert_eq!(on_disk, "<!doctype html><html><body>flow instance</body></html>");
+    assert_eq!(
+        on_disk,
+        "<!doctype html><html><body>flow instance</body></html>"
+    );
 
     // The created file is an ordinary CAS file from here: a revision-checked
     // write lands, a stale basis conflicts, and history records the creation
@@ -180,13 +195,20 @@ fn creation_is_refused_outside_the_user_flows_area_and_with_a_claimed_basis() {
     // Inside flows but claiming a basis for a file that does not exist.
     let claimed = mk("Control/user/flows/flow-2026-09-13-1300.html", "rev/1");
     // A create with a claimed basis is a conflict, not a silent mint.
-    assert_eq!(claimed.status, ResultStatus::VerificationFailure, "{:?}", claimed.data);
+    assert_eq!(
+        claimed.status,
+        ResultStatus::VerificationFailure,
+        "{:?}",
+        claimed.data
+    );
 
     // The refusals created nothing.
     assert!(!root.join("Work/Bare/new.txt").exists());
     assert!(!root.join("Control/agents/now/flows/flow-x.md").exists());
     assert!(!root.join("Control/user/notes.txt").exists());
-    assert!(!root.join("Control/user/flows/flow-2026-09-13-1300.html").exists());
+    assert!(!root
+        .join("Control/user/flows/flow-2026-09-13-1300.html")
+        .exists());
 }
 
 #[test]
@@ -227,7 +249,10 @@ fn a_second_creation_of_the_same_instance_is_a_conflict_not_an_overwrite() {
     );
     assert_eq!(again.status, ResultStatus::Success);
     assert_eq!(again.data.expect("d")["outcome"], "conflict");
-    assert_eq!(fs::read_to_string(root.join("Control/user/flows/flow-2026-09-13-1400.html")).unwrap(), "first");
+    assert_eq!(
+        fs::read_to_string(root.join("Control/user/flows/flow-2026-09-13-1400.html")).unwrap(),
+        "first"
+    );
     // CliEnvironment remains constructible in the test's own right.
     let _ = std::marker::PhantomData::<CliEnvironment>;
 }

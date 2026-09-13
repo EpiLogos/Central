@@ -1,9 +1,9 @@
 use central_ctrl::projectcentral_ops::register_projectcentral_actions;
 use central_ctrl::{
-    create_core_action_registry, create_default_connector_registry, create_flow, read_flow,
-    read_project_change_horizon, read_world_source, run_cli, write_world_source,
-    ActionExecutionContext, CliEnvironment, ConnectorContext, ConnectorRegistry, ResultStatus,
-    RootOptions, WORLD_SOURCE_READING_SCHEMA, WORLD_SOURCE_WRITE_RECEIPT_SCHEMA,
+    create_core_action_registry, create_default_connector_registry, read_project_change_horizon,
+    read_world_source, run_cli, write_world_source, ActionExecutionContext, CliEnvironment,
+    ConnectorContext, ConnectorRegistry, ResultStatus, RootOptions, WORLD_SOURCE_READING_SCHEMA,
+    WORLD_SOURCE_WRITE_RECEIPT_SCHEMA,
 };
 use serde_json::{json, Value};
 use std::fs;
@@ -462,49 +462,6 @@ fn an_agent_session_cannot_claim_human_authorship_to_write_human_ground() {
         fs::read_to_string(&source).unwrap(),
         "revised by the human\n"
     );
-}
-
-#[test]
-fn world_source_seam_and_flow_seam_compose_over_one_source_ref() {
-    let (_temp, _central, project) = project_fixture("flow-compose", "flow-compose-project");
-    let flow = create_flow(
-        &project,
-        Some("2026-09-04-1200"),
-        None,
-        Some("Flow thread".to_owned()),
-        "human:cradle",
-        "human",
-        None,
-    )
-    .unwrap();
-
-    let horizon = read_project_change_horizon(&project, None).unwrap();
-    let flow_source_ref = source_ref_of(&horizon, &flow.path);
-
-    let reading = read_world_source(&project, &flow_source_ref).unwrap();
-    assert_eq!(reading.content, "");
-    assert_eq!(reading.revision.revision, flow.current_revision);
-
-    let basis = current_revision(&project, &flow_source_ref);
-    let receipt = write_world_source(
-        &project,
-        &flow_source_ref,
-        &basis,
-        "Flow thread\ncontinued\n",
-        "agent:epii",
-        "agent",
-        Some("aikit:agent-session:2".to_owned()),
-    )
-    .unwrap();
-    assert!(receipt.changed);
-
-    // One source, one content, two owner seams: the Flow reading reconciles the
-    // source-level write as an external revision while the Horizon change keeps
-    // the true attribution.
-    let flow_after = read_flow(&project, &flow.flow_ref).unwrap();
-    assert_eq!(flow_after.content, "Flow thread\ncontinued\n");
-    assert_eq!(flow_after.flow.current_revision, receipt.revision.revision);
-    assert!(flow_after.dirty_external_revision_reconciled);
 }
 
 #[test]

@@ -10,7 +10,6 @@ use crate::action::{
 };
 use crate::machine::read_machine_declaration;
 use crate::projectcentral::read_project_manifest;
-use crate::projectcentral_flow::{reject_symlink_components, relative_member};
 use crate::projectcentral_ground::{
     apply_accepted_ground_relation, SourceProvenance, SourceStanding, SourceTreatment,
 };
@@ -21,6 +20,7 @@ use crate::source_horizon::{
     SourceRevision, CONTROL_GROUND_RELATIONS_SCHEMA, CONTROL_GROUND_RELATIONS_SOURCE,
     CONTROL_WORLD_REF,
 };
+use crate::source_safety::{reject_symlink_components, relative_member};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};

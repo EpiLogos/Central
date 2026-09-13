@@ -13,13 +13,13 @@ use crate::action::{
     ActionOutputDefinition, ActionRegistry, MutationClass,
 };
 use crate::projectcentral::read_project_manifest;
-use crate::projectcentral_flow::{relative_member, safe_source_member_path, validate_actor_kind};
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
 use crate::source_horizon::{
     read_project_change_horizon, reconcile_project_source_writes, SourceBinding, SourceRevision,
     SourceWriteAttribution,
 };
+use crate::source_safety::{relative_member, safe_source_member_path, validate_actor_kind};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -149,7 +149,7 @@ pub fn read_world_source(project_root: &Path, source_ref: &str) -> io::Result<Wo
     require_retrieval(&observed.binding)?;
     let _path = safe_source_member_path(project_root, &observed.binding.path, true)?;
     let content = crate::source_safety::read(project_root, &observed.binding.path)?;
-    if crate::projectcentral_flow::content_revision_bytes(content.as_bytes())
+    if crate::source_safety::content_revision_bytes(content.as_bytes())
         != observed.revision.revision
     {
         return Err(io::Error::new(
@@ -292,7 +292,7 @@ fn project_root(
             ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None)
         })?
         .path;
-    crate::projectcentral_flow::reject_symlink_components(&root, &Path::new("Work").join(&project))
+    crate::source_safety::reject_symlink_components(&root, &Path::new("Work").join(&project))
         .map_err(|e| {
             ActionResult::failure(
                 Some(action),

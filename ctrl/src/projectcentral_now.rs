@@ -4,7 +4,6 @@ use crate::action::{
 };
 use crate::continuous_work::thoughts::{snapshot_streams, StreamDaySnapshot};
 use crate::projectcentral::{read_project_manifest, HUMAN_SOURCE_DIR};
-use crate::projectcentral_flow::{snapshot_flows_for_day, FlowDaySnapshot};
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
 use serde::{Deserialize, Serialize};
@@ -155,7 +154,6 @@ pub struct RolloverReport {
     pub protected: Vec<String>,
     pub human_scratch: Vec<String>,
     pub promotions: Vec<PromotionReceipt>,
-    pub flows: Vec<FlowDaySnapshot>,
     pub streams: Vec<StreamDaySnapshot>,
     pub cleanup_failures: Vec<String>,
 }
@@ -812,7 +810,7 @@ fn snapshot_day_sources(
     day: &str,
     human_scratch: &[String],
     handoffs: &[(String, NowHandoff)],
-) -> io::Result<(PathBuf, Vec<FlowDaySnapshot>, Vec<StreamDaySnapshot>)> {
+) -> io::Result<(PathBuf, Vec<StreamDaySnapshot>)> {
     let snapshot_root = day_root.join(format!("{day}.sources"));
     if snapshot_root.exists() {
         return Err(io::Error::new(
@@ -848,13 +846,6 @@ fn snapshot_day_sources(
         let _ = fs::remove_dir_all(&snapshot_root);
         return Err(error);
     }
-    let flows = match snapshot_flows_for_day(project_root, &snapshot_root, day) {
-        Ok(flows) => flows,
-        Err(error) => {
-            let _ = fs::remove_dir_all(&snapshot_root);
-            return Err(error);
-        }
-    };
     // The NOW clearings' contemplative streams (T fixtures and T-prime
     // learnings) ride the close like every other fixture: byte-exact copy,
     // taken before anything is cleaned.
@@ -866,7 +857,7 @@ fn snapshot_day_sources(
             return Err(error);
         }
     };
-    Ok((snapshot_root, flows, streams))
+    Ok((snapshot_root, streams))
 }
 
 /// The clearings directory of the register this rollover runs in. The close
@@ -902,7 +893,6 @@ fn render_day(
     removed: &[String],
     protected: &[String],
     promotions: &[PromotionReceipt],
-    flows: &[FlowDaySnapshot],
     streams: &[StreamDaySnapshot],
 ) -> io::Result<String> {
     let mut output = format!(
@@ -983,23 +973,6 @@ fn render_day(
             output.push('\n');
         }
     }
-
-    output.push_str("## Flows present at close\n\n");
-    if flows.is_empty() {
-        output.push_str("- none\n");
-    } else {
-        for flow in flows {
-            output.push_str(&format!(
-                "- `{}` @ `{}` — source `{}`; DAY snapshot `{}`; lifecycle `{}`\n",
-                flow.flow_ref,
-                flow.revision,
-                flow.source_path,
-                flow.snapshot_source,
-                flow.lifecycle
-            ));
-        }
-    }
-    output.push_str("\nFlowRef remains the continuity identity across this DAY boundary; DAY records the exact revision present at close.\n\n");
 
     output.push_str("## Contemplative streams at close\n\n");
     if streams.is_empty() {
@@ -1132,7 +1105,7 @@ pub fn rollover(project_root: &Path, day: &str, next_day: &str) -> io::Result<Ro
         ));
     }
 
-    let (snapshot_root, flows, streams) =
+    let (snapshot_root, streams) =
         snapshot_day_sources(project_root, &paths.day, day, &human_scratch, &handoffs)?;
     let day_text = match render_day(
         project_root,
@@ -1145,7 +1118,6 @@ pub fn rollover(project_root: &Path, day: &str, next_day: &str) -> io::Result<Ro
         &removed,
         &protected,
         &promotions,
-        &flows,
         &streams,
     ) {
         Ok(text) => text,
@@ -1191,7 +1163,6 @@ pub fn rollover(project_root: &Path, day: &str, next_day: &str) -> io::Result<Ro
         protected,
         human_scratch,
         promotions,
-        flows,
         streams,
         cleanup_failures,
     })
@@ -1706,6 +1677,20 @@ mod tests {
         let day = fs::read_to_string(project.join(&report.day_record)).unwrap();
         assert!(day.contains("state A"));
         assert!(!day.contains("state B"));
+    }
+
+    #[test]
+    fn now_initialisation_never_materialises_a_flow_registry() {
+        let temp = tempdir().unwrap();
+        let central = temp.path().join("Central");
+        let project = central.join("Work/example");
+        fs::create_dir_all(&project).unwrap();
+        initialize_projectcentral(&central, &project, "example/project").unwrap();
+        initialize_now(&project).unwrap();
+        assert!(!project.join(".central/flows.json").exists());
+        assert!(!project.join(".central/flow-revisions").exists());
+        assert!(!central.join(".central/flows.json").exists());
+        assert!(!central.join("Control/agents/now/flows").exists());
     }
 
     #[test]

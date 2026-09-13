@@ -134,11 +134,6 @@ fn shared_flow_and_dialogue_use_the_existing_register_and_protect_human_edits() 
     let world = world();
     for (project, kind) in [(None, "flow"), (Some("one"), "dialogue")] {
         let doc = document(world.path(), project, kind, "doc:shared");
-        let root = Scope::resolve(world.path(), project).unwrap().root;
-        let register: Value =
-            serde_json::from_slice(&fs::read(root.join(".central/flows.json")).unwrap()).unwrap();
-        assert_eq!(register["flows"].as_array().unwrap().len(), 1);
-        assert_eq!(register["flows"][0]["source_ref"], doc["source"]["ref"]);
         assert_eq!(doc["document"]["title"], "");
         let mut add = mutation(&doc, project, "add:one", "entry.add");
         add["entry_id"] = json!("entry:one");

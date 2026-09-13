@@ -1,7 +1,7 @@
 //! Shared temporal source operations. Authored files and source-relations remain
 //! authoritative; the existing Source Change Horizon remains their index.
-use crate::projectcentral_flow::{content_revision_bytes, relative_member};
 use crate::source_horizon::{SourceBinding, SourceRevision, SourceWriteAttribution};
+use crate::source_safety::{content_revision_bytes, relative_member};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;

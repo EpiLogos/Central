@@ -307,7 +307,7 @@ fn read_wiki(
             WikiReadFailure::unreadable(format!("wiki source at {relative} is unreadable: {error}"))
         }
     })?;
-    let revision = crate::projectcentral_flow::content_revision_bytes(content.as_bytes());
+    let revision = crate::source_safety::content_revision_bytes(content.as_bytes());
     let parsed = parse_wiki_document(&content)?;
     let mut spaces = Vec::new();
     let mut nodes = Vec::new();
@@ -425,7 +425,7 @@ fn central_wiki_read_action(
         }
     };
     if let Err(error) =
-        crate::projectcentral_flow::reject_symlink_components(&root.path, Path::new("Control"))
+        crate::source_safety::reject_symlink_components(&root.path, Path::new("Control"))
     {
         return ActionResult::failure(
             Some(action),
@@ -452,7 +452,7 @@ fn project_wiki_context(
     context: &ActionExecutionContext<'_>,
 ) -> Result<PathBuf, ActionResult> {
     let project = required(input, "project", action)?;
-    let project = crate::projectcentral_flow::relative_member(&project).map_err(|error| {
+    let project = crate::source_safety::relative_member(&project).map_err(|error| {
         ActionResult::failure(
             Some(action),
             ResultStatus::InvalidInput,
@@ -465,7 +465,7 @@ fn project_wiki_context(
             ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None)
         })?
         .path;
-    crate::projectcentral_flow::reject_symlink_components(&root, &Path::new("Work").join(&project))
+    crate::source_safety::reject_symlink_components(&root, &Path::new("Work").join(&project))
         .map_err(|error| {
             ActionResult::failure(
                 Some(action),

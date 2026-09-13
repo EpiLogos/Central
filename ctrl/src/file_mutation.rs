@@ -3,9 +3,9 @@
 use crate::{
     action::*,
     files::{participating_source, read_file, CentralPathRef},
-    projectcentral_flow::{content_revision_bytes, reject_symlink_components},
     result::{ActionResult, ResultStatus},
     root::resolve_central_root,
+    source_safety::{content_revision_bytes, reject_symlink_components},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -340,7 +340,7 @@ fn attribution(input: &Value) -> io::Result<(String, String, Option<String>)> {
         return Err(invalid("actor must be bounded and nonempty"));
     }
     let kind = text(input, "actor_kind")?;
-    crate::projectcentral_flow::validate_actor_kind(kind)?;
+    crate::source_safety::validate_actor_kind(kind)?;
     let session = input
         .get("agent_session_ref")
         .filter(|s| !s.is_null())

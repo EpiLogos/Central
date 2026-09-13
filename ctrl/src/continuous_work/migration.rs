@@ -52,7 +52,7 @@ struct Journal {
     updated_at_unix_seconds: u64,
 }
 fn relative(raw: &str) -> io::Result<std::path::PathBuf> {
-    let path = crate::projectcentral_flow::relative_member(raw)?;
+    let path = crate::source_safety::relative_member(raw)?;
     if path
         .components()
         .any(|c| matches!(c.as_os_str().to_str(), Some(".git" | ".central")))
@@ -254,34 +254,6 @@ pub fn plan(scope: &Scope, input: &Value, principal: &Principal, now: u64) -> io
     }];
     // Flow transcript identity/history stays in the existing registry. Unknown
     // metadata is preserved, and the entire original registry is CAS-pinned.
-    if let Some(raw) = optional(scope, ".central/flows.json")? {
-        let mut registry: Value = serde_json::from_str(&raw)?;
-        let flows = registry["flows"]
-            .as_array_mut()
-            .ok_or_else(|| invalid("existing Flow registry has no flows array"))?;
-        let mut changed = false;
-        for flow in flows {
-            if let Some(step) = moves
-                .iter()
-                .find(|step| flow["source_ref"] == step.source_ref)
-            {
-                if flow["path"] != step.from {
-                    return Err(conflict(
-                        "Flow registry and source relation disagree before migration",
-                    ));
-                }
-                flow["path"] = json!(step.to);
-                changed = true;
-            }
-        }
-        if changed {
-            changes.push(MetadataChange {
-                path: ".central/flows.json".into(),
-                before: Some(raw),
-                after: encoded(&registry)?,
-            });
-        }
-    }
     let plan = Plan {
         plan_ref,
         request_key,
@@ -426,7 +398,7 @@ fn metadata_change(scope: &Scope, change: &MetadataChange, reverse: bool) -> io:
             &next,
         )?,
         (Some(previous), None) => {
-            let path = crate::projectcentral_flow::relative_member(&change.path)?;
+            let path = crate::source_safety::relative_member(&change.path)?;
             let parent = crate::file_mutation::directory(
                 &scope.root,
                 path.parent()

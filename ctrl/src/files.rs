@@ -5,10 +5,10 @@ use crate::action::{
     ActionAvailability, ActionDescriptor, ActionExecutionContext, ActionInputDefinition,
     ActionOutputDefinition, ActionRegistry, MutationClass,
 };
-use crate::projectcentral_flow::{content_revision_bytes, reject_symlink_components};
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
 use crate::source_horizon::retrieval_allowed;
+use crate::source_safety::{content_revision_bytes, reject_symlink_components};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::os::unix::fs::MetadataExt;

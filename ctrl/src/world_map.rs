@@ -32,10 +32,6 @@ use crate::projectcentral::{
     read_project_manifest, ProjectCentralManifest, AGENT_GOVERNANCE_DIR, HUMAN_SOURCE_DIR,
     PROJECTCENTRAL_DIR, PROJECT_MANIFEST, ROOT_WIKI_SOURCE, WIKI_DIR, WIKI_PROFILE, WIKI_SOURCE,
 };
-use crate::projectcentral_flow::{
-    content_revision_bytes, registered_flow_records, relative_member, FLOW_HISTORY_DIR,
-    FLOW_REGISTRY,
-};
 use crate::projectcentral_now::{inspect_now, NOW_DIR};
 use crate::projectcentral_ops::{
     doctor_projectcentral, inspect_projectcentral, project_space_ref, project_wiki_value,
@@ -630,14 +626,7 @@ fn absent_wiki_area(relative: &str) -> WikiArea {
 }
 
 fn absent_flows() -> FlowState {
-    FlowState {
-        registry: FLOW_REGISTRY.to_owned(),
-        history: FLOW_HISTORY_DIR.to_owned(),
-        present: false,
-        flows: Vec::new(),
-        active: 0,
-        error: None,
-    }
+    map_flows(Path::new("/dev/null"))
 }
 
 fn absent_now(relative: &str) -> NowState {
@@ -659,57 +648,19 @@ fn absent_now(relative: &str) -> NowState {
 /// map discloses revisions and uncommitted external edits, it never absorbs
 /// them. `list_flows` would reconcile (and write); the registry reader does not.
 fn map_flows(project_root: &Path) -> FlowState {
-    let registry = project_root.join(FLOW_REGISTRY);
-    let present = registry.is_file();
-    let mut state = FlowState {
-        registry: FLOW_REGISTRY.to_owned(),
-        history: FLOW_HISTORY_DIR.to_owned(),
-        present,
+    // The Flow registry is retired: the map no longer reads it, and only
+    // discloses whether a leftover registry file still exists so a ground
+    // with residue stays visible instead of silently looking clean.
+    const RETIRED_FLOW_REGISTRY: &str = ".central/flows.json";
+    const RETIRED_FLOW_HISTORY: &str = ".central/flow-revisions";
+    FlowState {
+        registry: RETIRED_FLOW_REGISTRY.to_owned(),
+        history: RETIRED_FLOW_HISTORY.to_owned(),
+        present: project_root.join(RETIRED_FLOW_REGISTRY).is_file(),
         flows: Vec::new(),
         active: 0,
         error: None,
-    };
-    // A missing registry is the ordinary no-Flows case; only a registry that
-    // exists but cannot be read is a fault, and then it is an error field.
-    if !present {
-        return state;
     }
-    let records = match registered_flow_records(project_root) {
-        Ok(records) => records,
-        Err(error) => {
-            state.error = Some(format!("flow registry cannot be read: {error}"));
-            return state;
-        }
-    };
-    for record in records {
-        let source = project_root.join(&record.path);
-        let mut source_present = source.is_file();
-        let mut uncommitted_edits = None;
-        if source_present {
-            match fs::read(&source) {
-                Ok(bytes) => {
-                    uncommitted_edits =
-                        Some(content_revision_bytes(&bytes) != record.current_revision)
-                }
-                Err(_) => source_present = false,
-            }
-        }
-        if record.lifecycle == "active" {
-            state.active += 1;
-        }
-        state.flows.push(FlowEntry {
-            flow_ref: record.flow_ref,
-            source_ref: record.source_ref,
-            path: record.path,
-            lifecycle: record.lifecycle,
-            title: record.title,
-            revision: record.current_revision,
-            revisions_recorded: record.revisions.len(),
-            source_present,
-            uncommitted_edits,
-        });
-    }
-    state
 }
 
 /// Reads the NOW folder of one Project through the NOW inspection, which is a
@@ -1304,7 +1255,7 @@ fn disclose_blocked_manifest(
 }
 
 fn validated_project_name(name: &str) -> io::Result<String> {
-    let validated = relative_member(name)
+    let validated = crate::source_safety::relative_member(name)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
     Ok(validated.to_string_lossy().replace('\\', "/"))
 }

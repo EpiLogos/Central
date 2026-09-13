@@ -209,9 +209,9 @@ class NativeDiscoveryTests(unittest.TestCase):
     def test_aikit_blank_description_help_entries_are_all_discovered_recursively(self):
         executable = ROOT.parent / "ai-kit/target/debug/aikit"
         output = subprocess.run([str(executable), "knowledge", "--help"], text=True, capture_output=True, check=True).stdout
-        self.assertEqual(["search", "read", "relations", "route", "frame", "sources", "explain", "history", "status", "forget"], maintenance.help_commands(output))
+        self.assertEqual(["search", "resolve", "open", "read", "relations", "route", "frame", "sources", "explain", "history", "status", "forget"], maintenance.help_commands(output))
         discovered = maintenance.discover(ROOT, {"argv": [str(executable), "knowledge"], "format": "clap-help"})
-        self.assertEqual(sorted({"search", "read", "relations", "route", "frame", "sources", "explain", "history", "status", "forget destination", "forget route", "forget project", "forget all"}), discovered)
+        self.assertEqual(sorted({"search", "resolve", "open", "read", "relations", "route", "frame", "sources", "explain", "history", "status", "forget destination", "forget route", "forget project", "forget all"}), discovered)
 
 
 if __name__ == "__main__":

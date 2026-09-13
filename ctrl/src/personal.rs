@@ -286,11 +286,8 @@ fn safe_control_target(root: &Path, target: &str) -> Result<PathBuf, String> {
                 .to_owned(),
         );
     }
-    crate::projectcentral_flow::reject_symlink_components(
-        root,
-        &Path::new("Control").join(relative),
-    )
-    .map_err(|e| e.to_string())?;
+    crate::source_safety::reject_symlink_components(root, &Path::new("Control").join(relative))
+        .map_err(|e| e.to_string())?;
     Ok(root.join("Control").join(relative))
 }
 
@@ -398,7 +395,7 @@ fn control_propose_action(
         );
     }
     let basis_revision = match crate::source_safety::read(&root.path.join("Control"), &target) {
-        Ok(content) => crate::projectcentral_flow::content_revision_bytes(content.as_bytes()),
+        Ok(content) => crate::source_safety::content_revision_bytes(content.as_bytes()),
         Err(e) if e.kind() == io::ErrorKind::NotFound => "central.absent/v1".into(),
         Err(e) => {
             return ActionResult::failure(
@@ -554,7 +551,7 @@ fn control_apply_proposal_action(
         return ActionResult::failure(Some("control.apply-proposal"),ResultStatus::UnavailableCapability,"Legacy Control proposal has no source basis; create a fresh native proposal before review",Some(json!({"authored_source_mutated":false})));
     };
     let current = match crate::source_safety::read(&root.path.join("Control"), &proposal.target) {
-        Ok(content) => crate::projectcentral_flow::content_revision_bytes(content.as_bytes()),
+        Ok(content) => crate::source_safety::content_revision_bytes(content.as_bytes()),
         Err(e) if e.kind() == io::ErrorKind::NotFound => "central.absent/v1".into(),
         Err(e) => {
             return ActionResult::failure(
