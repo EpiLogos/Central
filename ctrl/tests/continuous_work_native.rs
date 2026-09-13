@@ -373,3 +373,182 @@ fn real_cli_binary_roundtrips_policy_allocation_source_and_rejection() {
     println!("native-consumer-policy={policy}");
     println!("native-consumer-allocation={first}");
 }
+#[test]
+fn thought_streams_append_distill_and_refuse_inactive_tasks() {
+    let world = world();
+    let allocation = allocate(&world, Some("one"), 100);
+    let now_ref = allocation["now_ref"].as_str().unwrap().to_owned();
+    let revision = allocation["revision"]["revision"].clone();
+
+    let fixture = execute_at(
+        world.path(),
+        "thoughts_append",
+        &json!({
+            "project":"one","now_ref":now_ref,"slug":"session-return",
+            "day":"2026-09-13","actor":"agent:test","actor_kind":"agent",
+            "agent_session_ref":"sess:native","content":"Raw contemplative fixture.",
+        }),
+        200,
+    )
+    .unwrap();
+    assert_eq!(fixture["schema"], "central.t-fixture-receipt/v1");
+    assert!(fixture["created"] == true);
+    let fixture_file = fixture["file"].as_str().unwrap().to_owned();
+
+    let reading = execute_at(
+        world.path(),
+        "thoughts_read",
+        &json!({"project":"one","now_ref":now_ref,"include_content":true}),
+        201,
+    )
+    .unwrap();
+    assert_eq!(reading["total"], 1);
+    assert_eq!(reading["fixtures"][0]["conforming"], true);
+    assert!(reading["fixtures"][0]["content"]
+        .as_str()
+        .unwrap()
+        .contains("contemplative"));
+
+    let learning = execute_at(
+        world.path(),
+        "learnings_distill",
+        &json!({
+            "project":"one","now_ref":now_ref,"slug":"distilled-signal",
+            "day":"2026-09-13","actor":"agent:test","actor_kind":"agent",
+            "content":"One signal, parsed from the fixture.",
+            "source_fixtures":[fixture_file],
+        }),
+        202,
+    )
+    .unwrap();
+    assert_eq!(learning["schema"], "central.t-learning-receipt/v1");
+
+    let learnings = execute_at(
+        world.path(),
+        "learnings_read",
+        &json!({"project":"one","now_ref":now_ref}),
+        203,
+    )
+    .unwrap();
+    assert_eq!(learnings["total"], 1);
+    assert_eq!(
+        learnings["learnings"][0]["source_fixtures"],
+        json!([fixture_file])
+    );
+
+    // An inactive task's stream is read-only: append and distill refuse.
+    // The lifecycle helper is root-scoped; this NOW lives in project one.
+    let lifecycle_project = |current: &Value, state: &str, at: u64| {
+        let policy = execute_at(world.path(), "policy", &json!({"project":"one"}), at).unwrap();
+        run(
+            &world,
+            "now_lifecycle",
+            &json!({"project":"one","now_ref":now_ref,"expected_revision":current,"expected_policy_revision":policy["revision"],"lifecycle":state}),
+            AGENT,
+            at,
+        )
+        .unwrap()
+    };
+    let quiesced = lifecycle_project(&revision, "quiescent", 300);
+    let next_revision = quiesced["revision"]["revision"].clone();
+    for operation in ["thoughts_append", "learnings_distill"] {
+        let mut input = json!({
+            "project":"one","now_ref":now_ref,"slug":"still-writing",
+            "day":"2026-09-13","actor":"agent:test","actor_kind":"agent",
+            "content":"must refuse",
+        });
+        if operation == "learnings_distill" {
+            input["source_fixtures"] = json!([fixture_file]);
+        }
+        assert_eq!(
+            execute_at(world.path(), operation, &input, 301)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied,
+            "{operation}"
+        );
+    }
+    assert_eq!(
+        execute_at(
+            world.path(),
+            "thoughts_read",
+            &json!({"project":"one","now_ref":now_ref}),
+            302,
+        )
+        .unwrap()["total"],
+        1
+    );
+
+    // Explicit re-entry reopens the stream.
+    lifecycle_project(&next_revision, "active", 303);
+    assert!(execute_at(
+        world.path(),
+        "thoughts_append",
+        &json!({
+            "project":"one","now_ref":now_ref,"slug":"re-entered",
+            "day":"2026-09-13","actor":"agent:test","actor_kind":"agent",
+            "content":"After explicit re-entry.",
+        }),
+        304,
+    )
+    .is_ok());
+}
+#[test]
+fn real_cli_binary_appends_reads_and_distills_thought_streams() {
+    let world = world();
+    let invoke = |action: &str, input: Value| {
+        let output = Command::new(env!("CARGO_BIN_EXE_ctrl"))
+            .args([
+                "--json",
+                "--root",
+                world.path().to_str().unwrap(),
+                "action",
+                "run",
+                action,
+                &input.to_string(),
+            ])
+            .env_remove("CENTRAL_NATIVE_TOKEN")
+            .output()
+            .unwrap();
+        serde_json::from_slice::<Value>(&output.stdout).unwrap_or_else(|error| {
+            panic!(
+                "{error}: {} / {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )
+        })
+    };
+    let policy = invoke("central.work.policy", json!({}));
+    let allocation = invoke(
+        "central.now.allocate",
+        json!({"task_ref":"task:real-thought-streams","purpose":"contemplative stream boundary","expected_policy_revision":policy["data"]["revision"]}),
+    );
+    assert_eq!(allocation["ok"], true, "{allocation}");
+    let now_ref = allocation["data"]["now_ref"].as_str().unwrap().to_owned();
+    let append = invoke(
+        "central.now.thoughts.append",
+        json!({"now_ref":now_ref,"slug":"binary-fixture","day":"2026-09-13","actor":"agent:test","actor_kind":"agent","content":"Written through the real binary."}),
+    );
+    assert_eq!(append["ok"], true, "{append}");
+    assert_eq!(append["data"]["file"], "binary-fixture-2026-09-13.md");
+    let reading = invoke(
+        "central.now.thoughts.read",
+        json!({"now_ref":now_ref,"include_content":true}),
+    );
+    assert_eq!(reading["ok"], true, "{reading}");
+    assert_eq!(reading["data"]["total"], 1);
+    assert!(reading["data"]["fixtures"][0]["content"]
+        .as_str()
+        .unwrap()
+        .contains("real binary"));
+    let distill = invoke(
+        "central.now.learnings.distill",
+        json!({"now_ref":now_ref,"slug":"binary-learning","day":"2026-09-13","actor":"agent:test","actor_kind":"agent","content":"Signal from the binary fixture.","source_fixtures":["binary-fixture-2026-09-13.md"]}),
+    );
+    assert_eq!(distill["ok"], true, "{distill}");
+    let learnings = invoke("central.now.learnings.read", json!({"now_ref":now_ref}));
+    assert_eq!(
+        learnings["data"]["learnings"][0]["source_fixtures"][0],
+        "binary-fixture-2026-09-13.md"
+    );
+}

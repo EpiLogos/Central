@@ -51,7 +51,7 @@ pub(super) fn world() -> crate::TempDir {
     })).unwrap()).unwrap();
     temp
 }
-fn policy(root: &Path, project: Option<&str>) -> Value {
+pub(super) fn policy(root: &Path, project: Option<&str>) -> Value {
     execute_at(root, "policy", &json!({"project":project}), 100).unwrap()
 }
 fn request(root: &Path, project: Option<&str>, task: &str) -> Value {

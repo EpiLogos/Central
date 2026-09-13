@@ -9,6 +9,7 @@ pub mod placement;
 pub mod receiving;
 pub mod source;
 pub mod temporal;
+pub mod thoughts;
 
 use crate::action::{
     ActionAvailability, ActionDescriptor, ActionExecutionContext, ActionInputDefinition,
@@ -96,6 +97,10 @@ pub fn execute_with_token_at(
             "automatic_agent_or_model_invocation": false,
             "pointer_note":"Records are pointers, not authority: follow the governing guidance, and search the native surface before building anything new."
         })),
+        "thoughts_read" => thoughts::thoughts_read(&scope, input),
+        "thoughts_append" => thoughts::thoughts_append(&scope, input, now),
+        "learnings_read" => thoughts::learnings_read(&scope, input),
+        "learnings_distill" => thoughts::learnings_distill(&scope, input, now),
         "time_policy" => Ok(serde_json::to_value(temporal::time_policy(&scope, now)?)?),
         "day_read" => temporal::day_read(&scope, input),
         "source_history" => history::read(&scope, input),
@@ -222,6 +227,26 @@ handler!(
     "central.temporal.source-history",
     "source_history"
 );
+handler!(
+    thoughts_read_action,
+    "central.now.thoughts.read",
+    "thoughts_read"
+);
+handler!(
+    thoughts_append_action,
+    "central.now.thoughts.append",
+    "thoughts_append"
+);
+handler!(
+    learnings_read_action,
+    "central.now.learnings.read",
+    "learnings_read"
+);
+handler!(
+    learnings_distill_action,
+    "central.now.learnings.distill",
+    "learnings_distill"
+);
 
 type Definition<'a> = (
     &'a str,
@@ -292,6 +317,10 @@ pub fn register_actions(registry: &mut ActionRegistry) {
         ("central.now.lifecycle", "Change agent NOW lifecycle", "Independent active/quiescent/closed/archive transitions with fresh placement policy and recorded receiving/obligation checks.", true, now_lifecycle_action, &[("now_ref","string",true),("expected_revision","string",true),("expected_policy_revision","string",true),("lifecycle","string",true),("expected_authority_revision","string",false)]),
         ("central.now.obligations", "Retain NOW obligations", "Append exact native obligation SourceRefs without silently dropping outstanding work.", true, now_obligations_action, &[("now_ref","string",true),("expected_revision","string",true),("obligation_refs","array",true),("expected_authority_revision","string",false)]),
         ("central.temporal.source-history", "Read native temporal source history", "Read SourceRef snapshots from the existing native file-history owner store.", false, history_action, &[("source_ref","string",true),("limit","integer",false),("before","integer",false)]),
+        ("central.now.thoughts.read", "Read a NOW's raw contemplative stream", "Walk one NOW clearing's T/ fixtures — dated, attributed, each with revision; content by explicit request. Pre-law fixtures list as nonconforming, never hidden. Read-only.", false, thoughts_read_action, &[("now_ref","string",true),("include_content","boolean",false),("limit","integer",false)]),
+        ("central.now.thoughts.append", "Append a raw contemplative fixture", "Write one dated, attributed markdown fixture into the NOW's T/ stream. Caller-supplied local civil day; declared actor attribution; active NOWs only; identical bytes are an idempotent re-append.", true, thoughts_append_action, &[("now_ref","string",true),("slug","string",true),("day","string",true),("actor","string",true),("actor_kind","string",true),("content","string",true),("agent_session_ref","string",false)]),
+        ("central.now.learnings.read", "Read a NOW's distilled learnings", "Walk the NOW's T-prime/ learnings, each naming the T fixture(s) it was parsed from; without now_ref, list learnings across every allocated clearing in scope. Read-only.", false, learnings_read_action, &[("now_ref","string",false),("include_content","boolean",false),("limit","integer",false)]),
+        ("central.now.learnings.distill", "Distill a learning into T-prime", "Write one learning distilled from named T fixtures — every named fixture must exist in this NOW's T/ and rides the learning's front-matter linkage. Active NOWs only.", true, learnings_distill_action, &[("now_ref","string",true),("slug","string",true),("day","string",true),("actor","string",true),("actor_kind","string",true),("content","string",true),("source_fixtures","array",true),("agent_session_ref","string",false)]),
     ]);
     extended::register_actions(registry);
 }
