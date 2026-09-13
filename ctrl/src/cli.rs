@@ -95,7 +95,7 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
             }
             explicit_root = Some(PathBuf::from(value));
         } else if argument.starts_with("--") {
-            return Err((structured, format!("Unknown option: {argument}")));
+            return Err((structured, format!("Unknown option: {argument}; run `ctrl --help`")));
         } else {
             positional.push(argument.clone());
         }
@@ -337,7 +337,9 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         {
             (canonical.as_str(), json!({}))
         }
-        [unknown] => return Err((structured, format!("Unknown command: {unknown}"))),
+        [unknown] => {
+            return Err((structured, format!("Unknown command: {unknown}; run `ctrl --help`")))
+        }
         _ => {
             return Err((
                 structured,

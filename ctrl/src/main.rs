@@ -19,11 +19,20 @@ fn top_level_command_index(args: &[String]) -> Option<usize> {
             }
         }
     }
-    (positional.len() == 1).then_some(positional[0])
+    // `then`, never `then_some`: `then_some` evaluates its argument eagerly,
+    // so the length guard would not stop `positional[0]` from panicking on an
+    // all-flag invocation (`ctrl`, `ctrl --root PATH` with no command).
+    (positional.len() == 1).then(|| positional[0])
 }
 
 fn main() {
     let mut args = std::env::args().skip(1).collect::<Vec<_>>();
+    if args.is_empty() {
+        // No command at all: show the doorway instead of falling through.
+        // Exit 2 matches the unknown-command convention (invalid input, not a crash).
+        println!("{HELP}");
+        process::exit(2);
+    }
     if matches!(args.as_slice(), [argument] if matches!(argument.as_str(), "--version" | "-V" | "version"))
     {
         println!(
