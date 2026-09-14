@@ -19,6 +19,7 @@ pub const AGENT_PROFILE_READ_ACTION: &str = "agent-profile.read";
 pub const AGENT_PROFILE_SAVE_ACTION: &str = "agent-profile.save";
 pub const AGENT_PROFILE_REMOVE_ACTION: &str = "agent-profile.remove";
 pub const AGENT_PROFILE_PROPOSE_ACTION: &str = "agent-profile.propose";
+pub const AGENT_PROFILE_EXPRESS_ACTION: &str = "agent-profile.express";
 
 fn input(name: &str, input_type: &str, required: bool) -> ActionInputDefinition {
     ActionInputDefinition {
@@ -484,9 +485,18 @@ fn optional_world_ref_list(
 /// `agent-profile.read` with the same scope/project/profile_ref; the success
 /// payload discloses that exact read path.
 fn propose_action(
+    registry: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    propose_action_with_origin(registry, input, context, AGENT_PROFILE_PROPOSE_ACTION)
+}
+
+fn propose_action_with_origin(
     _registry: &ActionRegistry,
     input: &Value,
     context: &ActionExecutionContext<'_>,
+    origin_action: &str,
 ) -> ActionResult {
     let store = match resolve_store(AGENT_PROFILE_PROPOSE_ACTION, input, context) {
         Ok(store) => store,
@@ -539,7 +549,7 @@ fn propose_action(
         scope,
         world_ref,
         raw_intent,
-        AGENT_PROFILE_PROPOSE_ACTION,
+        origin_action,
     ) {
         Ok(profile) => profile,
         Err(AgentProfileError::InvalidIntentExpression) => {
@@ -639,6 +649,85 @@ fn propose_action(
         })
 }
 
+fn allocated_expression_suffix() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
+}
+
+fn express_action(
+    registry: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    let action = AGENT_PROFILE_EXPRESS_ACTION;
+    let intent_expression = match required_text(input, "intent_expression", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let world_ref = match required_text(input, "world_ref", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let Some(raw_worlds) = input.get("ratified_world_refs") else {
+        return ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            "agent-profile.express requires ratified_world_refs from an already ratified World context; it never promotes world_ref.",
+            None,
+        );
+    };
+    let ratified_world_refs = match optional_world_ref_list(
+        &json!({ "ratified_world_refs": raw_worlds }),
+        "ratified_world_refs",
+    ) {
+        Ok(refs) if !refs.is_empty() => refs,
+        Ok(_) => {
+            return ActionResult::failure(
+                Some(action),
+                ResultStatus::InvalidInput,
+                "ratified_world_refs must contain at least one canonical World ref.",
+                None,
+            );
+        }
+        Err(error) => {
+            return ActionResult::failure(Some(action), ResultStatus::InvalidInput, error, None);
+        }
+    };
+    let suffix = allocated_expression_suffix();
+    let profile_ref = format!("agent-profile:expressed-{suffix}");
+    let agent_ref = format!("agent:expressed-{suffix}");
+    let mut proposal = json!({
+        "scope": input.get("scope").cloned().unwrap_or_else(|| json!("root")),
+        "profile_ref": profile_ref,
+        "agent_ref": agent_ref,
+        "revision": "r1",
+        "world_ref": world_ref,
+        "intent_expression": intent_expression,
+        "ratified_world_refs": ratified_world_refs,
+    });
+    if let Some(project) = input.get("project") {
+        proposal["project"] = project.clone();
+    }
+    for field in ["role", "purpose"] {
+        if let Some(value) = input.get(field) {
+            proposal[field] = value.clone();
+        }
+    }
+    let mut result =
+        propose_action_with_origin(registry, &proposal, context, AGENT_PROFILE_EXPRESS_ACTION);
+    result.action = Some(action.to_owned());
+    if result.ok {
+        if let Some(data) = result.data.as_mut() {
+            data["allocation"] = json!({
+                "profile_ref": profile_ref,
+                "agent_ref": agent_ref,
+                "revision": "r1",
+                "recognition": "unrecognised",
+            });
+        }
+    }
+    result
+}
+
 pub fn register_agent_profile_actions(registry: &mut ActionRegistry) {
     let common = vec![scope_input(), input("project", "string", false)];
     registry
@@ -736,6 +825,29 @@ pub fn register_agent_profile_actions(registry: &mut ActionRegistry) {
             required,
         ));
     }
+    let express_inputs = vec![
+        scope_input(),
+        input("project", "string", false),
+        input("world_ref", "string", true),
+        input("intent_expression", "string", true),
+        input("ratified_world_refs", "array", true),
+        input("role", "string", false),
+        input("purpose", "string", false),
+    ];
+    registry
+        .register(
+            descriptor(
+                AGENT_PROFILE_EXPRESS_ACTION,
+                "Express Agent Profile Intent",
+                "Allocate a fresh AgentProfile and AgentRef, then author the existing generated-proposal/unrecognised AgentProfile boundary. The caller must supply a canonical World ref and already ratified World refs; this action never recognises the proposal, admits an Agency, or creates an AgentSession.",
+                MutationClass::LocallyMutating,
+                "agent-profile-expression",
+                express_inputs,
+            ),
+            express_action,
+        )
+        .expect("AgentProfile Action ids are valid");
+
     registry
         .register(
             descriptor(
@@ -1063,6 +1175,105 @@ mod tests {
             input["project"] = Value::String(project.to_owned());
         }
         input
+    }
+
+    #[test]
+    fn express_allocates_refs_and_round_trips_unrecognised_proposal() {
+        let root = fixture_root();
+        let registry = registry();
+        let mut options = None;
+        let mut connectors = None;
+        let mut connector_context = None;
+        let context = context(&root, &mut options, &mut connectors, &mut connector_context);
+        let expressed = registry.execute(
+            AGENT_PROFILE_EXPRESS_ACTION,
+            &json!({
+                "scope": "personal",
+                "world_ref": "world:personal",
+                "ratified_world_refs": ["world:personal"],
+                "intent_expression": INTENT,
+                "role": "Guardian",
+            }),
+            &context,
+        );
+        assert!(expressed.ok, "{expressed:?}");
+        assert_eq!(
+            expressed.action.as_deref(),
+            Some(AGENT_PROFILE_EXPRESS_ACTION)
+        );
+        let data = expressed.data.as_ref().unwrap();
+        assert_eq!(data["authorship"], "generated-proposal");
+        assert_eq!(data["recognition"], "unrecognised");
+        assert_eq!(data["allocation"]["revision"], "r1");
+        let profile_ref = data["allocation"]["profile_ref"].as_str().unwrap();
+        let agent_ref = data["allocation"]["agent_ref"].as_str().unwrap();
+        assert!(profile_ref.starts_with("agent-profile:expressed-"));
+        assert!(agent_ref.starts_with("agent:expressed-"));
+        assert_eq!(data["profile"]["ref"], profile_ref);
+        assert_eq!(data["profile"]["agent_ref"], agent_ref);
+        assert_eq!(
+            data["profile"]["intent_provenance"]["origin_action"],
+            AGENT_PROFILE_EXPRESS_ACTION
+        );
+        assert_eq!(
+            data["profile"]["ratified_world_refs"],
+            json!(["world:personal"])
+        );
+
+        let read = registry.execute(
+            AGENT_PROFILE_READ_ACTION,
+            &json!({"scope": "personal", "profile_ref": profile_ref}),
+            &context,
+        );
+        assert!(read.ok, "{read:?}");
+        assert_eq!(read.data.as_ref().unwrap()["profile"]["ref"], profile_ref);
+        assert_eq!(
+            read.data.as_ref().unwrap()["profile"]["agent_ref"],
+            agent_ref
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn public_propose_cannot_spoof_origin_action() {
+        let root = fixture_root();
+        let registry = registry();
+        let mut options = None;
+        let mut connectors = None;
+        let mut connector_context = None;
+        let context = context(&root, &mut options, &mut connectors, &mut connector_context);
+        let mut input = propose_input(None);
+        input["_origin_action"] = json!("agent-profile.express");
+        let result = registry.execute(AGENT_PROFILE_PROPOSE_ACTION, &input, &context);
+        assert!(result.ok, "{result:?}");
+        assert_eq!(
+            result.data.as_ref().unwrap()["profile"]["intent_provenance"]["origin_action"],
+            AGENT_PROFILE_PROPOSE_ACTION
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn express_refuses_to_promote_unratified_world_input() {
+        let root = fixture_root();
+        let registry = registry();
+        let mut options = None;
+        let mut connectors = None;
+        let mut connector_context = None;
+        let context = context(&root, &mut options, &mut connectors, &mut connector_context);
+        let result = registry.execute(
+            AGENT_PROFILE_EXPRESS_ACTION,
+            &json!({
+                "scope": "personal",
+                "world_ref": "world:unratified",
+                "intent_expression": INTENT,
+            }),
+            &context,
+        );
+        assert!(!result.ok);
+        assert_eq!(result.status, ResultStatus::InvalidInput);
+        assert!(!root.join("Control/agents/profiles").exists());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
