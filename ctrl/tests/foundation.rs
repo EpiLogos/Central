@@ -466,7 +466,7 @@ fn action_list_has_human_and_structured_cli_renderings() {
     let actions = value["data"]["actions"].as_array().unwrap();
     let mut continuous = ActionRegistry::default();
     central_ctrl::continuous_work::register_actions(&mut continuous);
-    assert_eq!(actions.len(), 119 + continuous.list().len());
+    assert_eq!(actions.len(), 120 + continuous.list().len());
     for descriptor in continuous.list() {
         let actual = actions
             .iter()
@@ -483,6 +483,7 @@ fn action_list_has_human_and_structured_cli_renderings() {
         .collect::<Vec<_>>();
     for id in [
         "central.agent-set.save",
+        "central.agent-set.propose",
         "central.agent-set.list",
         "central.agent-set.read",
         "central.agent-set.remove",
