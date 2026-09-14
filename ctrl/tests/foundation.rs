@@ -342,6 +342,9 @@ fn action_list_has_human_and_structured_cli_renderings() {
     assert!(human.output.contains("central.world\tShow the world map"));
     assert!(human
         .output
+        .contains("agent-profile.express\tExpress Agent Profile Intent"));
+    assert!(human
+        .output
         .contains("central.recover\tRecover Central machine state"));
     assert!(human
         .output
@@ -466,7 +469,15 @@ fn action_list_has_human_and_structured_cli_renderings() {
     let actions = value["data"]["actions"].as_array().unwrap();
     let mut continuous = ActionRegistry::default();
     central_ctrl::continuous_work::register_actions(&mut continuous);
-    assert_eq!(actions.len(), 119 + continuous.list().len());
+    assert_eq!(actions.len(), 120 + continuous.list().len());
+    let express = actions
+        .iter()
+        .find(|action| action["id"] == "agent-profile.express")
+        .expect("missing agent-profile.express Action");
+    assert_eq!(express["title"], "Express Agent Profile Intent");
+    assert_eq!(express["mutation_class"], "locally-mutating");
+    assert_eq!(express["output"]["type"], "agent-profile-expression");
+
     for descriptor in continuous.list() {
         let actual = actions
             .iter()
