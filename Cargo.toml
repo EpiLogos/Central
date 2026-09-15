@@ -3,6 +3,7 @@ members = [
     "crates/connector-sdk",
     "connectors/chezmoi",
     "connectors/git-sync",
+    "connectors/harness",
     "connectors/homebrew",
     "connectors/macos",
     "connectors/reference",

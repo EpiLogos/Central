@@ -153,6 +153,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "central-harness-connector"
+version = "0.1.0"
+dependencies = [
+ "central-connector-sdk",
+ "central-reference-connectors",
+ "serde_json",
+]
+
+[[package]]
 name = "central-homebrew-connector"
 version = "0.1.0"
 dependencies = [
@@ -190,6 +199,7 @@ name = "central-reference-connectors"
 version = "0.1.0"
 dependencies = [
  "central-connector-sdk",
+ "central-harness-connector",
 ]
 
 [[package]]

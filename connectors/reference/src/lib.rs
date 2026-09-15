@@ -412,10 +412,21 @@ impl Connector for InMemoryMachineConnector {
     }
 }
 
+/// The default Connector composition used by plain `ctrl` deployments.
+///
+/// The harness-capability Connector observes real machine capability sources
+/// (the Actuation CLI and the Workcell harness-instance registry). It is
+/// probe-gated: when neither source is reachable it reports unavailable and
+/// resolution falls back to the reference inspector, so machines without
+/// harness sources behave exactly as before. Its manifest id
+/// (`read-models.harness-capability`) sorts after the `personal.*` platform
+/// Connectors, so host surfaces that register one keep it as the selected
+/// MachineInspector.
 pub fn create_default_connector_registry() -> ConnectorRegistry {
     let mut registry = ConnectorRegistry::default();
     registry.register(FilesystemWorkConnector::new()).expect("reference Connector manifest is valid");
     registry.register(StaticWorkConnector::new(Vec::new())).expect("reference Connector manifest is valid");
     registry.register(StaticMachineInspectorConnector::current_host()).expect("reference Connector manifest is valid");
+    registry.register(central_harness_connector::HarnessCapabilityConnector::new()).expect("harness capability Connector manifest is valid");
     registry
 }
