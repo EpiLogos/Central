@@ -70,7 +70,252 @@ fn parse_action_input(
     Ok(value)
 }
 
+/// Index of the first positional token (skipping `--json` / `--root <path>`),
+/// or `None` when every argument is a flag.
+fn first_positional(args: &[String]) -> Option<usize> {
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--json" => index += 1,
+            "--root" => {
+                if args.get(index + 1).is_none() {
+                    return None;
+                }
+                index += 2;
+            }
+            argument if argument.starts_with("--root=") => index += 1,
+            _ => return Some(index),
+        }
+    }
+    None
+}
+
+/// True when the invocation addresses the Configuration Plane family, so
+/// usage failures answer with `oi.config-error/v1` instead of an envelope.
+fn config_family_involved(args: &[String]) -> bool {
+    matches!(
+        first_positional(args).map(|index| args[index].as_str()),
+        Some("config") | Some("config-contribution")
+    )
+}
+
+/// The frozen four-verb owner mutation transport plus the contribution
+/// command (09-CONFIGURATION-PLANE.md §4/§6):
+///
+/// ```text
+/// ctrl config-contribution --json
+/// ctrl config validate --json --setting <ref> [--scope <kind:ref>]
+///           (--value <json> | --value-file <path|->)
+/// ctrl config plan     --json ...   (same value flags as validate)
+/// ctrl config apply    --json (--plan-file <path|->) [--changeset <id>]
+/// ctrl config reset    --json --setting <ref> [--scope <compact>]
+///           [--changeset <id>]
+/// ```
+fn parse_config_family(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
+    let mut structured = false;
+    let mut explicit_root = None;
+    let mut positional: Vec<String> = Vec::new();
+    let mut setting: Option<String> = None;
+    let mut scope: Option<String> = None;
+    let mut value: Option<String> = None;
+    let mut value_file: Option<String> = None;
+    let mut plan_file: Option<String> = None;
+    let mut changeset: Option<String> = None;
+
+    let mut index = 0;
+    while index < args.len() {
+        let argument = args[index].clone();
+        let takes_value = |flag: &str, name: &str| -> Result<String, (bool, String)> {
+            let next = args
+                .get(index + 1)
+                .filter(|next| !next.starts_with("--") || next.as_str() == "-");
+            match next {
+                Some(next) => Ok(next.clone()),
+                None => Err((structured, format!("{flag} requires a {name}."))),
+            }
+        };
+        match argument.as_str() {
+            "--json" => structured = true,
+            "--root" => {
+                let path = takes_value("--root", "path")?;
+                explicit_root = Some(PathBuf::from(path));
+                index += 1;
+            }
+            "--setting" => {
+                setting = Some(takes_value("--setting", "setting ref")?);
+                index += 1;
+            }
+            "--scope" => {
+                scope = Some(takes_value("--scope", "scope")?);
+                index += 1;
+            }
+            "--value" => {
+                value = Some(takes_value("--value", "JSON value")?);
+                index += 1;
+            }
+            "--value-file" => {
+                value_file = Some(takes_value("--value-file", "path or -")?);
+                index += 1;
+            }
+            "--plan-file" => {
+                plan_file = Some(takes_value("--plan-file", "path or -")?);
+                index += 1;
+            }
+            "--changeset" => {
+                changeset = Some(takes_value("--changeset", "changeset id")?);
+                index += 1;
+            }
+            other if other.starts_with("--root=") => {
+                let path = other.strip_prefix("--root=").unwrap_or_default();
+                if path.is_empty() {
+                    return Err((structured, "--root requires a path.".to_owned()));
+                }
+                explicit_root = Some(PathBuf::from(path));
+            }
+            other if other.starts_with("--") => {
+                return Err((structured, format!("Unknown option: {other}")));
+            }
+            other => positional.push(other.to_owned()),
+        }
+        index += 1;
+    }
+
+    if positional.first().map(String::as_str) != Some("config") {
+        return Err((structured, "Unknown command.".to_owned()));
+    }
+    let Some(verb) = positional.get(1).map(String::as_str) else {
+        return Err((
+            structured,
+            "config requires a verb: contribution | validate | plan | apply | reset.".to_owned(),
+        ));
+    };
+    if positional.len() > 2 {
+        return Err((
+            structured,
+            format!("config {verb} takes no positional arguments."),
+        ));
+    }
+
+    let (action_id, input): (&str, Value) = match verb {
+        "contribution" => (crate::configuration::CONFIG_CONTRIBUTION_ACTION, json!({})),
+        "validate" | "plan" => {
+            let Some(setting_ref) = setting.as_ref() else {
+                return Err((
+                    structured,
+                    format!("config {verb} requires --setting <setting_ref>."),
+                ));
+            };
+            let scope_value = scope.clone().map(Value::String).unwrap_or(Value::Null);
+            match (&value, &value_file) {
+                (Some(raw), None) => {
+                    let parsed: Value = serde_json::from_str(raw).map_err(|error| {
+                        (
+                            structured,
+                            format!("--value must be a JSON document: {error}"),
+                        )
+                    })?;
+                    (
+                        if verb == "validate" {
+                            crate::configuration::CONFIG_VALIDATE_ACTION
+                        } else {
+                            crate::configuration::CONFIG_PLAN_ACTION
+                        },
+                        json!({
+                            "setting_ref": setting_ref,
+                            "scope": scope_value,
+                            "value": parsed,
+                            "value_file": Value::Null,
+                        }),
+                    )
+                }
+                (None, Some(file)) => (
+                    if verb == "validate" {
+                        crate::configuration::CONFIG_VALIDATE_ACTION
+                    } else {
+                        crate::configuration::CONFIG_PLAN_ACTION
+                    },
+                    json!({
+                        "setting_ref": setting_ref,
+                        "scope": scope_value,
+                        "value": Value::Null,
+                        "value_file": file,
+                    }),
+                ),
+                (Some(_), Some(_)) => {
+                    return Err((
+                        structured,
+                        "pass either --value or --value-file, not both.".to_owned(),
+                    ))
+                }
+                (None, None) => {
+                    return Err((
+                        structured,
+                        format!(
+                        "config {verb} requires a value: --value <json> or --value-file <path|->."
+                    ),
+                    ))
+                }
+            }
+        }
+        "apply" => {
+            let Some(source) = plan_file.as_ref() else {
+                return Err((
+                    structured,
+                    "config apply requires --plan-file <path|->.".to_owned(),
+                ));
+            };
+            (
+                crate::configuration::CONFIG_APPLY_ACTION,
+                json!({
+                    "plan_file": source,
+                    "changeset": changeset.clone().map(Value::String).unwrap_or(Value::Null),
+                }),
+            )
+        }
+        "reset" => {
+            let Some(setting_ref) = setting.as_ref() else {
+                return Err((
+                    structured,
+                    "config reset requires --setting <setting_ref>.".to_owned(),
+                ));
+            };
+            (
+                crate::configuration::CONFIG_RESET_ACTION,
+                json!({
+                    "setting_ref": setting_ref,
+                    "scope": scope.clone().map(Value::String).unwrap_or(Value::Null),
+                    "changeset": changeset.clone().map(Value::String).unwrap_or(Value::Null),
+                }),
+            )
+        }
+        other => {
+            return Err((
+                structured,
+                format!(
+                "Unknown config verb: {other} (contribution | validate | plan | apply | reset)."
+            ),
+            ))
+        }
+    };
+
+    Ok(ParsedCommand {
+        structured,
+        explicit_root,
+        target: CommandTarget::Direct {
+            action_id: action_id.to_owned(),
+            input,
+        },
+    })
+}
+
 fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
+    // The Configuration Plane family (`ctrl config <verb> ...`) carries its
+    // own flag grammar (`--setting`, `--scope`, `--value`, ...); it is parsed
+    // by its own parser before the generic Action scan rejects those flags.
+    if first_positional(args).map(|index| args[index].as_str()) == Some("config") {
+        return parse_config_family(args);
+    }
+
     let mut structured = false;
     let mut explicit_root = None;
     let mut positional = Vec::new();
@@ -155,6 +400,9 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         }
         [command] if command == "actions" => ("action.list", json!({})),
         [command] if command == "system" => ("central.system", json!({})),
+        [command] if command == "config-contribution" => {
+            (crate::configuration::CONFIG_CONTRIBUTION_ACTION, json!({}))
+        }
         [domain, verb] if domain == "action" && verb == "list" => ("action.list", json!({})),
         [domain, verb, action] if domain == "action" && verb == "run" => {
             (action.as_str(), json!({}))
@@ -204,9 +452,7 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         {
             ("control.search", json!({ "query": rest.join(" ") }))
         }
-        [domain, verb] if domain == "control" && verb == "index" => {
-            ("control.index", json!({}))
-        }
+        [domain, verb] if domain == "control" && verb == "index" => ("control.index", json!({})),
         [domain, verb] if domain == "control" && verb == "open" => {
             return Err((
                 structured,
@@ -360,6 +606,25 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
 
 fn human_output(result: &ActionResult) -> String {
     if !result.ok {
+        // Configuration-plane failures carry the bare oi.config-error/v1
+        // document in `data` (no ActionError); render that document's code
+        // and message instead of expecting an envelope error.
+        if result
+            .action
+            .as_deref()
+            .is_some_and(|action| action.starts_with("central.config."))
+        {
+            let data = result.data.as_ref();
+            let code = data
+                .and_then(|d| d.get("error_code"))
+                .and_then(Value::as_str)
+                .unwrap_or(result.status.as_str());
+            let message = data
+                .and_then(|d| d.get("message"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return format!("{code}: {message}");
+        }
         let error = result.error.as_ref().expect("failure has an error");
         return if result.status == ResultStatus::Cancelled {
             error.message.clone()
@@ -553,6 +818,80 @@ fn human_output(result: &ActionResult) -> String {
                 .unwrap_or_default();
             format!("{name}\t{path}")
         }
+        Some(crate::configuration::CONFIG_CONTRIBUTION_ACTION) => {
+            let sections = data
+                .get("sections")
+                .and_then(Value::as_array)
+                .map(|sections| sections.len())
+                .unwrap_or_default();
+            let settings = data
+                .get("sections")
+                .and_then(Value::as_array)
+                .map(|sections| {
+                    sections
+                        .iter()
+                        .filter_map(|s| s.get("settings").and_then(Value::as_array))
+                        .map(Vec::len)
+                        .sum::<usize>()
+                })
+                .unwrap_or_default();
+            let availability = data
+                .pointer("/availability/state")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            format!(
+                "configuration contribution: {sections} section(s), {settings} setting(s), availability {availability}"
+            )
+        }
+        Some(crate::configuration::CONFIG_VALIDATE_ACTION) => {
+            let valid = data.get("valid").and_then(Value::as_bool).unwrap_or(false);
+            let violations = data
+                .get("violations")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or_default();
+            if valid {
+                "valid: yes".to_owned()
+            } else {
+                format!("valid: no ({violations} violation(s))")
+            }
+        }
+        Some(crate::configuration::CONFIG_PLAN_ACTION) => {
+            let plan_id = data
+                .get("plan_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let digest = data
+                .get("plan_digest")
+                .and_then(Value::as_str)
+                .map(|digest| digest.chars().take(12).collect::<String>())
+                .unwrap_or_default();
+            let changes = data
+                .get("changes")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or_default();
+            format!("plan {plan_id} (digest {digest}): {changes} change(s)")
+        }
+        Some(action)
+            if action == crate::configuration::CONFIG_APPLY_ACTION
+                || action == crate::configuration::CONFIG_RESET_ACTION =>
+        {
+            let receipt_id = data
+                .get("receipt_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let outcome = data
+                .get("outcome")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let original = data
+                .get("original_receipt_id")
+                .and_then(Value::as_str)
+                .map(|original| format!(" (original receipt {original})"))
+                .unwrap_or_default();
+            format!("receipt {receipt_id}: {outcome}{original}")
+        }
         _ => data.to_string(),
     }
 }
@@ -577,11 +916,30 @@ pub fn run_cli_with_runtime(
     connectors: &ConnectorRegistry,
     connector_context: &ConnectorContext,
 ) -> CliExecution {
+    let config_family = config_family_involved(args);
     let parsed = match parse_args(args) {
         Ok(parsed) => parsed,
         Err((structured, message)) => {
-            let result = ActionResult::failure(None, ResultStatus::InvalidInput, message, None);
-            let output = if structured {
+            let result =
+                ActionResult::failure(None, ResultStatus::InvalidInput, message.clone(), None);
+            // Configuration-plane usage failures answer with the contract
+            // error document, not an Action envelope (09 §6).
+            let output = if config_family {
+                let document = serde_json::json!({
+                    "schema": crate::configuration::CONFIG_ERROR_SCHEMA,
+                    "error_code": "validation_failed",
+                    "message": message,
+                    "setting_ref": Value::Null,
+                    "scope_kind": Value::Null,
+                    "retryable": false,
+                    "detail_ref": Value::Null,
+                });
+                if structured {
+                    document.to_string()
+                } else {
+                    format!("validation_failed: {message}")
+                }
+            } else if structured {
                 serde_json::to_string(&result).expect("ActionResult serializes")
             } else {
                 human_output(&result)
@@ -612,17 +970,32 @@ pub fn run_cli_with_runtime(
     crate::agent_set_actions::register_agent_set_actions(&mut registry);
     crate::remember_actions::register_remember_actions(&mut registry);
     crate::system_disclosure::register_system_disclosure_action(&mut registry);
+    crate::configuration::register_configuration_actions(&mut registry);
     let result = match parsed.target {
         CommandTarget::Direct { action_id, input } => {
             registry.execute(&action_id, &input, &context)
         }
         CommandTarget::Guided => run_guided_action_picker(&registry, &context, surface),
     };
+    let config_action = result
+        .action
+        .as_deref()
+        .map(|action| action.starts_with("central.config."))
+        .unwrap_or(false);
     let output = if parsed.structured {
+        // Configuration-plane verbs always answer with the bare contract
+        // document (contribution, validation, plan, receipt or error) on
+        // stdout — never the ActionResult envelope (09 §6).
+        if config_action {
+            match result.data.as_ref() {
+                Some(data) => serde_json::to_string(data).expect("config document serializes"),
+                None => serde_json::to_string(&result).expect("ActionResult serializes"),
+            }
         // The Wave 5 System disclosure is itself the output document: `ctrl system
         // --json` returns the bare descriptor on stdout (the O:I composition kernel
         // mount seam), not the ActionResult envelope.
-        if result.action.as_deref() == Some(crate::system_disclosure::SYSTEM_ACTION_ID) && result.ok
+        } else if result.action.as_deref() == Some(crate::system_disclosure::SYSTEM_ACTION_ID)
+            && result.ok
         {
             match result.data.as_ref() {
                 Some(data) => serde_json::to_string(data).expect("disclosure serializes"),

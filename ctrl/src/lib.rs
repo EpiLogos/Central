@@ -8,6 +8,7 @@ pub mod agent_set_store;
 pub mod automation;
 pub mod central_computer;
 pub mod cli;
+pub mod configuration;
 pub mod continuous_work;
 pub mod control;
 pub mod control_skills;
@@ -182,6 +183,12 @@ pub use central_reference_connectors::{
     SharedMachineState, StaticMachineInspectorConnector, StaticWorkConnector,
 };
 pub use cli::{run_cli, run_cli_with_runtime, run_cli_with_surface, CliEnvironment, CliExecution};
+pub use configuration::{
+    build_contribution, canonical_plan_digest, register_configuration_actions, CONFIG_APPLY_ACTION,
+    CONFIG_CONTRACT_REVISION, CONFIG_CONTRIBUTION_ACTION, CONFIG_CONTRIBUTION_SCHEMA,
+    CONFIG_ERROR_SCHEMA, CONFIG_OWNER_REF, CONFIG_PLAN_ACTION, CONFIG_PLAN_SCHEMA,
+    CONFIG_RECEIPT_SCHEMA, CONFIG_RESET_ACTION, CONFIG_VALIDATE_ACTION, CONFIG_VALIDATION_SCHEMA,
+};
 pub use control::{
     locate_control_root, search_control, ControlSearchMatch, ControlSearchResult,
     ControlSkippedSource, ControlSourceRoot, SourceClass, AGENT_RETRIEVAL_DENY_MARKER,
