@@ -470,8 +470,9 @@ fn action_list_has_human_and_structured_cli_renderings() {
     let mut continuous = ActionRegistry::default();
     central_ctrl::continuous_work::register_actions(&mut continuous);
     // 120 pre-configuration-plane Actions + the five owner-native ones
-    // (contribution, validate, plan, apply, reset).
-    assert_eq!(actions.len(), 125 + continuous.list().len());
+    // (contribution, validate, plan, apply, reset) + this line's
+    // central.agent-set.propose.
+    assert_eq!(actions.len(), 126 + continuous.list().len());
     let express = actions
         .iter()
         .find(|action| action["id"] == "agent-profile.express")
@@ -501,6 +502,7 @@ fn action_list_has_human_and_structured_cli_renderings() {
         "central.config.apply",
         "central.config.reset",
         "central.agent-set.save",
+        "central.agent-set.propose",
         "central.agent-set.list",
         "central.agent-set.read",
         "central.agent-set.remove",

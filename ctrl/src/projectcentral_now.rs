@@ -3,9 +3,10 @@ use crate::action::{
     ActionOutputDefinition, ActionRegistry, MutationClass,
 };
 use crate::continuous_work::thoughts::{snapshot_streams, StreamDaySnapshot};
-use crate::projectcentral::{read_project_manifest, HUMAN_SOURCE_DIR};
+use crate::projectcentral::{read_project_manifest, HUMAN_SOURCE_DIR, PROJECTCENTRAL_DIR};
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
+use crate::world_map::{apply_reproject, canonical_missing, ReprojectReceipt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
@@ -335,7 +336,7 @@ fn project_context(
     context: &ActionExecutionContext<'_>,
 ) -> Result<PathBuf, ActionResult> {
     let project = required(input, "project", action)?;
-    let project = relative_member(&project).map_err(|error| {
+    let member = relative_member(&project).map_err(|error| {
         ActionResult::failure(
             Some(action),
             ResultStatus::InvalidInput,
@@ -348,7 +349,7 @@ fn project_context(
             ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None)
         })?
         .path;
-    let project_root = root.join("Work").join(project);
+    let project_root = root.join("Work").join(member);
     if !project_root.is_dir() {
         return Err(ActionResult::failure(
             Some(action),
@@ -360,11 +361,27 @@ fn project_context(
             None,
         ));
     }
+    let project_central = project_root.join(PROJECTCENTRAL_DIR);
+    if !project_central.is_dir() {
+        return Err(project_central_absent(action, &project, &project_central));
+    }
+    let missing = canonical_missing(&project_root);
+    if !missing.is_empty() {
+        return Err(project_central_incomplete(
+            action,
+            &project,
+            &project_central,
+            missing,
+        ));
+    }
+    // The canonical pieces are all present, so a manifest that still cannot be
+    // read is genuinely malformed — authored content gone wrong, not missing
+    // scaffolding. That stays `invalid_central_structure`; no stamper repairs it.
     let manifest = read_project_manifest(&project_root).map_err(|error| {
         ActionResult::failure(
             Some(action),
             ResultStatus::InvalidCentralStructure,
-            format!("NOW requires an existing valid ProjectCentral: {error}"),
+            format!("NOW requires a readable ProjectCentral manifest: {error}"),
             None,
         )
     })?;
@@ -378,6 +395,70 @@ fn project_context(
         ));
     }
     Ok(project_root)
+}
+
+/// The repair chain for an absent or incomplete ProjectCentral: the reproject
+/// pair stamps only canonical scaffolding that is missing (never writing into
+/// anything that exists), and NOW initialization then opens the field.
+fn repair_hint(project: &str) -> String {
+    format!(
+        "run central.world.reproject.plan with project \"{project}\" to name what is missing, \
+         central.world.reproject.apply to stamp the missing canonical scaffolding (strictly \
+         additive), then projectcentral.now.init to initialize the NOW field"
+    )
+}
+
+fn project_central_absent(action: &str, project: &str, project_central: &Path) -> ActionResult {
+    ActionResult::failure_repairable(
+        Some(action),
+        // Same status as before, so exit codes and status-level consumers are
+        // unchanged; the code is what now tells the two cases apart.
+        ResultStatus::InvalidCentralStructure,
+        "project_central_not_found",
+        format!(
+            "Project \"{project}\" has no ProjectCentral at {}.",
+            project_central.display()
+        ),
+        Some(json!({
+            "project": project,
+            "project_central": project_central.display().to_string(),
+        })),
+        Some(repair_hint(project)),
+    )
+}
+
+fn project_central_incomplete(
+    action: &str,
+    project: &str,
+    project_central: &Path,
+    missing: Vec<String>,
+) -> ActionResult {
+    ActionResult::failure_repairable(
+        Some(action),
+        ResultStatus::InvalidCentralStructure,
+        "project_central_incomplete",
+        format!(
+            "Project \"{project}\" has an incomplete ProjectCentral at {}: missing {}.",
+            project_central.display(),
+            missing.join(", ")
+        ),
+        Some(json!({
+            "project": project,
+            "project_central": project_central.display().to_string(),
+            "missing": missing,
+        })),
+        Some(repair_hint(project)),
+    )
+}
+
+/// True when a failure from [`project_context`] names scaffolding the
+/// reproject stamper can add: an absent or incomplete ProjectCentral. A
+/// malformed manifest is not scaffoldable and never qualifies.
+fn repairable_project_central_failure(failed: &ActionResult) -> bool {
+    matches!(
+        failed.error.as_ref().map(|error| error.code.as_str()),
+        Some("project_central_not_found" | "project_central_incomplete")
+    )
 }
 
 fn unix_seconds() -> u64 {
@@ -1339,18 +1420,55 @@ fn init_action(
     context: &ActionExecutionContext<'_>,
 ) -> ActionResult {
     let action = "projectcentral.now.init";
+    let mut strapped: Option<ReprojectReceipt> = None;
     let project_root = match project_context(action, input, context) {
         Ok(value) => value,
-        Err(result) => return result,
+        Err(failed) if repairable_project_central_failure(&failed) => {
+            // The ProjectCentral is absent or incomplete, which is exactly
+            // what the reproject stamper repairs: it stamps only canonical
+            // scaffolding that is missing and never writes into anything that
+            // exists. Strap, then evaluate the context again.
+            strapped = strap_scaffolding(input, context);
+            match project_context(action, input, context) {
+                Ok(value) => value,
+                // Still not valid: the original classification is the
+                // informative failure, and its repair hint names the manual
+                // chain that surfaces any strap error verbatim.
+                Err(still_broken) => return still_broken,
+            }
+        }
+        Err(failed) => return failed,
     };
-    initialize_now(&project_root)
-        .map(|value| {
-            ActionResult::success(
-                action,
-                serde_json::to_value(value).expect("NOW initialization serializes"),
-            )
-        })
-        .unwrap_or_else(|error| io_failure(action, error))
+    let initialized = initialize_now(&project_root);
+    let mut data = match initialized {
+        Ok(value) => serde_json::to_value(value).expect("NOW initialization serializes"),
+        Err(error) => return io_failure(action, error),
+    };
+    if let Some(receipt) = strapped.filter(|receipt| !receipt.stamped.is_empty()) {
+        if let Some(object) = data.as_object_mut() {
+            object.insert(
+                "strapped".to_owned(),
+                json!(receipt
+                    .stamped
+                    .iter()
+                    .map(|step| step.path.clone())
+                    .collect::<Vec<_>>()),
+            );
+        }
+    }
+    ActionResult::success(action, data)
+}
+
+/// Stamp missing canonical scaffolding through the reproject stamper. Strictly
+/// additive by construction; an error here is not fatal — the caller falls
+/// back to the original classification failure.
+fn strap_scaffolding(
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> Option<ReprojectReceipt> {
+    let project = input.get("project").and_then(Value::as_str)?;
+    let root = resolve_central_root(context.root_options).ok()?;
+    apply_reproject(&root.path, project).ok()
 }
 
 fn return_action(

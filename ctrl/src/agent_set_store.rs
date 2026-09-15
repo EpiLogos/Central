@@ -664,7 +664,7 @@ mod tests {
                     "control-operators",
                     "r1",
                     json!([
-                        {"kind": "agent", "agent_ref": "agent:hermes"}
+                        {"kind": "agent", "agent_ref": "agent/hermes"}
                     ]),
                 ),
                 None,
@@ -699,8 +699,8 @@ mod tests {
                     "control-operators",
                     "r2",
                     json!([
-                        {"kind": "agent", "agent_ref": "agent:hermes"},
-                        {"kind": "agent", "agent_ref": "agent:picker"}
+                        {"kind": "agent", "agent_ref": "agent/hermes"},
+                        {"kind": "agent", "agent_ref": "agent/picker"}
                     ]),
                 ),
                 Some("r1"),

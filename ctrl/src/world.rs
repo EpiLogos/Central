@@ -22,6 +22,13 @@ pub const WORLD_DECLARATION_ABSENT_CODE: &str = "central.world_declaration_absen
 /// distinguishable from the record it corrects.
 pub const AGENT_SET_CORRECTION_SCHEMA: &str = "central.agent-set-correction/v1";
 
+/// Canonical schema for the proposal block an agent-proposed agent-set
+/// carries on original authorship. A generated Action can propose a
+/// composition into the store, but the standing of that proposal stays
+/// visible in the record: `generated-proposal` / `unrecognised` until the
+/// human owner's separate act says otherwise.
+pub const AGENT_SET_PROPOSAL_SCHEMA: &str = "central.agent-set-proposal/v1";
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct WorldRef(pub String);
@@ -150,6 +157,29 @@ impl WorldRecord {
             default_agent_set_ref: None,
         }
     }
+
+    /// Reject a world record whose declared default formation ref is not
+    /// well formed. The check is format-only on purpose: whether the named
+    /// set exists is a resolution-time question, and a world may legitimately
+    /// declare a default ahead of the set's own record in the same store.
+    /// Colon-form is the pasu grammar, not a set id, so it is refused here —
+    /// the same drift rule the agent-set record applies to agent refs.
+    pub(crate) fn validate(&self) -> Result<(), WorldError> {
+        if let Some(default) = self.default_agent_set_ref.as_ref() {
+            let default = default.0.as_str();
+            if default.is_empty()
+                || default.trim() != default
+                || default.contains('\0')
+                || default.contains(':')
+                || default.contains(char::is_whitespace)
+            {
+                return Err(WorldError::InvalidRef(format!(
+                    "default_agent_set_ref must be a plain agent-set id, got {default:?}"
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -159,6 +189,7 @@ pub struct WorldGraph {
 
 impl WorldGraph {
     pub fn insert(&mut self, world: WorldRecord) -> Result<(), WorldError> {
+        world.validate()?;
         if world.parent.as_ref() == Some(&world.world_ref) {
             return Err(WorldError::Cycle(vec![world.world_ref]));
         }
@@ -379,6 +410,92 @@ fn validate_correction_text(field: &str, value: &str) -> Result<(), WorldError> 
     Ok(())
 }
 
+/// Authorship standing of an agent-proposed agent set. A generated Action can
+/// only ever record a generated proposal; the human owner's adoption is a
+/// separate act that no Action performs and no payload can claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentSetProposalAuthorship {
+    GeneratedProposal,
+}
+
+/// Provenance for an agent-proposed agent set on original authorship. Absent
+/// when the human owner authored the set directly, which needs no proposal
+/// stamp. The block keeps the record's standing readable at the store: a
+/// proposed set is declared source, not adopted law, and readers separate the
+/// two instead of guessing from presence alone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSetProposal {
+    pub schema: String,
+    /// Canonical Central Action that authored the proposal.
+    pub origin_action: String,
+    pub authorship: AgentSetProposalAuthorship,
+    /// Standing of the proposal at write time. A generated Action always
+    /// records `unrecognised`; recognition is the owner's separate act.
+    pub recognition: AgentSetProposalRecognition,
+    /// Why the composition was proposed, in the proposer's own words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Recognition standing of a generated agent-set proposal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentSetProposalRecognition {
+    Unrecognised,
+}
+
+impl AgentSetProposal {
+    /// Mint a generated proposal. The reason is optional but, when present,
+    /// must be clean text: a proposal that says why it exists must say it
+    /// plainly, not with padding or control characters.
+    pub fn generated(
+        origin_action: impl Into<String>,
+        reason: Option<String>,
+    ) -> Result<Self, WorldError> {
+        let origin_action = origin_action.into();
+        validate_proposal_text("origin action", &origin_action)?;
+        if let Some(reason) = reason.as_deref() {
+            validate_proposal_text("reason", reason)?;
+        }
+        Ok(Self {
+            schema: AGENT_SET_PROPOSAL_SCHEMA.into(),
+            origin_action,
+            authorship: AgentSetProposalAuthorship::GeneratedProposal,
+            recognition: AgentSetProposalRecognition::Unrecognised,
+            reason,
+        })
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), WorldError> {
+        if self.schema != AGENT_SET_PROPOSAL_SCHEMA {
+            return Err(WorldError::Schema(self.schema.clone()));
+        }
+        if self.authorship != AgentSetProposalAuthorship::GeneratedProposal {
+            return Err(WorldError::InvalidProposal(
+                "proposal authorship".to_owned(),
+            ));
+        }
+        if self.recognition != AgentSetProposalRecognition::Unrecognised {
+            return Err(WorldError::InvalidProposal(
+                "proposal recognition".to_owned(),
+            ));
+        }
+        validate_proposal_text("origin action", &self.origin_action)?;
+        if let Some(reason) = self.reason.as_deref() {
+            validate_proposal_text("reason", reason)?;
+        }
+        Ok(())
+    }
+}
+
+fn validate_proposal_text(field: &str, value: &str) -> Result<(), WorldError> {
+    if value.trim().is_empty() || value != value.trim() || value.contains('\0') {
+        return Err(WorldError::InvalidProposal(field.to_owned()));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentSetRecord {
     pub schema: String,
@@ -401,6 +518,11 @@ pub struct AgentSetRecord {
     /// Provenance for a corrective revision. Absent on original authorship.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub correction: Option<AgentSetCorrection>,
+    /// Provenance for an agent-proposed set on original authorship. Absent
+    /// when the human owner authored the set directly. A record carrying this
+    /// block is declared generated source, not adopted law.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposal: Option<AgentSetProposal>,
 }
 
 impl AgentSetRecord {
@@ -412,22 +534,53 @@ impl AgentSetRecord {
             members: Vec::new(),
             orchestrator_agent_ref: None,
             correction: None,
+            proposal: None,
         }
+    }
+
+    /// Mint a generated proposal: an ordinary record plus the provenance
+    /// block that keeps its standing readable. The proposal is never
+    /// recognised here — recognition is the owner's separate act.
+    pub fn proposed(
+        agent_set_ref: AgentSetRef,
+        revision: impl Into<String>,
+        members: Vec<AgentSetMember>,
+        orchestrator_agent_ref: Option<String>,
+        origin_action: impl Into<String>,
+        reason: Option<String>,
+    ) -> Result<Self, WorldError> {
+        let mut set = Self::new(agent_set_ref, revision);
+        set.members = members;
+        set.orchestrator_agent_ref = orchestrator_agent_ref;
+        set.proposal = Some(AgentSetProposal::generated(origin_action, reason)?);
+        set.validate()?;
+        Ok(set)
     }
 
     /// Reject a record whose declared composition is not well formed. The
     /// orchestrator is checked here rather than inherited from the store's
     /// `validate_ref`, which accepts anything non-blank: a new field must not
-    /// enter through the hole in an existing one.
+    /// enter through the hole in an existing one. Member agent refs are held
+    /// to the same slash-form rule, so the harness-as-agency category error
+    /// cannot re-enter through membership after being driven out of the
+    /// orchestrator field.
     pub(crate) fn validate(&self) -> Result<(), WorldError> {
         if self.schema != AGENT_SET_SCHEMA {
             return Err(WorldError::Schema(self.schema.clone()));
+        }
+        for member in &self.members {
+            if let AgentSetMember::Agent { agent_ref } = member {
+                validate_relation_agent_ref(agent_ref)?;
+            }
         }
         if let Some(orchestrator) = self.orchestrator_agent_ref.as_deref() {
             validate_relation_agent_ref(orchestrator)?;
         }
         if let Some(correction) = self.correction.as_ref() {
             correction.validate()?;
+        }
+        if let Some(proposal) = self.proposal.as_ref() {
+            proposal.validate()?;
         }
         Ok(())
     }
@@ -468,6 +621,12 @@ pub struct ResolvedAgentSet {
     pub resolved_agents: Vec<String>,
     pub unavailable_agents: Vec<String>,
     pub nested_sets: Vec<AgentSetRef>,
+    /// The set's authored orchestrator, carried through so a consumer can
+    /// explain the composition's orchestration relation without re-reading
+    /// the record. Absent when the set names no orchestrator. This is a
+    /// relation, not a grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestrator_agent_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -510,6 +669,7 @@ impl AgentSetRegistry {
             resolved_agents,
             unavailable_agents,
             nested_sets: nested_sets.into_iter().collect(),
+            orchestrator_agent_ref: root.orchestrator_agent_ref.clone(),
         })
     }
 
@@ -590,6 +750,7 @@ pub enum WorldError {
     AgentSetCycle(Vec<AgentSetRef>),
     InvalidReturn { from: WorldRef, toward: WorldRef },
     InvalidCorrection(String),
+    InvalidProposal(String),
 }
 
 impl fmt::Display for WorldError {
@@ -606,6 +767,7 @@ impl fmt::Display for WorldError {
                 write!(f, "{toward} is not an ancestor of {from}")
             }
             Self::InvalidCorrection(field) => write!(f, "invalid correction {field}"),
+            Self::InvalidProposal(field) => write!(f, "invalid proposal {field}"),
         }
     }
 }
@@ -692,27 +854,27 @@ mod tests {
 
         let mut review_set = AgentSetRecord::new(reviewers.clone(), "r1");
         review_set.members.push(AgentSetMember::Agent {
-            agent_ref: "agent:reviewer".into(),
+            agent_ref: "agent/reviewer".into(),
         });
         registry.insert(review_set).unwrap();
 
         let mut dev_set = AgentSetRecord::new(developers.clone(), "d1");
         dev_set.members.push(AgentSetMember::Agent {
-            agent_ref: "agent:builder".into(),
+            agent_ref: "agent/builder".into(),
         });
         dev_set.members.push(AgentSetMember::AgentSet {
             agent_set_ref: reviewers.clone(),
         });
         registry.insert(dev_set).unwrap();
 
-        let available = BTreeSet::from(["agent:builder".to_string()]);
+        let available = BTreeSet::from(["agent/builder".to_string()]);
         let resolved = registry.resolve(&developers, Some(&available)).unwrap();
         assert_eq!(
             resolved.authored_agents,
-            vec!["agent:builder", "agent:reviewer"]
+            vec!["agent/builder", "agent/reviewer"]
         );
-        assert_eq!(resolved.resolved_agents, vec!["agent:builder"]);
-        assert_eq!(resolved.unavailable_agents, vec!["agent:reviewer"]);
+        assert_eq!(resolved.resolved_agents, vec!["agent/builder"]);
+        assert_eq!(resolved.unavailable_agents, vec!["agent/reviewer"]);
         assert_eq!(resolved.revision, "d1");
 
         let mut cyclic_review = AgentSetRecord::new(reviewers.clone(), "r2");
@@ -895,5 +1057,112 @@ mod tests {
                 "{malformed:?} should be refused"
             );
         }
+    }
+
+    #[test]
+    fn member_agent_refs_are_held_to_the_same_slash_form_rule_as_orchestrators() {
+        // The orchestrator rule closed the front door; members were the back
+        // one. `agent:hermes` must not re-enter as an ordinary member after
+        // having been driven out of the orchestrator field.
+        let mut colon = AgentSetRecord::new(set_ref("agent-set:members"), "r1");
+        colon.members.push(AgentSetMember::Agent {
+            agent_ref: "agent:hermes".into(),
+        });
+        let mut registry = AgentSetRegistry::default();
+        assert!(matches!(
+            registry.insert(colon),
+            Err(WorldError::InvalidRef(_))
+        ));
+
+        let mut slash = AgentSetRecord::new(set_ref("agent-set:members"), "r1");
+        slash.members.push(AgentSetMember::Agent {
+            agent_ref: "agent/hermes".into(),
+        });
+        slash.members.push(AgentSetMember::Agent {
+            agent_ref: "agent/oi-guardian-field".into(),
+        });
+        let mut registry = AgentSetRegistry::default();
+        registry.insert(slash).unwrap();
+    }
+
+    #[test]
+    fn world_default_agent_set_ref_refuses_pasu_form_and_blank_ids() {
+        // Format-only: existence is a resolution-time question, so a world may
+        // declare a default ahead of the set record landing in its store.
+        let mut declared = WorldRecord::new(world("control:root"), "w2", None);
+        declared.default_agent_set_ref = Some(AgentSetRef::new("oi-product-guardians").unwrap());
+        let mut graph = WorldGraph::default();
+        graph.insert(declared).unwrap();
+
+        for malformed in ["central:pasu:agent-set:x", " spaced ", "", "with space"] {
+            let mut bad = WorldRecord::new(world("control:root"), "w2", None);
+            bad.default_agent_set_ref = Some(AgentSetRef(malformed.to_owned()));
+            let mut graph = WorldGraph::default();
+            assert!(
+                matches!(graph.insert(bad), Err(WorldError::InvalidRef(_))),
+                "{malformed:?} should be refused as a default formation ref"
+            );
+        }
+    }
+
+    #[test]
+    fn a_proposed_set_carries_generated_standing_and_the_resolution_surfaces_the_orchestrator() {
+        let field = AgentSetRef::new("oi-product-guardians").unwrap();
+        let proposed = AgentSetRecord::proposed(
+            field.clone(),
+            "r1",
+            vec![
+                AgentSetMember::Agent {
+                    agent_ref: "agent/central-guardian".into(),
+                },
+                AgentSetMember::Agent {
+                    agent_ref: "agent/factory-guardian".into(),
+                },
+            ],
+            Some("agent/oi-guardian-field".into()),
+            "central.agent-set.propose",
+            Some("guardian formation proposal".into()),
+        )
+        .unwrap();
+        assert!(proposed.proposal.is_some());
+
+        // The proposal block survives a serialisation round trip and says its
+        // standing on its face: generated, unrecognised, never adopted.
+        let emitted = serde_json::to_value(&proposed).unwrap();
+        assert_eq!(
+            emitted["proposal"]["schema"],
+            "central.agent-set-proposal/v1"
+        );
+        assert_eq!(emitted["proposal"]["authorship"], "generated-proposal");
+        assert_eq!(emitted["proposal"]["recognition"], "unrecognised");
+        let reparsed: AgentSetRecord = serde_json::from_value(emitted).unwrap();
+        reparsed.validate().unwrap();
+
+        // A proposal block that claims recognition is refused: recognition is
+        // the owner's act, and no payload can mint it.
+        let mut promoted = proposed.clone();
+        if let Some(proposal) = promoted.proposal.as_mut() {
+            proposal.recognition = AgentSetProposalRecognition::Unrecognised;
+            proposal.origin_action = " padded ".into();
+        }
+        assert!(matches!(
+            promoted.validate(),
+            Err(WorldError::InvalidProposal(_))
+        ));
+
+        // The orchestration relation is part of what a resolution returns, so
+        // a consumer can explain the composition without re-reading the record.
+        let mut registry = AgentSetRegistry::default();
+        registry.insert(proposed).unwrap();
+        let resolved = registry.resolve(&field, None).unwrap();
+        assert_eq!(
+            resolved.orchestrator_agent_ref.as_deref(),
+            Some("agent/oi-guardian-field")
+        );
+
+        let plain = AgentSetRecord::new(field.clone(), "r1");
+        let mut registry = AgentSetRegistry::default();
+        registry.insert(plain).unwrap();
+        assert!(registry.resolve(&field, None).unwrap().orchestrator_agent_ref.is_none());
     }
 }

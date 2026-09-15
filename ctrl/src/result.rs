@@ -37,6 +37,11 @@ pub struct ActionError {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<Value>,
+    /// The Action (or Action chain) that repairs the condition, when one
+    /// exists. Present only where the product itself carries the repair
+    /// machinery; a failure a human must judge names no mechanical fix.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repair_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -81,6 +86,7 @@ impl ActionResult {
                 code: status.as_str().to_owned(),
                 message: message.into(),
                 details,
+                repair_hint: None,
             }),
         }
     }
@@ -100,6 +106,19 @@ impl ActionResult {
         message: impl Into<String>,
         details: Option<Value>,
     ) -> Self {
+        Self::failure_repairable(action, status, code, message, details, None)
+    }
+
+    /// [`ActionResult::failure_coded`] with a `repair_hint`: the Action chain
+    /// that repairs the reported condition.
+    pub fn failure_repairable(
+        action: Option<&str>,
+        status: ResultStatus,
+        code: &str,
+        message: impl Into<String>,
+        details: Option<Value>,
+        repair_hint: Option<String>,
+    ) -> Self {
         Self {
             ok: false,
             status,
@@ -109,6 +128,7 @@ impl ActionResult {
                 code: code.to_owned(),
                 message: message.into(),
                 details,
+                repair_hint,
             }),
         }
     }

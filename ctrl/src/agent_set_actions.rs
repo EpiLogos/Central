@@ -15,9 +15,13 @@ use crate::agent_set_store::{RelationRecordKind, RelationRecordStore, RelationRe
 use crate::projectcentral::read_project_manifest;
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
-use crate::world::{AgentSetRegistry, WorldError, WorldGraph, WORLD_DECLARATION_ABSENT_CODE};
+use crate::world::{
+    AgentSetMember, AgentSetRecord, AgentSetRef, AgentSetRegistry, WorldError, WorldGraph,
+    WORLD_DECLARATION_ABSENT_CODE,
+};
 
 pub const AGENT_SET_SAVE_ACTION: &str = "central.agent-set.save";
+pub const AGENT_SET_PROPOSE_ACTION: &str = "central.agent-set.propose";
 pub const AGENT_SET_LIST_ACTION: &str = "central.agent-set.list";
 pub const AGENT_SET_READ_ACTION: &str = "central.agent-set.read";
 pub const AGENT_SET_REMOVE_ACTION: &str = "central.agent-set.remove";
@@ -32,6 +36,7 @@ const REF_OUTPUT: &str = "central.relation-record-reading";
 const RECEIPT_OUTPUT: &str = "central.relation-record-write-receipt";
 const RESOLVE_OUTPUT: &str = "central.resolved-agent-set";
 const SOURCES_OUTPUT: &str = "central.effective-world-sources";
+const PROPOSE_OUTPUT: &str = "central.agent-set-proposal";
 
 pub fn register_agent_set_actions(registry: &mut ActionRegistry) {
     // `kind` names the record kind for the descriptor text only; the input
@@ -59,6 +64,26 @@ pub fn register_agent_set_actions(registry: &mut ActionRegistry) {
         required_ports: Vec::new(),
         availability: always_available(),
     }, agent_set_save);
+
+    registry.register(ActionDescriptor {
+        id: AGENT_SET_PROPOSE_ACTION.into(),
+        title: "Propose agent-set".into(),
+        description: "Propose a central.agent-set/v1 composition as generated source: typed members and orchestrator, create-only, stamped generated-proposal/unrecognised. Recognition stays with the human owner.".into(),
+        inputs: {
+            let mut inputs = store_inputs("agent-set");
+            inputs.push(input("ref", "string", true));
+            inputs.push(input("revision", "string", true));
+            inputs.push(input("members", "array<object>", true));
+            inputs.push(input("orchestrator_agent_ref", "string", false));
+            inputs.push(input("reason", "string", false));
+            inputs
+        },
+        output: ActionOutputDefinition { output_type: PROPOSE_OUTPUT.into() },
+        mutation_class: MutationClass::LocallyMutating,
+        preview_supported: true,
+        required_ports: Vec::new(),
+        availability: always_available(),
+    }, agent_set_propose);
 
     registry.register(
         ActionDescriptor {
@@ -548,8 +573,165 @@ fn agent_set_resolve(
     }
 }
 
-fn world_effective_sources(
+/// A member entry is `{kind: "agent", agent_ref}` or
+/// `{kind: "agent-set", agent_set_ref}`. Anything else is refused before a
+/// record exists: a proposal is typed at the door, not repaired afterwards.
+fn parse_proposed_members(action: &str, input: &Value) -> Result<Vec<AgentSetMember>, ActionResult> {
+    let Some(entries) = input.get("members").and_then(Value::as_array) else {
+        return Err(invalid(
+            action,
+            "`members` must be an array of {kind, agent_ref | agent_set_ref} entries".into(),
+        ));
+    };
+    let mut members = Vec::new();
+    for entry in entries {
+        let kind = entry.get("kind").and_then(Value::as_str).unwrap_or_default();
+        match kind {
+            "agent" => {
+                let Some(agent_ref) = entry.get("agent_ref").and_then(Value::as_str) else {
+                    return Err(invalid(
+                        action,
+                        "an agent member requires `agent_ref`".into(),
+                    ));
+                };
+                members.push(AgentSetMember::Agent {
+                    agent_ref: agent_ref.to_owned(),
+                });
+            }
+            "agent-set" => {
+                let Some(agent_set_ref) = entry.get("agent_set_ref").and_then(Value::as_str) else {
+                    return Err(invalid(
+                        action,
+                        "an agent-set member requires `agent_set_ref`".into(),
+                    ));
+                };
+                let nested = AgentSetRef::new(agent_set_ref)
+                    .map_err(|error| invalid(action, error.to_string()))?;
+                members.push(AgentSetMember::AgentSet {
+                    agent_set_ref: nested,
+                });
+            }
+            other => {
+                return Err(invalid(
+                    action,
+                    format!("member kind must be `agent` or `agent-set`, got `{other}`"),
+                ));
+            }
+        }
+    }
+    Ok(members)
+}
+
+/// Propose an agent-set as generated source. Create-only by construction: an
+/// existing composition is owned ground, and correcting it is a revision with
+/// a correction block, never a proposal over it. The stored record carries
+/// the proposal block, so declared source and adopted law stay distinguishable
+/// at every later read.
+fn agent_set_propose(
     _registry: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    let action = AGENT_SET_PROPOSE_ACTION;
+    let store = match resolve_store(action, RelationRecordKind::AgentSet, input, context) {
+        Ok(store) => store,
+        Err(failure) => return failure,
+    };
+    let ref_ = match optional(input, "ref") {
+        Some(ref_) => ref_,
+        None => return invalid(action, "`ref` is required".into()),
+    };
+    let revision = match optional(input, "revision") {
+        Some(revision) => revision,
+        None => return invalid(action, "`revision` is required".into()),
+    };
+    let members = match parse_proposed_members(action, input) {
+        Ok(members) => members,
+        Err(failure) => return failure,
+    };
+    let orchestrator = optional(input, "orchestrator_agent_ref");
+    let reason = optional(input, "reason");
+    let set_ref = match AgentSetRef::new(ref_.clone()) {
+        Ok(set_ref) => set_ref,
+        Err(error) => return invalid(action, error.to_string()),
+    };
+    let record = match AgentSetRecord::proposed(
+        set_ref,
+        revision,
+        members,
+        orchestrator,
+        action,
+        reason,
+    ) {
+        Ok(record) => record,
+        Err(error) => return invalid(action, format!("invalid agent-set proposal: {error}")),
+    };
+    let record_json = match serde_json::to_value(&record) {
+        Ok(value) => value,
+        Err(error) => {
+            return ActionResult::failure(
+                Some(action),
+                ResultStatus::InternalFailure,
+                format!("proposal did not serialize: {error}"),
+                None,
+            );
+        }
+    };
+    store
+        .save(&record_json, None)
+        .map(|receipt| {
+            let mut read_path = json!({
+                "action": AGENT_SET_READ_ACTION,
+                "input": {
+                    "scope": if store.is_project_scope() { "project" } else { "root" },
+                    "ref": record.agent_set_ref.0,
+                },
+            });
+            if let Some(project) = input.get("project").and_then(Value::as_str) {
+                read_path["input"]["project"] = Value::String(project.to_owned());
+            }
+            ActionResult::success(
+                action,
+                json!({
+                    "receipt": receipt,
+                    "record": record_json,
+                    "authorship": "generated-proposal",
+                    "recognition": "unrecognised",
+                    "human_recognised": false,
+                    "read_path": read_path,
+                }),
+            )
+        })
+        .unwrap_or_else(|error| propose_store_failure(action, error, &ref_))
+}
+
+fn propose_store_failure(
+    action: &str,
+    error: RelationRecordStoreError,
+    set_ref: &str,
+) -> ActionResult {
+    match error {
+        RelationRecordStoreError::AlreadyExists { .. } => ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            format!("duplicate agent-set ref: {error}"),
+            Some(json!({
+                "state": "duplicate-agent-set-ref",
+                "ref": set_ref,
+            })),
+        ),
+        RelationRecordStoreError::Io(_) | RelationRecordStoreError::UnsafeRoot(_)
+        | RelationRecordStoreError::UnsafeSource(_) => ActionResult::failure(
+            Some(action),
+            ResultStatus::VerificationFailure,
+            format!("target ground absent or unwritable: {error}"),
+            Some(json!({ "state": "target-ground-absent-or-unwritable" })),
+        ),
+        other => store_failure(action, other),
+    }
+}
+
+fn world_effective_sources(    _registry: &ActionRegistry,
     input: &Value,
     context: &ActionExecutionContext<'_>,
 ) -> ActionResult {
@@ -703,7 +885,7 @@ mod tests {
                     "ref": "control-operators",
                     "revision": "r1",
                     "members": [
-                        {"kind": "agent", "agent_ref": "agent:hermes"},
+                        {"kind": "agent", "agent_ref": "agent/hermes"},
                         {"kind": "agent-set", "agent_set_ref": "field-operators"}
                     ]
                 }
@@ -723,8 +905,8 @@ mod tests {
                     "ref": "field-operators",
                     "revision": "r1",
                     "members": [
-                        {"kind": "agent", "agent_ref": "agent:picker"},
-                        {"kind": "agent", "agent_ref": "agent:gardener"}
+                        {"kind": "agent", "agent_ref": "agent/picker"},
+                        {"kind": "agent", "agent_ref": "agent/gardener"}
                     ]
                 }
             }),
@@ -752,7 +934,7 @@ mod tests {
             &json!({
                 "scope": "root",
                 "ref": "control-operators",
-                "available_agents": ["agent:hermes", "agent:picker"]
+                "available_agents": ["agent/hermes", "agent/picker"]
             }),
             &context,
         );
@@ -760,14 +942,14 @@ mod tests {
         let resolved = &partial.data.as_ref().unwrap();
         assert_eq!(
             resolved["resolved_agents"].as_array().unwrap(),
-            &json!(["agent:hermes", "agent:picker"])
+            &json!(["agent/hermes", "agent/picker"])
                 .as_array()
                 .unwrap()
                 .clone()
         );
         assert_eq!(
             resolved["unavailable_agents"].as_array().unwrap(),
-            &json!(["agent:gardener"]).as_array().unwrap().clone()
+            &json!(["agent/gardener"]).as_array().unwrap().clone()
         );
         let stored = registry.execute(
             AGENT_SET_READ_ACTION,
@@ -843,7 +1025,7 @@ mod tests {
                     "schema": "central.agent-set/v1",
                     "ref": "field-operators",
                     "revision": "r2",
-                    "members": [{"kind": "agent", "agent_ref": "agent:picker"}]
+                    "members": [{"kind": "agent", "agent_ref": "agent/picker"}]
                 }
             }),
             &context,
@@ -1014,7 +1196,7 @@ mod tests {
                     "schema": "central.agent-set/v1",
                     "ref": "garden-crew",
                     "revision": "p1",
-                    "members": [{"kind": "agent", "agent_ref": "agent:gardener"}]
+                    "members": [{"kind": "agent", "agent_ref": "agent/gardener"}]
                 }
             }),
             &context,
@@ -1036,6 +1218,189 @@ mod tests {
                 .unwrap()
                 .len(),
             1
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn agent_set_propose_stamps_generated_standing_and_resolves_with_orchestration() {
+        let root = fixture_root();
+        let registry = registry();
+        let mut options = None;
+        let mut connectors = None;
+        let mut connector_context = None;
+        let context = context(&root, &mut options, &mut connectors, &mut connector_context);
+
+        let proposed = registry.execute(
+            AGENT_SET_PROPOSE_ACTION,
+            &json!({
+                "scope": "root",
+                "ref": "oi-product-guardians",
+                "revision": "r1",
+                "members": [
+                    {"kind": "agent", "agent_ref": "agent/central-guardian"},
+                    {"kind": "agent", "agent_ref": "agent/factory-guardian"}
+                ],
+                "orchestrator_agent_ref": "agent/oi-guardian-field",
+                "reason": "guardian formation proposal for the root world"
+            }),
+            &context,
+        );
+        assert!(proposed.ok, "{proposed:?}");
+        let data = proposed.data.as_ref().unwrap();
+        // The standing is on the result's face and in the stored record.
+        assert_eq!(data["authorship"], "generated-proposal");
+        assert_eq!(data["recognition"], "unrecognised");
+        assert_eq!(data["human_recognised"], false);
+        assert_eq!(data["record"]["proposal"]["origin_action"], AGENT_SET_PROPOSE_ACTION);
+        assert_eq!(data["receipt"]["created"], true);
+        assert_eq!(data["read_path"]["action"], AGENT_SET_READ_ACTION);
+
+        // The read path returns the proposal block, so every later reader can
+        // tell declared generated source from adopted law.
+        let read = registry.execute(
+            AGENT_SET_READ_ACTION,
+            &json!({"scope": "root", "ref": "oi-product-guardians"}),
+            &context,
+        );
+        assert!(read.ok, "{read:?}");
+        assert_eq!(
+            read.data.as_ref().unwrap()["record"]["proposal"]["recognition"],
+            "unrecognised"
+        );
+
+        // The orchestration relation survives into resolution output.
+        let resolved = registry.execute(
+            AGENT_SET_RESOLVE_ACTION,
+            &json!({"scope": "root", "ref": "oi-product-guardians"}),
+            &context,
+        );
+        assert!(resolved.ok, "{resolved:?}");
+        assert_eq!(
+            resolved.data.as_ref().unwrap()["orchestrator_agent_ref"],
+            "agent/oi-guardian-field"
+        );
+
+        // Propose is create-only: the composition now exists, so a second
+        // proposal is refused with an explicit state, never a silent overwrite.
+        let duplicate = registry.execute(
+            AGENT_SET_PROPOSE_ACTION,
+            &json!({
+                "scope": "root",
+                "ref": "oi-product-guardians",
+                "revision": "r2",
+                "members": [{"kind": "agent", "agent_ref": "agent/central-guardian"}]
+            }),
+            &context,
+        );
+        assert!(!duplicate.ok, "{duplicate:?}");
+        let details = duplicate.error.as_ref().unwrap().details.as_ref().unwrap();
+        assert_eq!(details["state"], "duplicate-agent-set-ref");
+        assert_eq!(details["ref"], "oi-product-guardians");
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn agent_set_propose_refuses_harness_refs_in_members_like_every_other_field() {
+        let root = fixture_root();
+        let registry = registry();
+        let mut options = None;
+        let mut connectors = None;
+        let mut connector_context = None;
+        let context = context(&root, &mut options, &mut connectors, &mut connector_context);
+
+        let colon = registry.execute(
+            AGENT_SET_PROPOSE_ACTION,
+            &json!({
+                "scope": "root",
+                "ref": "category-error",
+                "revision": "r1",
+                "members": [{"kind": "agent", "agent_ref": "agent:hermes"}]
+            }),
+            &context,
+        );
+        assert!(!colon.ok, "{colon:?}");
+
+        let listed = registry.execute(
+            AGENT_SET_LIST_ACTION,
+            &json!({"scope": "root"}),
+            &context,
+        );
+        assert_eq!(
+            listed.data.as_ref().unwrap()["records"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0,
+            "a refused proposal must not leave a record behind"
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn world_relations_save_rejects_pasu_form_defaults_and_reads_back_a_declared_default() {
+        let root = fixture_root();
+        let registry = registry();
+        let mut options = None;
+        let mut connectors = None;
+        let mut connector_context = None;
+        let context = context(&root, &mut options, &mut connectors, &mut connector_context);
+
+        let colon_default = registry.execute(
+            WORLD_RELATIONS_SAVE_ACTION,
+            &json!({
+                "scope": "root",
+                "record": {
+                    "schema": "central.world-relations/v1",
+                    "ref": "control:root",
+                    "revision": "w2",
+                    "default_agent_set_ref": "central:pasu:agent-set:oi-product-guardians"
+                }
+            }),
+            &context,
+        );
+        assert!(!colon_default.ok, "{colon_default:?}");
+
+        let declared = registry.execute(
+            WORLD_RELATIONS_SAVE_ACTION,
+            &json!({
+                "scope": "root",
+                "record": {
+                    "schema": "central.world-relations/v1",
+                    "ref": "control:root",
+                    "revision": "w2",
+                    "default_agent_set_ref": "oi-product-guardians"
+                }
+            }),
+            &context,
+        );
+        assert!(declared.ok, "{declared:?}");
+
+        // Declared is exactly declared: the readback emits the named set so a
+        // consumer resolves it through central.agent-set.resolve, and absence
+        // of the field remains the only no-default state.
+        let read = registry.execute(
+            WORLD_RELATIONS_READ_ACTION,
+            &json!({"scope": "root", "ref": "control:root"}),
+            &context,
+        );
+        assert!(read.ok, "{read:?}");
+        assert_eq!(
+            read.data.as_ref().unwrap()["record"]["default_agent_set_ref"],
+            "oi-product-guardians"
+        );
+
+        let resolved = registry.execute(
+            AGENT_SET_RESOLVE_ACTION,
+            &json!({"scope": "root", "ref": "oi-product-guardians"}),
+            &context,
+        );
+        assert!(
+            !resolved.ok,
+            "resolving an absent named set must refuse rather than return an empty formation"
         );
 
         fs::remove_dir_all(root).unwrap();
