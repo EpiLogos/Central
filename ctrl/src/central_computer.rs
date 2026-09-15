@@ -459,7 +459,7 @@ mod tests {
         let mut registry = AgentSetRegistry::default();
         let mut set = AgentSetRecord::new(set_ref.clone(), "set-r1");
         set.members.push(AgentSetMember::Agent {
-            agent_ref: "agent:builder".into(),
+            agent_ref: "agent/builder".into(),
         });
         registry.insert(set).unwrap();
 

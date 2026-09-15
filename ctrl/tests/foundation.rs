@@ -521,6 +521,7 @@ fn action_list_has_human_and_structured_cli_renderings() {
         "central.config.apply",
         "central.config.reset",
         "central.agent-set.save",
+        "central.agent-set.propose",
         "central.agent-set.list",
         "central.agent-set.read",
         "central.agent-set.remove",

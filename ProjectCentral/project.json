@@ -1,6 +1,6 @@
 {
   "human_source": "ProjectCentral/user",
-  "project_id": "project:central",
+  "project_id": "Central",
   "schema": "central.project/v1",
   "wiki": {
     "profile": "okf-wiki/v1",
