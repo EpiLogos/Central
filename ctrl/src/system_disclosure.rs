@@ -46,7 +46,7 @@ pub const SYSTEM_OWNER_REF: &str = "control:root";
 pub const SYSTEM_READING_COMMAND: [&str; 3] = ["ctrl", "system", "--json"];
 pub const SYSTEM_ACTION_ID: &str = "central.system";
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -141,12 +141,12 @@ fn sha256(data: &[u8]) -> [u8; 32] {
     out
 }
 
-fn sha256_hex(data: &[u8]) -> String {
+pub(crate) fn sha256_hex(data: &[u8]) -> String {
     sha256(data).iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Recursively zero every `*_unix_ms` field so the digest is time-independent.
-fn zero_timestamps(value: &mut Value) {
+pub(crate) fn zero_timestamps(value: &mut Value) {
     match value {
         Value::Object(map) => {
             for (key, child) in map.iter_mut() {
@@ -576,7 +576,7 @@ fn settings_axes_for_actions(action_count: usize, observed: u64) -> Value {
 /// unavailable. `available` with an empty degradations list is only produced
 /// when the probe reports a valid, non-mixed root — so the failure branch is
 /// reachable and observable, not papered over.
-fn derive_availability(health: &CentralHealth) -> (String, Option<String>, Vec<Value>) {
+pub(crate) fn derive_availability(health: &CentralHealth) -> (String, Option<String>, Vec<Value>) {
     let mut degradations = Vec::new();
 
     // A missing or non-directory root is the ground failing to exist at all:
