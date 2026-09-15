@@ -467,11 +467,31 @@ fn action_list_has_human_and_structured_cli_renderings() {
     let value: serde_json::Value = serde_json::from_str(&structured.output).unwrap();
     assert_eq!(value["status"], "success");
     let actions = value["data"]["actions"].as_array().unwrap();
+    let mut listed_ids = actions
+        .iter()
+        .filter_map(|action| action["id"].as_str())
+        .collect::<Vec<_>>();
+    let listed_count = listed_ids.len();
+    listed_ids.sort_unstable();
+    listed_ids.dedup();
+    assert_eq!(
+        listed_ids.len(),
+        listed_count,
+        "action.list must not contain duplicate Action ids"
+    );
+    for action in actions {
+        let id = action["id"].as_str().expect("Action id must be a string");
+        let title = action["title"]
+            .as_str()
+            .expect("Action title must be a string");
+        assert!(
+            human.output.contains(&format!("{id}\t{title}")),
+            "human Actions projection is missing {id}"
+        );
+    }
+
     let mut continuous = ActionRegistry::default();
     central_ctrl::continuous_work::register_actions(&mut continuous);
-    // 120 pre-configuration-plane Actions + the five owner-native ones
-    // (contribution, validate, plan, apply, reset).
-    assert_eq!(actions.len(), 125 + continuous.list().len());
     let express = actions
         .iter()
         .find(|action| action["id"] == "agent-profile.express")
@@ -510,6 +530,9 @@ fn action_list_has_human_and_structured_cli_renderings() {
         "central.world-relations.read",
         "central.world-relations.remove",
         "central.world.effective-sources",
+        "central.local-endpoints.inspect",
+        "central.local-endpoints.refresh",
+        "central.local-endpoints.suggest",
         "projectcentral.inspect",
         "projectcentral.doctor",
         "projectcentral.init",
@@ -520,6 +543,9 @@ fn action_list_has_human_and_structured_cli_renderings() {
         "projectcentral.ground.inspect",
         "projectcentral.ground.plan",
         "projectcentral.ground.apply",
+        "projectcentral.local-endpoints.inspect",
+        "projectcentral.local-endpoints.set",
+        "projectcentral.local-endpoints.remove",
         "projectcentral.change.horizon",
         "projectcentral.change.reconcile",
         "projectcentral.change.ack",
