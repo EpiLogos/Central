@@ -129,14 +129,14 @@ pub struct SkillManifest {
 /// One resolved skill scope on disk: the skills directory, its world, and how
 /// paths inside it are addressed.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct SkillLocation {
+pub(crate) struct SkillLocation {
     scope: SkillScope,
     machine: Option<String>,
     project: Option<String>,
     /// The ProjectCentral project id used by the canonical ref grammar.
     project_id: Option<String>,
     /// Absolute skills directory (may not exist — absence is disclosed, not repaired).
-    skills_root: PathBuf,
+    pub(crate) skills_root: PathBuf,
     /// Central-root-relative display path of the skills directory.
     skills_root_display: String,
     /// The world this scope's sources belong to (`control:root` / `project:{id}`).
@@ -279,7 +279,7 @@ fn validate_segment(raw: &str, field: &str) -> io::Result<String> {
     Ok(raw.to_owned())
 }
 
-fn resolve_skill_location(
+pub(crate) fn resolve_skill_location(
     central_root: &Path,
     scope: SkillScope,
     machine: Option<&str>,

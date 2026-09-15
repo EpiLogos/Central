@@ -469,7 +469,9 @@ fn action_list_has_human_and_structured_cli_renderings() {
     let actions = value["data"]["actions"].as_array().unwrap();
     let mut continuous = ActionRegistry::default();
     central_ctrl::continuous_work::register_actions(&mut continuous);
-    assert_eq!(actions.len(), 120 + continuous.list().len());
+    // 120 pre-configuration-plane Actions + the five owner-native ones
+    // (contribution, validate, plan, apply, reset).
+    assert_eq!(actions.len(), 125 + continuous.list().len());
     let express = actions
         .iter()
         .find(|action| action["id"] == "agent-profile.express")
@@ -493,6 +495,11 @@ fn action_list_has_human_and_structured_cli_renderings() {
         .filter_map(|action| action["id"].as_str())
         .collect::<Vec<_>>();
     for id in [
+        "central.config.contribution",
+        "central.config.validate",
+        "central.config.plan",
+        "central.config.apply",
+        "central.config.reset",
         "central.agent-set.save",
         "central.agent-set.list",
         "central.agent-set.read",
