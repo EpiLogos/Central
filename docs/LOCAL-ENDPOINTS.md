@@ -156,8 +156,12 @@ allocation merely because they inspected a moment apart.
 Occupancy is probed on the scope's own interfaces by attempting a
 non-persistent TCP bind on each of the scope's addresses (loopback families
 for `localhost`, discovered tailnet addresses for `tailnet`, wildcard binds
-for `any`). The first `AddrInUse` reports `occupied`; addresses that cannot
-exist on this machine are skipped; any other bind failure reports `unknown`.
+for `any`). The probe binds strictly — no `SO_REUSEADDR`/`SO_REUSEPORT` — so
+`AddrInUse` means a real address conflict on every platform; a lax bind would
+let a wildcard probe report `available` while a specific loopback binding
+held the port on macOS. The first `AddrInUse` reports `occupied`; addresses
+that cannot exist on this machine are skipped; any other bind failure reports
+`unknown`.
 The result is one of:
 
 - `available` — Central could bind every probed address of the scope during
