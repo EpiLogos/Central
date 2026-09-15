@@ -15,10 +15,21 @@ use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const PROJECT_LOCAL_ENDPOINTS_SOURCE: &str = "ProjectCentral/local-endpoints.json";
-pub const PROJECT_LOCAL_ENDPOINTS_SCHEMA: &str = "central.project.local-endpoints/v1";
+pub const PROJECT_LOCAL_ENDPOINTS_SCHEMA: &str = "central.project.local-endpoints/v2";
+/// v1 sources stay readable for compatibility: their scope vocabulary is
+/// fixed to `localhost`, and the first mutation normalises them onto v2.
+pub const PROJECT_LOCAL_ENDPOINTS_SCHEMA_V1: &str = "central.project.local-endpoints/v1";
 pub const PROJECT_LOCAL_ENDPOINTS_INSPECTION_SCHEMA: &str =
-    "central.project.local-endpoints-inspection/v1";
-pub const CENTRAL_LOCAL_ENDPOINTS_SCHEMA: &str = "central.local-endpoint-registry/v1";
+    "central.project.local-endpoints-inspection/v2";
+pub const CENTRAL_LOCAL_ENDPOINTS_SCHEMA: &str = "central.local-endpoint-registry/v2";
+/// Loopback only (`127.0.0.1`, `::1`). The v1 scope and the default.
+pub const SCOPE_LOCALHOST: &str = "localhost";
+/// The machine's tailnet interfaces: Tailscale IPv4 CGNAT `100.64.0.0/10`
+/// and Tailscale IPv6 ULA `fd7a:115c:a1e0::/48` addresses.
+pub const SCOPE_TAILNET: &str = "tailnet";
+/// Wildcard binding (`0.0.0.0`, `::`), reachable on every interface.
+pub const SCOPE_ANY: &str = "any";
+pub const LOCAL_ENDPOINT_SCOPES: [&str; 3] = [SCOPE_LOCALHOST, SCOPE_TAILNET, SCOPE_ANY];
 pub const CENTRAL_LOCAL_ENDPOINTS_CACHE: &str = ".central/local-endpoints.json";
 const CENTRAL_LOCAL_ENDPOINTS_LOCK: &str = ".central/local-endpoints.lock";
 const LOCK_STALE_SECONDS: u64 = 30;
@@ -94,8 +105,12 @@ pub struct LocalEndpointValidation {
 impl ProjectLocalEndpoints {
     pub fn validate(&self) -> LocalEndpointValidation {
         let mut errors = Vec::new();
-        if self.schema != PROJECT_LOCAL_ENDPOINTS_SCHEMA {
-            errors.push(format!("schema must be {PROJECT_LOCAL_ENDPOINTS_SCHEMA}"));
+        if self.schema != PROJECT_LOCAL_ENDPOINTS_SCHEMA
+            && self.schema != PROJECT_LOCAL_ENDPOINTS_SCHEMA_V1
+        {
+            errors.push(format!(
+                "schema must be {PROJECT_LOCAL_ENDPOINTS_SCHEMA} (or {PROJECT_LOCAL_ENDPOINTS_SCHEMA_V1}, read for compatibility)"
+            ));
         }
 
         let mut ids = BTreeSet::new();
@@ -116,10 +131,19 @@ impl ProjectLocalEndpoints {
                 ));
             }
             if endpoint.protocol != "tcp" {
-                errors.push(format!("{prefix}.protocol must be tcp in v1"));
+                errors.push(format!("{prefix}.protocol must be tcp"));
             }
-            if endpoint.scope != "localhost" {
-                errors.push(format!("{prefix}.scope must be localhost in v1"));
+            if self.schema == PROJECT_LOCAL_ENDPOINTS_SCHEMA_V1 {
+                if endpoint.scope != SCOPE_LOCALHOST {
+                    errors.push(format!(
+                        "{prefix}.scope must be localhost in {PROJECT_LOCAL_ENDPOINTS_SCHEMA_V1}; declare interface scopes under {PROJECT_LOCAL_ENDPOINTS_SCHEMA}"
+                    ));
+                }
+            } else if !LOCAL_ENDPOINT_SCOPES.contains(&endpoint.scope.as_str()) {
+                errors.push(format!(
+                    "{prefix}.scope must be one of {}",
+                    LOCAL_ENDPOINT_SCOPES.join(", ")
+                ));
             }
             if endpoint.port == 0 {
                 errors.push(format!("{prefix}.port must be in 1..=65535"));
@@ -245,13 +269,29 @@ pub struct CentralLocalEndpointRegistry {
     pub source_errors: Vec<LocalEndpointSourceError>,
 }
 
+/// One scope's observation inside a suggestion payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LocalEndpointScopeObservation {
+    pub scope: String,
+    pub addresses: Vec<String>,
+    pub status: LocalEndpointOccupancy,
+    pub detail: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LocalEndpointSuggestion {
     pub protocol: String,
+    /// The default declaration scope for the suggested port. The port is
+    /// verified bindable on every scope listed in `free_in`.
     pub scope: String,
     pub port: u16,
     pub range_start: u16,
     pub range_end: u16,
+    /// Scopes where the port was probed and found bindable.
+    pub free_in: Vec<LocalEndpointScopeObservation>,
+    /// Scopes this machine cannot observe (no interface address), for which
+    /// no occupancy claim is made.
+    pub unverified_in: Vec<LocalEndpointScopeObservation>,
 }
 
 fn now_unix_seconds() -> u64 {
@@ -295,31 +335,138 @@ fn write_project_local_endpoints(
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let mut bytes = serde_json::to_vec_pretty(declaration)
+    // Any mutation writes the current schema; v1 sources normalise onto v2,
+    // which is a strict vocabulary superset with the same localhost default.
+    let mut declaration = declaration.clone();
+    declaration.schema = PROJECT_LOCAL_ENDPOINTS_SCHEMA.to_owned();
+    let mut bytes = serde_json::to_vec_pretty(&declaration)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     bytes.push(b'\n');
     fs::write(path, bytes)
 }
 
-pub fn probe_local_tcp_port(port: u16) -> LocalEndpointObservation {
-    if port == 0 {
+fn loopback_addresses(port: u16) -> Vec<SocketAddr> {
+    vec![
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port),
+        SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), port),
+    ]
+}
+
+fn wildcard_addresses(port: u16) -> Vec<SocketAddr> {
+    vec![
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port),
+        SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), port),
+    ]
+}
+
+/// Tailscale assigns tailnet addresses from its own IPv4 CGNAT block and its
+/// own IPv6 ULA block; any other interface address is not tailnet.
+fn is_tailnet_address(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => {
+            let octets = address.octets();
+            octets[0] == 100 && (64..=127).contains(&octets[1]) // 100.64.0.0/10
+        }
+        IpAddr::V6(address) => {
+            let segments = address.segments();
+            segments[0] == 0xfd7a && segments[1] == 0x115c && segments[2] == 0xa1e0
+            // fd7a:115c:a1e0::/48
+        }
+    }
+}
+
+/// Enumerate the machine's interface addresses (`ip -o addr show` on Linux,
+/// `ifconfig -a` on macOS). An empty or failed discovery is honest: callers
+/// report `unknown` rather than inventing occupancy.
+pub fn discover_interface_addresses() -> Vec<IpAddr> {
+    let Some(listing) = interface_address_listing() else {
+        return Vec::new();
+    };
+    let mut addresses = BTreeSet::new();
+    let mut tokens = listing.split_whitespace().peekable();
+    while let Some(token) = tokens.next() {
+        if token != "inet" && token != "inet6" {
+            continue;
+        }
+        if let Some(value) = tokens.peek() {
+            // `ip` writes `10.0.0.1/24`; `ifconfig` may suffix `%interface`.
+            let candidate = value.split('%').next().unwrap_or(value);
+            let candidate = candidate.split('/').next().unwrap_or(candidate);
+            if let Ok(address) = candidate.parse::<IpAddr>() {
+                addresses.insert(address);
+            }
+        }
+    }
+    addresses.into_iter().collect()
+}
+
+#[cfg(target_os = "linux")]
+fn interface_address_listing() -> Option<String> {
+    let output = std::process::Command::new("ip")
+        .args(["-o", "addr", "show"])
+        .output()
+        .ok()?;
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+#[cfg(target_os = "macos")]
+fn interface_address_listing() -> Option<String> {
+    let output = std::process::Command::new("ifconfig")
+        .arg("-a")
+        .output()
+        .ok()?;
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn interface_address_listing() -> Option<String> {
+    None
+}
+
+/// The machine's tailnet addresses, discovered from the live interfaces.
+pub fn tailnet_interface_addresses() -> Vec<IpAddr> {
+    discover_interface_addresses()
+        .into_iter()
+        .filter(|address| is_tailnet_address(*address))
+        .collect()
+}
+
+fn scope_addresses_with_tailnet(scope: &str, port: u16, tailnet: &[IpAddr]) -> Vec<SocketAddr> {
+    match scope {
+        SCOPE_LOCALHOST => loopback_addresses(port),
+        SCOPE_TAILNET => tailnet
+            .iter()
+            .map(|address| SocketAddr::new(*address, port))
+            .collect(),
+        SCOPE_ANY => wildcard_addresses(port),
+        _ => Vec::new(),
+    }
+}
+
+fn scope_addresses(scope: &str, port: u16) -> Vec<SocketAddr> {
+    scope_addresses_with_tailnet(scope, port, &tailnet_interface_addresses())
+}
+
+/// Probe a port by briefly binding each address and dropping the listener.
+/// The first `AddrInUse` reports `occupied`; addresses that cannot exist on
+/// this machine are skipped; anything else is honest `unknown`.
+pub fn probe_bound_addresses(label: &str, addresses: &[SocketAddr]) -> LocalEndpointObservation {
+    if addresses.is_empty() {
         return LocalEndpointObservation {
             status: LocalEndpointOccupancy::Unknown,
-            detail: "port 0 is not a stable endpoint allocation".into(),
+            detail: format!(
+                "{label} scope has no observable interface address on this machine; occupancy cannot be established"
+            ),
         };
     }
 
-    let addresses = [
-        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port),
-        SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), port),
-    ];
-    let mut available_family = false;
+    let mut bindable = false;
     let mut errors = Vec::new();
 
     for address in addresses {
-        match TcpListener::bind(address) {
+        match TcpListener::bind(*address) {
             Ok(listener) => {
-                available_family = true;
+                bindable = true;
                 drop(listener);
             }
             Err(error) if error.kind() == io::ErrorKind::AddrInUse => {
@@ -334,7 +481,7 @@ pub fn probe_local_tcp_port(port: u16) -> LocalEndpointObservation {
                     io::ErrorKind::AddrNotAvailable | io::ErrorKind::Unsupported
                 ) =>
             {
-                // A machine may not expose both loopback address families.
+                // A machine may not expose every probed address family.
             }
             Err(error) => errors.push(format!("{address}: {error}")),
         }
@@ -345,17 +492,49 @@ pub fn probe_local_tcp_port(port: u16) -> LocalEndpointObservation {
             status: LocalEndpointOccupancy::Unknown,
             detail: errors.join("; "),
         }
-    } else if available_family {
+    } else if bindable {
         LocalEndpointObservation {
             status: LocalEndpointOccupancy::Available,
-            detail: "localhost TCP port is bindable on the available loopback families".into(),
+            detail: format!("{label} TCP port is bindable on all probed addresses"),
         }
     } else {
         LocalEndpointObservation {
             status: LocalEndpointOccupancy::Unknown,
-            detail: "no supported localhost address family was available for probing".into(),
+            detail: "no supported address family was available for probing".into(),
         }
     }
+}
+
+pub fn probe_local_tcp_port(port: u16) -> LocalEndpointObservation {
+    if port == 0 {
+        return LocalEndpointObservation {
+            status: LocalEndpointOccupancy::Unknown,
+            detail: "port 0 is not a stable endpoint allocation".into(),
+        };
+    }
+    probe_bound_addresses(SCOPE_LOCALHOST, &loopback_addresses(port))
+}
+
+/// Probe the scope's actual interfaces for a port: loopback families for
+/// `localhost`, discovered tailnet addresses for `tailnet`, wildcard binds
+/// for `any`.
+pub fn probe_scoped_tcp_port(scope: &str, port: u16) -> LocalEndpointObservation {
+    if !LOCAL_ENDPOINT_SCOPES.contains(&scope) {
+        return LocalEndpointObservation {
+            status: LocalEndpointOccupancy::Unknown,
+            detail: format!(
+                "{scope} is not a known endpoint scope; expected one of {}",
+                LOCAL_ENDPOINT_SCOPES.join(", ")
+            ),
+        };
+    }
+    if port == 0 {
+        return LocalEndpointObservation {
+            status: LocalEndpointOccupancy::Unknown,
+            detail: "port 0 is not a stable endpoint allocation".into(),
+        };
+    }
+    probe_bound_addresses(scope, &scope_addresses(scope, port))
 }
 
 pub fn inspect_project_local_endpoints(
@@ -399,7 +578,7 @@ pub fn inspect_project_local_endpoints(
         .endpoints
         .into_iter()
         .map(|declaration| ObservedProjectLocalEndpoint {
-            observation: probe_local_tcp_port(declaration.port),
+            observation: probe_scoped_tcp_port(&declaration.scope, declaration.port),
             declaration,
         })
         .collect();
@@ -422,6 +601,9 @@ pub fn set_project_local_endpoint(
 ) -> io::Result<LocalEndpointMutation> {
     ensure_projectcentral(project_root)?;
     let mut declaration = read_project_local_endpoints(project_root)?;
+    // Mutations write the current schema; v1 sources normalise onto v2 so a
+    // non-loopback scope can join a file that predated the scope vocabulary.
+    declaration.schema = PROJECT_LOCAL_ENDPOINTS_SCHEMA.to_owned();
     let validation = declaration.validate();
     if !validation.valid {
         return Err(io::Error::new(
@@ -521,9 +703,10 @@ pub fn inspect_central_local_endpoints(
     central_root: &Path,
 ) -> io::Result<CentralLocalEndpointRegistry> {
     let work_root = central_root.join("Work");
+    let tailnet = tailnet_interface_addresses();
     let mut source_errors = Vec::new();
     let mut endpoints = Vec::new();
-    let mut observation_cache: BTreeMap<u16, LocalEndpointObservation> = BTreeMap::new();
+    let mut observation_cache: BTreeMap<(String, u16), LocalEndpointObservation> = BTreeMap::new();
 
     if work_root.is_dir() {
         let mut projects = fs::read_dir(&work_root)?.collect::<Result<Vec<_>, _>>()?;
@@ -587,8 +770,12 @@ pub fn inspect_central_local_endpoints(
 
             for endpoint in declaration.endpoints {
                 let observation = observation_cache
-                    .entry(endpoint.port)
-                    .or_insert_with(|| probe_local_tcp_port(endpoint.port))
+                    .entry((endpoint.scope.clone(), endpoint.port))
+                    .or_insert_with(|| {
+                        let addresses =
+                            scope_addresses_with_tailnet(&endpoint.scope, endpoint.port, &tailnet);
+                        probe_bound_addresses(&endpoint.scope, &addresses)
+                    })
                     .clone();
                 endpoints.push(CentralLocalEndpointReading {
                     project: project.clone(),
@@ -693,26 +880,73 @@ pub fn suggest_central_local_endpoint(
         .iter()
         .map(|endpoint| endpoint.declaration.port)
         .collect::<BTreeSet<_>>();
+    let tailnet = tailnet_interface_addresses();
 
     for port in range_start..=range_end {
         if declared.contains(&port) {
             continue;
         }
-        if probe_local_tcp_port(port).status == LocalEndpointOccupancy::Available {
-            return Ok(LocalEndpointSuggestion {
-                protocol: "tcp".into(),
-                scope: "localhost".into(),
-                port,
-                range_start,
-                range_end,
-            });
+        // A wildcard bind is the cheapest honest rejection: it fails whenever
+        // the port is held on any interface this machine exposes, so a port
+        // occupied in any observable scope is never suggested.
+        let wildcard = probe_bound_addresses(SCOPE_ANY, &wildcard_addresses(port));
+        if wildcard.status != LocalEndpointOccupancy::Available {
+            continue;
         }
+
+        let mut free_in = Vec::new();
+        let mut unverified_in = Vec::new();
+        let mut blocked = false;
+        for scope in LOCAL_ENDPOINT_SCOPES {
+            let addresses = scope_addresses_with_tailnet(scope, port, &tailnet);
+            if addresses.is_empty() {
+                unverified_in.push(LocalEndpointScopeObservation {
+                    scope: scope.to_owned(),
+                    addresses: Vec::new(),
+                    status: LocalEndpointOccupancy::Unknown,
+                    detail: format!(
+                        "{scope} scope has no observable interface address on this machine; no occupancy claim is made"
+                    ),
+                });
+                continue;
+            }
+            let observation = probe_bound_addresses(scope, &addresses);
+            match observation.status {
+                LocalEndpointOccupancy::Available => {
+                    free_in.push(LocalEndpointScopeObservation {
+                        scope: scope.to_owned(),
+                        addresses: addresses.iter().map(|address| address.to_string()).collect(),
+                        status: observation.status,
+                        detail: observation.detail,
+                    });
+                }
+                // Occupied here would be a race with the wildcard probe, and
+                // an unknown means the port cannot be verified; both skip.
+                _ => {
+                    blocked = true;
+                    break;
+                }
+            }
+        }
+        if blocked {
+            continue;
+        }
+
+        return Ok(LocalEndpointSuggestion {
+            protocol: "tcp".into(),
+            scope: SCOPE_LOCALHOST.into(),
+            port,
+            range_start,
+            range_end,
+            free_in,
+            unverified_in,
+        });
     }
 
     Err(io::Error::new(
         io::ErrorKind::NotFound,
         format!(
-            "no undeclared and currently available localhost TCP port found in {range_start}..={range_end}"
+            "no undeclared and currently bindable TCP port found in {range_start}..={range_end} across the observable endpoint scopes"
         ),
     ))
 }
@@ -975,8 +1209,24 @@ fn project_set_action(
         Ok(value) => value,
         Err(result) => return result,
     };
+    let scope = match optional_text(input, "scope") {
+        Some(scope) => scope,
+        None => SCOPE_LOCALHOST.to_owned(),
+    };
+    if !LOCAL_ENDPOINT_SCOPES.contains(&scope.as_str()) {
+        return ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            format!(
+                "{action} requires scope to be one of {}.",
+                LOCAL_ENDPOINT_SCOPES.join(", ")
+            ),
+            None,
+        );
+    }
     let allow_conflict = optional_bool(input, "allow_conflict");
     let mut endpoint = LocalEndpointDeclaration::localhost_tcp(id.clone(), kind, port);
+    endpoint.scope = scope;
     endpoint.service = optional_text(input, "service");
     endpoint.description = optional_text(input, "description");
 
@@ -1004,16 +1254,36 @@ fn project_set_action(
             endpoint_id: reading.declaration.id.clone(),
         })
         .collect::<Vec<_>>();
+    // The same port under a different scope is a coexistence, not a
+    // collision; it stays visible in the success payload.
+    let same_port_other_scopes = registry
+        .endpoints
+        .iter()
+        .filter(|reading| {
+            reading.declaration.protocol == endpoint.protocol
+                && reading.declaration.port == endpoint.port
+                && reading.declaration.scope != endpoint.scope
+                && !(reading.project == project && reading.declaration.id == endpoint.id)
+        })
+        .map(|reading| {
+            json!({
+                "scope": reading.declaration.scope,
+                "project": reading.project,
+                "endpoint_id": reading.declaration.id,
+            })
+        })
+        .collect::<Vec<_>>();
     if !conflicts.is_empty() && !allow_conflict {
         return ActionResult::failure(
             Some(action),
             ResultStatus::VerificationFailure,
             format!(
-                "localhost TCP port {port} is already declared; set allow_conflict=true only for intentional overlap"
+                "{} port {port} scoped {} is already declared; set allow_conflict=true only for intentional overlap",
+                endpoint.protocol, endpoint.scope
             ),
             Some(json!({
-                "protocol": "tcp",
-                "scope": "localhost",
+                "protocol": endpoint.protocol,
+                "scope": endpoint.scope,
                 "port": port,
                 "conflicts": conflicts
             })),
@@ -1022,14 +1292,19 @@ fn project_set_action(
 
     match set_project_local_endpoint(&project_root, endpoint) {
         Ok(mutation) => match inspect_project_local_endpoints(&project_root) {
-            Ok(inspection) => ActionResult::success(
-                action,
-                json!({
+            Ok(inspection) => {
+                let mut payload = json!({
                     "mutation": mutation,
                     "inspection": inspection,
-                    "cross_project_conflicts": conflicts
-                }),
-            ),
+                    "cross_project_conflicts": conflicts,
+                });
+                if !same_port_other_scopes.is_empty() {
+                    payload["same_port_other_scopes"] = json!(same_port_other_scopes);
+                    payload["same_port_other_scopes_note"] =
+                        json!("the same protocol/port under a different scope is not a collision");
+                }
+                ActionResult::success(action, payload)
+            }
             Err(error) => io_failure(action, error),
         },
         Err(error) => io_failure(action, error),
@@ -1150,6 +1425,8 @@ pub fn register_local_endpoint_actions(registry: &mut ActionRegistry) {
     let id = action_input("id", "string", true);
     let kind = action_input("kind", "string", true);
     let port = action_input("port", "integer", true);
+    let mut scope = action_input("scope", "string", false);
+    scope.choices = Some(LOCAL_ENDPOINT_SCOPES.iter().map(|value| value.to_string()).collect());
     let service = action_input("service", "string", false);
     let description = action_input("description", "string", false);
     let allow_conflict = action_input("allow_conflict", "boolean", false);
@@ -1159,7 +1436,7 @@ pub fn register_local_endpoint_actions(registry: &mut ActionRegistry) {
             descriptor(
                 "projectcentral.local-endpoints.inspect",
                 "Inspect Project local endpoints",
-                "Read one ProjectCentral localhost endpoint declaration and report current machine occupancy without mutating the declaration.",
+                "Read one ProjectCentral endpoint declaration and report current machine occupancy for each declared scope (localhost, tailnet, or any) without mutating the declaration.",
                 MutationClass::ReadOnly,
                 "project-local-endpoint-inspection",
                 vec![project.clone()],
@@ -1171,7 +1448,7 @@ pub fn register_local_endpoint_actions(registry: &mut ActionRegistry) {
             descriptor(
                 "projectcentral.local-endpoints.set",
                 "Set Project local endpoint",
-                "Create or replace one Project-local localhost TCP endpoint declaration after re-checking the Central-wide allocation set.",
+                "Create or replace one Project-local TCP endpoint declaration scoped to localhost (default), the tailnet interfaces, or the wildcard binding, after re-checking the Central-wide allocation set.",
                 MutationClass::LocallyMutating,
                 "project-local-endpoint-mutation",
                 vec![
@@ -1179,6 +1456,7 @@ pub fn register_local_endpoint_actions(registry: &mut ActionRegistry) {
                     id.clone(),
                     kind,
                     port,
+                    scope,
                     service,
                     description,
                     allow_conflict,
@@ -1201,7 +1479,7 @@ pub fn register_local_endpoint_actions(registry: &mut ActionRegistry) {
             descriptor(
                 "central.local-endpoints.inspect",
                 "Inspect Central local endpoints",
-                "Aggregate ProjectCentral localhost endpoint declarations across Work, report declared collisions, and observe current machine occupancy.",
+                "Aggregate ProjectCentral endpoint declarations across Work, report declared collisions within the same scope, and observe current machine occupancy per scope.",
                 MutationClass::ReadOnly,
                 "central-local-endpoint-registry",
                 vec![],
@@ -1223,7 +1501,7 @@ pub fn register_local_endpoint_actions(registry: &mut ActionRegistry) {
             descriptor(
                 "central.local-endpoints.suggest",
                 "Suggest available local endpoint",
-                "Find the first localhost TCP port in a bounded range that is neither declared by a Project nor currently occupied.",
+                "Find the first TCP port in a bounded range that is neither declared by a Project nor occupied on any observable interface scope, and report the scopes where the port is free.",
                 MutationClass::ReadOnly,
                 "central-local-endpoint-suggestion",
                 vec![
@@ -1355,5 +1633,199 @@ mod tests {
         let result = suggest_central_local_endpoint(&central, candidate, candidate);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn v2_scopes_validate_and_unknown_scope_is_rejected() {
+        let mut declaration = ProjectLocalEndpoints::default();
+        declaration
+            .endpoints
+            .push(LocalEndpointDeclaration::localhost_tcp("web", "http", 45140));
+        let mut tailnet_endpoint =
+            LocalEndpointDeclaration::localhost_tcp("stdb", "database", 45141);
+        tailnet_endpoint.scope = SCOPE_TAILNET.into();
+        let mut any_endpoint = LocalEndpointDeclaration::localhost_tcp("mesh", "http", 45142);
+        any_endpoint.scope = SCOPE_ANY.into();
+        declaration.endpoints.push(tailnet_endpoint);
+        declaration.endpoints.push(any_endpoint);
+        let validation = declaration.validate();
+        assert!(validation.valid, "{:?}", validation.errors);
+
+        let mut bogus = LocalEndpointDeclaration::localhost_tcp("bad", "http", 45143);
+        bogus.scope = "multicast".into();
+        declaration.endpoints.push(bogus);
+        let validation = declaration.validate();
+        assert!(!validation.valid);
+        assert!(validation
+            .errors
+            .iter()
+            .any(|error| error.contains("scope must be one of")));
+    }
+
+    #[test]
+    fn v1_declaration_keeps_localhost_vocabulary() {
+        let raw = r#"{"schema":"central.project.local-endpoints/v1","endpoints":[{"id":"db","kind":"database","scope":"tailnet","port":45150}]}"#;
+        let parsed: ProjectLocalEndpoints = serde_json::from_str(raw).unwrap();
+        let validation = parsed.validate();
+        assert!(!validation.valid);
+        assert!(validation
+            .errors
+            .iter()
+            .any(|error| error.contains("must be localhost")));
+
+        let raw = r#"{"schema":"central.project.local-endpoints/v1","endpoints":[{"id":"db","kind":"database","port":45151}]}"#;
+        let parsed: ProjectLocalEndpoints = serde_json::from_str(raw).unwrap();
+        assert_eq!(parsed.endpoints[0].scope, SCOPE_LOCALHOST);
+        assert!(parsed.validate().valid);
+    }
+
+    #[test]
+    fn v1_source_upgrades_to_v2_schema_when_mutated() {
+        let temp = tempdir().unwrap();
+        let central = temp.path().join("Central");
+        let project = establish_project(&central, "example", "example/project");
+        let raw = r#"{"schema":"central.project.local-endpoints/v1","endpoints":[{"id":"db","kind":"database","port":45160}]}"#;
+        fs::write(project.join(PROJECT_LOCAL_ENDPOINTS_SOURCE), raw).unwrap();
+
+        set_project_local_endpoint(
+            &project,
+            LocalEndpointDeclaration::localhost_tcp("web", "http", 45161),
+        )
+        .unwrap();
+
+        let written = fs::read_to_string(project.join(PROJECT_LOCAL_ENDPOINTS_SOURCE)).unwrap();
+        assert!(written.contains(PROJECT_LOCAL_ENDPOINTS_SCHEMA));
+        let reread = read_project_local_endpoints(&project).unwrap();
+        assert_eq!(reread.endpoints.len(), 2);
+        assert!(reread
+            .endpoints
+            .iter()
+            .all(|endpoint| endpoint.scope == SCOPE_LOCALHOST));
+    }
+
+    #[test]
+    fn cross_scope_declarations_are_not_collisions() {
+        let temp = tempdir().unwrap();
+        let central = temp.path().join("Central");
+        let one = establish_project(&central, "one", "example/one");
+        let two = establish_project(&central, "two", "example/two");
+        set_project_local_endpoint(
+            &one,
+            LocalEndpointDeclaration::localhost_tcp("web", "http", 45170),
+        )
+        .unwrap();
+        let mut tailnet_endpoint =
+            LocalEndpointDeclaration::localhost_tcp("stdb", "database", 45170);
+        tailnet_endpoint.scope = SCOPE_TAILNET.into();
+        set_project_local_endpoint(&two, tailnet_endpoint).unwrap();
+
+        let registry = inspect_central_local_endpoints(&central).unwrap();
+        assert_eq!(registry.endpoints.len(), 2);
+        assert!(registry.collisions.is_empty());
+        assert!(registry
+            .endpoints
+            .iter()
+            .all(|endpoint| !endpoint.declared_conflict));
+    }
+
+    #[test]
+    fn occupancy_follows_the_declaration_scope() {
+        let temp = tempdir().unwrap();
+        let central = temp.path().join("Central");
+        let one = establish_project(&central, "one", "example/one");
+        let two = establish_project(&central, "two", "example/two");
+        let three = establish_project(&central, "three", "example/three");
+
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        set_project_local_endpoint(
+            &one,
+            LocalEndpointDeclaration::localhost_tcp("web", "http", port),
+        )
+        .unwrap();
+        let mut tailnet_endpoint =
+            LocalEndpointDeclaration::localhost_tcp("stdb", "database", port);
+        tailnet_endpoint.scope = SCOPE_TAILNET.into();
+        set_project_local_endpoint(&two, tailnet_endpoint).unwrap();
+        let mut any_endpoint = LocalEndpointDeclaration::localhost_tcp("mesh", "http", port);
+        any_endpoint.scope = SCOPE_ANY.into();
+        set_project_local_endpoint(&three, any_endpoint).unwrap();
+
+        let registry = inspect_central_local_endpoints(&central).unwrap();
+        assert_eq!(registry.endpoints.len(), 3);
+        for endpoint in &registry.endpoints {
+            match endpoint.declaration.scope.as_str() {
+                SCOPE_LOCALHOST => assert_eq!(
+                    endpoint.observation.status,
+                    LocalEndpointOccupancy::Occupied
+                ),
+                SCOPE_TAILNET => {
+                    // Free where a tailnet interface exists and probed, honest
+                    // `unknown` where the machine has no tailnet address.
+                    assert_ne!(
+                        endpoint.observation.status,
+                        LocalEndpointOccupancy::Occupied
+                    );
+                }
+                SCOPE_ANY => assert_eq!(
+                    endpoint.observation.status,
+                    LocalEndpointOccupancy::Occupied
+                ),
+                other => panic!("unexpected scope {other}"),
+            }
+        }
+    }
+
+    #[test]
+    fn tailnet_discovery_and_range_checks() {
+        assert!(discover_interface_addresses().contains(&IpAddr::V4(Ipv4Addr::LOCALHOST)));
+        assert!(is_tailnet_address("100.92.62.101".parse().unwrap()));
+        assert!(is_tailnet_address("100.64.0.1".parse().unwrap()));
+        assert!(is_tailnet_address("100.127.255.254".parse().unwrap()));
+        assert!(!is_tailnet_address("100.63.0.1".parse().unwrap()));
+        assert!(!is_tailnet_address("100.128.0.1".parse().unwrap()));
+        assert!(!is_tailnet_address("192.168.4.90".parse().unwrap()));
+        assert!(is_tailnet_address("fd7a:115c:a1e0::1".parse().unwrap()));
+        assert!(!is_tailnet_address("fd7a:115c:a1e1::1".parse().unwrap()));
+        assert!(!is_tailnet_address("fe80::1".parse().unwrap()));
+        for address in tailnet_interface_addresses() {
+            assert!(is_tailnet_address(address));
+        }
+    }
+
+    #[test]
+    fn suggest_skips_ports_occupied_on_any_interface() {
+        let temp = tempdir().unwrap();
+        let central = temp.path().join("Central");
+        establish_project(&central, "example", "example/project");
+
+        let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
+        let candidate = listener.local_addr().unwrap().port();
+        // The port is free on loopback-adjacent scopes the moment the
+        // wildcard listener disappears, but while it is held on the wildcard
+        // binding it is occupied on every interface and must not be offered.
+        let result = suggest_central_local_endpoint(&central, candidate, candidate);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::NotFound);
+        drop(listener);
+
+        let suggestion = suggest_central_local_endpoint(&central, candidate, candidate).unwrap();
+        assert_eq!(suggestion.port, candidate);
+        assert_eq!(suggestion.scope, SCOPE_LOCALHOST);
+        assert!(suggestion
+            .free_in
+            .iter()
+            .all(|scope| scope.status == LocalEndpointOccupancy::Available));
+        let free_scopes = suggestion
+            .free_in
+            .iter()
+            .map(|scope| scope.scope.as_str())
+            .collect::<Vec<_>>();
+        assert!(free_scopes.contains(&SCOPE_LOCALHOST));
+        assert!(free_scopes.contains(&SCOPE_ANY));
+        assert!(suggestion
+            .unverified_in
+            .iter()
+            .all(|scope| scope.status == LocalEndpointOccupancy::Unknown));
     }
 }
