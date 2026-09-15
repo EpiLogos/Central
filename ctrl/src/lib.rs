@@ -22,6 +22,7 @@ mod file_map_index;
 mod file_map_moves;
 mod file_map_projection;
 mod file_map_skills;
+pub mod local_endpoints;
 pub mod machine;
 pub mod machine_account;
 pub mod names;
@@ -58,6 +59,7 @@ pub mod projectcentral_ops {
         super::development_field::register_development_field_actions(registry);
         super::projectcentral_ground::register_projectcentral_ground_actions(registry);
         super::projectcentral_now::register_projectcentral_now_actions(registry);
+        super::local_endpoints::register_local_endpoint_actions(registry);
         super::source_horizon::register_source_horizon_actions(registry);
         super::file_map::register(registry);
         super::source_history::register_source_history_actions(registry);

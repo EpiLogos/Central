@@ -53,6 +53,7 @@ Work/<project>/
 │   │       └── wiki.json
 │   ├── relations/
 │   │   └── source-relations.json   # optional accepted source/provenance relations
+│   ├── local-endpoints.json        # optional Project-local localhost socket declarations
 │   └── project.json
 └── <ordinary native Project files and directories>
 ```
@@ -176,6 +177,17 @@ Rules:
 4. adopted source paths remain project-root-relative and may not escape the Project.
 5. the manifest does not make human source Agent-authored, and does not make an adopted/generated Wiki human-authored.
 6. source/provenance/standing relations remain outside `project.json` so identity metadata does not become a document taxonomy.
+7. operational declarations such as localhost/database endpoints remain beside `project.json`, not inside it, so stable Project identity does not become mutable runtime coordination state.
+
+### Local endpoint coordination
+
+`ProjectCentral/local-endpoints.json` is the optional Project-local source for stable localhost socket declarations used by development services such as databases, HTTP servers, RPC endpoints and debuggers. Its v1 schema is `central.project.local-endpoints/v1`.
+
+Central aggregates those child declarations across `Work/` to make collisions visible and to help Agents choose unused ports. The declaration and current machine observation are different facts: a declared endpoint records what the Project expects to use, while Central may separately observe whether that localhost TCP port is bindable now. Occupancy is temporal evidence and is never written back into Project source as authored intent.
+
+The generated Central-wide reading may be cached at `.central/local-endpoints.json`; that file is derived state and never outranks the ProjectCentral declarations from which it was compiled. Workcell remains owner of process/service lifecycle and may later enrich an observed endpoint with process or service identity.
+
+See [`LOCAL-ENDPOINTS.md`](LOCAL-ENDPOINTS.md) for the schema, collision law and canonical Actions.
 
 ## 7. Root/personal Wiki federation
 

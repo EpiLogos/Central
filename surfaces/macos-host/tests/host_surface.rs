@@ -65,24 +65,26 @@ mod unix_tests {
         for id in ["central.files.write","central.files.history","central.files.recovery_preview","central.files.restore"] {
             assert!(core.get(id).is_some(), "Core lost ordinary-file Action {id}");
         }
-        let core_ids = core
-            .list()
-            .into_iter()
-            .map(|action| action.id)
-            .collect::<Vec<_>>();
+
+        let mut projectcentral = create_core_action_registry();
+        central_ctrl::projectcentral_ops::register_projectcentral_actions(&mut projectcentral);
+        let projectcentral_descriptors = projectcentral.list();
 
         let macos = create_macos_action_registry();
-        let mut continuous = central_ctrl::ActionRegistry::default();
-        central_ctrl::continuous_work::register_actions(&mut continuous);
-        assert_eq!(macos.list().len(), 98 + continuous.list().len());
+        assert_eq!(
+            macos.list().len(),
+            projectcentral_descriptors.len() + 1,
+            "macOS host should be the current ProjectCentral registry plus automation.run"
+        );
+        for descriptor in projectcentral_descriptors {
+            assert_eq!(
+                macos.get(&descriptor.id),
+                Some(&descriptor),
+                "macOS host lost or changed ProjectCentral Action {}",
+                descriptor.id
+            );
+        }
         assert!(macos.get("central.file-map.skill-tree").is_some());
-        for descriptor in continuous.list() {
-            assert_eq!(macos.get(&descriptor.id), Some(&descriptor),
-                "macOS host lost or changed native continuous-work Action {}", descriptor.id);
-        }
-        for id in core_ids {
-            assert!(macos.get(&id).is_some(), "macOS host lost core Action {id}");
-        }
         assert!(macos.get("projectcentral.ground.inspect").is_some());
         assert!(macos.get("projectcentral.now.inspect").is_some());
         assert!(macos.get("projectcentral.change.horizon").is_some());
