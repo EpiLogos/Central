@@ -53,7 +53,7 @@ Work/<project>/
 │   │       └── wiki.json
 │   ├── relations/
 │   │   └── source-relations.json   # optional accepted source/provenance relations
-│   ├── local-endpoints.json        # optional Project-local localhost socket declarations
+│   ├── local-endpoints.json        # optional Project-local scoped TCP socket declarations
 │   └── project.json
 └── <ordinary native Project files and directories>
 ```
@@ -181,9 +181,9 @@ Rules:
 
 ### Local endpoint coordination
 
-`ProjectCentral/local-endpoints.json` is the optional Project-local source for stable localhost socket declarations used by development services such as databases, HTTP servers, RPC endpoints and debuggers. Its v1 schema is `central.project.local-endpoints/v1`.
+`ProjectCentral/local-endpoints.json` is the optional Project-local source for stable TCP socket declarations — loopback, tailnet, or wildcard-bound — used by development services such as databases, HTTP servers, RPC endpoints and debuggers. Its schema is `central.project.local-endpoints/v2`; v1 sources (loopback-only) remain readable and normalise onto v2 on their first mutation.
 
-Central aggregates those child declarations across `Work/` to make collisions visible and to help Agents choose unused ports. The declaration and current machine observation are different facts: a declared endpoint records what the Project expects to use, while Central may separately observe whether that localhost TCP port is bindable now. Occupancy is temporal evidence and is never written back into Project source as authored intent.
+Central aggregates those child declarations across `Work/` to make same-scope collisions visible and to help Agents choose unused ports. The declaration and current machine observation are different facts: a declared endpoint records what the Project expects to use, while Central may separately observe whether that socket is bindable now on the scope's own interfaces (loopback, discovered tailnet addresses, or the wildcard binding). Occupancy is temporal evidence and is never written back into Project source as authored intent.
 
 The generated Central-wide reading may be cached at `.central/local-endpoints.json`; that file is derived state and never outranks the ProjectCentral declarations from which it was compiled. Workcell remains owner of process/service lifecycle and may later enrich an observed endpoint with process or service identity.
 

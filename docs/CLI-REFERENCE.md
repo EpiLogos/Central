@@ -41,9 +41,9 @@ The composed registry is deliberately discovered at runtime through `action.list
 | `central.world.project` | project the world onto one ProjectCentral: its fractal ground, Wiki, Flows, NOW folder, participating sources with provenance, and position under Work. Read-only | `world <project>` |
 | `central.world.reproject.plan` | list the canonical ProjectCentral scaffolding that is missing, classify everything else by source provenance, and state what reprojection would never do. Read-only | `world plan <project>` |
 | `central.world.reproject.apply` | stamp only the missing canonical ProjectCentral scaffolding; never moves, renames, deletes, relabels, or writes into anything that exists | `world apply <project>` |
-| `central.local-endpoints.inspect` | aggregate ProjectCentral localhost endpoint declarations across `Work/`, report declared collisions, and attach current machine occupancy evidence | `action run central.local-endpoints.inspect` |
+| `central.local-endpoints.inspect` | aggregate ProjectCentral endpoint declarations across `Work/`, report declared same-scope collisions, and attach current occupancy observed on each declaration's interfaces | `action run central.local-endpoints.inspect` |
 | `central.local-endpoints.refresh` | rebuild the same Central-wide endpoint reading and write its derived snapshot to `.central/local-endpoints.json` | `action run central.local-endpoints.refresh` |
-| `central.local-endpoints.suggest` | find the first bounded localhost TCP port that is neither Project-declared nor currently occupied | `action run central.local-endpoints.suggest` |
+| `central.local-endpoints.suggest` | find the first bounded TCP port that is neither Project-declared nor occupied on any observable interface scope, and report the scopes where it is free | `action run central.local-endpoints.suggest` |
 | `central.wiki.read` | read the root register Agent Wiki source into Central's canonical structural read model: spaces, nodes, U0.2 source refs, relation rows derived at read time, and owner counts. Read-only; never writes the agent-maintained wiki | `action run central.wiki.read` |
 | `central.recovery.plan` | explain recovery for an authored machine role | `recovery plan <role>` |
 | `central.recover` | reconcile supported recovery for an authored machine role | `recover <role>` |
@@ -74,8 +74,8 @@ The composed registry is deliberately discovered at runtime through `action.list
 | `projectcentral.ground.inspect` | inspect authored Project ground and provenance standing | `action run projectcentral.ground.inspect` |
 | `projectcentral.ground.plan` | propose reviewable source-ground relations | `action run projectcentral.ground.plan` |
 | `projectcentral.ground.apply` | record an explicitly human-accepted source-ground relation | `action run projectcentral.ground.apply` |
-| `projectcentral.local-endpoints.inspect` | read one Project's endpoint declarations and attach current localhost TCP occupancy without mutating the declarations | `action run projectcentral.local-endpoints.inspect` |
-| `projectcentral.local-endpoints.set` | create or replace a Project-local endpoint declaration after rechecking the Central-wide allocation field; declared overlap is refused unless explicitly allowed | `action run projectcentral.local-endpoints.set` |
+| `projectcentral.local-endpoints.inspect` | read one Project's endpoint declarations and attach current occupancy observed on each declared scope (localhost, tailnet, or any) without mutating the declarations | `action run projectcentral.local-endpoints.inspect` |
+| `projectcentral.local-endpoints.set` | create or replace a Project-local endpoint declaration (scope: `localhost` default, `tailnet`, or `any`) after rechecking the Central-wide allocation field; same-scope declared overlap is refused unless explicitly allowed | `action run projectcentral.local-endpoints.set` |
 | `projectcentral.local-endpoints.remove` | remove one Project-local endpoint declaration by stable endpoint id | `action run projectcentral.local-endpoints.remove` |
 | `projectcentral.change.horizon` | reconcile participating Project sources and read the deterministic Source Change Horizon | `action run projectcentral.change.horizon` |
 | `projectcentral.change.reconcile` | reconcile authoritative Project source revisions | `action run projectcentral.change.reconcile` |
@@ -111,7 +111,7 @@ ctrl --json action run work.search '{"query":"Central"}'
 ctrl --json action run machine.plan '{"role":"home-server"}'
 ctrl --json action run machine.adopt-current '{"role":"current","workcell_ref":"workcell:local"}'
 ctrl --json action run projectcentral.ground.inspect '{"project":"Central"}'
-ctrl --json action run projectcentral.local-endpoints.set '{"project":"Central","id":"db","kind":"database","service":"postgres","port":5432}'
+ctrl --json action run projectcentral.local-endpoints.set '{"project":"Central","id":"db","kind":"database","service":"postgres","port":5432,"scope":"tailnet"}'
 ctrl --json action run projectcentral.local-endpoints.inspect '{"project":"Central"}'
 ctrl --json action run central.local-endpoints.inspect '{}'
 ctrl --json action run central.local-endpoints.suggest '{"start":3000,"end":9999}'
