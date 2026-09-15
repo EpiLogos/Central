@@ -1,12 +1,13 @@
 use central_ctrl::{
-    create_core_action_registry, initialize_central, run_cli, ActionExecutionContext,
-    CapabilityProbe, CliEnvironment, ConfigurationManager, ConfigurationStateRequest, Connector,
-    ConnectorContext, ConnectorManifest, ConnectorPortDeclaration, ConnectorRegistry,
-    MachineInspectionOutput, ObservedConfiguration, ObservedPackage, ObservedService,
-    PackageManager, PackageStateRequest, PortContract, PortError, ResultStatus, RootOptions,
-    ServiceManager, ServiceStateRequest, StateChangePreview, StateChangeResult,
-    StaticMachineInspectorConnector, CONFIGURATION_MANAGER_PORT, CONNECTOR_API_VERSION,
-    MACHINE_INSPECTOR_PORT, PACKAGE_MANAGER_PORT, SERVICE_MANAGER_PORT,
+    create_core_action_registry, initialize_central, run_cli_with_runtime,
+    ActionExecutionContext, CapabilityProbe, CliEnvironment, ConfigurationManager,
+    ConfigurationStateRequest, Connector, ConnectorContext, ConnectorManifest,
+    ConnectorPortDeclaration, ConnectorRegistry, MachineInspectionOutput, NullTerminalSurface,
+    ObservedConfiguration, ObservedPackage, ObservedService, PackageManager, PackageStateRequest,
+    PortContract, PortError, ResultStatus, RootOptions, ServiceManager, ServiceStateRequest,
+    StateChangePreview, StateChangeResult, StaticMachineInspectorConnector,
+    CONFIGURATION_MANAGER_PORT, CONNECTOR_API_VERSION, MACHINE_INSPECTOR_PORT,
+    PACKAGE_MANAGER_PORT, SERVICE_MANAGER_PORT,
 };
 use serde_json::json;
 use std::fs;
@@ -371,14 +372,64 @@ fn unobserved_capability_and_unreported_requirement_are_unsupported_with_actiona
 }
 
 #[test]
+fn sourced_capability_observation_satisfies_bare_name_and_unknown_capability_names_a_gap() {
+    // The SDK capability convention sources observed capability strings
+    // ('codex@source:actuation-harness-capability'); a declared bare name
+    // ('codex') matches it by name. A capability the inspection does not
+    // show at all stays a named, unsupported gap.
+    let root = temporary_directory("capability-convention").join("Central");
+    initialize_central(&root).unwrap();
+    write_role(&root, &["codex", "ghost-harness"]);
+    let observed = observation(
+        &["codex@source:actuation-harness-capability"],
+        true,
+        true,
+        true,
+        true,
+    );
+    let result = execute(&root, observed, &[]);
+    let data = result.data.unwrap();
+    let entries = data["entries"].as_array().unwrap();
+    let codex = entries.iter().find(|entry| entry["id"] == "codex").unwrap();
+    assert_eq!(codex["kind"], "capability");
+    assert_eq!(codex["status"], "satisfied");
+    let ghost = entries
+        .iter()
+        .find(|entry| entry["id"] == "ghost-harness")
+        .unwrap();
+    assert_eq!(ghost["kind"], "capability");
+    assert_eq!(ghost["status"], "unsupported");
+    assert!(ghost["reason"]
+        .as_str()
+        .unwrap()
+        .contains("Required capability 'ghost-harness' is not observed"));
+    assert_eq!(data["summary"]["satisfied"], 4);
+    assert_eq!(data["summary"]["unsupported"], 1);
+}
+
+#[test]
 fn default_cli_can_inspect_reference_host_without_a_personal_stack() {
+    // Isolates the reference inspector on purpose: the default registry also
+    // carries the probe-gated harness-capability Connector, which is
+    // selectable on machines that have Actuation or a Workcell instance
+    // registry. This test pins the reference-only stack so it stays
+    // hermetic on any host.
+    let mut connectors = ConnectorRegistry::default();
+    connectors
+        .register(StaticMachineInspectorConnector::current_host())
+        .unwrap();
+    let connector_context = ConnectorContext::current();
     let environment = CliEnvironment {
         configured_root: None,
         home: Some(temporary_directory("cli-home")),
     };
-    let structured = run_cli(
+    let mut surface = NullTerminalSurface;
+    let structured = run_cli_with_runtime(
         &["--json".to_owned(), "machine.inspect".to_owned()],
         &environment,
+        &mut surface,
+        &connectors,
+        &connector_context,
     );
     assert_eq!(structured.exit_code, 0);
     let value: serde_json::Value = serde_json::from_str(&structured.output).unwrap();
@@ -389,7 +440,13 @@ fn default_cli_can_inspect_reference_host_without_a_personal_stack() {
         "reference.machine-host"
     );
 
-    let human = run_cli(&["machine".to_owned(), "inspect".to_owned()], &environment);
+    let human = run_cli_with_runtime(
+        &["machine".to_owned(), "inspect".to_owned()],
+        &environment,
+        &mut surface,
+        &connectors,
+        &connector_context,
+    );
     assert_eq!(human.exit_code, 0);
     assert!(human.output.contains("Observed host:"));
     assert!(human.output.contains("[observed]"));

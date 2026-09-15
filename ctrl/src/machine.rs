@@ -6,10 +6,11 @@ use crate::control::SourceClass;
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
 use central_connector_sdk::{
-    ConfigurationStateRequest, ConnectorDiagnostics, ConnectorSummary, MachineInspectionInput,
-    MachineInspectionOutput, PackageStateRequest, PortContract, PortError,
-    ReconciliationSourceReference, ServiceStateRequest, StateChangePreview, StateChangeResult,
-    CONFIGURATION_MANAGER_PORT, MACHINE_INSPECTOR_PORT, PACKAGE_MANAGER_PORT, SERVICE_MANAGER_PORT,
+    machine_capability::capability_name, ConfigurationStateRequest, ConnectorDiagnostics,
+    ConnectorSummary, MachineInspectionInput, MachineInspectionOutput, PackageStateRequest,
+    PortContract, PortError, ReconciliationSourceReference, ServiceStateRequest,
+    StateChangePreview, StateChangeResult, CONFIGURATION_MANAGER_PORT, MACHINE_INSPECTOR_PORT,
+    PACKAGE_MANAGER_PORT, SERVICE_MANAGER_PORT,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, to_value, Value};
@@ -1272,11 +1273,17 @@ fn compare_machine(
     let observation = &observed.observation;
     let mut entries = Vec::new();
 
+    // Capability matching is defined on the capability NAME portion, so a
+    // bare authored name matches a sourced observation of the same
+    // capability (e.g. authored 'codex' matches observed
+    // 'codex@source:actuation-harness-capability'); see the SDK capability
+    // convention. A named capability the inspection does not show is named
+    // as a gap; capabilities are never applied, the plan discloses.
     for capability in &declaration.capabilities {
         if observation
             .capabilities
             .iter()
-            .any(|value| value == capability)
+            .any(|value| capability_name(value) == capability_name(capability))
         {
             entries.push(satisfied_entry(
                 "capability",
