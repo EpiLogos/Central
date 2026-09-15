@@ -19,6 +19,7 @@ pub const AGENT_PROFILE_READ_ACTION: &str = "agent-profile.read";
 pub const AGENT_PROFILE_SAVE_ACTION: &str = "agent-profile.save";
 pub const AGENT_PROFILE_REMOVE_ACTION: &str = "agent-profile.remove";
 pub const AGENT_PROFILE_PROPOSE_ACTION: &str = "agent-profile.propose";
+pub const AGENT_PROFILE_EXPRESS_ACTION: &str = "agent-profile.express";
 
 fn input(name: &str, input_type: &str, required: bool) -> ActionInputDefinition {
     ActionInputDefinition {
@@ -532,6 +533,10 @@ fn propose_action(
         AgentProfileScope::Personal => AgentProfileScope::Personal,
         AgentProfileScope::Project => AgentProfileScope::Project,
     };
+    let origin_action = input
+        .get("_origin_action")
+        .and_then(Value::as_str)
+        .unwrap_or(AGENT_PROFILE_PROPOSE_ACTION);
     let mut profile = match AgentProfile::propose_from_intent(
         profile_ref.clone(),
         revision,
@@ -539,7 +544,7 @@ fn propose_action(
         scope,
         world_ref,
         raw_intent,
-        AGENT_PROFILE_PROPOSE_ACTION,
+        origin_action,
     ) {
         Ok(profile) => profile,
         Err(AgentProfileError::InvalidIntentExpression) => {
@@ -637,6 +642,67 @@ fn propose_action(
         .unwrap_or_else(|error| {
             propose_store_failure(AGENT_PROFILE_PROPOSE_ACTION, error, &profile_ref)
         })
+}
+
+fn express_action(
+    registry: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    let scope = match required_text(input, "scope", AGENT_PROFILE_EXPRESS_ACTION) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let intent = match required_text(input, "intent_expression", AGENT_PROFILE_EXPRESS_ACTION) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let world_ref = match required_text(input, "world_ref", AGENT_PROFILE_EXPRESS_ACTION) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let suffix = format!("expressed-{nonce}");
+    let mut proposal = json!({
+        "scope": scope,
+        "profile_ref": format!("profile/{suffix}"),
+        "agent_ref": format!("agent/{suffix}"),
+        "revision": "r1",
+        "world_ref": world_ref.clone(),
+        "ratified_world_refs": [world_ref],
+        "intent_expression": intent,
+        "_origin_action": AGENT_PROFILE_EXPRESS_ACTION,
+    });
+    if let Some(project) = input.get("project") {
+        proposal["project"] = project.clone();
+    }
+    for field in ["role", "purpose"] {
+        if let Some(value) = input.get(field) {
+            proposal[field] = value.clone();
+        }
+    }
+    let profile_ref = proposal["profile_ref"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    let agent_ref = proposal["agent_ref"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    let mut result = propose_action(registry, &proposal, context);
+    result.action = Some(AGENT_PROFILE_EXPRESS_ACTION.to_owned());
+    if let Some(data) = result.data.as_mut() {
+        data["allocation"] = json!({
+            "profile_ref": profile_ref,
+            "agent_ref": agent_ref,
+            "revision": "r1",
+            "recognition": "unrecognised",
+        });
+    }
+    result
 }
 
 pub fn register_agent_profile_actions(registry: &mut ActionRegistry) {
@@ -749,6 +815,28 @@ pub fn register_agent_profile_actions(registry: &mut ActionRegistry) {
             propose_action,
         )
         .expect("AgentProfile Action ids are valid");
+
+    let express_inputs = vec![
+        scope_input(),
+        input("project", "string", false),
+        input("world_ref", "string", true),
+        input("intent_expression", "string", true),
+        input("role", "string", false),
+        input("purpose", "string", false),
+    ];
+    registry
+        .register(
+            descriptor(
+                AGENT_PROFILE_EXPRESS_ACTION,
+                "Express Agent Profile Intent",
+                "Allocate a Central profile ref, Agent ref and initial revision, then author the existing generated-proposal/unrecognised AgentProfile boundary from verbatim intent. The supplied World remains required; no recognition, Agency or runtime admission is performed.",
+                MutationClass::LocallyMutating,
+                "agent-profile-proposal",
+                express_inputs,
+            ),
+            express_action,
+        )
+        .expect("AgentProfile express Action id is valid");
 }
 
 #[cfg(test)]
@@ -1063,6 +1151,54 @@ mod tests {
             input["project"] = Value::String(project.to_owned());
         }
         input
+    }
+
+    #[test]
+    fn express_allocates_refs_and_round_trips_unrecognised_proposal() {
+        let root = fixture_root();
+        let registry = registry();
+        let mut options = None;
+        let mut connectors = None;
+        let mut connector_context = None;
+        let context = context(&root, &mut options, &mut connectors, &mut connector_context);
+        let result = registry.execute(
+            AGENT_PROFILE_EXPRESS_ACTION,
+            &json!({
+                "scope": "personal",
+                "world_ref": "world:personal",
+                "intent_expression": "A bounded owner-authorised Agent expression probe.",
+                "purpose": "Test allocation only.",
+            }),
+            &context,
+        );
+        assert!(result.ok, "{result:?}");
+        assert_eq!(result.action.as_deref(), Some(AGENT_PROFILE_EXPRESS_ACTION));
+        let data = result.data.as_ref().unwrap();
+        assert_eq!(data["authorship"], "generated-proposal");
+        assert_eq!(data["recognition"], "unrecognised");
+        assert_eq!(data["human_recognised"], false);
+        let profile = &data["profile"];
+        let profile_ref = profile["ref"].as_str().unwrap();
+        let agent_ref = profile["agent_ref"].as_str().unwrap();
+        assert!(profile_ref.starts_with("profile/expressed-"));
+        assert!(agent_ref.starts_with("agent/expressed-"));
+        assert_eq!(profile["revision"], "r1");
+        assert_eq!(
+            profile["intent_provenance"]["origin_action"],
+            AGENT_PROFILE_EXPRESS_ACTION
+        );
+        let read = registry.execute(
+            AGENT_PROFILE_READ_ACTION,
+            &json!({"scope":"personal", "profile_ref": profile_ref}),
+            &context,
+        );
+        assert!(read.ok, "{read:?}");
+        assert_eq!(
+            read.data.as_ref().unwrap()["profile"]["agent_ref"],
+            agent_ref
+        );
+        assert_eq!(read.data.as_ref().unwrap()["profile"]["revision"], "r1");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
