@@ -110,6 +110,9 @@ resembles the product checkout (`mixed_root` in the structured health report).
 - [PROJECTCENTRAL-AUTHORED-GROUND.md](PROJECTCENTRAL-AUTHORED-GROUND.md) —
   conservative inspection and explicit accepted source/provenance/standing
   relations for existing or ProjectCentral-local human Project source.
+- [LOCAL-ENDPOINTS.md](LOCAL-ENDPOINTS.md) — Project-local localhost/database
+  declarations, Central-wide collision management, current occupancy evidence
+  and the derived registry used by Agents choosing local service ports.
 - [PROJECTCENTRAL-NOW.md](PROJECTCENTRAL-NOW.md) — Central NOW/DAY temporal
   contract (root register `control:root` and ProjectCentral), DAY snapshots,
   bounded Agent returns, promotion and rollover.
@@ -132,6 +135,7 @@ resembles the product checkout (`mixed_root` in the structured health report).
 | Establishing the current machine | `MACHINE-WORKCELL-RELATION.md` → `CLI-REFERENCE.md` |
 | Working with Development Field source | `DEVELOPMENT-FIELD-SOURCE.md` → `CONTROL-CONTENT-PROTOCOL.md` → `PROJECTCENTRAL-AUTHORED-GROUND.md` → `CLI-REFERENCE.md` |
 | Working with authored Project ground | `PROJECT-CONTEXT-PROTOCOL.md` → `PROJECTCENTRAL-CONTRACT.md` → `PROJECTCENTRAL-AUTHORED-GROUND.md` → `CLI-REFERENCE.md` |
+| Coordinating localhost / database ports | `LOCAL-ENDPOINTS.md` → `PROJECTCENTRAL-CONTRACT.md` → `MACHINE-WORKCELL-RELATION.md` |
 | Working with Project context / Intent / disclosure | `PROJECT-CONTEXT-PROTOCOL.md` → `PRODUCT-GROUND-CONVENTION.md` → `AGENT-GOVERNANCE-SOURCES.md` → AIKit ContextResolution/Explain contracts |
 | Working with NOW / DAY | `PROJECTCENTRAL-NOW.md` → `CLI-REFERENCE.md` |
 | Working with a live Flow | `PROJECTCENTRAL-FLOW.md` → `PROJECTCENTRAL-NOW.md` → `CLI-REFERENCE.md` |
