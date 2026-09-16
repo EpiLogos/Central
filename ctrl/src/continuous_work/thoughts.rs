@@ -5,6 +5,18 @@
 //! written only while the NOW is active, snapshotted by the project day
 //! close, never cleaned by this module.
 //!
+//! Two laws above the plumbing. First, accessibility: a T artifact is
+//! forward-facing writing — raw and in the moment, but clean plain
+//! statements, not tech jargon. Second, the twelve readings: the QL Vāk
+//! law's working-thought readings (T0–T5 prospective — Question, Trace,
+//! Challenge, Pattern, Discovery, Insight; T0′–T5′ retrospective —
+//! Assumption, Lacuna, Affordance, Anomaly, Concealment, Integration) ride
+//! the fixture front-matter as an optional typed field. One carrier, twelve
+//! types — never twelve accumulating silos. The offices they serve are the
+//! ontology's own: the composed acts in NOW produce the raw stream, and the
+//! contemplate/distill contract metabolises it into learnings for
+//! Recognition/Return.
+//!
 //! The prime stream's on-disk name is `T-prime`; the apostrophe spelling is
 //! the concept's name, not the directory name, which must survive shells and
 //! globs. Fixture and learning files are one markdown document each with a
@@ -44,6 +56,30 @@ pub struct ContemplativeFrontMatter {
     /// from. Always empty for raw T fixtures.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_fixtures: Vec<String>,
+    /// The working-thought reading this fixture carries, when the writer
+    /// names one: `T0`..`T5` (Question, Trace, Challenge, Pattern,
+    /// Discovery, Insight) or `T0-prime`..`T5-prime` (Assumption, Lacuna,
+    /// Affordance, Anomaly, Concealment, Integration). Absent is lawful.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reading: Option<String>,
+}
+
+/// The twelve working-thought readings, machine spellings. The human names
+/// live in the action description and the module doc; the enum here is the
+/// whole law.
+const READINGS: [&str; 12] = [
+    "T0", "T1", "T2", "T3", "T4", "T5", "T0-prime", "T1-prime", "T2-prime", "T3-prime",
+    "T4-prime", "T5-prime",
+];
+
+fn validate_reading(reading: Option<&str>) -> io::Result<Option<String>> {
+    match reading {
+        None | Some("") => Ok(None),
+        Some(value) if READINGS.contains(&value) => Ok(Some(value.to_owned())),
+        Some(other) => Err(invalid(format!(
+            "reading must be one of the twelve working-thought readings (T0..T5, T0-prime..T5-prime), got {other}"
+        ))),
+    }
 }
 
 pub(crate) fn stream_destination(
@@ -242,6 +278,9 @@ fn row_value(row: &StreamRow, include_content: bool) -> Value {
         if !matter.source_fixtures.is_empty() {
             value["source_fixtures"] = json!(matter.source_fixtures);
         }
+        if let Some(reading) = &matter.reading {
+            value["reading"] = json!(reading);
+        }
     }
     if include_content {
         value["content"] = json!(row.body);
@@ -261,6 +300,7 @@ fn write_fixture(
     agent_session_ref: Option<String>,
     body: &str,
     source_fixtures: Vec<String>,
+    typed_reading: Option<String>,
     now: u64,
 ) -> io::Result<Value> {
     if record.lifecycle != "active" {
@@ -280,6 +320,7 @@ fn write_fixture(
         actor_kind: actor_kind.to_owned(),
         agent_session_ref,
         recorded_at_unix_seconds: now,
+        reading: typed_reading,
         source_fixtures,
     };
     let dir = stream_destination(scope, &reading.source.path, prime)?;
@@ -329,6 +370,7 @@ pub(crate) fn thoughts_append(scope: &Scope, input: &Value, now: u64) -> io::Res
     let actor = text(input, "actor")?;
     let actor_kind = text(input, "actor_kind")?;
     validate_attribution(actor, actor_kind)?;
+    let typed_reading = validate_reading(optional_ref(input, "reading")?.as_deref())?;
     write_fixture(
         scope,
         &record,
@@ -341,6 +383,7 @@ pub(crate) fn thoughts_append(scope: &Scope, input: &Value, now: u64) -> io::Res
         optional_ref(input, "agent_session_ref")?,
         text(input, "content")?,
         Vec::new(),
+        typed_reading,
         now,
     )
 }
@@ -428,6 +471,7 @@ pub(crate) fn learnings_distill(scope: &Scope, input: &Value, now: u64) -> io::R
     }
     source_fixtures.sort();
     source_fixtures.dedup();
+    let typed_reading = validate_reading(optional_ref(input, "reading")?.as_deref())?;
     write_fixture(
         scope,
         &record,
@@ -440,6 +484,7 @@ pub(crate) fn learnings_distill(scope: &Scope, input: &Value, now: u64) -> io::R
         optional_ref(input, "agent_session_ref")?,
         text(input, "content")?,
         source_fixtures,
+        typed_reading,
         now,
     )
 }
@@ -864,5 +909,92 @@ mod tests {
         )
         .unwrap();
         assert!(empty.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod reading_tests {
+    use super::super::tests::world;
+    use super::*;
+
+    fn allocated(root: &Path, task: &str) -> Value {
+        let policy = super::super::tests::policy(root, None);
+        super::super::execute_at(
+            root,
+            "allocate",
+            &json!({"task_ref":task,"purpose":"reading type-space","participant_refs":["agent:test"],"source_refs":[],"expected_policy_revision":policy["revision"]}),
+            100,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn readings_roundtrip_and_invalid_spellings_refuse() {
+        let temp = world();
+        let root = temp.path();
+        let allocation = allocated(root, "task:readings");
+
+        // One prospective, one retrospective, carried verbatim to disk.
+        for (slug, reading) in [("a-question", "T0"), ("an-anomaly", "T3-prime")] {
+            super::super::execute_at(root, "thoughts_append", &json!({
+                "now_ref": allocation["now_ref"], "slug": slug, "day": "2026-09-16",
+                "actor": "agent:test", "actor_kind": "agent",
+                "reading": reading,
+                "content": "Plain, in-the-moment writing.",
+            }), 200).unwrap();
+        }
+        let stream = super::super::execute_at(root, "thoughts_read", &json!({
+            "now_ref": allocation["now_ref"],
+        }), 201).unwrap();
+        let rows = stream["fixtures"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["reading"], "T0");
+        assert_eq!(rows[1]["reading"], "T3-prime");
+
+        // An invalid spelling refuses before any write.
+        assert_eq!(
+            super::super::execute_at(root, "thoughts_append", &json!({
+                "now_ref": allocation["now_ref"], "slug": "bad", "day": "2026-09-16",
+                "actor": "agent:test", "actor_kind": "agent", "reading": "T7",
+                "content": "no such reading",
+            }), 202).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        // Absent reading stays lawful and reads as absent.
+        super::super::execute_at(root, "thoughts_append", &json!({
+            "now_ref": allocation["now_ref"], "slug": "untyped", "day": "2026-09-16",
+            "actor": "agent:test", "actor_kind": "agent", "content": "no reading named",
+        }), 203).unwrap();
+        let stream = super::super::execute_at(root, "thoughts_read", &json!({
+            "now_ref": allocation["now_ref"],
+        }), 204).unwrap();
+        let untyped = stream["fixtures"].as_array().unwrap().iter()
+            .find(|row| row["file"] == "untyped-2026-09-16.md").unwrap();
+        assert!(untyped.get("reading").is_none());
+    }
+
+    #[test]
+    fn distillation_carries_the_integrative_reading() {
+        let temp = world();
+        let root = temp.path();
+        let allocation = allocated(root, "task:distill-reading");
+        super::super::execute_at(root, "thoughts_append", &json!({
+            "now_ref": allocation["now_ref"], "slug": "raw-moment", "day": "2026-09-16",
+            "actor": "agent:test", "actor_kind": "agent", "reading": "T4",
+            "content": "What the day turned on.",
+        }), 300).unwrap();
+        let learning = super::super::execute_at(root, "learnings_distill", &json!({
+            "now_ref": allocation["now_ref"], "slug": "what-it-means", "day": "2026-09-16",
+            "actor": "agent:test", "actor_kind": "agent", "reading": "T5-prime",
+            "content": "One plain statement of what the raw stream means.",
+            "source_fixtures": ["raw-moment-2026-09-16.md"],
+        }), 301).unwrap();
+        let document =
+            fs::read_to_string(root.join(learning["path"].as_str().unwrap())).unwrap();
+        assert!(document.contains("\"reading\": \"T5-prime\""));
+        let read = super::super::execute_at(root, "learnings_read", &json!({
+            "now_ref": allocation["now_ref"],
+        }), 302).unwrap();
+        assert_eq!(read["learnings"][0]["reading"], "T5-prime");
     }
 }
