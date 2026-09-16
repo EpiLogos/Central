@@ -450,6 +450,13 @@ fn scope_addresses(scope: &str, port: u16) -> Vec<SocketAddr> {
 /// Probe a port by briefly binding each address and dropping the listener.
 /// The first `AddrInUse` reports `occupied`; addresses that cannot exist on
 /// this machine are skipped; anything else is honest `unknown`.
+///
+/// The probe binds strictly: no `SO_REUSEADDR`, no `SO_REUSEPORT`. Rust's
+/// `std` sets `SO_REUSEADDR` on every Unix bind, and the BSD semantics macOS
+/// follows let a wildcard bind succeed while a specific address (e.g.
+/// `127.0.0.1`) already holds the port — a plain-std probe then reported
+/// `available` for a port that nothing else could actually use. Strict
+/// semantics give `AddrInUse` its plain meaning on macOS and Linux alike.
 pub fn probe_bound_addresses(label: &str, addresses: &[SocketAddr]) -> LocalEndpointObservation {
     if addresses.is_empty() {
         return LocalEndpointObservation {
@@ -464,7 +471,7 @@ pub fn probe_bound_addresses(label: &str, addresses: &[SocketAddr]) -> LocalEndp
     let mut errors = Vec::new();
 
     for address in addresses {
-        match TcpListener::bind(*address) {
+        match strict_tcp_listener(*address) {
             Ok(listener) => {
                 bindable = true;
                 drop(listener);
@@ -503,6 +510,81 @@ pub fn probe_bound_addresses(label: &str, addresses: &[SocketAddr]) -> LocalEndp
             detail: "no supported address family was available for probing".into(),
         }
     }
+}
+
+/// Bind a probe listener with strict address semantics: no `SO_REUSEADDR`
+/// and no `SO_REUSEPORT`. The occupancy probe needs a bind whose success
+/// actually proves the port free on that address, and std's default
+/// `SO_REUSEADDR` breaks that proof on macOS (BSD lets a wildcard bind
+/// overlap a specific-address bind, so `0.0.0.0` reported free while
+/// `127.0.0.1` held the port).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn strict_tcp_listener(address: SocketAddr) -> io::Result<TcpListener> {
+    use std::os::fd::FromRawFd;
+
+    let family = match address {
+        SocketAddr::V4(_) => libc::AF_INET,
+        SocketAddr::V6(_) => libc::AF_INET6,
+    };
+    // Ownership: on success `fd` is a fresh socket this function owns; every
+    // error path closes it before returning.
+    let fd = unsafe { libc::socket(family, libc::SOCK_STREAM, 0) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let bound = match address {
+        SocketAddr::V4(v4) => {
+            let mut socket_address: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+            socket_address.sin_family = libc::AF_INET as libc::sa_family_t;
+            #[cfg(target_os = "macos")]
+            {
+                socket_address.sin_len = std::mem::size_of::<libc::sockaddr_in>() as u8;
+            }
+            socket_address.sin_port = v4.port().to_be();
+            socket_address.sin_addr.s_addr = u32::from_ne_bytes(v4.ip().octets());
+            (
+                &socket_address as *const libc::sockaddr_in as *const libc::sockaddr,
+                std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+            )
+        }
+        SocketAddr::V6(v6) => {
+            let mut socket_address: libc::sockaddr_in6 = unsafe { std::mem::zeroed() };
+            socket_address.sin6_family = libc::AF_INET6 as libc::sa_family_t;
+            #[cfg(target_os = "macos")]
+            {
+                socket_address.sin6_len = std::mem::size_of::<libc::sockaddr_in6>() as u8;
+            }
+            socket_address.sin6_port = v6.port().to_be();
+            socket_address.sin6_addr.s6_addr = v6.ip().octets();
+            socket_address.sin6_flowinfo = v6.flowinfo();
+            socket_address.sin6_scope_id = v6.scope_id();
+            (
+                &socket_address as *const libc::sockaddr_in6 as *const libc::sockaddr,
+                std::mem::size_of::<libc::sockaddr_in6>() as libc::socklen_t,
+            )
+        }
+    };
+    let bind_status = unsafe { libc::bind(fd, bound.0, bound.1) };
+    if bind_status != 0 {
+        let error = io::Error::last_os_error();
+        unsafe { libc::close(fd) };
+        return Err(error);
+    }
+    let listen_status = unsafe { libc::listen(fd, libc::SOMAXCONN) };
+    if listen_status != 0 {
+        let error = io::Error::last_os_error();
+        unsafe { libc::close(fd) };
+        return Err(error);
+    }
+    // `fd` is an owned, listening stream socket; hand it to std for cleanup.
+    Ok(unsafe { TcpListener::from_raw_fd(fd) })
+}
+
+/// Platforms outside the deployed set keep std's bind semantics; interface
+/// discovery already reports `unknown` rather than inventing occupancy there.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn strict_tcp_listener(address: SocketAddr) -> io::Result<TcpListener> {
+    TcpListener::bind(address)
 }
 
 pub fn probe_local_tcp_port(port: u16) -> LocalEndpointObservation {
