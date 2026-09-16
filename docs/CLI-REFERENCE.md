@@ -80,6 +80,10 @@ The composed registry is deliberately discovered at runtime through `action.list
 | `projectcentral.change.horizon` | reconcile participating Project sources and read the deterministic Source Change Horizon | `action run projectcentral.change.horizon` |
 | `projectcentral.change.reconcile` | reconcile authoritative Project source revisions | `action run projectcentral.change.reconcile` |
 | `projectcentral.change.ack` | advance one named consumer cursor without changing source | `action run projectcentral.change.ack` |
+| `projectcentral.source.transfer.export` | export an explicitly scoped, explicitly directed source transfer bundle for another ground of the same world (world-relative paths and content revisions only) | `action run projectcentral.source.transfer.export` |
+| `projectcentral.source.transfer.apply` | apply a transfer bundle: fast-forward from the recorded base, already-present, or an explicit recorded conflict - divergent source is never overwritten, transfers never delete | `action run projectcentral.source.transfer.apply` |
+| `projectcentral.source.transfer.conflicts` | read recorded transfer conflicts: both revisions, origin, and the resolution path per record | `action run projectcentral.source.transfer.conflicts` |
+| `projectcentral.source.transfer.resolve` | resolve one recorded conflict explicitly (`keep-local`, or `accept-incoming` on the exact recorded local revision) | `action run projectcentral.source.transfer.resolve` |
 | `projectcentral.wiki.read` | read one Project's canonical Agent Wiki source into Central's canonical structural read model: spaces, nodes, U0.2 source refs, relation rows derived at read time, and owner counts; the disclosed source ref round-trips through `projectcentral.source.read`. Read-only; never writes the agent-maintained wiki | `action run projectcentral.wiki.read` |
 | `projectcentral.now.inspect` | inspect the opt-in Project NOW field | `action run projectcentral.now.inspect` |
 | `projectcentral.now.init` | initialise Project NOW / DAY state | `action run projectcentral.now.init` |

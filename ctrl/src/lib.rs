@@ -37,6 +37,7 @@ mod projectcentral_ops_base;
 pub mod source_history;
 #[path = "source_horizon_extensions.rs"]
 pub mod source_horizon;
+pub mod source_transfer;
 pub mod system_disclosure;
 pub mod template_stamp;
 pub mod wiki_read;
@@ -61,6 +62,7 @@ pub mod projectcentral_ops {
         super::projectcentral_now::register_projectcentral_now_actions(registry);
         super::local_endpoints::register_local_endpoint_actions(registry);
         super::source_horizon::register_source_horizon_actions(registry);
+        super::source_transfer::register_source_transfer_actions(registry);
         super::file_map::register(registry);
         super::source_history::register_source_history_actions(registry);
         super::world_source::register_world_source_actions(registry);

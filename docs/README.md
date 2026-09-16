@@ -152,4 +152,6 @@ dependency rule; this index carries the corpus.
 
 - [Source Return](SOURCE-RETURN.md): native proposal/CAS acceptance, provenance, and explicit human-authority availability.
 
+- [Source transfer](SOURCE-TRANSFER.md): scoped source movement between grounds of one world, with explicit direction/authority and recorded divergence conflicts.
+
 - [Chosen root recognition](ROOT-RECOGNITION.md): bounded metadata-only recognition before explicit desktop binding.
