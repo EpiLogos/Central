@@ -68,8 +68,8 @@ pub struct ContemplativeFrontMatter {
 /// live in the action description and the module doc; the enum here is the
 /// whole law.
 const READINGS: [&str; 12] = [
-    "T0", "T1", "T2", "T3", "T4", "T5", "T0-prime", "T1-prime", "T2-prime", "T3-prime",
-    "T4-prime", "T5-prime",
+    "T0", "T1", "T2", "T3", "T4", "T5", "T0-prime", "T1-prime", "T2-prime", "T3-prime", "T4-prime",
+    "T5-prime",
 ];
 
 fn validate_reading(reading: Option<&str>) -> io::Result<Option<String>> {
@@ -936,16 +936,28 @@ mod reading_tests {
 
         // One prospective, one retrospective, carried verbatim to disk.
         for (slug, reading) in [("a-question", "T0"), ("an-anomaly", "T3-prime")] {
-            super::super::execute_at(root, "thoughts_append", &json!({
-                "now_ref": allocation["now_ref"], "slug": slug, "day": "2026-09-16",
-                "actor": "agent:test", "actor_kind": "agent",
-                "reading": reading,
-                "content": "Plain, in-the-moment writing.",
-            }), 200).unwrap();
+            super::super::execute_at(
+                root,
+                "thoughts_append",
+                &json!({
+                    "now_ref": allocation["now_ref"], "slug": slug, "day": "2026-09-16",
+                    "actor": "agent:test", "actor_kind": "agent",
+                    "reading": reading,
+                    "content": "Plain, in-the-moment writing.",
+                }),
+                200,
+            )
+            .unwrap();
         }
-        let stream = super::super::execute_at(root, "thoughts_read", &json!({
-            "now_ref": allocation["now_ref"],
-        }), 201).unwrap();
+        let stream = super::super::execute_at(
+            root,
+            "thoughts_read",
+            &json!({
+                "now_ref": allocation["now_ref"],
+            }),
+            201,
+        )
+        .unwrap();
         let rows = stream["fixtures"].as_array().unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0]["reading"], "T0");
@@ -953,23 +965,46 @@ mod reading_tests {
 
         // An invalid spelling refuses before any write.
         assert_eq!(
-            super::super::execute_at(root, "thoughts_append", &json!({
-                "now_ref": allocation["now_ref"], "slug": "bad", "day": "2026-09-16",
-                "actor": "agent:test", "actor_kind": "agent", "reading": "T7",
-                "content": "no such reading",
-            }), 202).unwrap_err().kind(),
+            super::super::execute_at(
+                root,
+                "thoughts_append",
+                &json!({
+                    "now_ref": allocation["now_ref"], "slug": "bad", "day": "2026-09-16",
+                    "actor": "agent:test", "actor_kind": "agent", "reading": "T7",
+                    "content": "no such reading",
+                }),
+                202
+            )
+            .unwrap_err()
+            .kind(),
             io::ErrorKind::InvalidInput
         );
         // Absent reading stays lawful and reads as absent.
-        super::super::execute_at(root, "thoughts_append", &json!({
-            "now_ref": allocation["now_ref"], "slug": "untyped", "day": "2026-09-16",
-            "actor": "agent:test", "actor_kind": "agent", "content": "no reading named",
-        }), 203).unwrap();
-        let stream = super::super::execute_at(root, "thoughts_read", &json!({
-            "now_ref": allocation["now_ref"],
-        }), 204).unwrap();
-        let untyped = stream["fixtures"].as_array().unwrap().iter()
-            .find(|row| row["file"] == "untyped-2026-09-16.md").unwrap();
+        super::super::execute_at(
+            root,
+            "thoughts_append",
+            &json!({
+                "now_ref": allocation["now_ref"], "slug": "untyped", "day": "2026-09-16",
+                "actor": "agent:test", "actor_kind": "agent", "content": "no reading named",
+            }),
+            203,
+        )
+        .unwrap();
+        let stream = super::super::execute_at(
+            root,
+            "thoughts_read",
+            &json!({
+                "now_ref": allocation["now_ref"],
+            }),
+            204,
+        )
+        .unwrap();
+        let untyped = stream["fixtures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["file"] == "untyped-2026-09-16.md")
+            .unwrap();
         assert!(untyped.get("reading").is_none());
     }
 
@@ -978,23 +1013,40 @@ mod reading_tests {
         let temp = world();
         let root = temp.path();
         let allocation = allocated(root, "task:distill-reading");
-        super::super::execute_at(root, "thoughts_append", &json!({
-            "now_ref": allocation["now_ref"], "slug": "raw-moment", "day": "2026-09-16",
-            "actor": "agent:test", "actor_kind": "agent", "reading": "T4",
-            "content": "What the day turned on.",
-        }), 300).unwrap();
-        let learning = super::super::execute_at(root, "learnings_distill", &json!({
-            "now_ref": allocation["now_ref"], "slug": "what-it-means", "day": "2026-09-16",
-            "actor": "agent:test", "actor_kind": "agent", "reading": "T5-prime",
-            "content": "One plain statement of what the raw stream means.",
-            "source_fixtures": ["raw-moment-2026-09-16.md"],
-        }), 301).unwrap();
-        let document =
-            fs::read_to_string(root.join(learning["path"].as_str().unwrap())).unwrap();
+        super::super::execute_at(
+            root,
+            "thoughts_append",
+            &json!({
+                "now_ref": allocation["now_ref"], "slug": "raw-moment", "day": "2026-09-16",
+                "actor": "agent:test", "actor_kind": "agent", "reading": "T4",
+                "content": "What the day turned on.",
+            }),
+            300,
+        )
+        .unwrap();
+        let learning = super::super::execute_at(
+            root,
+            "learnings_distill",
+            &json!({
+                "now_ref": allocation["now_ref"], "slug": "what-it-means", "day": "2026-09-16",
+                "actor": "agent:test", "actor_kind": "agent", "reading": "T5-prime",
+                "content": "One plain statement of what the raw stream means.",
+                "source_fixtures": ["raw-moment-2026-09-16.md"],
+            }),
+            301,
+        )
+        .unwrap();
+        let document = fs::read_to_string(root.join(learning["path"].as_str().unwrap())).unwrap();
         assert!(document.contains("\"reading\": \"T5-prime\""));
-        let read = super::super::execute_at(root, "learnings_read", &json!({
-            "now_ref": allocation["now_ref"],
-        }), 302).unwrap();
+        let read = super::super::execute_at(
+            root,
+            "learnings_read",
+            &json!({
+                "now_ref": allocation["now_ref"],
+            }),
+            302,
+        )
+        .unwrap();
         assert_eq!(read["learnings"][0]["reading"], "T5-prime");
     }
 }

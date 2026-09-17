@@ -41,7 +41,10 @@ fn run(command: &mut Command, operation: &str) -> Output {
 }
 
 fn git(args: &[&str]) -> Output {
-    run(Command::new("git").args(args), &format!("git {}", args.join(" ")))
+    run(
+        Command::new("git").args(args),
+        &format!("git {}", args.join(" ")),
+    )
 }
 
 fn git_at(repository: &Path, args: &[&str]) -> Output {
@@ -74,10 +77,14 @@ impl GitFixture {
         git_at(&seed, &["add", "payload.txt"]);
         git_at(&seed, &["commit", "-m", "initial"]);
 
-        let branch = String::from_utf8_lossy(&git_at(&seed, &["rev-parse", "--abbrev-ref", "HEAD"]).stdout)
-            .trim()
-            .to_owned();
-        git_at(&seed, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        let branch =
+            String::from_utf8_lossy(&git_at(&seed, &["rev-parse", "--abbrev-ref", "HEAD"]).stdout)
+                .trim()
+                .to_owned();
+        git_at(
+            &seed,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
         git_at(&seed, &["push", "origin", "HEAD"]);
         git(&[
             "--git-dir",
@@ -137,8 +144,14 @@ fn git_target_passes_public_synchronizer_conformance_with_real_mutation() {
 
     assert_eq!(report.port_id, "Synchronizer");
     assert_eq!(report.connector.id, GIT_SYNCHRONIZER_CONNECTOR_ID);
-    assert!(report.checks.iter().any(|check| check == "fixture-precondition"));
-    assert_eq!(fs::read_to_string(fixture.target.join("payload.txt")).unwrap(), "v2\n");
+    assert!(report
+        .checks
+        .iter()
+        .any(|check| check == "fixture-precondition"));
+    assert_eq!(
+        fs::read_to_string(fixture.target.join("payload.txt")).unwrap(),
+        "v2\n"
+    );
 }
 
 #[test]
@@ -152,7 +165,10 @@ fn git_apply_refuses_to_overwrite_a_dirty_target() {
     let error = connector.apply(&request).unwrap_err();
     assert_eq!(error.code, PortErrorCode::InvalidConfiguration);
     assert!(error.message.contains("local changes"));
-    assert_eq!(fs::read_to_string(fixture.target.join("payload.txt")).unwrap(), "v1\n");
+    assert_eq!(
+        fs::read_to_string(fixture.target.join("payload.txt")).unwrap(),
+        "v1\n"
+    );
 }
 
 #[test]
@@ -232,12 +248,18 @@ fn canonical_recover_uses_the_public_git_synchronizer_against_the_real_target() 
         GIT_SYNCHRONIZER_CONNECTOR_ID
     );
     assert_eq!(data["synchronization"]["changed"], true);
-    assert_eq!(fs::read_to_string(fixture.target.join("payload.txt")).unwrap(), "v2\n");
+    assert_eq!(
+        fs::read_to_string(fixture.target.join("payload.txt")).unwrap(),
+        "v2\n"
+    );
 
     let repeated = registry.execute("central.recover", &json!({ "role": role }), &context);
     assert_eq!(repeated.status, ResultStatus::Success);
     let repeated_data = repeated.data.unwrap();
     assert_eq!(repeated_data["outcome"], "complete");
     assert!(repeated_data["synchronization"].is_null());
-    assert_eq!(fs::read_to_string(fixture.target.join("payload.txt")).unwrap(), "v2\n");
+    assert_eq!(
+        fs::read_to_string(fixture.target.join("payload.txt")).unwrap(),
+        "v2\n"
+    );
 }

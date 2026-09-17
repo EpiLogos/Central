@@ -1163,6 +1163,10 @@ mod tests {
         let plain = AgentSetRecord::new(field.clone(), "r1");
         let mut registry = AgentSetRegistry::default();
         registry.insert(plain).unwrap();
-        assert!(registry.resolve(&field, None).unwrap().orchestrator_agent_ref.is_none());
+        assert!(registry
+            .resolve(&field, None)
+            .unwrap()
+            .orchestrator_agent_ref
+            .is_none());
     }
 }

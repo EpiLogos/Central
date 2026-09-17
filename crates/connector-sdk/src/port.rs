@@ -409,7 +409,11 @@ pub struct PortError {
 
 impl PortError {
     pub fn new(code: PortErrorCode, message: impl Into<String>) -> Self {
-        Self { code, message: message.into(), provider_detail: None }
+        Self {
+            code,
+            message: message.into(),
+            provider_detail: None,
+        }
     }
 
     pub fn with_provider_detail(mut self, detail: impl Into<String>) -> Self {
@@ -452,7 +456,8 @@ pub trait TagStore: Send + Sync {
 }
 
 pub trait MachineInspector: Send + Sync {
-    fn inspect(&self, input: &MachineInspectionInput) -> Result<MachineInspectionOutput, PortError>;
+    fn inspect(&self, input: &MachineInspectionInput)
+        -> Result<MachineInspectionOutput, PortError>;
 }
 
 pub trait PackageManager: Send + Sync {

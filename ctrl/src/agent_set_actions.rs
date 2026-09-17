@@ -576,7 +576,10 @@ fn agent_set_resolve(
 /// A member entry is `{kind: "agent", agent_ref}` or
 /// `{kind: "agent-set", agent_set_ref}`. Anything else is refused before a
 /// record exists: a proposal is typed at the door, not repaired afterwards.
-fn parse_proposed_members(action: &str, input: &Value) -> Result<Vec<AgentSetMember>, ActionResult> {
+fn parse_proposed_members(
+    action: &str,
+    input: &Value,
+) -> Result<Vec<AgentSetMember>, ActionResult> {
     let Some(entries) = input.get("members").and_then(Value::as_array) else {
         return Err(invalid(
             action,
@@ -585,7 +588,10 @@ fn parse_proposed_members(action: &str, input: &Value) -> Result<Vec<AgentSetMem
     };
     let mut members = Vec::new();
     for entry in entries {
-        let kind = entry.get("kind").and_then(Value::as_str).unwrap_or_default();
+        let kind = entry
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         match kind {
             "agent" => {
                 let Some(agent_ref) = entry.get("agent_ref").and_then(Value::as_str) else {
@@ -655,17 +661,11 @@ fn agent_set_propose(
         Ok(set_ref) => set_ref,
         Err(error) => return invalid(action, error.to_string()),
     };
-    let record = match AgentSetRecord::proposed(
-        set_ref,
-        revision,
-        members,
-        orchestrator,
-        action,
-        reason,
-    ) {
-        Ok(record) => record,
-        Err(error) => return invalid(action, format!("invalid agent-set proposal: {error}")),
-    };
+    let record =
+        match AgentSetRecord::proposed(set_ref, revision, members, orchestrator, action, reason) {
+            Ok(record) => record,
+            Err(error) => return invalid(action, format!("invalid agent-set proposal: {error}")),
+        };
     let record_json = match serde_json::to_value(&record) {
         Ok(value) => value,
         Err(error) => {
@@ -720,7 +720,8 @@ fn propose_store_failure(
                 "ref": set_ref,
             })),
         ),
-        RelationRecordStoreError::Io(_) | RelationRecordStoreError::UnsafeRoot(_)
+        RelationRecordStoreError::Io(_)
+        | RelationRecordStoreError::UnsafeRoot(_)
         | RelationRecordStoreError::UnsafeSource(_) => ActionResult::failure(
             Some(action),
             ResultStatus::VerificationFailure,
@@ -731,7 +732,8 @@ fn propose_store_failure(
     }
 }
 
-fn world_effective_sources(    _registry: &ActionRegistry,
+fn world_effective_sources(
+    _registry: &ActionRegistry,
     input: &Value,
     context: &ActionExecutionContext<'_>,
 ) -> ActionResult {
@@ -1253,7 +1255,10 @@ mod tests {
         assert_eq!(data["authorship"], "generated-proposal");
         assert_eq!(data["recognition"], "unrecognised");
         assert_eq!(data["human_recognised"], false);
-        assert_eq!(data["record"]["proposal"]["origin_action"], AGENT_SET_PROPOSE_ACTION);
+        assert_eq!(
+            data["record"]["proposal"]["origin_action"],
+            AGENT_SET_PROPOSE_ACTION
+        );
         assert_eq!(data["receipt"]["created"], true);
         assert_eq!(data["read_path"]["action"], AGENT_SET_READ_ACTION);
 
@@ -1323,11 +1328,7 @@ mod tests {
         );
         assert!(!colon.ok, "{colon:?}");
 
-        let listed = registry.execute(
-            AGENT_SET_LIST_ACTION,
-            &json!({"scope": "root"}),
-            &context,
-        );
+        let listed = registry.execute(AGENT_SET_LIST_ACTION, &json!({"scope": "root"}), &context);
         assert_eq!(
             listed.data.as_ref().unwrap()["records"]
                 .as_array()

@@ -18,9 +18,14 @@ pub struct SynchronizerConformanceReport {
     pub checks: Vec<String>,
 }
 
-fn require_stable_preview(first: &StateChangePreview, second: &StateChangePreview) -> Result<(), String> {
+fn require_stable_preview(
+    first: &StateChangePreview,
+    second: &StateChangePreview,
+) -> Result<(), String> {
     if first != second {
-        return Err("repeat-preview: Synchronizer preview changed without an intervening apply.".to_owned());
+        return Err(
+            "repeat-preview: Synchronizer preview changed without an intervening apply.".to_owned(),
+        );
     }
     if first.summary.trim().is_empty() {
         return Err("typed-preview: Synchronizer preview summary must be non-empty.".to_owned());
@@ -66,9 +71,9 @@ pub fn run_synchronizer_conformance(
         ));
     }
 
-    let implementation = connector
-        .synchronizer()
-        .ok_or_else(|| "implementation: Connector does not expose Synchronizer implementation.".to_owned())?;
+    let implementation = connector.synchronizer().ok_or_else(|| {
+        "implementation: Connector does not expose Synchronizer implementation.".to_owned()
+    })?;
 
     let first = implementation
         .preview(&fixture.request)
@@ -101,14 +106,19 @@ pub fn run_synchronizer_conformance(
         .preview(&fixture.request)
         .map_err(|error| format!("post-apply-preview: {:?}: {}", error.code, error.message))?;
     if after.changed {
-        return Err("post-apply-preview: Synchronizer remains changeable after successful apply.".to_owned());
+        return Err(
+            "post-apply-preview: Synchronizer remains changeable after successful apply."
+                .to_owned(),
+        );
     }
 
     let repeated = implementation
         .apply(&fixture.request)
         .map_err(|error| format!("idempotent-apply: {:?}: {}", error.code, error.message))?;
     if repeated.changed {
-        return Err("idempotent-apply: Repeating a satisfied synchronization changed state.".to_owned());
+        return Err(
+            "idempotent-apply: Repeating a satisfied synchronization changed state.".to_owned(),
+        );
     }
 
     Ok(SynchronizerConformanceReport {
