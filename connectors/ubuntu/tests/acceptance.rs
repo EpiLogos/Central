@@ -53,6 +53,29 @@ fn ubuntu_registry() -> ConnectorRegistry {
 #[cfg(target_os = "linux")]
 #[test]
 fn headless_ubuntu_can_root_control_plan_reconcile_verify_and_repeat() {
+    // The walk exercises the Ubuntu platform Connector end to end. The
+    // Connector probes /etc/os-release for ID=ubuntu and reports unavailable
+    // elsewhere, so on any other Linux host this walk cannot select the
+    // personal.ubuntu-server Connector by design — declare the skip rather
+    // than fail on a machine that is not the platform under test.
+    let on_ubuntu = std::fs::read_to_string("/etc/os-release")
+        .ok()
+        .and_then(|text| {
+            text.lines().find_map(|line| {
+                let (key, value) = line.split_once('=')?;
+                (key == "ID").then(|| value.trim().trim_matches('"').to_owned())
+            })
+        })
+        .as_deref()
+        == Some("ubuntu");
+    if !on_ubuntu {
+        eprintln!(
+            "skipping: /etc/os-release does not declare ID=ubuntu; the Ubuntu \
+             platform Connector is unavailable on this host by design"
+        );
+        return;
+    }
+
     let fixture = temporary_directory("lifecycle");
     let root = fixture.join("Central");
     initialize_central(&root).unwrap();
