@@ -85,6 +85,11 @@ resembles the product checkout (`mixed_root` in the structured health report).
   implemented continuous-work Actions, concrete AIKit/Workcell request/result
   examples, controlled-World evidence and explicit remaining feature limits.
 
+- [GIT-STATE-CENSUS.md](GIT-STATE-CENSUS.md) — the branches-and-worktrees read
+  model: `central.git.census` action over the `GIT_STATE_PORT`, list/tree/graph
+  projections, NOW/DAY lane reconciliation and the reuse-before-mint rules.
+  Stages 1-3 built; skill/wiki adoption and cross-machine lanes remain.
+
 - [integrations/BKMR-FILE-MAP.md](integrations/BKMR-FILE-MAP.md) — persistent root/Project file maps, managed links, migration, native bkmr adoption and AIKit knowledge/skill consumption.
 
 ## Installation / recovery

@@ -199,6 +199,7 @@ name = "central-reference-connectors"
 version = "0.1.0"
 dependencies = [
  "central-connector-sdk",
+ "central-git-sync-connector",
  "central-harness-connector",
 ]
 

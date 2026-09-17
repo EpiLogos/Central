@@ -38,7 +38,10 @@ pub struct ManifestError {
 
 impl ManifestError {
     fn new(code: &str, message: impl Into<String>) -> Self {
-        Self { code: code.to_owned(), message: message.into() }
+        Self {
+            code: code.to_owned(),
+            message: message.into(),
+        }
     }
 }
 
@@ -46,7 +49,10 @@ pub fn validate_connector_manifest(manifest: &ConnectorManifest) -> Result<(), M
     if manifest.api_version != CONNECTOR_API_VERSION {
         return Err(ManifestError::new(
             "unsupported_api_version",
-            format!("Unsupported Connector API version: {}", manifest.api_version),
+            format!(
+                "Unsupported Connector API version: {}",
+                manifest.api_version
+            ),
         ));
     }
     for (label, value) in [
@@ -57,27 +63,48 @@ pub fn validate_connector_manifest(manifest: &ConnectorManifest) -> Result<(), M
         ("mutation_scope", manifest.mutation_scope.as_str()),
     ] {
         if value.trim().is_empty() {
-            return Err(ManifestError::new("missing_field", format!("Connector manifest {label} must be non-empty.")));
+            return Err(ManifestError::new(
+                "missing_field",
+                format!("Connector manifest {label} must be non-empty."),
+            ));
         }
     }
-    if !matches!(manifest.mutation_scope.as_str(), "read-only" | "locally-mutating" | "externally-mutating") {
-        return Err(ManifestError::new("invalid_mutation_scope", "Connector manifest mutation_scope is invalid."));
+    if !matches!(
+        manifest.mutation_scope.as_str(),
+        "read-only" | "locally-mutating" | "externally-mutating"
+    ) {
+        return Err(ManifestError::new(
+            "invalid_mutation_scope",
+            "Connector manifest mutation_scope is invalid.",
+        ));
     }
     if manifest.platforms.is_empty() {
-        return Err(ManifestError::new("missing_platform", "Connector manifest must declare a supported platform or environment."));
+        return Err(ManifestError::new(
+            "missing_platform",
+            "Connector manifest must declare a supported platform or environment.",
+        ));
     }
     if manifest.ports.is_empty() {
-        return Err(ManifestError::new("missing_port", "Connector manifest must declare at least one Port."));
+        return Err(ManifestError::new(
+            "missing_port",
+            "Connector manifest must declare at least one Port.",
+        ));
     }
     let mut declarations = BTreeSet::new();
     for port in &manifest.ports {
         if port.id.trim().is_empty() || port.version.trim().is_empty() {
-            return Err(ManifestError::new("invalid_port", "Connector Port declarations require id and version."));
+            return Err(ManifestError::new(
+                "invalid_port",
+                "Connector Port declarations require id and version.",
+            ));
         }
         if !declarations.insert((port.id.clone(), port.version.clone())) {
             return Err(ManifestError::new(
                 "duplicate_port",
-                format!("Duplicate Connector Port declaration: {} {}", port.id, port.version),
+                format!(
+                    "Duplicate Connector Port declaration: {} {}",
+                    port.id, port.version
+                ),
             ));
         }
     }
@@ -91,7 +118,9 @@ pub struct ConnectorContext {
 
 impl ConnectorContext {
     pub fn current() -> Self {
-        Self { platform: std::env::consts::OS.to_owned() }
+        Self {
+            platform: std::env::consts::OS.to_owned(),
+        }
     }
 }
 
@@ -103,29 +132,62 @@ pub struct CapabilityProbe {
 
 impl CapabilityProbe {
     pub fn available() -> Self {
-        Self { available: true, reason: None }
+        Self {
+            available: true,
+            reason: None,
+        }
     }
 
     pub fn unavailable(reason: impl Into<String>) -> Self {
-        Self { available: false, reason: Some(reason.into()) }
+        Self {
+            available: false,
+            reason: Some(reason.into()),
+        }
     }
 }
 
 pub trait Connector: Send + Sync {
     fn manifest(&self) -> &ConnectorManifest;
     fn probe(&self, port: &PortContract, context: &ConnectorContext) -> CapabilityProbe;
-    fn work_discovery(&self) -> Option<&dyn WorkDiscovery> { None }
-    fn automation(&self) -> Option<&dyn Automation> { None }
-    fn native_open(&self) -> Option<&dyn NativeOpen> { None }
-    fn native_reveal(&self) -> Option<&dyn NativeReveal> { None }
-    fn tag_store(&self) -> Option<&dyn TagStore> { None }
-    fn machine_inspector(&self) -> Option<&dyn MachineInspector> { None }
-    fn package_manager(&self) -> Option<&dyn PackageManager> { None }
-    fn configuration_manager(&self) -> Option<&dyn ConfigurationManager> { None }
-    fn service_manager(&self) -> Option<&dyn ServiceManager> { None }
-    fn synchronizer(&self) -> Option<&dyn Synchronizer> { None }
-    fn source_history(&self) -> Option<&dyn SourceHistory> { None }
-    fn user_notification(&self) -> Option<&dyn UserNotification> { None }
+    fn work_discovery(&self) -> Option<&dyn WorkDiscovery> {
+        None
+    }
+    fn automation(&self) -> Option<&dyn Automation> {
+        None
+    }
+    fn native_open(&self) -> Option<&dyn NativeOpen> {
+        None
+    }
+    fn native_reveal(&self) -> Option<&dyn NativeReveal> {
+        None
+    }
+    fn tag_store(&self) -> Option<&dyn TagStore> {
+        None
+    }
+    fn machine_inspector(&self) -> Option<&dyn MachineInspector> {
+        None
+    }
+    fn package_manager(&self) -> Option<&dyn PackageManager> {
+        None
+    }
+    fn configuration_manager(&self) -> Option<&dyn ConfigurationManager> {
+        None
+    }
+    fn service_manager(&self) -> Option<&dyn ServiceManager> {
+        None
+    }
+    fn synchronizer(&self) -> Option<&dyn Synchronizer> {
+        None
+    }
+    fn source_history(&self) -> Option<&dyn SourceHistory> {
+        None
+    }
+    fn git_state(&self) -> Option<&dyn crate::git_state::GitState> {
+        None
+    }
+    fn user_notification(&self) -> Option<&dyn UserNotification> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -167,9 +229,16 @@ pub struct ConnectorRegistry {
 }
 
 impl ConnectorRegistry {
-    pub fn register<C: Connector + 'static>(&mut self, connector: C) -> Result<&mut Self, ManifestError> {
+    pub fn register<C: Connector + 'static>(
+        &mut self,
+        connector: C,
+    ) -> Result<&mut Self, ManifestError> {
         validate_connector_manifest(connector.manifest())?;
-        if self.connectors.iter().any(|existing| existing.manifest().id == connector.manifest().id) {
+        if self
+            .connectors
+            .iter()
+            .any(|existing| existing.manifest().id == connector.manifest().id)
+        {
             return Err(ManifestError::new(
                 "duplicate_connector",
                 format!("Connector already registered: {}", connector.manifest().id),
@@ -179,7 +248,11 @@ impl ConnectorRegistry {
         Ok(self)
     }
 
-    pub fn resolve<'a>(&'a self, port: &PortContract, context: &ConnectorContext) -> ConnectorResolution<'a> {
+    pub fn resolve<'a>(
+        &'a self,
+        port: &PortContract,
+        context: &ConnectorContext,
+    ) -> ConnectorResolution<'a> {
         let mut eligible = Vec::<&dyn Connector>::new();
         let mut ineligible = Vec::new();
 
@@ -187,7 +260,10 @@ impl ConnectorRegistry {
             let connector = connector.as_ref();
             let summary = ConnectorSummary::from_connector(connector);
             let manifest = connector.manifest();
-            let port_match = manifest.ports.iter().any(|candidate| candidate.id == port.id && candidate.version == port.version);
+            let port_match = manifest
+                .ports
+                .iter()
+                .any(|candidate| candidate.id == port.id && candidate.version == port.version);
             if !port_match {
                 ineligible.push(IneligibleConnector {
                     connector: summary,
@@ -195,7 +271,11 @@ impl ConnectorRegistry {
                 });
                 continue;
             }
-            if !manifest.platforms.iter().any(|platform| platform == "*" || platform == &context.platform) {
+            if !manifest
+                .platforms
+                .iter()
+                .any(|platform| platform == "*" || platform == &context.platform)
+            {
                 ineligible.push(IneligibleConnector {
                     connector: summary,
                     reason: format!("unsupported platform: {}", context.platform),
@@ -206,7 +286,9 @@ impl ConnectorRegistry {
             if !probe.available {
                 ineligible.push(IneligibleConnector {
                     connector: summary,
-                    reason: probe.reason.unwrap_or_else(|| "capability probe reported unavailable".to_owned()),
+                    reason: probe
+                        .reason
+                        .unwrap_or_else(|| "capability probe reported unavailable".to_owned()),
                 });
                 continue;
             }
@@ -216,7 +298,10 @@ impl ConnectorRegistry {
         eligible.sort_by(|left, right| left.manifest().id.cmp(&right.manifest().id));
         ineligible.sort_by(|left, right| left.connector.id.cmp(&right.connector.id));
         let selected = eligible.first().copied();
-        let eligible_summaries = eligible.iter().map(|connector| ConnectorSummary::from_connector(*connector)).collect();
+        let eligible_summaries = eligible
+            .iter()
+            .map(|connector| ConnectorSummary::from_connector(*connector))
+            .collect();
         let selected_connector = selected.map(ConnectorSummary::from_connector);
 
         ConnectorResolution {

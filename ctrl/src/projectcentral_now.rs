@@ -82,6 +82,11 @@ pub struct NowHandoff {
     pub carried_from_days: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub promoted_to: Vec<String>,
+    /// Declared lane ownership (repo + branch + optional worktree path) in
+    /// the same form as the clearing schema's `work_refs`. Consumed by the
+    /// git census for lane attribution and by day-close reconciliation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub work_refs: Vec<crate::continuous_work::placement::WorkRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -157,6 +162,16 @@ pub struct RolloverReport {
     pub promotions: Vec<PromotionReceipt>,
     pub streams: Vec<StreamDaySnapshot>,
     pub cleanup_failures: Vec<String>,
+    /// The day-close git census summary and attention list, when the GitState
+    /// port was available; the full census document is written beside the day
+    /// record as `git-census.json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_census: Option<Value>,
+    /// Open work from the census the recorded returns do not account for:
+    /// unattributed worktrees and local-only branches of this project's
+    /// repository. Empty when no census ran.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open_lanes: Vec<Value>,
 }
 
 fn now_paths(project_root: &Path) -> NowPaths {
@@ -805,6 +820,35 @@ fn create_handoff(
         }
     }
 
+    let work_refs = match serde_json::from_value::<Vec<crate::continuous_work::placement::WorkRef>>(
+        input
+            .get("work_refs")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([])),
+    ) {
+        Ok(refs) => refs,
+        Err(_) => {
+            return Err(ActionResult::failure(
+                Some(action),
+                ResultStatus::InvalidInput,
+                "work_refs entries require non-empty repo and branch strings",
+                None,
+            ));
+        }
+    };
+    if work_refs.len() > 64
+        || work_refs
+            .iter()
+            .any(|work_ref| work_ref.repo.trim().is_empty() || work_ref.branch.trim().is_empty())
+    {
+        return Err(ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            "work_refs carries at most 64 entries with non-empty repo and branch",
+            None,
+        ));
+    }
+
     Ok(NowHandoff {
         schema: HANDOFF_SCHEMA.into(),
         id,
@@ -824,6 +868,7 @@ fn create_handoff(
         preserve_refs: string_array(input, "preserve_refs", action)?,
         carried_from_days: vec![],
         promoted_to: vec![],
+        work_refs,
     })
 }
 
@@ -1121,6 +1166,20 @@ fn render_day(
 }
 
 pub fn rollover(project_root: &Path, day: &str, next_day: &str) -> io::Result<RolloverReport> {
+    rollover_with_census(project_root, day, next_day, None)
+}
+
+/// The project-register day close. `census` is the caller's git census
+/// document for this project's repository (`central.git-census/v1`); when
+/// present it is written beside the day record and reconciled against the
+/// carried returns: every unattributed worktree and local-only branch the
+/// returns' `work_refs` do not account for is reported as an open lane.
+pub fn rollover_with_census(
+    project_root: &Path,
+    day: &str,
+    next_day: &str,
+    census: Option<Value>,
+) -> io::Result<RolloverReport> {
     let day_value = parse_day(day)?;
     let next_day_value = parse_day(next_day)?;
     if next_day_value <= day_value {
@@ -1212,6 +1271,18 @@ pub fn rollover(project_root: &Path, day: &str, next_day: &str) -> io::Result<Ro
         return Err(error);
     }
 
+    // Lane claims from the returns, captured before the cleanup loop
+    // consumes the handoff records.
+    let claimed: Vec<(String, String)> = handoffs
+        .iter()
+        .flat_map(|(_, handoff)| {
+            handoff
+                .work_refs
+                .iter()
+                .map(|work_ref| (work_ref.repo.clone(), work_ref.branch.clone()))
+        })
+        .collect();
+
     let mut cleanup_failures = vec![];
     for (source, mut handoff) in handoffs {
         let path = project_root.join(&source);
@@ -1234,6 +1305,33 @@ pub fn rollover(project_root: &Path, day: &str, next_day: &str) -> io::Result<Ro
         cleanup_failures.push(format!("reset promotion ledger: {error}"));
     }
 
+    let mut git_census_value = None;
+    let mut open_lanes = Vec::new();
+    if let Some(document) = census {
+        let census_path = snapshot_root.join("git-census.json");
+        if let Err(error) = fs::write(&census_path, serde_json::to_vec_pretty(&document)?) {
+            cleanup_failures.push(format!("write git census: {error}"));
+        }
+        // Reconciliation: lanes the carried returns' work_refs do not name.
+        // A worktree item counts as claimed when its repo matches and either
+        // its branch is named or the claim names no branch for that repo.
+        for item in document["attention"].as_array().into_iter().flatten() {
+            let kind = item["kind"].as_str().unwrap_or_default();
+            let item_branch = item["branch"].as_str();
+            let accounted = claimed.iter().any(|(repo, branch)| {
+                item["repo"].as_str() == Some(repo.as_str())
+                    && (item_branch == Some(branch.as_str()) || item_branch.is_none())
+            });
+            if matches!(kind, "unattributed_worktree" | "local_only_branch") && !accounted {
+                open_lanes.push(item.clone());
+            }
+        }
+        git_census_value = Some(json!({
+            "summary": document["summary"],
+            "attention": document["attention"],
+        }));
+    }
+
     Ok(RolloverReport {
         day: day.into(),
         next_day: next_day.into(),
@@ -1246,6 +1344,8 @@ pub fn rollover(project_root: &Path, day: &str, next_day: &str) -> io::Result<Ro
         promotions,
         streams,
         cleanup_failures,
+        git_census: git_census_value,
+        open_lanes,
     })
 }
 
@@ -1590,6 +1690,28 @@ fn promote_action(
         .unwrap_or_else(|error| io_failure(action, error))
 }
 
+/// Best-effort census for the day close: the close never fails because git
+/// state could not be observed; it closes without the census section.
+fn census_for_close(context: &ActionExecutionContext<'_>, project: &str) -> Option<Value> {
+    let central = crate::root::resolve_central_root(context.root_options).ok()?;
+    let resolution = context.connectors.resolve(
+        &central_connector_sdk::GIT_STATE_PORT,
+        context.connector_context,
+    );
+    let provider = resolution.connector?.git_state()?;
+    crate::git_census::assemble(
+        &central.path,
+        crate::git_census::CensusScope {
+            repos: vec![format!("Work/{project}")],
+        },
+        provider,
+        false,
+        14,
+    )
+    .ok()
+    .map(|model| model.document)
+}
+
 fn rollover_action(
     _: &ActionRegistry,
     input: &Value,
@@ -1608,7 +1730,11 @@ fn rollover_action(
         Ok(value) => value,
         Err(result) => return result,
     };
-    match rollover(&project_root, &day, &next_day) {
+    let census = input
+        .get("project")
+        .and_then(Value::as_str)
+        .and_then(|project| census_for_close(context, project));
+    match rollover_with_census(&project_root, &day, &next_day, census) {
         Ok(report) if report.cleanup_failures.is_empty() => ActionResult::success(
             action,
             serde_json::to_value(report).expect("rollover serializes"),
@@ -1751,6 +1877,7 @@ mod tests {
             preserve_refs: vec![],
             carried_from_days: vec![],
             promoted_to: vec![],
+            work_refs: vec![],
         }
     }
 

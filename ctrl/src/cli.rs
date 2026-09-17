@@ -340,7 +340,10 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
             }
             explicit_root = Some(PathBuf::from(value));
         } else if argument.starts_with("--") {
-            return Err((structured, format!("Unknown option: {argument}; run `ctrl --help`")));
+            return Err((
+                structured,
+                format!("Unknown option: {argument}; run `ctrl --help`"),
+            ));
         } else {
             positional.push(argument.clone());
         }
@@ -437,6 +440,33 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
             if domain == "work" && matches!(verb.as_str(), "search" | "open" | "reveal") =>
         {
             return Err((structured, format!("work {verb} requires a query.")));
+        }
+        [domain, verb] if domain == "git" && verb == "census" => {
+            ("central.git.census", json!({ "format": "list" }))
+        }
+        [domain, verb, project] if domain == "git" && verb == "census" => (
+            "central.git.census",
+            json!({ "format": "list", "project": project }),
+        ),
+        [domain, verb] if domain == "git" && verb == "tree" => {
+            ("central.git.census", json!({ "format": "tree" }))
+        }
+        [domain, verb, project] if domain == "git" && verb == "tree" => (
+            "central.git.census",
+            json!({ "format": "tree", "project": project }),
+        ),
+        [domain, verb] if domain == "git" && verb == "graph" => {
+            ("central.git.census", json!({ "format": "graph" }))
+        }
+        [domain, verb, project] if domain == "git" && verb == "graph" => (
+            "central.git.census",
+            json!({ "format": "graph", "project": project }),
+        ),
+        [domain, ..] if domain == "git" => {
+            return Err((
+                structured,
+                "git takes census, tree or graph, with an optional Project name.".to_owned(),
+            ));
         }
         [command] if command == "open" => {
             return Err((
@@ -584,7 +614,10 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
             (canonical.as_str(), json!({}))
         }
         [unknown] => {
-            return Err((structured, format!("Unknown command: {unknown}; run `ctrl --help`")))
+            return Err((
+                structured,
+                format!("Unknown command: {unknown}; run `ctrl --help`"),
+            ))
         }
         _ => {
             return Err((
@@ -684,6 +717,28 @@ fn human_output(result: &ActionResult) -> String {
         Some("central.world.project") => crate::world_map::explain_project_world_map(data),
         Some("central.world.reproject.plan") => crate::world_map::explain_reproject_plan(data),
         Some("central.world.reproject.apply") => crate::world_map::explain_reproject_receipt(data),
+        Some("central.git.census") => {
+            if let Some(render) = data.get("render").and_then(Value::as_str) {
+                render.to_owned()
+            } else {
+                let summary = data.get("summary");
+                let field = |name: &str| {
+                    summary
+                        .and_then(|s| s.get(name))
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0)
+                };
+                format!(
+                    "census: repos={} worktrees={} branches={} local_only={} unattributed={} attention={}",
+                    field("repos_censused"),
+                    field("worktrees"),
+                    field("branches"),
+                    field("local_only_branches"),
+                    field("unattributed_worktrees"),
+                    field("attention_items"),
+                )
+            }
+        }
         Some("central.recovery.plan") => crate::recovery::explain_recovery_plan(data),
         Some("central.recover") => crate::recovery::explain_recovery(data),
         Some("action.list") => data
@@ -970,6 +1025,7 @@ pub fn run_cli_with_runtime(
     crate::agent_set_actions::register_agent_set_actions(&mut registry);
     crate::remember_actions::register_remember_actions(&mut registry);
     crate::system_disclosure::register_system_disclosure_action(&mut registry);
+    crate::git_census::register_git_actions(&mut registry);
     crate::configuration::register_configuration_actions(&mut registry);
     let result = match parsed.target {
         CommandTarget::Direct { action_id, input } => {
