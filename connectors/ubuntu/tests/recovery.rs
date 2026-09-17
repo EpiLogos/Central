@@ -49,6 +49,25 @@ fn ubuntu_registry() -> ConnectorRegistry {
 #[cfg(target_os = "linux")]
 #[test]
 fn canonical_recovery_reuses_the_real_ubuntu_reconciliation_connectors() {
+    // The recovery walk drives the real Ubuntu reconciliation connectors
+    // (dpkg/apt toolchain). On Linux hosts without them it cannot execute by
+    // design: declare the skip instead of failing on a machine that is not
+    // the platform under test.
+    let ubuntu_tooling = std::env::var("PATH")
+        .map(|paths| {
+            paths.split(':').any(|dir| {
+                std::path::Path::new(dir).join("dpkg").is_file()
+            })
+        })
+        .unwrap_or(false);
+    if !ubuntu_tooling {
+        eprintln!(
+            "declared skip: dpkg is unavailable on this host; the Ubuntu \
+             recovery walk needs the real Ubuntu package toolchain"
+        );
+        return;
+    }
+
     let fixture = temporary_directory("provider-proof");
     let root = fixture.join("Central");
     initialize_central(&root).unwrap();
