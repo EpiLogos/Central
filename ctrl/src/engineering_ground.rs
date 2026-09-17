@@ -20,7 +20,7 @@ use std::io;
 use std::path::Path;
 
 pub const ENGINEERING_GROUND_DIR: &str = "Control/agents/governance/engineering";
-pub const ENGINEERING_GROUND_STATEMENTS: [&str; 11] = [
+pub const ENGINEERING_GROUND_STATEMENTS: [&str; 12] = [
     "agent-operations.md",
     "coding-approach.md",
     "verification.md",
@@ -32,6 +32,7 @@ pub const ENGINEERING_GROUND_STATEMENTS: [&str; 11] = [
     "derived-surfaces.md",
     "skills-as-agent-ci.md",
     "feature-completion.md",
+    "loop-closure.md",
 ];
 pub const ENGINEERING_GROUND_OUTPUT: &str =
     "Control/agents/governance/engineering/foundational-prompt.md";
