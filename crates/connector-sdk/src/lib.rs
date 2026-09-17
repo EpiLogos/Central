@@ -1,6 +1,7 @@
 mod automation_conformance;
 mod conformance;
 mod connector;
+pub mod machine_capability;
 mod notification;
 mod port;
 mod scoped_conformance;
@@ -16,6 +17,11 @@ pub use conformance::{
     MachineInspectorConformanceFixture, NativeTargetConformanceFixture,
     PackageManagerConformanceFixture, ServiceManagerConformanceFixture,
     TagStoreConformanceFixture, WorkDiscoveryConformanceFixture,
+};
+pub use machine_capability::{
+    capability_name, with_source, ACTUATION_DETECT_DISCLOSURE_NAME, CAPABILITY_SOURCE_SEPARATOR,
+    SOURCE_ABSENT, SOURCE_ACTUATION_CAPABILITY, SOURCE_ACTUATION_DETECTION, SOURCE_UNAVAILABLE,
+    SOURCE_WORKCELL_INSTANCE, WORKCELL_REGISTRY_DISCLOSURE_NAME,
 };
 pub use connector::{
     validate_connector_manifest, CapabilityProbe, Connector, ConnectorContext, ConnectorDiagnostics,
