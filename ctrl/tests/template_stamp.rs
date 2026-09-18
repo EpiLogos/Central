@@ -26,6 +26,7 @@ const ROOT_DEFAULT_PATHS: &[&str] = &[
 ];
 const PROJECT_STRUCTURE_STARTER: &str = "ProjectCentral/agents/governance/repo-structure.md";
 const PROJECT_CONTENT_STARTER: &str = "ProjectCentral/agents/governance/repo-content.md";
+const PROJECT_TELOS_STARTER: &str = "ProjectCentral/user/telos/README.md";
 
 fn temporary_directory(label: &str) -> PathBuf {
     let nonce = SystemTime::now()
@@ -165,25 +166,37 @@ fn project_scope_creates_starters_after_projectcentral_init() {
         vec![
             PROJECT_STRUCTURE_STARTER.to_owned(),
             PROJECT_CONTENT_STARTER.to_owned(),
+            PROJECT_TELOS_STARTER.to_owned(),
         ]
     );
 
     let result = stamp_project(&project).unwrap();
-    assert_eq!(result.created.len(), 2);
+    assert_eq!(result.created.len(), 3);
     assert!(result.skipped_existing.is_empty());
     assert_marked_draft(&project.join(PROJECT_STRUCTURE_STARTER));
     assert_marked_draft(&project.join(PROJECT_CONTENT_STARTER));
+    assert_marked_draft(&project.join(PROJECT_TELOS_STARTER));
 
-    // The stamp adds nothing to the human authorship aperture.
+    // The telos ground skeleton is the one owner-commissioned default inside
+    // the human aperture; the aperture root itself stays untouched.
     assert!(!project
         .join(PROJECTCENTRAL_DIR)
         .join("user")
         .join("README.md")
         .exists());
+    let aperture = project.join(PROJECTCENTRAL_DIR).join("user");
+    let stamped: Vec<_> = fs::read_dir(&aperture)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(
+        stamped,
+        vec![std::ffi::OsString::from("telos")]
+    );
 
     let second = stamp_project(&project).unwrap();
     assert!(second.created.is_empty());
-    assert_eq!(second.skipped_existing.len(), 2);
+    assert_eq!(second.skipped_existing.len(), 3);
 }
 
 #[test]
@@ -208,14 +221,40 @@ fn project_scope_never_overwrites_project_governance() {
     fs::write(&live, "this repo's own structure law\n").unwrap();
 
     let result = stamp_project(&project).unwrap();
-    assert_eq!(result.created, vec![PROJECT_CONTENT_STARTER.to_owned()]);
+    assert_eq!(
+        result.created,
+        vec![
+            PROJECT_CONTENT_STARTER.to_owned(),
+            PROJECT_TELOS_STARTER.to_owned(),
+        ]
+    );
     assert_eq!(
         result.skipped_existing,
         vec![PROJECT_STRUCTURE_STARTER.to_owned()]
     );
+    // The starter the owner already wrote keeps their words byte-for-byte.
     assert_eq!(
         fs::read_to_string(&live).unwrap(),
         "this repo's own structure law\n"
+    );
+}
+
+#[test]
+fn project_scope_never_overwrites_owner_telos_ground() {
+    let central = initialized_central("project-telos-no-clobber");
+    let project = central.join("Work/product");
+    fs::create_dir_all(&project).unwrap();
+    initialize_projectcentral(&central, &project, "example/product").unwrap();
+
+    let live = project.join(PROJECT_TELOS_STARTER);
+    fs::create_dir_all(live.parent().unwrap()).unwrap();
+    fs::write(&live, "the owner's own open intents\n").unwrap();
+
+    let result = stamp_project(&project).unwrap();
+    assert_eq!(result.skipped_existing, vec![PROJECT_TELOS_STARTER.to_owned()]);
+    assert_eq!(
+        fs::read_to_string(&live).unwrap(),
+        "the owner's own open intents\n"
     );
 }
 
