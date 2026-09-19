@@ -1,11 +1,9 @@
 use central_ctrl::projectcentral_ops::register_projectcentral_actions;
+use central_ctrl::source_transfer::{SOURCE_TRANSFER_APPLY_RECEIPT_SCHEMA, SOURCE_TRANSFER_SCHEMA};
 use central_ctrl::{
     create_core_action_registry, create_default_connector_registry, read_project_change_horizon,
     run_cli, ActionExecutionContext, CliEnvironment, ConnectorContext, ConnectorRegistry,
     ResultStatus, RootOptions,
-};
-use central_ctrl::source_transfer::{
-    SOURCE_TRANSFER_APPLY_RECEIPT_SCHEMA, SOURCE_TRANSFER_SCHEMA,
 };
 use serde_json::{json, Value};
 use std::fs;
@@ -152,10 +150,18 @@ fn forked_grounds(
     let a = ground(&format!("{label}-a"), "case6");
     let b = ground(&format!("{label}-b"), "case6");
     let _ = read_project_change_horizon(&a.2, None).unwrap();
-    write_external(&a.2, "ProjectCentral/agents/wiki/case6-note.md", "shared fork\n");
+    write_external(
+        &a.2,
+        "ProjectCentral/agents/wiki/case6-note.md",
+        "shared fork\n",
+    );
     let horizon = read_project_change_horizon(&a.2, None).unwrap();
     let source_ref = source_ref_of(&horizon, "case6-note.md");
-    write_external(&b.2, "ProjectCentral/agents/wiki/case6-note.md", "shared fork\n");
+    write_external(
+        &b.2,
+        "ProjectCentral/agents/wiki/case6-note.md",
+        "shared fork\n",
+    );
     let _ = read_project_change_horizon(&b.2, None).unwrap();
     assert_eq!(
         current_revision(&a.2, &source_ref),
@@ -224,7 +230,11 @@ fn write_bundle_file(dir: &Path, payload: &Value) -> PathBuf {
 fn export_carries_scope_direction_and_payloads_without_absolute_paths() {
     let (_a, central_a, project_a) = ground("export", "case6");
     let _ = read_project_change_horizon(&project_a, None).unwrap();
-    write_external(&project_a, "ProjectCentral/agents/wiki/case6-note.md", "shared fork\n");
+    write_external(
+        &project_a,
+        "ProjectCentral/agents/wiki/case6-note.md",
+        "shared fork\n",
+    );
     let horizon = read_project_change_horizon(&project_a, None).unwrap();
     let source_ref = source_ref_of(&horizon, "case6-note.md");
     write_via_action(
@@ -247,7 +257,10 @@ fn export_carries_scope_direction_and_payloads_without_absolute_paths() {
     let bundle = result.data.unwrap();
     assert_eq!(bundle["schema"], SOURCE_TRANSFER_SCHEMA);
     assert_eq!(bundle["direction"]["from_world_ref"], world_ref.as_str());
-    assert_eq!(bundle["direction"]["to_world_ref"], "project:example/elsewhere");
+    assert_eq!(
+        bundle["direction"]["to_world_ref"],
+        "project:example/elsewhere"
+    );
     assert_eq!(bundle["direction"]["from_ground"], "origin-ground");
     assert_eq!(bundle["direction"]["to_ground"], "receiving-ground");
     assert_eq!(bundle["scope"]["source_refs"][0], source_ref.as_str());
@@ -273,7 +286,11 @@ fn export_carries_scope_direction_and_payloads_without_absolute_paths() {
 fn export_refuses_own_ground_destination_and_foreign_and_masked_sources() {
     let (_a, central_a, project_a) = ground("export-refuse", "case6");
     let _ = read_project_change_horizon(&project_a, None).unwrap();
-    write_external(&project_a, "ProjectCentral/agents/wiki/case6-note.md", "shared fork\n");
+    write_external(
+        &project_a,
+        "ProjectCentral/agents/wiki/case6-note.md",
+        "shared fork\n",
+    );
     let horizon = read_project_change_horizon(&project_a, None).unwrap();
     let source_ref = source_ref_of(&horizon, "case6-note.md");
 
@@ -288,8 +305,16 @@ fn export_refuses_own_ground_destination_and_foreign_and_masked_sources() {
 
     // A masked source participates but is never disclosed or exported:
     // masking is enforced before any payload is read.
-    write_external(&project_a, "ProjectCentral/agents/wiki/masked/.no-agent-retrieval", "");
-    write_external(&project_a, "ProjectCentral/agents/wiki/masked/secret.md", "masked\n");
+    write_external(
+        &project_a,
+        "ProjectCentral/agents/wiki/masked/.no-agent-retrieval",
+        "",
+    );
+    write_external(
+        &project_a,
+        "ProjectCentral/agents/wiki/masked/secret.md",
+        "masked\n",
+    );
     let horizon = read_project_change_horizon(&project_a, None).unwrap();
     let masked = horizon
         .sources
@@ -304,8 +329,17 @@ fn export_refuses_own_ground_destination_and_foreign_and_masked_sources() {
         &masked.binding.source_ref,
         None,
     );
-    assert_eq!(refused.status, ResultStatus::UnavailableCapability, "{:?}", refused.error);
-    assert!(refused.error.unwrap().message.contains("no-agent-retrieval"));
+    assert_eq!(
+        refused.status,
+        ResultStatus::UnavailableCapability,
+        "{:?}",
+        refused.error
+    );
+    assert!(refused
+        .error
+        .unwrap()
+        .message
+        .contains("no-agent-retrieval"));
 }
 
 #[test]
@@ -323,10 +357,18 @@ fn apply_fast_forwards_from_the_recorded_base_and_emits_an_attributed_change() {
     // Scope the transfer to the changes after the shared fork.
     let world_ref = world_ref_of(&project_b);
     let exported = export(&central_a, &project_a, &world_ref, &source_ref, Some(1));
-    assert_eq!(exported.status, ResultStatus::Success, "{:?}", exported.error);
+    assert_eq!(
+        exported.status,
+        ResultStatus::Success,
+        "{:?}",
+        exported.error
+    );
     let bundle = exported.data.unwrap();
     assert_eq!(bundle["sources"][0]["kind"], "modified");
-    assert_eq!(bundle["sources"][0]["base_revision"], current_revision(&project_b, &source_ref).as_str());
+    assert_eq!(
+        bundle["sources"][0]["base_revision"],
+        current_revision(&project_b, &source_ref).as_str()
+    );
     let bundle_file = write_bundle_file(temp_b.path(), &bundle);
 
     let applied = apply_bundle(&central_b, &project_b, &bundle_file, json!({}));
@@ -389,10 +431,21 @@ fn divergent_change_conflicts_is_recorded_and_overwrites_nothing() {
 
     let world_ref = world_ref_of(&project_b);
     let exported = export(&central_a, &project_a, &world_ref, &source_ref, Some(1));
-    assert_eq!(exported.status, ResultStatus::Success, "{:?}", exported.error);
+    assert_eq!(
+        exported.status,
+        ResultStatus::Success,
+        "{:?}",
+        exported.error
+    );
     let bundle = exported.data.unwrap();
-    assert_eq!(bundle["sources"][0]["base_revision"], revision_shared.as_str());
-    assert_eq!(bundle["sources"][0]["after_revision"], origin_revision.as_str());
+    assert_eq!(
+        bundle["sources"][0]["base_revision"],
+        revision_shared.as_str()
+    );
+    assert_eq!(
+        bundle["sources"][0]["after_revision"],
+        origin_revision.as_str()
+    );
     let bundle_file = write_bundle_file(temp_b.path(), &bundle);
 
     let applied = apply_bundle(&central_b, &project_b, &bundle_file, json!({}));
@@ -435,9 +488,9 @@ fn divergent_change_conflicts_is_recorded_and_overwrites_nothing() {
         .contains("accept-incoming"));
     // Both sides of the divergence are snapshotted beside the record.
     let stem = conflict_ref.rsplit(':').next().unwrap();
-    let local_snapshot = fs::read_to_string(
-        project_b.join(format!(".central/source-transfer/conflicts/{stem}/local-source.txt")),
-    )
+    let local_snapshot = fs::read_to_string(project_b.join(format!(
+        ".central/source-transfer/conflicts/{stem}/local-source.txt"
+    )))
     .unwrap();
     assert!(local_snapshot.contains("receiver's own divergent line"));
 }
@@ -487,10 +540,17 @@ fn resolve_accept_incoming_requires_the_exact_recorded_local_revision() {
     // A wrong basis is refused: the recorded divergence is the only basis.
     let wrong = run_action(
         "projectcentral.source.transfer.resolve",
-        resolve_input(json!({"expected_local_revision": "central.content-fnv1a64/v1:0:cbf29ce484222325"})),
+        resolve_input(
+            json!({"expected_local_revision": "central.content-fnv1a64/v1:0:cbf29ce484222325"}),
+        ),
         &central_b,
     );
-    assert_eq!(wrong.status, ResultStatus::InvalidInput, "{:?}", wrong.error);
+    assert_eq!(
+        wrong.status,
+        ResultStatus::InvalidInput,
+        "{:?}",
+        wrong.error
+    );
 
     let result = run_action(
         "projectcentral.source.transfer.resolve",
@@ -519,7 +579,10 @@ fn resolve_accept_incoming_requires_the_exact_recorded_local_revision() {
         json!({"project": project_b.file_name().unwrap().to_string_lossy(), "status": "resolved"}),
         &central_b,
     );
-    assert_eq!(listed.data.unwrap()["conflicts"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        listed.data.unwrap()["conflicts"].as_array().unwrap().len(),
+        1
+    );
     // And with no open conflict left, a repeat resolution refuses honestly.
     let repeat = run_action(
         "projectcentral.source.transfer.resolve",
@@ -590,11 +653,22 @@ fn apply_refuses_direction_and_payload_violations_without_mutating() {
         fs::read_to_string(project_b.join("ProjectCentral/agents/wiki/case6-note.md")).unwrap();
 
     // Directed at another ground.
-    let exported = export(&central_a, &project_a, "project:example/elsewhere", &source_ref, None);
+    let exported = export(
+        &central_a,
+        &project_a,
+        "project:example/elsewhere",
+        &source_ref,
+        None,
+    );
     let bundle = exported.data.unwrap();
     let bundle_file = write_bundle_file(temp_b.path(), &bundle);
     let refused = apply_bundle(&central_b, &project_b, &bundle_file, json!({}));
-    assert_eq!(refused.status, ResultStatus::InvalidInput, "{:?}", refused.error);
+    assert_eq!(
+        refused.status,
+        ResultStatus::InvalidInput,
+        "{:?}",
+        refused.error
+    );
 
     let world_ref = world_ref_of(&project_b);
 
@@ -618,7 +692,12 @@ fn apply_refuses_direction_and_payload_violations_without_mutating() {
         json!("central:source:project:example/other:ProjectCentral/x.md");
     let bundle_file = write_bundle_file(temp_b.path(), &bundle);
     let refused = apply_bundle(&central_b, &project_b, &bundle_file, json!({}));
-    assert_eq!(refused.status, ResultStatus::InvalidInput, "{:?}", refused.error);
+    assert_eq!(
+        refused.status,
+        ResultStatus::InvalidInput,
+        "{:?}",
+        refused.error
+    );
 
     // A path outside the participating trees has no home on this ground.
     let exported = export(&central_a, &project_a, &world_ref, &source_ref, Some(1));
@@ -628,7 +707,12 @@ fn apply_refuses_direction_and_payload_violations_without_mutating() {
         json!(format!("central:source:{world_ref}:docs%2Felbow-room.md"));
     let bundle_file = write_bundle_file(temp_b.path(), &bundle);
     let refused = apply_bundle(&central_b, &project_b, &bundle_file, json!({}));
-    assert_eq!(refused.status, ResultStatus::InvalidInput, "{:?}", refused.error);
+    assert_eq!(
+        refused.status,
+        ResultStatus::InvalidInput,
+        "{:?}",
+        refused.error
+    );
 
     assert_eq!(
         fs::read_to_string(project_b.join("ProjectCentral/agents/wiki/case6-note.md")).unwrap(),
@@ -641,12 +725,21 @@ fn apply_refuses_declared_non_human_write_to_human_ground() {
     let ((_temp_a, central_a, project_a), (temp_b, central_b, project_b), _source_ref) =
         forked_grounds("authority");
     // A human-ground aperture source, changed on the origin ground.
-    write_external(&project_a, "ProjectCentral/user/intent.md", "origin intent\n");
+    write_external(
+        &project_a,
+        "ProjectCentral/user/intent.md",
+        "origin intent\n",
+    );
     let horizon = read_project_change_horizon(&project_a, None).unwrap();
     let intent_ref = source_ref_of(&horizon, "intent.md");
     let world_ref = world_ref_of(&project_b);
     let exported = export(&central_a, &project_a, &world_ref, &intent_ref, None);
-    assert_eq!(exported.status, ResultStatus::Success, "{:?}", exported.error);
+    assert_eq!(
+        exported.status,
+        ResultStatus::Success,
+        "{:?}",
+        exported.error
+    );
     let bundle_file = write_bundle_file(temp_b.path(), &exported.data.unwrap());
 
     // B never held this source: absent local, unacknowledged lineage, and a
@@ -676,17 +769,25 @@ fn unestablished_lineage_conflicts_until_explicitly_acknowledged() {
     );
 
     // A source the origin created within the transferred range.
-    write_external(&project_a, "ProjectCentral/agents/wiki/fresh-note.md", "born on origin\n");
+    write_external(
+        &project_a,
+        "ProjectCentral/agents/wiki/fresh-note.md",
+        "born on origin\n",
+    );
     let horizon = read_project_change_horizon(&project_a, None).unwrap();
     let fresh_ref = source_ref_of(&horizon, "fresh-note.md");
 
     let world_ref = world_ref_of(&project_b);
     let exported = export(&central_a, &project_a, &world_ref, &fresh_ref, None);
-    assert_eq!(exported.status, ResultStatus::Success, "{:?}", exported.error);
+    assert_eq!(
+        exported.status,
+        ResultStatus::Success,
+        "{:?}",
+        exported.error
+    );
     let bundle = exported.data.unwrap();
     assert_eq!(
-        bundle["sources"][0]["kind"],
-        "added",
+        bundle["sources"][0]["kind"], "added",
         "the origin's creation is in the transferred range"
     );
     let bundle_file = write_bundle_file(temp_b.path(), &bundle);
@@ -703,7 +804,11 @@ fn unestablished_lineage_conflicts_until_explicitly_acknowledged() {
     // state: applying it without acknowledgement conflicts, with the caller's
     // explicit lineage acknowledgement it is established.
     let (_temp_c, central_c, project_c) = ground("lineage-c", "case6");
-    write_external(&project_c, "ProjectCentral/agents/wiki/prehistoric.md", "before any horizon\n");
+    write_external(
+        &project_c,
+        "ProjectCentral/agents/wiki/prehistoric.md",
+        "before any horizon\n",
+    );
     let horizon_c = read_project_change_horizon(&project_c, None).unwrap();
     let prehistoric_ref = source_ref_of(&horizon_c, "prehistoric.md");
     let exported = export(&central_c, &project_c, &world_ref, &prehistoric_ref, None);
@@ -713,7 +818,9 @@ fn unestablished_lineage_conflicts_until_explicitly_acknowledged() {
     let bundle_file = write_bundle_file(temp_b.path(), &bundle);
     let refused = apply_bundle(&central_b, &project_b, &bundle_file, json!({}));
     assert_eq!(refused.data.unwrap()["status"], "conflicted");
-    assert!(!project_b.join("ProjectCentral/agents/wiki/prehistoric.md").exists());
+    assert!(!project_b
+        .join("ProjectCentral/agents/wiki/prehistoric.md")
+        .exists());
 
     let bundle_file = write_bundle_file(temp_b.path(), &bundle);
     let established = apply_bundle(
@@ -726,7 +833,12 @@ fn unestablished_lineage_conflicts_until_explicitly_acknowledged() {
             "agent_session_ref": "session/establish",
         }),
     );
-    assert_eq!(established.status, ResultStatus::Success, "{:?}", established.error);
+    assert_eq!(
+        established.status,
+        ResultStatus::Success,
+        "{:?}",
+        established.error
+    );
     let receipt = established.data.unwrap();
     assert_eq!(receipt["outcomes"][0]["outcome"], "established");
     assert_eq!(
@@ -775,11 +887,19 @@ fn transfer_records_carry_no_absolute_paths() {
     for entry in walk(transfer_area) {
         let raw = fs::read_to_string(&entry).unwrap();
         for path in &forbidden {
-            assert!(!raw.contains(path.as_str()), "{} leaks {}", entry.display(), path);
+            assert!(
+                !raw.contains(path.as_str()),
+                "{} leaks {}",
+                entry.display(),
+                path
+            );
         }
         inspected += 1;
     }
-    assert!(inspected >= 3, "receipt, conflict record and snapshots expected");
+    assert!(
+        inspected >= 3,
+        "receipt, conflict record and snapshots expected"
+    );
 }
 
 fn walk(root: PathBuf) -> Vec<PathBuf> {

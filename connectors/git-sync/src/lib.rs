@@ -1,10 +1,11 @@
+mod git_state;
 mod source_history;
 
 use central_connector_sdk::{
     CapabilityProbe, Connector, ConnectorContext, ConnectorManifest, ConnectorPortDeclaration,
-    PortContract, PortError, PortErrorCode, SourceHistory, StateChangePreview, StateChangeResult,
-    SynchronizationRequest, Synchronizer, CONNECTOR_API_VERSION, SOURCE_HISTORY_PORT,
-    SYNCHRONIZER_PORT,
+    GitState, PortContract, PortError, PortErrorCode, SourceHistory, StateChangePreview,
+    StateChangeResult, SynchronizationRequest, Synchronizer, CONNECTOR_API_VERSION, GIT_STATE_PORT,
+    SOURCE_HISTORY_PORT, SYNCHRONIZER_PORT,
 };
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -37,8 +38,8 @@ impl GitSynchronizerConnector {
             manifest: ConnectorManifest {
                 api_version: CONNECTOR_API_VERSION.to_owned(),
                 id: GIT_SYNCHRONIZER_CONNECTOR_ID.to_owned(),
-                version: "0.2.0".to_owned(),
-                display_name: "Git synchronization and source history".to_owned(),
+                version: "0.3.0".to_owned(),
+                display_name: "Git synchronization, source history and state".to_owned(),
                 ports: vec![
                     ConnectorPortDeclaration {
                         id: SYNCHRONIZER_PORT.id.to_owned(),
@@ -47,6 +48,10 @@ impl GitSynchronizerConnector {
                     ConnectorPortDeclaration {
                         id: SOURCE_HISTORY_PORT.id.to_owned(),
                         version: SOURCE_HISTORY_PORT.version.to_owned(),
+                    },
+                    ConnectorPortDeclaration {
+                        id: GIT_STATE_PORT.id.to_owned(),
+                        version: GIT_STATE_PORT.version.to_owned(),
                     },
                 ],
                 platforms: vec!["*".to_owned()],
@@ -65,6 +70,11 @@ impl GitSynchronizerConnector {
 
     pub fn target(&self) -> &Path {
         &self.target
+    }
+
+    /// The configured Git executable, shared with the GitState port.
+    pub(crate) fn git_path(&self) -> &Path {
+        &self.git
     }
 
     fn error(
@@ -125,8 +135,7 @@ impl GitSynchronizerConnector {
             .args(["rev-parse", "--is-inside-work-tree"])
             .output()
             .map(|output| {
-                output.status.success()
-                    && String::from_utf8_lossy(&output.stdout).trim() == "true"
+                output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "true"
             })
             .unwrap_or(false)
     }
@@ -293,10 +302,11 @@ impl GitSynchronizerConnector {
         }
 
         let merge = self.command_output(
-            Command::new(&self.git)
-                .arg("-C")
-                .arg(&self.target)
-                .args(["merge", "--ff-only", "FETCH_HEAD"]),
+            Command::new(&self.git).arg("-C").arg(&self.target).args([
+                "merge",
+                "--ff-only",
+                "FETCH_HEAD",
+            ]),
             "fast-forward merge",
         )?;
         if !merge.status.success() {
@@ -387,7 +397,8 @@ impl Connector for GitSynchronizerConnector {
                 "Git executable is unavailable; configure {GIT_ENV} when git is not on PATH."
             ));
         }
-        if port.id == SOURCE_HISTORY_PORT.id {
+        if port.id == SOURCE_HISTORY_PORT.id || port.id == GIT_STATE_PORT.id {
+            // Both read ports are request-scoped; no configured target needed.
             return CapabilityProbe::available();
         }
         if self.target.as_os_str().is_empty() {
@@ -409,6 +420,10 @@ impl Connector for GitSynchronizerConnector {
     }
 
     fn source_history(&self) -> Option<&dyn SourceHistory> {
+        Some(self)
+    }
+
+    fn git_state(&self) -> Option<&dyn GitState> {
         Some(self)
     }
 }

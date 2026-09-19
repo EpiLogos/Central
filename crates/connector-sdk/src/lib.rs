@@ -1,6 +1,7 @@
 mod automation_conformance;
 mod conformance;
 mod connector;
+pub mod git_state;
 pub mod machine_capability;
 mod notification;
 mod port;
@@ -15,18 +16,23 @@ pub use conformance::{
     run_service_manager_conformance, run_tag_store_conformance, run_work_discovery_conformance,
     ConfigurationManagerConformanceFixture, ConformanceFailure, ConformanceReport,
     MachineInspectorConformanceFixture, NativeTargetConformanceFixture,
-    PackageManagerConformanceFixture, ServiceManagerConformanceFixture,
-    TagStoreConformanceFixture, WorkDiscoveryConformanceFixture,
+    PackageManagerConformanceFixture, ServiceManagerConformanceFixture, TagStoreConformanceFixture,
+    WorkDiscoveryConformanceFixture,
+};
+pub use connector::{
+    validate_connector_manifest, CapabilityProbe, Connector, ConnectorContext,
+    ConnectorDiagnostics, ConnectorManifest, ConnectorPortDeclaration, ConnectorRegistry,
+    ConnectorResolution, ConnectorSummary, IneligibleConnector, ManifestError,
+    CONNECTOR_API_VERSION,
+};
+pub use git_state::{
+    GitBranchObservation, GitCensusRequest, GitRepoCensus, GitState, GitWorktreeObservation,
+    GIT_STATE_OPERATIONS, GIT_STATE_PORT,
 };
 pub use machine_capability::{
     capability_name, with_source, ACTUATION_DETECT_DISCLOSURE_NAME, CAPABILITY_SOURCE_SEPARATOR,
     SOURCE_ABSENT, SOURCE_ACTUATION_CAPABILITY, SOURCE_ACTUATION_DETECTION, SOURCE_UNAVAILABLE,
     SOURCE_WORKCELL_INSTANCE, WORKCELL_REGISTRY_DISCLOSURE_NAME,
-};
-pub use connector::{
-    validate_connector_manifest, CapabilityProbe, Connector, ConnectorContext, ConnectorDiagnostics,
-    ConnectorManifest, ConnectorPortDeclaration, ConnectorRegistry, ConnectorResolution,
-    ConnectorSummary, IneligibleConnector, ManifestError, CONNECTOR_API_VERSION,
 };
 pub use notification::{
     NotificationAuthorizationState, NotificationCapabilities, NotificationCapabilityRequest,
@@ -46,9 +52,8 @@ pub use port::{
     CONFIGURATION_MANAGER_OPERATIONS, CONFIGURATION_MANAGER_PORT, MACHINE_INSPECTOR_OPERATIONS,
     MACHINE_INSPECTOR_PORT, NATIVE_OPEN_OPERATIONS, NATIVE_OPEN_PORT, NATIVE_REVEAL_OPERATIONS,
     NATIVE_REVEAL_PORT, PACKAGE_MANAGER_OPERATIONS, PACKAGE_MANAGER_PORT,
-    SERVICE_MANAGER_OPERATIONS, SERVICE_MANAGER_PORT, SYNCHRONIZER_OPERATIONS,
-    SYNCHRONIZER_PORT, TAG_STORE_OPERATIONS, TAG_STORE_PORT, WORK_DISCOVERY_OPERATIONS,
-    WORK_DISCOVERY_PORT,
+    SERVICE_MANAGER_OPERATIONS, SERVICE_MANAGER_PORT, SYNCHRONIZER_OPERATIONS, SYNCHRONIZER_PORT,
+    TAG_STORE_OPERATIONS, TAG_STORE_PORT, WORK_DISCOVERY_OPERATIONS, WORK_DISCOVERY_PORT,
 };
 pub use scoped_conformance::{
     run_scoped_machine_inspector_conformance, ScopedMachineInspectorConformanceFixture,

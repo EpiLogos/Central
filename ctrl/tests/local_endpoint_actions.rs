@@ -125,8 +125,17 @@ fn actions_record_ports_observe_occupancy_and_guard_cross_project_collisions() {
     let central = run(&root, "central.local-endpoints.inspect", json!({}));
     assert_eq!(central.exit_code, 0, "{}", central.output);
     let central_value: Value = serde_json::from_str(&central.output).unwrap();
-    assert_eq!(central_value["data"]["endpoints"].as_array().unwrap().len(), 2);
-    assert_eq!(central_value["data"]["collisions"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        central_value["data"]["endpoints"].as_array().unwrap().len(),
+        2
+    );
+    assert_eq!(
+        central_value["data"]["collisions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     assert_eq!(central_value["data"]["collisions"][0]["port"], port);
 
     let refreshed = run(&root, "central.local-endpoints.refresh", json!({}));
@@ -196,7 +205,10 @@ fn scope_aware_set_inspect_collision_and_suggest_across_interfaces() {
     );
     assert_eq!(set_tailnet.exit_code, 0, "{}", set_tailnet.output);
     let set_value: Value = serde_json::from_str(&set_tailnet.output).unwrap();
-    assert_eq!(set_value["data"]["inspection"]["endpoints"][0]["declaration"]["scope"], "tailnet");
+    assert_eq!(
+        set_value["data"]["inspection"]["endpoints"][0]["declaration"]["scope"],
+        "tailnet"
+    );
 
     let set_localhost = run(
         &root,
@@ -242,7 +254,13 @@ fn scope_aware_set_inspect_collision_and_suggest_across_interfaces() {
     let central = run(&root, "central.local-endpoints.inspect", json!({}));
     assert_eq!(central.exit_code, 0, "{}", central.output);
     let central_value: Value = serde_json::from_str(&central.output).unwrap();
-    assert_eq!(central_value["data"]["collisions"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        central_value["data"]["collisions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
 
     drop(listener);
 

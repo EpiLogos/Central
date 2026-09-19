@@ -57,7 +57,8 @@ impl SourceHistory for GitSynchronizerConnector {
         }
         let max = input.max_bytes.max(1);
         let truncated = output.stdout.len() > max;
-        let patch = String::from_utf8_lossy(&output.stdout[..output.stdout.len().min(max)]).to_string();
+        let patch =
+            String::from_utf8_lossy(&output.stdout[..output.stdout.len().min(max)]).to_string();
         Ok(SourceCompareOutput {
             provider: GIT_SYNCHRONIZER_CONNECTOR_ID.to_owned(),
             source_path: input.source_path.clone(),
@@ -84,7 +85,10 @@ impl SourceHistory for GitSynchronizerConnector {
             "historical source read",
         )?;
         if !output.status.success() {
-            return Err(git_error("Git historical source revision could not be read.", output));
+            return Err(git_error(
+                "Git historical source revision could not be read.",
+                output,
+            ));
         }
         let max = input.max_bytes.max(1);
         let truncated = output.stdout.len() > max;
@@ -111,7 +115,10 @@ fn resolve_repo_path(
     if !world_root.is_dir() {
         return Err(PortError::new(
             PortErrorCode::InvalidInput,
-            format!("Source history world root does not exist: {}", world_root.display()),
+            format!(
+                "Source history world root does not exist: {}",
+                world_root.display()
+            ),
         ));
     }
     if source_path.as_os_str().is_empty()
@@ -206,7 +213,9 @@ fn require_revision(value: &str, field: &str) -> Result<(), PortError> {
     if value.trim().is_empty() || value != value.trim() || value.starts_with('-') {
         return Err(PortError::new(
             PortErrorCode::InvalidInput,
-            format!("{field} must be a non-empty Git revision expression and may not begin with '-'."),
+            format!(
+                "{field} must be a non-empty Git revision expression and may not begin with '-'."
+            ),
         ));
     }
     Ok(())
@@ -233,8 +242,14 @@ fn parse_history(raw: &str) -> Vec<SourceHistoryEntry> {
                 .map(str::to_owned)
                 .collect();
             let subject = fields.next().unwrap_or_default().to_owned();
-            let author = fields.next().filter(|value| !value.is_empty()).map(str::to_owned);
-            let authored_at = fields.next().filter(|value| !value.is_empty()).map(str::to_owned);
+            let author = fields
+                .next()
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned);
+            let authored_at = fields
+                .next()
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned);
             Some(SourceHistoryEntry {
                 revision,
                 parents,
@@ -254,8 +269,14 @@ mod tests {
 
     #[test]
     fn git_source_history_is_bounded_and_source_scoped() {
-        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let root = std::env::temp_dir().join(format!("central-git-history-{}-{nonce}", std::process::id()));
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "central-git-history-{}-{nonce}",
+            std::process::id()
+        ));
         fs::create_dir_all(root.join("ProjectCentral/user")).unwrap();
         run(&root, ["init", "-q"]);
         run(&root, ["config", "user.name", "Central Test"]);
@@ -271,31 +292,37 @@ mod tests {
         let second = rev(&root);
 
         let provider = GitSynchronizerConnector::with_paths(PathBuf::from("git"), root.clone());
-        let history = provider.history(&SourceHistoryRequest {
-            world_root: root.clone(),
-            source_path: PathBuf::from("ProjectCentral/user/intent.md"),
-            limit: 8,
-        }).unwrap();
+        let history = provider
+            .history(&SourceHistoryRequest {
+                world_root: root.clone(),
+                source_path: PathBuf::from("ProjectCentral/user/intent.md"),
+                limit: 8,
+            })
+            .unwrap();
         assert_eq!(history.entries.len(), 2);
         assert_eq!(history.entries[0].revision, second);
 
-        let compared = provider.compare(&SourceCompareRequest {
-            world_root: root.clone(),
-            source_path: PathBuf::from("ProjectCentral/user/intent.md"),
-            from_revision: first.clone(),
-            to_revision: second.clone(),
-            max_bytes: 4096,
-        }).unwrap();
+        let compared = provider
+            .compare(&SourceCompareRequest {
+                world_root: root.clone(),
+                source_path: PathBuf::from("ProjectCentral/user/intent.md"),
+                from_revision: first.clone(),
+                to_revision: second.clone(),
+                max_bytes: 4096,
+            })
+            .unwrap();
         assert!(compared.patch.contains("-one"));
         assert!(compared.patch.contains("+two"));
         assert!(!compared.truncated);
 
-        let prior = provider.read_revision(&SourceRevisionReadRequest {
-            world_root: root.clone(),
-            source_path: PathBuf::from("ProjectCentral/user/intent.md"),
-            revision: first,
-            max_bytes: 1024,
-        }).unwrap();
+        let prior = provider
+            .read_revision(&SourceRevisionReadRequest {
+                world_root: root.clone(),
+                source_path: PathBuf::from("ProjectCentral/user/intent.md"),
+                revision: first,
+                max_bytes: 1024,
+            })
+            .unwrap();
         assert_eq!(prior.content, b"one\n");
         assert!(!prior.truncated);
 
@@ -303,13 +330,27 @@ mod tests {
     }
 
     fn run<const N: usize>(cwd: &Path, args: [&str; N]) {
-        let status = Command::new("git").arg("-C").arg(cwd).args(args).status().unwrap();
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(cwd)
+            .args(args)
+            .status()
+            .unwrap();
         assert!(status.success());
     }
 
     fn rev(cwd: &Path) -> String {
         String::from_utf8(
-            Command::new("git").arg("-C").arg(cwd).args(["rev-parse", "HEAD"]).output().unwrap().stdout,
-        ).unwrap().trim().to_owned()
+            Command::new("git")
+                .arg("-C")
+                .arg(cwd)
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_owned()
     }
 }

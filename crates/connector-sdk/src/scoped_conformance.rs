@@ -27,7 +27,9 @@ fn ensure_unique_nonempty<'a>(
     let mut seen = BTreeSet::new();
     for value in values {
         if value.trim().is_empty() {
-            return Err(format!("MachineInspector {label} contains an empty identifier."));
+            return Err(format!(
+                "MachineInspector {label} contains an empty identifier."
+            ));
         }
         if !seen.insert(value) {
             return Err(format!(
@@ -104,9 +106,9 @@ pub fn run_scoped_machine_inspector_conformance(
         ));
     }
 
-    let implementation = connector
-        .machine_inspector()
-        .ok_or_else(|| "implementation: Connector does not expose MachineInspector implementation.".to_owned())?;
+    let implementation = connector.machine_inspector().ok_or_else(|| {
+        "implementation: Connector does not expose MachineInspector implementation.".to_owned()
+    })?;
 
     let first = implementation
         .inspect(&fixture.input)
@@ -126,17 +128,26 @@ pub fn run_scoped_machine_inspector_conformance(
                 .to_owned(),
         );
     }
-    ensure_unique_nonempty("capabilities", first.capabilities.iter().map(String::as_str))
-        .map_err(|message| format!("typed-operation: {message}"))?;
-    ensure_unique_nonempty("packages", first.packages.iter().map(|item| item.id.as_str()))
-        .map_err(|message| format!("typed-operation: {message}"))?;
+    ensure_unique_nonempty(
+        "capabilities",
+        first.capabilities.iter().map(String::as_str),
+    )
+    .map_err(|message| format!("typed-operation: {message}"))?;
+    ensure_unique_nonempty(
+        "packages",
+        first.packages.iter().map(|item| item.id.as_str()),
+    )
+    .map_err(|message| format!("typed-operation: {message}"))?;
     ensure_unique_nonempty(
         "configurations",
         first.configurations.iter().map(|item| item.id.as_str()),
     )
     .map_err(|message| format!("typed-operation: {message}"))?;
-    ensure_unique_nonempty("services", first.services.iter().map(|item| item.id.as_str()))
-        .map_err(|message| format!("typed-operation: {message}"))?;
+    ensure_unique_nonempty(
+        "services",
+        first.services.iter().map(|item| item.id.as_str()),
+    )
+    .map_err(|message| format!("typed-operation: {message}"))?;
     ensure_requested_observations(&fixture.input, &first)
         .map_err(|message| format!("requested-observations: {message}"))?;
 

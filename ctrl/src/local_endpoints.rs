@@ -322,7 +322,10 @@ pub fn read_project_local_endpoints(project_root: &Path) -> io::Result<ProjectLo
     serde_json::from_slice(&bytes).map_err(|error| {
         io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("{} is not valid local-endpoint JSON: {error}", path.display()),
+            format!(
+                "{} is not valid local-endpoint JSON: {error}",
+                path.display()
+            ),
         )
     })
 }
@@ -997,7 +1000,10 @@ pub fn suggest_central_local_endpoint(
                 LocalEndpointOccupancy::Available => {
                     free_in.push(LocalEndpointScopeObservation {
                         scope: scope.to_owned(),
-                        addresses: addresses.iter().map(|address| address.to_string()).collect(),
+                        addresses: addresses
+                            .iter()
+                            .map(|address| address.to_string())
+                            .collect(),
                         status: observation.status,
                         detail: observation.detail,
                     });
@@ -1054,7 +1060,11 @@ fn acquire_mutation_lock(central_root: &Path) -> io::Result<LocalEndpointMutatio
             Ok(()) => {
                 let _ = fs::write(
                     lock_path.join("owner"),
-                    format!("pid={}\ncreated_at={}\n", std::process::id(), now_unix_seconds()),
+                    format!(
+                        "pid={}\ncreated_at={}\n",
+                        std::process::id(),
+                        now_unix_seconds()
+                    ),
                 );
                 return Ok(LocalEndpointMutationLock { path: lock_path });
             }
@@ -1429,12 +1439,7 @@ fn central_inspect_action(
     let root = match resolve_central_root(context.root_options) {
         Ok(value) => value.path,
         Err(message) => {
-            return ActionResult::failure(
-                Some(action),
-                ResultStatus::InvalidInput,
-                message,
-                None,
-            )
+            return ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None)
         }
     };
     inspect_central_local_endpoints(&root)
@@ -1456,19 +1461,13 @@ fn central_refresh_action(
     let root = match resolve_central_root(context.root_options) {
         Ok(value) => value.path,
         Err(message) => {
-            return ActionResult::failure(
-                Some(action),
-                ResultStatus::InvalidInput,
-                message,
-                None,
-            )
+            return ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None)
         }
     };
     match refresh_central_local_endpoints(&root) {
-        Ok((cache, registry)) => ActionResult::success(
-            action,
-            json!({ "cache": cache, "registry": registry }),
-        ),
+        Ok((cache, registry)) => {
+            ActionResult::success(action, json!({ "cache": cache, "registry": registry }))
+        }
         Err(error) => io_failure(action, error),
     }
 }
@@ -1482,12 +1481,7 @@ fn central_suggest_action(
     let root = match resolve_central_root(context.root_options) {
         Ok(value) => value.path,
         Err(message) => {
-            return ActionResult::failure(
-                Some(action),
-                ResultStatus::InvalidInput,
-                message,
-                None,
-            )
+            return ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None)
         }
     };
     let start = optional_port(input, "start").unwrap_or(DEFAULT_SUGGEST_START);
@@ -1508,7 +1502,12 @@ pub fn register_local_endpoint_actions(registry: &mut ActionRegistry) {
     let kind = action_input("kind", "string", true);
     let port = action_input("port", "integer", true);
     let mut scope = action_input("scope", "string", false);
-    scope.choices = Some(LOCAL_ENDPOINT_SCOPES.iter().map(|value| value.to_string()).collect());
+    scope.choices = Some(
+        LOCAL_ENDPOINT_SCOPES
+            .iter()
+            .map(|value| value.to_string())
+            .collect(),
+    );
     let service = action_input("service", "string", false);
     let description = action_input("description", "string", false);
     let allow_conflict = action_input("allow_conflict", "boolean", false);
@@ -1614,7 +1613,11 @@ mod tests {
         let manifest = ProjectCentralManifest::new(project_id);
         let mut bytes = serde_json::to_vec_pretty(&manifest).unwrap();
         bytes.push(b'\n');
-        fs::write(project.join(PROJECTCENTRAL_DIR).join(PROJECT_MANIFEST), bytes).unwrap();
+        fs::write(
+            project.join(PROJECTCENTRAL_DIR).join(PROJECT_MANIFEST),
+            bytes,
+        )
+        .unwrap();
         project
     }
 
@@ -1623,7 +1626,9 @@ mod tests {
         let mut declaration = ProjectLocalEndpoints::default();
         declaration
             .endpoints
-            .push(LocalEndpointDeclaration::localhost_tcp("db", "database", 5432));
+            .push(LocalEndpointDeclaration::localhost_tcp(
+                "db", "database", 5432,
+            ));
         declaration
             .endpoints
             .push(LocalEndpointDeclaration::localhost_tcp("api", "http", 5432));
@@ -1653,7 +1658,10 @@ mod tests {
         endpoint.port = 55432;
         let update = set_project_local_endpoint(&project, endpoint).unwrap();
         assert!(update.changed);
-        assert_eq!(read_project_local_endpoints(&project).unwrap().endpoints[0].port, 55432);
+        assert_eq!(
+            read_project_local_endpoints(&project).unwrap().endpoints[0].port,
+            55432
+        );
 
         let removed = remove_project_local_endpoint(&project, "db").unwrap();
         assert!(removed.changed);
@@ -1722,7 +1730,9 @@ mod tests {
         let mut declaration = ProjectLocalEndpoints::default();
         declaration
             .endpoints
-            .push(LocalEndpointDeclaration::localhost_tcp("web", "http", 45140));
+            .push(LocalEndpointDeclaration::localhost_tcp(
+                "web", "http", 45140,
+            ));
         let mut tailnet_endpoint =
             LocalEndpointDeclaration::localhost_tcp("stdb", "database", 45141);
         tailnet_endpoint.scope = SCOPE_TAILNET.into();
