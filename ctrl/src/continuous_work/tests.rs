@@ -631,3 +631,80 @@ fn allocation_with_work_refs_carries_lane_claims_and_rejects_a_different_basis()
     let plain = execute_at(root, "allocate", &request(root, None, "task:plain"), 103).unwrap();
     assert!(!plain.is_null());
 }
+
+#[test]
+fn allocate_advertises_work_refs_in_its_declared_inputs() {
+    // The 2026-09-19 root allocate incident was diagnosable only from a raw
+    // serde message: the action accepted work_refs at runtime while its
+    // advertised contract omitted it. The declared inputs are the surface
+    // other agents read; they must carry the field.
+    let mut registry = crate::action::ActionRegistry::default();
+    register_actions(&mut registry);
+    let descriptor = registry.get("central.now.allocate").unwrap();
+    let work_refs = descriptor
+        .inputs
+        .iter()
+        .find(|input| input.name == "work_refs")
+        .expect("central.now.allocate must advertise work_refs");
+    assert_eq!(work_refs.input_type, "array");
+    assert!(!work_refs.required);
+}
+
+#[test]
+fn a_corrupt_bound_clearing_names_itself_in_the_listing_failure() {
+    // When one bound record fails to parse, the failure must name the
+    // offending record — a bare serde message left the 2026-09-19 incident
+    // pointing at the caller's request instead of the stale record.
+    let temp = world();
+    let root = temp.path();
+    let first = execute_at(root, "allocate", &request(root, None, "task:first"), 100).unwrap();
+    let second = execute_at(root, "allocate", &request(root, None, "task:second"), 101).unwrap();
+    let second_source = second["record"]["source_ref"].as_str().unwrap().to_owned();
+    let second_path = second_source
+        .split("central:source:control:root:")
+        .nth(1)
+        .unwrap()
+        .to_owned();
+    fs::write(
+        root.join(&second_path),
+        "{\"schema\":\"central.now-clearing/v1\"}",
+    )
+    .unwrap();
+
+    let error = execute_at(root, "now_list", &serde_json::json!({}), 102).unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains("failed to parse"),
+        "message must name the parse failure: {message}"
+    );
+    assert!(
+        message.contains(&second_source),
+        "message must name the offending record: {message}"
+    );
+
+    // Repairing the corrupt bytes restores the listing without touching the
+    // first allocation.
+    fs::write(
+        root.join(&second_path),
+        source::encoded(&serde_json::json!({
+            "schema":placement::NOW_SCHEMA,
+            "now_ref":second["record"]["now_ref"],
+            "source_ref":second_source,
+            "scope_ref":second["record"]["scope_ref"],
+            "task_ref":"task:second",
+            "purpose":"bounded implementation",
+            "participant_refs":["agent:test"],
+            "source_refs":[],
+            "policy_revision_at_allocation":first["record"]["policy_revision_at_allocation"],
+            "created_at_unix_seconds":101,
+            "lifecycle":"active",
+            "obligations":[],
+            "continuation_refs":[],
+            "archive_ref":null
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let listed = execute_at(root, "now_list", &serde_json::json!({}), 103).unwrap();
+    assert_eq!(listed["records"].as_array().unwrap().len(), 2);
+}
