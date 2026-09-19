@@ -1,4 +1,5 @@
 use central_connector_sdk::{ConnectorContext, ConnectorRegistry};
+use central_git_sync_connector::GitSynchronizerConnector;
 use central_macos_connectors::MacOsNativeConnector;
 use central_reference_connectors::create_default_connector_registry;
 use central_shortcuts_connector::ShortcutsAutomationConnector;
@@ -18,6 +19,12 @@ pub fn create_macos_connector_registry() -> ConnectorRegistry {
     registry
         .register(ShortcutsAutomationConnector::new())
         .expect("Shortcuts Connector manifest is valid");
+    // git-sync is a host-surface adapter: its request-scoped read ports
+    // (SourceHistory, GitState) back `central.git.census`. Mounted here rather
+    // than in ctrl core so the core keeps its dependency boundary.
+    registry
+        .register(GitSynchronizerConnector::new())
+        .expect("git-sync Connector manifest is valid");
     registry
 }
 

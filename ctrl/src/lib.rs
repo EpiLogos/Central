@@ -22,6 +22,7 @@ mod file_map_index;
 mod file_map_moves;
 mod file_map_projection;
 mod file_map_skills;
+pub mod git_census;
 pub mod local_endpoints;
 pub mod machine;
 pub mod machine_account;

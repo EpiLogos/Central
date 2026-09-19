@@ -110,3 +110,125 @@ fn generic_action_run_rejects_non_object_or_extra_input() {
     assert_eq!(extra.result.status, ResultStatus::InvalidInput);
     assert!(extra.output.contains("at most one JSON object"));
 }
+
+#[test]
+fn git_census_reports_worktrees_branches_and_attention_for_a_fixture_repo() {
+    use std::process::Command;
+
+    let root = temporary_directory("git-census").join("Central");
+    initialize_central(&root).unwrap();
+    let repo = root.join("Work/example");
+    fs::create_dir_all(&repo).unwrap();
+
+    let git = |args: &[&str], cwd: &std::path::Path| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(cwd)
+            .args(args)
+            .output()
+            .expect("git runs");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    git(&["init", "--initial-branch=main"], &repo);
+    git(&["config", "user.email", "contract@example.invalid"], &repo);
+    git(&["config", "user.name", "Contract"], &repo);
+    fs::write(repo.join("seed.txt"), "seed\n").unwrap();
+    git(&["add", "-A"], &repo);
+    git(&["commit", "-m", "seed"], &repo);
+    git(
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "lane/unpushed",
+            "../../example-lane",
+        ],
+        &repo,
+    );
+    fs::write(root.join("example-lane").join("lane.txt"), "lane\n").unwrap();
+    git(&["add", "-A"], &root.join("example-lane"));
+    git(&["commit", "-m", "lane work"], &root.join("example-lane"));
+    fs::write(repo.join("dirty.txt"), "uncommitted\n").unwrap();
+
+    // git-sync is a host-surface Connector, not part of ctrl core, so this
+    // contract test mounts it as a dev-only provider on top of the default
+    // registry and drives every git command through the runtime entry point.
+    let run_git = |args: &[String]| {
+        let mut connectors = central_ctrl::create_default_connector_registry();
+        connectors
+            .register(central_git_sync_connector::GitSynchronizerConnector::new())
+            .expect("git-sync Connector manifest is valid");
+        let connector_context = central_ctrl::ConnectorContext::current();
+        let mut surface = central_ctrl::NullTerminalSurface;
+        central_ctrl::run_cli_with_runtime(
+            args,
+            &environment(&root),
+            &mut surface,
+            &connectors,
+            &connector_context,
+        )
+    };
+    let json = run_git(&[
+        "--json".to_owned(),
+        "action".to_owned(),
+        "run".to_owned(),
+        "central.git.census".to_owned(),
+        r#"{"project":"example"}"#.to_owned(),
+    ]);
+    assert_eq!(json.result.status, ResultStatus::Success);
+    let repos = json.result.data.as_ref().unwrap()["repos"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(repos.len(), 1);
+    let repo_doc = &repos[0];
+    assert_eq!(repo_doc["repo"], "Work/example");
+    assert_eq!(repo_doc["head_branch"], "main");
+    assert_eq!(repo_doc["worktrees"].as_array().unwrap().len(), 2);
+    // The fixture has no remote at all, so every branch tip — main included —
+    // is reachable from no remote ref: both are reported local-only.
+    assert_eq!(repo_doc["unmerged_tips"].as_array().unwrap().len(), 2);
+    // The lane lives outside .aikit/tasks and no return claims it yet.
+    let lanes: Vec<&str> = repo_doc["worktrees"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|w| w["lane"].as_str())
+        .collect();
+    assert!(lanes.contains(&"unattributed"));
+
+    let attention: Vec<String> = json.result.data.as_ref().unwrap()["attention"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["kind"].as_str().unwrap().to_owned())
+        .collect();
+    assert!(attention.contains(&"local_only_branch".to_owned()));
+    assert!(attention.contains(&"unattributed_worktree".to_owned()));
+    assert_eq!(
+        attention
+            .iter()
+            .filter(|kind| *kind == "local_only_branch")
+            .count(),
+        2
+    );
+
+    let tree = run_git(&["git".to_owned(), "tree".to_owned(), "example".to_owned()]);
+    assert_eq!(tree.result.status, ResultStatus::Success);
+    assert!(tree.output.contains("wt example @ main"));
+    // The lane is checked out, so it renders as a worktree; the tree's
+    // branch section lists parked (not checked out) branches only.
+    assert!(tree.output.contains("wt example-lane @ lane/unpushed"));
+
+    let graph = run_git(&["git".to_owned(), "graph".to_owned()]);
+    assert_eq!(graph.result.status, ResultStatus::Success);
+    assert!(graph.output.contains("flowchart LR"));
+    assert!(graph.output.contains("LOCAL-ONLY"));
+
+    let bad = run_cli(&["git".to_owned(), "shove".to_owned()], &environment(&root));
+    assert_eq!(bad.result.status, ResultStatus::InvalidInput);
+}

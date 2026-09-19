@@ -1,4 +1,6 @@
-use crate::connector::{validate_connector_manifest, Connector, ConnectorContext, ConnectorSummary};
+use crate::connector::{
+    validate_connector_manifest, Connector, ConnectorContext, ConnectorSummary,
+};
 use crate::port::{
     ConfigurationStateRequest, MachineInspectionInput, MachineInspectionOutput, NativeOpenInput,
     NativeRevealInput, PackageStateRequest, ServiceStateRequest, StateChangePreview,
@@ -69,21 +71,36 @@ pub struct ConformanceFailure {
 
 impl ConformanceFailure {
     fn new(check: &str, message: impl Into<String>) -> Self {
-        Self { check: check.to_owned(), message: message.into() }
+        Self {
+            check: check.to_owned(),
+            message: message.into(),
+        }
     }
 }
 
-fn compatible_port(connector: &dyn Connector, id: &str, version: &str) -> Result<(), ConformanceFailure> {
+fn compatible_port(
+    connector: &dyn Connector,
+    id: &str,
+    version: &str,
+) -> Result<(), ConformanceFailure> {
     let declaration = connector
         .manifest()
         .ports
         .iter()
         .find(|port| port.id == id)
-        .ok_or_else(|| ConformanceFailure::new("port-compatibility", format!("Connector does not declare {id}.")))?;
+        .ok_or_else(|| {
+            ConformanceFailure::new(
+                "port-compatibility",
+                format!("Connector does not declare {id}."),
+            )
+        })?;
     if declaration.version != version {
         return Err(ConformanceFailure::new(
             "port-compatibility",
-            format!("Connector declares {id} {}; expected {version}.", declaration.version),
+            format!(
+                "Connector declares {id} {}; expected {version}.",
+                declaration.version
+            ),
         ));
     }
     Ok(())
@@ -94,15 +111,20 @@ fn prepare_connector(
     port: &crate::port::PortContract,
     platform: &str,
 ) -> Result<(), ConformanceFailure> {
-    validate_connector_manifest(connector.manifest())
-        .map_err(|error| ConformanceFailure::new("manifest", format!("{}: {}", error.code, error.message)))?;
+    validate_connector_manifest(connector.manifest()).map_err(|error| {
+        ConformanceFailure::new("manifest", format!("{}: {}", error.code, error.message))
+    })?;
     compatible_port(connector, port.id, port.version)?;
-    let context = ConnectorContext { platform: platform.to_owned() };
+    let context = ConnectorContext {
+        platform: platform.to_owned(),
+    };
     let probe = connector.probe(port, &context);
     if !probe.available {
         return Err(ConformanceFailure::new(
             "probe",
-            probe.reason.unwrap_or_else(|| "Capability probe reported unavailable.".to_owned()),
+            probe
+                .reason
+                .unwrap_or_else(|| "Capability probe reported unavailable.".to_owned()),
         ));
     }
     Ok(())
@@ -114,16 +136,27 @@ pub fn run_work_discovery_conformance(
 ) -> Result<ConformanceReport, ConformanceFailure> {
     prepare_connector(connector, &WORK_DISCOVERY_PORT, &fixture.platform)?;
 
-    let implementation = connector
-        .work_discovery()
-        .ok_or_else(|| ConformanceFailure::new("implementation", "Connector does not expose WorkDiscovery implementation."))?;
-    let input = WorkDiscoveryInput { work_root: fixture.work_root.clone() };
-    let first = implementation
-        .list(&input)
-        .map_err(|error| ConformanceFailure::new("typed-operation", format!("{:?}: {}", error.code, error.message)))?;
-    let second = implementation
-        .list(&input)
-        .map_err(|error| ConformanceFailure::new("repeat-stability", format!("{:?}: {}", error.code, error.message)))?;
+    let implementation = connector.work_discovery().ok_or_else(|| {
+        ConformanceFailure::new(
+            "implementation",
+            "Connector does not expose WorkDiscovery implementation.",
+        )
+    })?;
+    let input = WorkDiscoveryInput {
+        work_root: fixture.work_root.clone(),
+    };
+    let first = implementation.list(&input).map_err(|error| {
+        ConformanceFailure::new(
+            "typed-operation",
+            format!("{:?}: {}", error.code, error.message),
+        )
+    })?;
+    let second = implementation.list(&input).map_err(|error| {
+        ConformanceFailure::new(
+            "repeat-stability",
+            format!("{:?}: {}", error.code, error.message),
+        )
+    })?;
 
     if first != second {
         return Err(ConformanceFailure::new(
@@ -135,7 +168,10 @@ pub fn run_work_discovery_conformance(
     let mut seen = BTreeSet::new();
     for item in &first.items {
         if item.name.trim().is_empty() || item.path.as_os_str().is_empty() {
-            return Err(ConformanceFailure::new("typed-operation", "WorkDiscovery items require non-empty name and path."));
+            return Err(ConformanceFailure::new(
+                "typed-operation",
+                "WorkDiscovery items require non-empty name and path.",
+            ));
         }
         if !seen.insert(item.name.clone()) {
             return Err(ConformanceFailure::new(
@@ -146,11 +182,18 @@ pub fn run_work_discovery_conformance(
     }
 
     if let Some(expected_names) = &fixture.expected_names {
-        let actual = first.items.iter().map(|item| item.name.clone()).collect::<Vec<_>>();
+        let actual = first
+            .items
+            .iter()
+            .map(|item| item.name.clone())
+            .collect::<Vec<_>>();
         if &actual != expected_names {
             return Err(ConformanceFailure::new(
                 "expected-items",
-                format!("Unexpected Work items: {:?}; expected {:?}.", actual, expected_names),
+                format!(
+                    "Unexpected Work items: {:?}; expected {:?}.",
+                    actual, expected_names
+                ),
             ));
         }
     }
@@ -176,14 +219,27 @@ pub fn run_native_open_conformance(
 ) -> Result<ConformanceReport, ConformanceFailure> {
     prepare_connector(connector, &NATIVE_OPEN_PORT, &fixture.platform)?;
     if !fixture.target.exists() {
-        return Err(ConformanceFailure::new("fixture", "NativeOpen conformance target must exist."));
+        return Err(ConformanceFailure::new(
+            "fixture",
+            "NativeOpen conformance target must exist.",
+        ));
     }
-    let implementation = connector
-        .native_open()
-        .ok_or_else(|| ConformanceFailure::new("implementation", "Connector does not expose NativeOpen implementation."))?;
+    let implementation = connector.native_open().ok_or_else(|| {
+        ConformanceFailure::new(
+            "implementation",
+            "Connector does not expose NativeOpen implementation.",
+        )
+    })?;
     let output = implementation
-        .open(&NativeOpenInput { target: fixture.target.clone() })
-        .map_err(|error| ConformanceFailure::new("typed-operation", format!("{:?}: {}", error.code, error.message)))?;
+        .open(&NativeOpenInput {
+            target: fixture.target.clone(),
+        })
+        .map_err(|error| {
+            ConformanceFailure::new(
+                "typed-operation",
+                format!("{:?}: {}", error.code, error.message),
+            )
+        })?;
     if output.target != fixture.target {
         return Err(ConformanceFailure::new(
             "typed-operation",
@@ -209,14 +265,27 @@ pub fn run_native_reveal_conformance(
 ) -> Result<ConformanceReport, ConformanceFailure> {
     prepare_connector(connector, &NATIVE_REVEAL_PORT, &fixture.platform)?;
     if !fixture.target.exists() {
-        return Err(ConformanceFailure::new("fixture", "NativeReveal conformance target must exist."));
+        return Err(ConformanceFailure::new(
+            "fixture",
+            "NativeReveal conformance target must exist.",
+        ));
     }
-    let implementation = connector
-        .native_reveal()
-        .ok_or_else(|| ConformanceFailure::new("implementation", "Connector does not expose NativeReveal implementation."))?;
+    let implementation = connector.native_reveal().ok_or_else(|| {
+        ConformanceFailure::new(
+            "implementation",
+            "Connector does not expose NativeReveal implementation.",
+        )
+    })?;
     let output = implementation
-        .reveal(&NativeRevealInput { target: fixture.target.clone() })
-        .map_err(|error| ConformanceFailure::new("typed-operation", format!("{:?}: {}", error.code, error.message)))?;
+        .reveal(&NativeRevealInput {
+            target: fixture.target.clone(),
+        })
+        .map_err(|error| {
+            ConformanceFailure::new(
+                "typed-operation",
+                format!("{:?}: {}", error.code, error.message),
+            )
+        })?;
     if output.target != fixture.target {
         return Err(ConformanceFailure::new(
             "typed-operation",
@@ -242,40 +311,79 @@ pub fn run_tag_store_conformance(
 ) -> Result<ConformanceReport, ConformanceFailure> {
     prepare_connector(connector, &TAG_STORE_PORT, &fixture.platform)?;
     if !fixture.target.exists() {
-        return Err(ConformanceFailure::new("fixture", "TagStore conformance target must exist."));
+        return Err(ConformanceFailure::new(
+            "fixture",
+            "TagStore conformance target must exist.",
+        ));
     }
-    let implementation = connector
-        .tag_store()
-        .ok_or_else(|| ConformanceFailure::new("implementation", "Connector does not expose TagStore implementation."))?;
+    let implementation = connector.tag_store().ok_or_else(|| {
+        ConformanceFailure::new(
+            "implementation",
+            "Connector does not expose TagStore implementation.",
+        )
+    })?;
 
     let first_tags = vec!["central-conformance".to_owned(), "work".to_owned()];
     let first_replace = implementation
-        .replace(&TagReplaceInput { target: fixture.target.clone(), tags: first_tags.clone() })
-        .map_err(|error| ConformanceFailure::new("replace", format!("{:?}: {}", error.code, error.message)))?;
+        .replace(&TagReplaceInput {
+            target: fixture.target.clone(),
+            tags: first_tags.clone(),
+        })
+        .map_err(|error| {
+            ConformanceFailure::new("replace", format!("{:?}: {}", error.code, error.message))
+        })?;
     if first_replace.tags != first_tags {
-        return Err(ConformanceFailure::new("replace", "TagStore.replace must report the normalized stored tags."));
+        return Err(ConformanceFailure::new(
+            "replace",
+            "TagStore.replace must report the normalized stored tags.",
+        ));
     }
     let first_read = implementation
-        .read(&TagReadInput { target: fixture.target.clone() })
-        .map_err(|error| ConformanceFailure::new("read", format!("{:?}: {}", error.code, error.message)))?;
+        .read(&TagReadInput {
+            target: fixture.target.clone(),
+        })
+        .map_err(|error| {
+            ConformanceFailure::new("read", format!("{:?}: {}", error.code, error.message))
+        })?;
     if first_read.tags != first_tags {
         return Err(ConformanceFailure::new(
             "read-after-replace",
-            format!("TagStore read {:?}; expected {:?}.", first_read.tags, first_tags),
+            format!(
+                "TagStore read {:?}; expected {:?}.",
+                first_read.tags, first_tags
+            ),
         ));
     }
 
     let second_tags = vec!["central-conformance".to_owned()];
     implementation
-        .replace(&TagReplaceInput { target: fixture.target.clone(), tags: second_tags.clone() })
-        .map_err(|error| ConformanceFailure::new("repeat-replace", format!("{:?}: {}", error.code, error.message)))?;
+        .replace(&TagReplaceInput {
+            target: fixture.target.clone(),
+            tags: second_tags.clone(),
+        })
+        .map_err(|error| {
+            ConformanceFailure::new(
+                "repeat-replace",
+                format!("{:?}: {}", error.code, error.message),
+            )
+        })?;
     let second_read = implementation
-        .read(&TagReadInput { target: fixture.target.clone() })
-        .map_err(|error| ConformanceFailure::new("repeat-read", format!("{:?}: {}", error.code, error.message)))?;
+        .read(&TagReadInput {
+            target: fixture.target.clone(),
+        })
+        .map_err(|error| {
+            ConformanceFailure::new(
+                "repeat-read",
+                format!("{:?}: {}", error.code, error.message),
+            )
+        })?;
     if second_read.tags != second_tags {
         return Err(ConformanceFailure::new(
             "repeat-stability",
-            format!("TagStore replacement was not stable: {:?}; expected {:?}.", second_read.tags, second_tags),
+            format!(
+                "TagStore replacement was not stable: {:?}; expected {:?}.",
+                second_read.tags, second_tags
+            ),
         ));
     }
 
@@ -294,11 +402,17 @@ pub fn run_tag_store_conformance(
     })
 }
 
-fn ensure_unique_nonempty<'a>(label: &str, values: impl IntoIterator<Item = &'a str>) -> Result<(), ConformanceFailure> {
+fn ensure_unique_nonempty<'a>(
+    label: &str,
+    values: impl IntoIterator<Item = &'a str>,
+) -> Result<(), ConformanceFailure> {
     let mut seen = BTreeSet::new();
     for value in values {
         if value.trim().is_empty() {
-            return Err(ConformanceFailure::new("typed-operation", format!("MachineInspector {label} contains an empty identifier.")));
+            return Err(ConformanceFailure::new(
+                "typed-operation",
+                format!("MachineInspector {label} contains an empty identifier."),
+            ));
         }
         if !seen.insert(value) {
             return Err(ConformanceFailure::new(
@@ -316,16 +430,25 @@ pub fn run_machine_inspector_conformance(
 ) -> Result<ConformanceReport, ConformanceFailure> {
     prepare_connector(connector, &MACHINE_INSPECTOR_PORT, &fixture.platform)?;
 
-    let implementation = connector
-        .machine_inspector()
-        .ok_or_else(|| ConformanceFailure::new("implementation", "Connector does not expose MachineInspector implementation."))?;
+    let implementation = connector.machine_inspector().ok_or_else(|| {
+        ConformanceFailure::new(
+            "implementation",
+            "Connector does not expose MachineInspector implementation.",
+        )
+    })?;
     let input = MachineInspectionInput::default();
-    let first = implementation
-        .inspect(&input)
-        .map_err(|error| ConformanceFailure::new("typed-operation", format!("{:?}: {}", error.code, error.message)))?;
-    let second = implementation
-        .inspect(&input)
-        .map_err(|error| ConformanceFailure::new("repeat-stability", format!("{:?}: {}", error.code, error.message)))?;
+    let first = implementation.inspect(&input).map_err(|error| {
+        ConformanceFailure::new(
+            "typed-operation",
+            format!("{:?}: {}", error.code, error.message),
+        )
+    })?;
+    let second = implementation.inspect(&input).map_err(|error| {
+        ConformanceFailure::new(
+            "repeat-stability",
+            format!("{:?}: {}", error.code, error.message),
+        )
+    })?;
     if first != second {
         return Err(ConformanceFailure::new(
             "repeat-stability",
@@ -338,16 +461,31 @@ pub fn run_machine_inspector_conformance(
             "MachineInspector output requires non-empty platform and architecture.",
         ));
     }
-    ensure_unique_nonempty("capabilities", first.capabilities.iter().map(String::as_str))?;
-    ensure_unique_nonempty("packages", first.packages.iter().map(|item| item.id.as_str()))?;
-    ensure_unique_nonempty("configurations", first.configurations.iter().map(|item| item.id.as_str()))?;
-    ensure_unique_nonempty("services", first.services.iter().map(|item| item.id.as_str()))?;
+    ensure_unique_nonempty(
+        "capabilities",
+        first.capabilities.iter().map(String::as_str),
+    )?;
+    ensure_unique_nonempty(
+        "packages",
+        first.packages.iter().map(|item| item.id.as_str()),
+    )?;
+    ensure_unique_nonempty(
+        "configurations",
+        first.configurations.iter().map(|item| item.id.as_str()),
+    )?;
+    ensure_unique_nonempty(
+        "services",
+        first.services.iter().map(|item| item.id.as_str()),
+    )?;
 
     if let Some(expected) = &fixture.expected {
         if &first != expected {
             return Err(ConformanceFailure::new(
                 "expected-observation",
-                format!("Unexpected MachineInspector output: {:?}; expected {:?}.", first, expected),
+                format!(
+                    "Unexpected MachineInspector output: {:?}; expected {:?}.",
+                    first, expected
+                ),
             ));
         }
     }
@@ -413,15 +551,23 @@ pub fn run_package_manager_conformance(
     fixture: &PackageManagerConformanceFixture,
 ) -> Result<ConformanceReport, ConformanceFailure> {
     prepare_connector(connector, &PACKAGE_MANAGER_PORT, &fixture.platform)?;
-    let implementation = connector
-        .package_manager()
-        .ok_or_else(|| ConformanceFailure::new("implementation", "Connector does not expose PackageManager implementation."))?;
+    let implementation = connector.package_manager().ok_or_else(|| {
+        ConformanceFailure::new(
+            "implementation",
+            "Connector does not expose PackageManager implementation.",
+        )
+    })?;
 
-    let preview = implementation.preview(&fixture.request)
-        .map_err(|error| ConformanceFailure::new("preview", format!("{:?}: {}", error.code, error.message)))?;
+    let preview = implementation.preview(&fixture.request).map_err(|error| {
+        ConformanceFailure::new("preview", format!("{:?}: {}", error.code, error.message))
+    })?;
     validate_preview(&preview, PACKAGE_MANAGER_PORT.id)?;
-    let repeated_preview = implementation.preview(&fixture.request)
-        .map_err(|error| ConformanceFailure::new("preview-nonmutating", format!("{:?}: {}", error.code, error.message)))?;
+    let repeated_preview = implementation.preview(&fixture.request).map_err(|error| {
+        ConformanceFailure::new(
+            "preview-nonmutating",
+            format!("{:?}: {}", error.code, error.message),
+        )
+    })?;
     if repeated_preview != preview {
         return Err(ConformanceFailure::new(
             "preview-nonmutating",
@@ -429,8 +575,9 @@ pub fn run_package_manager_conformance(
         ));
     }
 
-    let applied = implementation.apply(&fixture.request)
-        .map_err(|error| ConformanceFailure::new("apply", format!("{:?}: {}", error.code, error.message)))?;
+    let applied = implementation.apply(&fixture.request).map_err(|error| {
+        ConformanceFailure::new("apply", format!("{:?}: {}", error.code, error.message))
+    })?;
     validate_apply(&applied, PACKAGE_MANAGER_PORT.id)?;
     if applied.changed != preview.changed {
         return Err(ConformanceFailure::new(
@@ -438,8 +585,12 @@ pub fn run_package_manager_conformance(
             "PackageManager apply changed flag does not match its preview.",
         ));
     }
-    let after = implementation.preview(&fixture.request)
-        .map_err(|error| ConformanceFailure::new("post-apply-preview", format!("{:?}: {}", error.code, error.message)))?;
+    let after = implementation.preview(&fixture.request).map_err(|error| {
+        ConformanceFailure::new(
+            "post-apply-preview",
+            format!("{:?}: {}", error.code, error.message),
+        )
+    })?;
     validate_preview(&after, PACKAGE_MANAGER_PORT.id)?;
     if after.changed {
         return Err(ConformanceFailure::new(
@@ -447,8 +598,12 @@ pub fn run_package_manager_conformance(
             "PackageManager preview still requests a change after successful apply.",
         ));
     }
-    let repeated = implementation.apply(&fixture.request)
-        .map_err(|error| ConformanceFailure::new("idempotent-apply", format!("{:?}: {}", error.code, error.message)))?;
+    let repeated = implementation.apply(&fixture.request).map_err(|error| {
+        ConformanceFailure::new(
+            "idempotent-apply",
+            format!("{:?}: {}", error.code, error.message),
+        )
+    })?;
     validate_apply(&repeated, PACKAGE_MANAGER_PORT.id)?;
     if repeated.changed {
         return Err(ConformanceFailure::new(
@@ -465,15 +620,23 @@ pub fn run_configuration_manager_conformance(
     fixture: &ConfigurationManagerConformanceFixture,
 ) -> Result<ConformanceReport, ConformanceFailure> {
     prepare_connector(connector, &CONFIGURATION_MANAGER_PORT, &fixture.platform)?;
-    let implementation = connector
-        .configuration_manager()
-        .ok_or_else(|| ConformanceFailure::new("implementation", "Connector does not expose ConfigurationManager implementation."))?;
+    let implementation = connector.configuration_manager().ok_or_else(|| {
+        ConformanceFailure::new(
+            "implementation",
+            "Connector does not expose ConfigurationManager implementation.",
+        )
+    })?;
 
-    let preview = implementation.preview(&fixture.request)
-        .map_err(|error| ConformanceFailure::new("preview", format!("{:?}: {}", error.code, error.message)))?;
+    let preview = implementation.preview(&fixture.request).map_err(|error| {
+        ConformanceFailure::new("preview", format!("{:?}: {}", error.code, error.message))
+    })?;
     validate_preview(&preview, CONFIGURATION_MANAGER_PORT.id)?;
-    let repeated_preview = implementation.preview(&fixture.request)
-        .map_err(|error| ConformanceFailure::new("preview-nonmutating", format!("{:?}: {}", error.code, error.message)))?;
+    let repeated_preview = implementation.preview(&fixture.request).map_err(|error| {
+        ConformanceFailure::new(
+            "preview-nonmutating",
+            format!("{:?}: {}", error.code, error.message),
+        )
+    })?;
     if repeated_preview != preview {
         return Err(ConformanceFailure::new(
             "preview-nonmutating",
@@ -481,8 +644,9 @@ pub fn run_configuration_manager_conformance(
         ));
     }
 
-    let applied = implementation.apply(&fixture.request)
-        .map_err(|error| ConformanceFailure::new("apply", format!("{:?}: {}", error.code, error.message)))?;
+    let applied = implementation.apply(&fixture.request).map_err(|error| {
+        ConformanceFailure::new("apply", format!("{:?}: {}", error.code, error.message))
+    })?;
     validate_apply(&applied, CONFIGURATION_MANAGER_PORT.id)?;
     if applied.changed != preview.changed {
         return Err(ConformanceFailure::new(
@@ -490,8 +654,12 @@ pub fn run_configuration_manager_conformance(
             "ConfigurationManager apply changed flag does not match its preview.",
         ));
     }
-    let after = implementation.preview(&fixture.request)
-        .map_err(|error| ConformanceFailure::new("post-apply-preview", format!("{:?}: {}", error.code, error.message)))?;
+    let after = implementation.preview(&fixture.request).map_err(|error| {
+        ConformanceFailure::new(
+            "post-apply-preview",
+            format!("{:?}: {}", error.code, error.message),
+        )
+    })?;
     validate_preview(&after, CONFIGURATION_MANAGER_PORT.id)?;
     if after.changed {
         return Err(ConformanceFailure::new(
@@ -499,8 +667,12 @@ pub fn run_configuration_manager_conformance(
             "ConfigurationManager preview still requests a change after successful apply.",
         ));
     }
-    let repeated = implementation.apply(&fixture.request)
-        .map_err(|error| ConformanceFailure::new("idempotent-apply", format!("{:?}: {}", error.code, error.message)))?;
+    let repeated = implementation.apply(&fixture.request).map_err(|error| {
+        ConformanceFailure::new(
+            "idempotent-apply",
+            format!("{:?}: {}", error.code, error.message),
+        )
+    })?;
     validate_apply(&repeated, CONFIGURATION_MANAGER_PORT.id)?;
     if repeated.changed {
         return Err(ConformanceFailure::new(
@@ -509,7 +681,10 @@ pub fn run_configuration_manager_conformance(
         ));
     }
 
-    Ok(reconciliation_report(connector, &CONFIGURATION_MANAGER_PORT))
+    Ok(reconciliation_report(
+        connector,
+        &CONFIGURATION_MANAGER_PORT,
+    ))
 }
 
 pub fn run_service_manager_conformance(
@@ -517,15 +692,23 @@ pub fn run_service_manager_conformance(
     fixture: &ServiceManagerConformanceFixture,
 ) -> Result<ConformanceReport, ConformanceFailure> {
     prepare_connector(connector, &SERVICE_MANAGER_PORT, &fixture.platform)?;
-    let implementation = connector
-        .service_manager()
-        .ok_or_else(|| ConformanceFailure::new("implementation", "Connector does not expose ServiceManager implementation."))?;
+    let implementation = connector.service_manager().ok_or_else(|| {
+        ConformanceFailure::new(
+            "implementation",
+            "Connector does not expose ServiceManager implementation.",
+        )
+    })?;
 
-    let preview = implementation.preview(&fixture.request)
-        .map_err(|error| ConformanceFailure::new("preview", format!("{:?}: {}", error.code, error.message)))?;
+    let preview = implementation.preview(&fixture.request).map_err(|error| {
+        ConformanceFailure::new("preview", format!("{:?}: {}", error.code, error.message))
+    })?;
     validate_preview(&preview, SERVICE_MANAGER_PORT.id)?;
-    let repeated_preview = implementation.preview(&fixture.request)
-        .map_err(|error| ConformanceFailure::new("preview-nonmutating", format!("{:?}: {}", error.code, error.message)))?;
+    let repeated_preview = implementation.preview(&fixture.request).map_err(|error| {
+        ConformanceFailure::new(
+            "preview-nonmutating",
+            format!("{:?}: {}", error.code, error.message),
+        )
+    })?;
     if repeated_preview != preview {
         return Err(ConformanceFailure::new(
             "preview-nonmutating",
@@ -533,8 +716,9 @@ pub fn run_service_manager_conformance(
         ));
     }
 
-    let applied = implementation.apply(&fixture.request)
-        .map_err(|error| ConformanceFailure::new("apply", format!("{:?}: {}", error.code, error.message)))?;
+    let applied = implementation.apply(&fixture.request).map_err(|error| {
+        ConformanceFailure::new("apply", format!("{:?}: {}", error.code, error.message))
+    })?;
     validate_apply(&applied, SERVICE_MANAGER_PORT.id)?;
     if applied.changed != preview.changed {
         return Err(ConformanceFailure::new(
@@ -542,8 +726,12 @@ pub fn run_service_manager_conformance(
             "ServiceManager apply changed flag does not match its preview.",
         ));
     }
-    let after = implementation.preview(&fixture.request)
-        .map_err(|error| ConformanceFailure::new("post-apply-preview", format!("{:?}: {}", error.code, error.message)))?;
+    let after = implementation.preview(&fixture.request).map_err(|error| {
+        ConformanceFailure::new(
+            "post-apply-preview",
+            format!("{:?}: {}", error.code, error.message),
+        )
+    })?;
     validate_preview(&after, SERVICE_MANAGER_PORT.id)?;
     if after.changed {
         return Err(ConformanceFailure::new(
@@ -551,8 +739,12 @@ pub fn run_service_manager_conformance(
             "ServiceManager preview still requests a change after successful apply.",
         ));
     }
-    let repeated = implementation.apply(&fixture.request)
-        .map_err(|error| ConformanceFailure::new("idempotent-apply", format!("{:?}: {}", error.code, error.message)))?;
+    let repeated = implementation.apply(&fixture.request).map_err(|error| {
+        ConformanceFailure::new(
+            "idempotent-apply",
+            format!("{:?}: {}", error.code, error.message),
+        )
+    })?;
     validate_apply(&repeated, SERVICE_MANAGER_PORT.id)?;
     if repeated.changed {
         return Err(ConformanceFailure::new(

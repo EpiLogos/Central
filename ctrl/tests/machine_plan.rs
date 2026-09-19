@@ -1,13 +1,12 @@
 use central_ctrl::{
-    create_core_action_registry, initialize_central, run_cli_with_runtime,
-    ActionExecutionContext, CapabilityProbe, CliEnvironment, ConfigurationManager,
-    ConfigurationStateRequest, Connector, ConnectorContext, ConnectorManifest,
-    ConnectorPortDeclaration, ConnectorRegistry, MachineInspectionOutput, NullTerminalSurface,
-    ObservedConfiguration, ObservedPackage, ObservedService, PackageManager, PackageStateRequest,
-    PortContract, PortError, ResultStatus, RootOptions, ServiceManager, ServiceStateRequest,
-    StateChangePreview, StateChangeResult, StaticMachineInspectorConnector,
-    CONFIGURATION_MANAGER_PORT, CONNECTOR_API_VERSION, MACHINE_INSPECTOR_PORT,
-    PACKAGE_MANAGER_PORT, SERVICE_MANAGER_PORT,
+    create_core_action_registry, initialize_central, run_cli_with_runtime, ActionExecutionContext,
+    CapabilityProbe, CliEnvironment, ConfigurationManager, ConfigurationStateRequest, Connector,
+    ConnectorContext, ConnectorManifest, ConnectorPortDeclaration, ConnectorRegistry,
+    MachineInspectionOutput, NullTerminalSurface, ObservedConfiguration, ObservedPackage,
+    ObservedService, PackageManager, PackageStateRequest, PortContract, PortError, ResultStatus,
+    RootOptions, ServiceManager, ServiceStateRequest, StateChangePreview, StateChangeResult,
+    StaticMachineInspectorConnector, CONFIGURATION_MANAGER_PORT, CONNECTOR_API_VERSION,
+    MACHINE_INSPECTOR_PORT, PACKAGE_MANAGER_PORT, SERVICE_MANAGER_PORT,
 };
 use serde_json::json;
 use std::fs;

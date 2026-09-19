@@ -27,26 +27,21 @@ fn bare_ctrl_prints_usage_and_exits_like_invalid_input() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("Usage:"));
     assert!(stdout.contains("ctrl capabilities"));
-    assert!(output.stderr.is_empty(), "no panic on the zero-argument path");
+    assert!(
+        output.stderr.is_empty(),
+        "no panic on the zero-argument path"
+    );
 }
 
 #[test]
 fn flag_only_invocations_name_an_error_instead_of_panicking() {
-    for args in [
-        vec!["--root", "/tmp"],
-        vec!["--json"],
-        vec!["--bogus-flag"],
-    ] {
+    for args in [vec!["--root", "/tmp"], vec!["--json"], vec!["--bogus-flag"]] {
         let output = run_ctrl(&args);
         assert!(
             !output.status.success(),
             "{args:?} should not be treated as a command"
         );
-        assert_ne!(
-            output.status.code(),
-            Some(101),
-            "{args:?} must not panic"
-        );
+        assert_ne!(output.status.code(), Some(101), "{args:?} must not panic");
         let stdout = String::from_utf8(output.stdout).unwrap();
         assert!(!stdout.is_empty(), "{args:?} should name its error");
     }

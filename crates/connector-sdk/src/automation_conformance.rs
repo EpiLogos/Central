@@ -1,6 +1,6 @@
 use crate::{
-    validate_connector_manifest, AutomationRunInput, Connector, ConnectorContext, ConnectorSummary,
-    ConformanceFailure, ConformanceReport, AUTOMATION_PORT,
+    validate_connector_manifest, AutomationRunInput, ConformanceFailure, ConformanceReport,
+    Connector, ConnectorContext, ConnectorSummary, AUTOMATION_PORT,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

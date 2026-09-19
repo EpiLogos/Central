@@ -22,10 +22,13 @@ fn manifest_with_scope(
         id: id.to_owned(),
         version: "0.1.0".to_owned(),
         display_name: display_name.to_owned(),
-        ports: ports.iter().map(|port| ConnectorPortDeclaration {
-            id: port.id.to_owned(),
-            version: port.version.to_owned(),
-        }).collect(),
+        ports: ports
+            .iter()
+            .map(|port| ConnectorPortDeclaration {
+                id: port.id.to_owned(),
+                version: port.version.to_owned(),
+            })
+            .collect(),
         platforms: vec!["*".to_owned()],
         entrypoint: entrypoint.to_owned(),
         runtime_requirements: vec!["ctrl-rust".to_owned()],
@@ -35,7 +38,12 @@ fn manifest_with_scope(
     }
 }
 
-fn manifest(id: &str, display_name: &str, entrypoint: &str, ports: &[PortContract]) -> ConnectorManifest {
+fn manifest(
+    id: &str,
+    display_name: &str,
+    entrypoint: &str,
+    ports: &[PortContract],
+) -> ConnectorManifest {
     manifest_with_scope(id, display_name, entrypoint, ports, "read-only")
 }
 
@@ -74,7 +82,9 @@ impl WorkDiscovery for FilesystemWorkConnector {
         let mut items = Vec::new();
         for entry in entries {
             let entry = entry.map_err(|error| PortError::provider(error.to_string()))?;
-            let file_type = entry.file_type().map_err(|error| PortError::provider(error.to_string()))?;
+            let file_type = entry
+                .file_type()
+                .map_err(|error| PortError::provider(error.to_string()))?;
             if file_type.is_dir() {
                 items.push(WorkItem {
                     name: entry.file_name().to_string_lossy().into_owned(),
@@ -173,7 +183,12 @@ impl StaticMachineInspectorConnector {
         )
     }
 
-    fn with_identity(id: &str, display_name: &str, entrypoint: &str, observation: MachineInspectionOutput) -> Self {
+    fn with_identity(
+        id: &str,
+        display_name: &str,
+        entrypoint: &str,
+        observation: MachineInspectionOutput,
+    ) -> Self {
         Self {
             manifest: manifest(id, display_name, entrypoint, &[MACHINE_INSPECTOR_PORT]),
             observation,
@@ -182,7 +197,10 @@ impl StaticMachineInspectorConnector {
 }
 
 impl MachineInspector for StaticMachineInspectorConnector {
-    fn inspect(&self, _input: &MachineInspectionInput) -> Result<MachineInspectionOutput, PortError> {
+    fn inspect(
+        &self,
+        _input: &MachineInspectionInput,
+    ) -> Result<MachineInspectionOutput, PortError> {
         Ok(self.observation.clone())
     }
 }
@@ -208,11 +226,16 @@ pub struct SharedMachineState {
 
 impl SharedMachineState {
     pub fn new(observation: MachineInspectionOutput) -> Self {
-        Self { state: Arc::new(Mutex::new(observation)) }
+        Self {
+            state: Arc::new(Mutex::new(observation)),
+        }
     }
 
     pub fn snapshot(&self) -> MachineInspectionOutput {
-        self.state.lock().expect("reference machine state lock poisoned").clone()
+        self.state
+            .lock()
+            .expect("reference machine state lock poisoned")
+            .clone()
     }
 }
 
@@ -249,25 +272,51 @@ impl InMemoryMachineConnector {
     }
 
     fn package_changed(&self, input: &PackageStateRequest) -> bool {
-        let state = self.state.state.lock().expect("reference machine state lock poisoned");
-        state.packages.iter().find(|item| item.id == input.id).map_or(input.present, |item| item.present != input.present)
+        let state = self
+            .state
+            .state
+            .lock()
+            .expect("reference machine state lock poisoned");
+        state
+            .packages
+            .iter()
+            .find(|item| item.id == input.id)
+            .map_or(input.present, |item| item.present != input.present)
     }
 
     fn configuration_changed(&self, input: &ConfigurationStateRequest) -> bool {
-        let state = self.state.state.lock().expect("reference machine state lock poisoned");
-        state.configurations.iter().find(|item| item.id == input.id).map_or(input.present, |item| item.present != input.present)
+        let state = self
+            .state
+            .state
+            .lock()
+            .expect("reference machine state lock poisoned");
+        state
+            .configurations
+            .iter()
+            .find(|item| item.id == input.id)
+            .map_or(input.present, |item| item.present != input.present)
     }
 
     fn service_changed(&self, input: &ServiceStateRequest) -> bool {
-        let state = self.state.state.lock().expect("reference machine state lock poisoned");
+        let state = self
+            .state
+            .state
+            .lock()
+            .expect("reference machine state lock poisoned");
         let current = state.services.iter().find(|item| item.id == input.id);
-        input.running.map_or(false, |value| current.map_or(value, |item| item.running != value))
-            || input.enabled.map_or(false, |value| current.map_or(value, |item| item.enabled != value))
+        input.running.map_or(false, |value| {
+            current.map_or(value, |item| item.running != value)
+        }) || input.enabled.map_or(false, |value| {
+            current.map_or(value, |item| item.enabled != value)
+        })
     }
 }
 
 impl MachineInspector for InMemoryMachineConnector {
-    fn inspect(&self, _input: &MachineInspectionInput) -> Result<MachineInspectionOutput, PortError> {
+    fn inspect(
+        &self,
+        _input: &MachineInspectionInput,
+    ) -> Result<MachineInspectionOutput, PortError> {
         Ok(self.state.snapshot())
     }
 }
@@ -288,11 +337,18 @@ impl PackageManager for InMemoryMachineConnector {
     fn apply(&self, input: &PackageStateRequest) -> Result<StateChangeResult, PortError> {
         let changed = self.package_changed(input);
         if changed {
-            let mut state = self.state.state.lock().expect("reference machine state lock poisoned");
+            let mut state = self
+                .state
+                .state
+                .lock()
+                .expect("reference machine state lock poisoned");
             if let Some(item) = state.packages.iter_mut().find(|item| item.id == input.id) {
                 item.present = input.present;
             } else {
-                state.packages.push(ObservedPackage { id: input.id.clone(), present: input.present });
+                state.packages.push(ObservedPackage {
+                    id: input.id.clone(),
+                    present: input.present,
+                });
                 state.packages.sort_by(|left, right| left.id.cmp(&right.id));
             }
         }
@@ -323,12 +379,25 @@ impl ConfigurationManager for InMemoryMachineConnector {
     fn apply(&self, input: &ConfigurationStateRequest) -> Result<StateChangeResult, PortError> {
         let changed = self.configuration_changed(input);
         if changed {
-            let mut state = self.state.state.lock().expect("reference machine state lock poisoned");
-            if let Some(item) = state.configurations.iter_mut().find(|item| item.id == input.id) {
+            let mut state = self
+                .state
+                .state
+                .lock()
+                .expect("reference machine state lock poisoned");
+            if let Some(item) = state
+                .configurations
+                .iter_mut()
+                .find(|item| item.id == input.id)
+            {
                 item.present = input.present;
             } else {
-                state.configurations.push(ObservedConfiguration { id: input.id.clone(), present: input.present });
-                state.configurations.sort_by(|left, right| left.id.cmp(&right.id));
+                state.configurations.push(ObservedConfiguration {
+                    id: input.id.clone(),
+                    present: input.present,
+                });
+                state
+                    .configurations
+                    .sort_by(|left, right| left.id.cmp(&right.id));
             }
         }
         Ok(StateChangeResult {
@@ -357,7 +426,11 @@ impl ServiceManager for InMemoryMachineConnector {
     fn apply(&self, input: &ServiceStateRequest) -> Result<StateChangeResult, PortError> {
         let changed = self.service_changed(input);
         if changed {
-            let mut state = self.state.state.lock().expect("reference machine state lock poisoned");
+            let mut state = self
+                .state
+                .state
+                .lock()
+                .expect("reference machine state lock poisoned");
             if let Some(item) = state.services.iter_mut().find(|item| item.id == input.id) {
                 if let Some(running) = input.running {
                     item.running = running;
@@ -422,11 +495,24 @@ impl Connector for InMemoryMachineConnector {
 /// (`read-models.harness-capability`) sorts after the `personal.*` platform
 /// Connectors, so host surfaces that register one keep it as the selected
 /// MachineInspector.
+///
+/// The git-sync Connector is deliberately *not* mounted here: it is a
+/// host-surface adapter (see `surfaces/macos-host`), so ctrl core keeps its
+/// dependency boundary and `central.git.census` resolves its `GitState` port
+/// only when a surface has mounted a provider.
 pub fn create_default_connector_registry() -> ConnectorRegistry {
     let mut registry = ConnectorRegistry::default();
-    registry.register(FilesystemWorkConnector::new()).expect("reference Connector manifest is valid");
-    registry.register(StaticWorkConnector::new(Vec::new())).expect("reference Connector manifest is valid");
-    registry.register(StaticMachineInspectorConnector::current_host()).expect("reference Connector manifest is valid");
-    registry.register(central_harness_connector::HarnessCapabilityConnector::new()).expect("harness capability Connector manifest is valid");
+    registry
+        .register(FilesystemWorkConnector::new())
+        .expect("reference Connector manifest is valid");
+    registry
+        .register(StaticWorkConnector::new(Vec::new()))
+        .expect("reference Connector manifest is valid");
+    registry
+        .register(StaticMachineInspectorConnector::current_host())
+        .expect("reference Connector manifest is valid");
+    registry
+        .register(central_harness_connector::HarnessCapabilityConnector::new())
+        .expect("harness capability Connector manifest is valid");
     registry
 }

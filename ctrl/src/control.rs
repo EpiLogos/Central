@@ -267,9 +267,9 @@ pub fn index_governance(central_root: &Path) -> io::Result<GovernanceIndex> {
             if path.is_dir() {
                 stack.push(path);
             } else if path.extension().is_some_and(|ext| ext == "md")
-                && path.file_name().is_some_and(|name| {
-                    name != "README.md" && name != "foundational-prompt.md"
-                })
+                && path
+                    .file_name()
+                    .is_some_and(|name| name != "README.md" && name != "foundational-prompt.md")
             {
                 files.push(path);
             }
@@ -291,8 +291,18 @@ pub fn index_governance(central_root: &Path) -> io::Result<GovernanceIndex> {
             .trim()
             .to_owned();
         statements.push(GovernanceIndexEntry {
-            file: rel.strip_prefix(&format!("{GOVERNANCE_DIR}/")).unwrap_or(&rel).to_owned(),
-            topic: if topic.is_empty() { path.file_stem().unwrap_or_default().to_string_lossy().to_string() } else { topic },
+            file: rel
+                .strip_prefix(&format!("{GOVERNANCE_DIR}/"))
+                .unwrap_or(&rel)
+                .to_owned(),
+            topic: if topic.is_empty() {
+                path.file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string()
+            } else {
+                topic
+            },
             standing: governance_standing(central_root, &rel),
         });
     }

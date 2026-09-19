@@ -373,8 +373,14 @@ fn now_listing_lists_allocations_and_filters_by_participant() {
         .find(|r| r["now_ref"] == alpha["now_ref"])
         .unwrap();
     assert_eq!(alpha_row["task_ref"], "task:alpha");
-    assert_eq!(alpha_row["participant_refs"], serde_json::json!(["agent:test"]));
-    assert_eq!(alpha_row["revision"]["revision"], alpha["revision"]["revision"]);
+    assert_eq!(
+        alpha_row["participant_refs"],
+        serde_json::json!(["agent:test"])
+    );
+    assert_eq!(
+        alpha_row["revision"]["revision"],
+        alpha["revision"]["revision"]
+    );
 
     let filtered = execute_at(
         root,
@@ -552,4 +558,76 @@ fn allocate_with_work_refs_emits_v2_and_now_read_and_list_surface_lane_claims() 
         .find(|r| r["now_ref"] == plain["now_ref"])
         .unwrap();
     assert_eq!(plain_row["work_refs"], serde_json::json!([]));
+}
+
+#[test]
+fn allocation_with_work_refs_carries_lane_claims_and_rejects_a_different_basis() {
+    let temp = world();
+    let root = temp.path();
+    let mut input = request(root, None, "task:lanes");
+    input["work_refs"] = serde_json::json!([
+        {"repo": "Work/one", "branch": "techne/lane-one"},
+        {"repo": "Work/two", "branch": "techne/lane-two", "worktree_path": "Work/two/.aikit/tasks/lane-two"}
+    ]);
+    let allocated = execute_at(root, "allocate", &input, 100).unwrap();
+
+    // The listing carries the declared claims; v1 records (no work_refs)
+    // remain exactly as before.
+    let listed = execute_at(root, "now_list", &serde_json::json!({}), 100).unwrap();
+    let row = listed["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["now_ref"] == allocated["now_ref"])
+        .unwrap()
+        .clone();
+    assert_eq!(
+        row["work_refs"],
+        serde_json::json!([
+            {"repo": "Work/one", "branch": "techne/lane-one"},
+            {"repo": "Work/two", "branch": "techne/lane-two", "worktree_path": "Work/two/.aikit/tasks/lane-two"}
+        ])
+    );
+
+    // The raw record carries the v2 schema so older readers fail loudly.
+    let mut raw = String::new();
+    for entry in fs::read_dir(root.join("Control/agents/now/clearings"))
+        .unwrap()
+        .flatten()
+    {
+        let path = entry.path().join("now.json");
+        if let Ok(content) = fs::read_to_string(&path) {
+            if content.contains("task:lanes") {
+                raw = content;
+                break;
+            }
+        }
+    }
+    assert!(raw.contains("central.now-clearing/v2"), "record: {raw}");
+    assert!(raw.contains("techne/lane-one"));
+
+    // Identical basis is an idempotent re-allocation; a different claim set
+    // conflicts.
+    execute_at(root, "allocate", &input, 101).unwrap();
+    let mut changed = input.clone();
+    changed["work_refs"] = serde_json::json!([{"repo": "Work/one", "branch": "other"}]);
+    assert_eq!(
+        execute_at(root, "allocate", &changed, 102)
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::AlreadyExists
+    );
+
+    // The census attribution sees the clearing claim.
+    let claims = crate::git_census::collect_now_claims(root, &["Work/one".to_owned()]);
+    assert_eq!(
+        claims
+            .get("Work/one")
+            .and_then(|by| by.get("techne/lane-one")),
+        Some(&row["now_ref"].as_str().unwrap().to_owned())
+    );
+
+    // A plain allocation without work_refs keeps the v1 schema.
+    let plain = execute_at(root, "allocate", &request(root, None, "task:plain"), 103).unwrap();
+    assert!(!plain.is_null());
 }

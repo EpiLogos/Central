@@ -31,3 +31,6 @@ rusqlite = { version = "0.37", features = ["bundled", "backup"] }
 # Contract tests validate emitted documents against the frozen C0 JSON Schemas
 # (byte-exact fixture copies); default features stay off (no external resolver).
 jsonschema = { version = "0.56.0", default-features = false }
+# git-sync is a host-surface Connector, never a ctrl-core (normal) dependency;
+# the git-census contract test mounts it as a dev-only provider.
+central-git-sync-connector = { path = "../connectors/git-sync" }

@@ -16,8 +16,14 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temporary_directory(label: &str) -> PathBuf {
-    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    let path = std::env::temp_dir().join(format!("central-sdk-{label}-{}-{nonce}", std::process::id()));
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "central-sdk-{label}-{}-{nonce}",
+        std::process::id()
+    ));
     fs::create_dir_all(&path).unwrap();
     path
 }
@@ -27,7 +33,10 @@ fn machine_fixture() -> MachineInspectionOutput {
         platform: "test-os".to_owned(),
         architecture: "test-arch".to_owned(),
         capabilities: vec!["remote-shell".to_owned()],
-        packages: vec![ObservedPackage { id: "git".to_owned(), present: false }],
+        packages: vec![ObservedPackage {
+            id: "git".to_owned(),
+            present: false,
+        }],
         configurations: vec![ObservedConfiguration {
             id: "remote-access-policy".to_owned(),
             present: false,
@@ -54,7 +63,8 @@ fn filesystem_reference_passes_public_work_discovery_conformance() {
             platform: std::env::consts::OS.to_owned(),
             expected_names: Some(vec!["alpha".to_owned(), "beta".to_owned()]),
         },
-    ).unwrap();
+    )
+    .unwrap();
     assert_eq!(report.port_id, "WorkDiscovery");
     assert_eq!(report.connector.id, "reference.work-filesystem");
 }
@@ -72,7 +82,8 @@ fn static_reference_passes_the_same_public_conformance_suite() {
             platform: std::env::consts::OS.to_owned(),
             expected_names: Some(vec!["fixture".to_owned()]),
         },
-    ).unwrap();
+    )
+    .unwrap();
     assert_eq!(report.connector.id, "reference.work-static");
 }
 
@@ -82,7 +93,10 @@ fn static_machine_inspector_passes_public_conformance_suite() {
         platform: "test-os".to_owned(),
         architecture: "test-arch".to_owned(),
         capabilities: vec!["remote-shell".to_owned()],
-        packages: vec![ObservedPackage { id: "git".to_owned(), present: true }],
+        packages: vec![ObservedPackage {
+            id: "git".to_owned(),
+            present: true,
+        }],
         configurations: Vec::new(),
         services: Vec::new(),
     };
@@ -93,7 +107,8 @@ fn static_machine_inspector_passes_public_conformance_suite() {
             platform: "test-os".to_owned(),
             expected: Some(observation),
         },
-    ).unwrap();
+    )
+    .unwrap();
     assert_eq!(report.port_id, "MachineInspector");
     assert_eq!(report.connector.id, "reference.machine-static");
 }
@@ -105,9 +120,14 @@ fn package_manager_reference_proves_preview_apply_and_idempotence() {
         &connector,
         &PackageManagerConformanceFixture {
             platform: "test-os".to_owned(),
-            request: PackageStateRequest { id: "git".to_owned(), present: true, source: None },
+            request: PackageStateRequest {
+                id: "git".to_owned(),
+                present: true,
+                source: None,
+            },
         },
-    ).unwrap();
+    )
+    .unwrap();
     assert_eq!(report.port_id, "PackageManager");
     assert_eq!(report.connector.id, "reference.machine-reconciler");
 }
@@ -125,7 +145,8 @@ fn configuration_manager_reference_proves_preview_apply_and_idempotence() {
                 source: None,
             },
         },
-    ).unwrap();
+    )
+    .unwrap();
     assert_eq!(report.port_id, "ConfigurationManager");
     assert_eq!(report.connector.id, "reference.machine-reconciler");
 }
@@ -144,7 +165,8 @@ fn service_manager_reference_proves_preview_apply_and_idempotence() {
                 source: None,
             },
         },
-    ).unwrap();
+    )
+    .unwrap();
     assert_eq!(report.port_id, "ServiceManager");
     assert_eq!(report.connector.id, "reference.machine-reconciler");
 }

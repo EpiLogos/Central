@@ -30,8 +30,8 @@ use crate::projectcentral::{read_project_manifest, AGENT_GOVERNANCE_DIR, WIKI_DI
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
 use crate::source_horizon::{
-    read_project_change_horizon, reconcile_project_source_writes, retrieval_allowed,
-    SourceBinding, SourceWriteAttribution,
+    read_project_change_horizon, reconcile_project_source_writes, retrieval_allowed, SourceBinding,
+    SourceWriteAttribution,
 };
 use crate::source_safety::{
     content_revision_bytes, lock, read, relative_member, safe_source_member_path,
@@ -342,8 +342,8 @@ fn read_record_value(root: &Path, relative: &str) -> io::Result<Value> {
 }
 
 fn bundle_digest(value: &Value) -> io::Result<String> {
-    let bytes =
-        serde_json::to_vec(value).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let bytes = serde_json::to_vec(value)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     Ok(content_revision_bytes(&bytes))
 }
 
@@ -439,14 +439,14 @@ fn export_action(
             .find(|source| &source.binding.source_ref == reference)
         {
             Some(value) => value,
-            None => {
-                return ActionResult::failure(
-                    Some(action),
-                    ResultStatus::InvalidInput,
-                    format!("source_ref is not a participating World source of this Project: {reference}"),
-                    None,
-                )
-            }
+            None => return ActionResult::failure(
+                Some(action),
+                ResultStatus::InvalidInput,
+                format!(
+                    "source_ref is not a participating World source of this Project: {reference}"
+                ),
+                None,
+            ),
         };
         if !observed.binding.agent_retrieval_allowed {
             return ActionResult::failure(
@@ -504,7 +504,10 @@ fn export_action(
             base_revision,
             after_revision: Some(current),
             content,
-            origin_change_refs: history.iter().map(|change| change.change_ref.clone()).collect(),
+            origin_change_refs: history
+                .iter()
+                .map(|change| change.change_ref.clone())
+                .collect(),
             origin_cursor: history
                 .last()
                 .map(|change| change.cursor)
@@ -637,15 +640,14 @@ fn load_bundle(action: &str, input: &Value) -> Result<(Value, String), ActionRes
 }
 
 fn parsed_bundle(action: &str, value: &Value) -> Result<SourceTransferBundle, ActionResult> {
-    let bundle: SourceTransferBundle =
-        serde_json::from_value(value.clone()).map_err(|error| {
-            ActionResult::failure(
-                Some(action),
-                ResultStatus::InvalidInput,
-                format!("bundle is not a {SOURCE_TRANSFER_SCHEMA} document: {error}"),
-                None,
-            )
-        })?;
+    let bundle: SourceTransferBundle = serde_json::from_value(value.clone()).map_err(|error| {
+        ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            format!("bundle is not a {SOURCE_TRANSFER_SCHEMA} document: {error}"),
+            None,
+        )
+    })?;
     if bundle.schema != SOURCE_TRANSFER_SCHEMA {
         return Err(ActionResult::failure(
             Some(action),
@@ -665,11 +667,23 @@ fn would_be_binding(project_root: &Path, path: &str) -> io::Result<Option<Source
     let member_of = |dir: &str| path.starts_with(&format!("{dir}/"));
     let manifest = read_project_manifest(project_root)?;
     let (role, provenance, treatment) = if member_of(&manifest.human_source) {
-        ("project-human-source-aperture", "unresolved", "projectcentral-user")
+        (
+            "project-human-source-aperture",
+            "unresolved",
+            "projectcentral-user",
+        )
     } else if member_of(AGENT_GOVERNANCE_DIR) {
-        ("agent-governance-source", "unresolved", "projectcentral-agent-governance")
+        (
+            "agent-governance-source",
+            "unresolved",
+            "projectcentral-agent-governance",
+        )
     } else if member_of(WIKI_DIR) {
-        ("agent-wiki-source", "agent-maintained", "projectcentral-agent-wiki")
+        (
+            "agent-wiki-source",
+            "agent-maintained",
+            "projectcentral-agent-wiki",
+        )
     } else {
         return Ok(None);
     };
@@ -709,7 +723,10 @@ fn conflict_stem(
         incoming.unwrap_or(&String::from("~")),
         local.unwrap_or(&String::from("~"))
     );
-    format!("{path_key}-{}", tail(&content_revision_bytes(material.as_bytes())))
+    format!(
+        "{path_key}-{}",
+        tail(&content_revision_bytes(material.as_bytes()))
+    )
 }
 
 const RESOLUTION_PATH_TEXT: &str = "resolve through projectcentral.source.transfer.resolve with disposition keep-local or accept-incoming; accept-incoming requires expected_local_revision equal to the recorded local_revision";
@@ -756,8 +773,8 @@ fn record_conflict(
         resolution_path: RESOLUTION_PATH_TEXT.to_owned(),
         resolution: None,
     };
-    let mut value =
-        serde_json::to_value(&record).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let mut value = serde_json::to_value(&record)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     let relative = format!("{TRANSFER_CONFLICT_AREA}/{stem}/record.json");
     if read_record_value(root, &relative).is_ok() {
         // Same divergence seen again: refresh the evidence instead of
@@ -812,7 +829,9 @@ fn create_source(
     let relative = Path::new(path);
     let parent = crate::file_mutation::directory(
         root,
-        relative.parent().ok_or_else(|| invalid("Missing source parent"))?,
+        relative
+            .parent()
+            .ok_or_else(|| invalid("Missing source parent"))?,
     )?;
     let name = format!(
         ".central-source-{}-{}",
@@ -964,7 +983,10 @@ fn apply_action(
             return ActionResult::failure(
                 Some(action),
                 ResultStatus::InvalidInput,
-                format!("entry {} carries no payload; transfers never delete", entry.source_ref),
+                format!(
+                    "entry {} carries no payload; transfers never delete",
+                    entry.source_ref
+                ),
                 None,
             );
         }
@@ -1093,16 +1115,21 @@ fn apply_action(
                     }
                 }
             } else {
-                let conflict_ref =
-                    match record_conflict(&root, &world_ref, &bundle, entry, Some(local.clone()), now)
-                    {
-                        Ok(value) => Some(value),
-                        Err(error) => {
-                            status = "uncertain".to_owned();
-                            last_error = Some(error.to_string());
-                            break;
-                        }
-                    };
+                let conflict_ref = match record_conflict(
+                    &root,
+                    &world_ref,
+                    &bundle,
+                    entry,
+                    Some(local.clone()),
+                    now,
+                ) {
+                    Ok(value) => Some(value),
+                    Err(error) => {
+                        status = "uncertain".to_owned();
+                        last_error = Some(error.to_string());
+                        break;
+                    }
+                };
                 TransferOutcome {
                     source_ref: entry.source_ref.clone(),
                     path: entry.path.clone(),
@@ -1137,8 +1164,7 @@ fn apply_action(
             // Modified or unacknowledged state on an absent local source:
             // the origin's base was never established here, which is
             // divergence like any other.
-            let conflict_ref = match record_conflict(&root, &world_ref, &bundle, entry, None, now)
-            {
+            let conflict_ref = match record_conflict(&root, &world_ref, &bundle, entry, None, now) {
                 Ok(value) => Some(value),
                 Err(error) => {
                     status = "uncertain".to_owned();
@@ -1168,7 +1194,10 @@ fn apply_action(
         .iter()
         .filter(|o| o.outcome == "already-applied")
         .count();
-    let conflicted_count = outcomes.iter().filter(|o| o.outcome == "conflicted").count();
+    let conflicted_count = outcomes
+        .iter()
+        .filter(|o| o.outcome == "conflicted")
+        .count();
     let transfer_ref = format!("central:transfer:{}:{}", world_ref, tail(&bundle_revision));
     let receipt = TransferApplyReceipt {
         schema: SOURCE_TRANSFER_APPLY_RECEIPT_SCHEMA.to_owned(),
@@ -1190,8 +1219,8 @@ fn apply_action(
         last_error,
         record_write_error: None,
     };
-    let mut receipt_value =
-        serde_json::to_value(&receipt).unwrap_or_else(|_| json!({"schema": SOURCE_TRANSFER_APPLY_RECEIPT_SCHEMA}));
+    let mut receipt_value = serde_json::to_value(&receipt)
+        .unwrap_or_else(|_| json!({"schema": SOURCE_TRANSFER_APPLY_RECEIPT_SCHEMA}));
     let record_relative = format!("{TRANSFER_RECORD_AREA}/{}.json", tail(&transfer_ref));
     if let Err(error) = write_record_file(&root, &record_relative, &receipt_value) {
         // The mutations already happened; the receipt is returned and its
@@ -1269,18 +1298,20 @@ fn conflicts_action(
         conflicts.push(record);
     }
     conflicts.sort_by(|left, right| {
-        let key = |value: &Value| (
-            value
-                .get("source_ref")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_owned(),
-            value
-                .get("conflict_ref")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_owned(),
-        );
+        let key = |value: &Value| {
+            (
+                value
+                    .get("source_ref")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned(),
+                value
+                    .get("conflict_ref")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned(),
+            )
+        };
         key(left).cmp(&key(right))
     });
     let open_conflicts = conflicts
@@ -1649,7 +1680,14 @@ fn descriptor_read(
     inputs: Vec<ActionInputDefinition>,
     output_type: &str,
 ) -> ActionDescriptor {
-    build_descriptor(id, title, description, MutationClass::ReadOnly, inputs, output_type)
+    build_descriptor(
+        id,
+        title,
+        description,
+        MutationClass::ReadOnly,
+        inputs,
+        output_type,
+    )
 }
 
 fn descriptor_mutation(
