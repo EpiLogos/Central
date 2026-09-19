@@ -457,12 +457,23 @@ pub(crate) fn read_now(
         .filter(|b| b.roles.iter().any(|r| r == "now-clearing"))
     {
         let source = scope.read(&binding.source_ref)?;
-        let record: NowRecord = serde_json::from_str(&source.content)?;
+        let record: NowRecord = serde_json::from_str(&source.content).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "now-clearing record {} failed to parse: {error}",
+                    binding.source_ref
+                ),
+            )
+        })?;
         if !matches!(record.schema.as_str(), NOW_SCHEMA | NOW_SCHEMA_V2)
             || record.scope_ref != scope.world_ref
             || record.source_ref != binding.source_ref
         {
-            return Err(invalid("NOW source identity/schema mismatch"));
+            return Err(invalid(format!(
+                "NOW source identity/schema mismatch at {}",
+                binding.source_ref
+            )));
         }
         if record.now_ref == reference {
             return Ok((record, source));
@@ -489,12 +500,23 @@ pub(crate) fn list_now(scope: &Scope, input: &Value) -> io::Result<Vec<Value>> {
         .filter(|b| b.roles.iter().any(|r| r == "now-clearing"))
     {
         let source = scope.read(&binding.source_ref)?;
-        let record: NowRecord = serde_json::from_str(&source.content)?;
+        let record: NowRecord = serde_json::from_str(&source.content).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "now-clearing record {} failed to parse: {error}",
+                    binding.source_ref
+                ),
+            )
+        })?;
         if !matches!(record.schema.as_str(), NOW_SCHEMA | NOW_SCHEMA_V2)
             || record.scope_ref != scope.world_ref
             || record.source_ref != binding.source_ref
         {
-            return Err(invalid("NOW source identity/schema mismatch"));
+            return Err(invalid(format!(
+                "NOW source identity/schema mismatch at {}",
+                binding.source_ref
+            )));
         }
         if !seen.insert(record.now_ref.clone()) {
             continue;
