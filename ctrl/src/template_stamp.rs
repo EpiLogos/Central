@@ -6,6 +6,12 @@
 //! text, existing files are never read, compared or overwritten, and a
 //! repeated stamp is stable. Stamping is opt-in and additive only — it
 //! never deletes, moves or rewrites source.
+//!
+//! One default reaches inside the human authorship aperture: the telos
+//! ground skeleton at `ProjectCentral/user/telos/README.md`. The owner
+//! commissioned telos into the propagation (2026-09-18); it lands as a
+//! marked distributed default like every other stamp — created only when
+//! missing, never read, compared or overwritten.
 
 use crate::action::{ActionDescriptor, ActionExecutionContext, ActionRegistry, MutationClass};
 use crate::projectcentral::{read_project_manifest, PROJECTCENTRAL_DIR};
@@ -58,6 +64,10 @@ const PROJECT_DEFAULTS: &[(&str, &str)] = &[
     (
         "ProjectCentral/agents/governance/repo-content.md",
         include_str!("../defaults/projectcentral-repo-content.md"),
+    ),
+    (
+        "ProjectCentral/user/telos/README.md",
+        include_str!("../defaults/projectcentral-user-telos-readme.md"),
     ),
 ];
 
@@ -373,7 +383,7 @@ pub fn register_template_stamp_actions(registry: &mut ActionRegistry) {
             descriptor(
                 "central.template.stamp",
                 "Stamp default tree",
-                "Create missing Central-owned default sources as marked distributed drafts: the repo guidance protocol, the field-and-now governance statements and the root NOW/DAY field skeleton at Control scope; repo-structure/repo-content starters at ProjectCentral scope. Never overwrites, moves or deletes existing source; a repeated stamp is stable.",
+                "Create missing Central-owned default sources as marked distributed drafts: the repo guidance protocol, the field-and-now governance statements and the root NOW/DAY field skeleton at Control scope; repo-structure/repo-content starters and the telos ground skeleton at ProjectCentral scope. Never overwrites, moves or deletes existing source; a repeated stamp is stable.",
                 MutationClass::LocallyMutating,
                 "central-template-stamp",
                 true,
