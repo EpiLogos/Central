@@ -154,7 +154,16 @@ fn git_census_reports_worktrees_branches_and_attention_for_a_fixture_repo() {
     git(&["commit", "-m", "lane work"], &root.join("example-lane"));
     fs::write(repo.join("dirty.txt"), "uncommitted\n").unwrap();
 
-    let json = run_cli(
+    // git-sync is a host-surface Connector, not part of ctrl core, so this
+    // contract test mounts it as a dev-only provider on top of the default
+    // registry and drives the action through the runtime entry point.
+    let mut connectors = central_ctrl::create_default_connector_registry();
+    connectors
+        .register(central_git_sync_connector::GitSynchronizerConnector::new())
+        .expect("git-sync Connector manifest is valid");
+    let connector_context = central_ctrl::ConnectorContext::current();
+    let mut surface = central_ctrl::NullTerminalSurface;
+    let json = central_ctrl::run_cli_with_runtime(
         &[
             "--json".to_owned(),
             "action".to_owned(),
@@ -163,6 +172,9 @@ fn git_census_reports_worktrees_branches_and_attention_for_a_fixture_repo() {
             r#"{"project":"example"}"#.to_owned(),
         ],
         &environment(&root),
+        &mut surface,
+        &connectors,
+        &connector_context,
     );
     assert_eq!(json.result.status, ResultStatus::Success);
     let repos = json.result.data.as_ref().unwrap()["repos"]

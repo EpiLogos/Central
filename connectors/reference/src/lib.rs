@@ -496,9 +496,10 @@ impl Connector for InMemoryMachineConnector {
 /// Connectors, so host surfaces that register one keep it as the selected
 /// MachineInspector.
 ///
-/// The git-sync Connector is mounted for its two request-scoped read ports
-/// (SourceHistory, GitState); its Synchronizer port stays unavailable unless
-/// `CENTRAL_GIT_SYNC_TARGET` configures a target.
+/// The git-sync Connector is deliberately *not* mounted here: it is a
+/// host-surface adapter (see `surfaces/macos-host`), so ctrl core keeps its
+/// dependency boundary and `central.git.census` resolves its `GitState` port
+/// only when a surface has mounted a provider.
 pub fn create_default_connector_registry() -> ConnectorRegistry {
     let mut registry = ConnectorRegistry::default();
     registry
@@ -510,9 +511,6 @@ pub fn create_default_connector_registry() -> ConnectorRegistry {
     registry
         .register(StaticMachineInspectorConnector::current_host())
         .expect("reference Connector manifest is valid");
-    registry
-        .register(central_git_sync_connector::GitSynchronizerConnector::new())
-        .expect("git-sync Connector manifest is valid");
     registry
         .register(central_harness_connector::HarnessCapabilityConnector::new())
         .expect("harness capability Connector manifest is valid");

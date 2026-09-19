@@ -10,5 +10,4 @@ path = "src/lib.rs"
 
 [dependencies]
 central-connector-sdk = { path = "../../crates/connector-sdk" }
-central-git-sync-connector = { path = "../git-sync" }
 central-harness-connector = { path = "../harness" }

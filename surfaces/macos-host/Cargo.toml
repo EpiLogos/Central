@@ -14,6 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 central-connector-sdk = { path = "../../crates/connector-sdk" }
+central-git-sync-connector = { path = "../../connectors/git-sync" }
 central-macos-connectors = { path = "../../connectors/macos" }
 central-reference-connectors = { path = "../../connectors/reference" }
 central-shortcuts-connector = { path = "../../connectors/shortcuts" }
