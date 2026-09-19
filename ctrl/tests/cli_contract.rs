@@ -156,26 +156,29 @@ fn git_census_reports_worktrees_branches_and_attention_for_a_fixture_repo() {
 
     // git-sync is a host-surface Connector, not part of ctrl core, so this
     // contract test mounts it as a dev-only provider on top of the default
-    // registry and drives the action through the runtime entry point.
-    let mut connectors = central_ctrl::create_default_connector_registry();
-    connectors
-        .register(central_git_sync_connector::GitSynchronizerConnector::new())
-        .expect("git-sync Connector manifest is valid");
-    let connector_context = central_ctrl::ConnectorContext::current();
-    let mut surface = central_ctrl::NullTerminalSurface;
-    let json = central_ctrl::run_cli_with_runtime(
-        &[
-            "--json".to_owned(),
-            "action".to_owned(),
-            "run".to_owned(),
-            "central.git.census".to_owned(),
-            r#"{"project":"example"}"#.to_owned(),
-        ],
-        &environment(&root),
-        &mut surface,
-        &connectors,
-        &connector_context,
-    );
+    // registry and drives every git command through the runtime entry point.
+    let run_git = |args: &[String]| {
+        let mut connectors = central_ctrl::create_default_connector_registry();
+        connectors
+            .register(central_git_sync_connector::GitSynchronizerConnector::new())
+            .expect("git-sync Connector manifest is valid");
+        let connector_context = central_ctrl::ConnectorContext::current();
+        let mut surface = central_ctrl::NullTerminalSurface;
+        central_ctrl::run_cli_with_runtime(
+            args,
+            &environment(&root),
+            &mut surface,
+            &connectors,
+            &connector_context,
+        )
+    };
+    let json = run_git(&[
+        "--json".to_owned(),
+        "action".to_owned(),
+        "run".to_owned(),
+        "central.git.census".to_owned(),
+        r#"{"project":"example"}"#.to_owned(),
+    ]);
     assert_eq!(json.result.status, ResultStatus::Success);
     let repos = json.result.data.as_ref().unwrap()["repos"]
         .as_array()
@@ -214,17 +217,14 @@ fn git_census_reports_worktrees_branches_and_attention_for_a_fixture_repo() {
         2
     );
 
-    let tree = run_cli(
-        &["git".to_owned(), "tree".to_owned(), "example".to_owned()],
-        &environment(&root),
-    );
+    let tree = run_git(&["git".to_owned(), "tree".to_owned(), "example".to_owned()]);
     assert_eq!(tree.result.status, ResultStatus::Success);
     assert!(tree.output.contains("wt example @ main"));
     // The lane is checked out, so it renders as a worktree; the tree's
     // branch section lists parked (not checked out) branches only.
     assert!(tree.output.contains("wt example-lane @ lane/unpushed"));
 
-    let graph = run_cli(&["git".to_owned(), "graph".to_owned()], &environment(&root));
+    let graph = run_git(&["git".to_owned(), "graph".to_owned()]);
     assert_eq!(graph.result.status, ResultStatus::Success);
     assert!(graph.output.contains("flowchart LR"));
     assert!(graph.output.contains("LOCAL-ONLY"));
