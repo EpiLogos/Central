@@ -11,6 +11,10 @@ use std::path::{Path, PathBuf};
 pub const POLICY_SCHEMA: &str = "central.work-placement-policy/v1";
 pub const POLICY_ROLE: &str = "work-placement-policy";
 pub const NOW_SCHEMA: &str = "central.now-clearing/v1";
+/// Records that declare `work_refs` (lane ownership) carry the v2 schema so
+/// older readers fail loudly on schema instead of confusingly on an unknown
+/// field. Readers accept both; writers emit v2 only when `work_refs` exist.
+pub const NOW_SCHEMA_V2: &str = "central.now-clearing/v2";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -370,6 +374,51 @@ pub(crate) fn checked_policy(
     Ok(policy)
 }
 
+/// A declared lane-ownership reference: one NOW record claiming one branch
+/// (optionally one worktree) of one repository. Shared by the clearing
+/// schema (`work_refs`) and the project handoff schema; also consumed by the
+/// git census read model for lane attribution. Declared by callers, never
+/// inferred.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkRef {
+    /// Repository path relative to the Central root (e.g. `Work/O-I`).
+    pub repo: String,
+    pub branch: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
+}
+
+/// Parse the optional `work_refs` input with plain bounds: non-empty
+/// repo/branch strings, at most 64 entries.
+pub(crate) fn work_refs_input(input: &Value) -> io::Result<Vec<WorkRef>> {
+    let value = match input.get("work_refs") {
+        None | Some(Value::Null) => return Ok(vec![]),
+        Some(value @ Value::Array(_)) => value.clone(),
+        Some(_) => return Err(invalid("work_refs must be an array")),
+    };
+    let refs: Vec<WorkRef> = serde_json::from_value(value)
+        .map_err(|_| invalid("work_refs entries require non-empty repo and branch strings"))?;
+    if refs.len() > 64 {
+        return Err(invalid("work_refs carries at most 64 entries"));
+    }
+    for work_ref in &refs {
+        if work_ref.repo.trim().is_empty() || work_ref.branch.trim().is_empty() {
+            return Err(invalid(
+                "work_refs entries require non-empty repo and branch strings",
+            ));
+        }
+    }
+    Ok(refs)
+}
+
+fn schema_for(record: &NowRecord) -> &'static str {
+    if record.work_refs.is_empty() {
+        NOW_SCHEMA
+    } else {
+        NOW_SCHEMA_V2
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NowRecord {
@@ -387,6 +436,8 @@ pub struct NowRecord {
     pub obligations: Vec<String>,
     pub continuation_refs: Vec<String>,
     pub archive_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub work_refs: Vec<WorkRef>,
 }
 fn refs(input: &Value, name: &str) -> io::Result<Vec<String>> {
     let values: Vec<String> =
@@ -407,7 +458,7 @@ pub(crate) fn read_now(
     {
         let source = scope.read(&binding.source_ref)?;
         let record: NowRecord = serde_json::from_str(&source.content)?;
-        if record.schema != NOW_SCHEMA
+        if !matches!(record.schema.as_str(), NOW_SCHEMA | NOW_SCHEMA_V2)
             || record.scope_ref != scope.world_ref
             || record.source_ref != binding.source_ref
         {
@@ -439,7 +490,7 @@ pub(crate) fn list_now(scope: &Scope, input: &Value) -> io::Result<Vec<Value>> {
     {
         let source = scope.read(&binding.source_ref)?;
         let record: NowRecord = serde_json::from_str(&source.content)?;
-        if record.schema != NOW_SCHEMA
+        if !matches!(record.schema.as_str(), NOW_SCHEMA | NOW_SCHEMA_V2)
             || record.scope_ref != scope.world_ref
             || record.source_ref != binding.source_ref
         {
@@ -466,6 +517,7 @@ pub(crate) fn list_now(scope: &Scope, input: &Value) -> io::Result<Vec<Value>> {
             "source_refs": record.source_refs,
             "lifecycle": record.lifecycle,
             "created_at_unix_seconds": record.created_at_unix_seconds,
+            "work_refs": record.work_refs,
             "revision": source.revision,
         }));
     }
@@ -537,6 +589,7 @@ pub fn allocate(scope: &Scope, input: &Value, now: u64) -> io::Result<Value> {
     let purpose = text(input, "purpose")?;
     let participants = refs(input, "participant_refs")?;
     let source_refs = refs(input, "source_refs")?;
+    let work_refs = work_refs_input(input)?;
     let now_ref = format!("central:now:{}:{}", scope.world_ref, key(task));
     match read_now(scope, &now_ref) {
         Ok((record, reading)) => {
@@ -544,6 +597,7 @@ pub fn allocate(scope: &Scope, input: &Value, now: u64) -> io::Result<Value> {
                 || record.purpose != purpose
                 || record.participant_refs != participants
                 || record.source_refs != source_refs
+                || record.work_refs != work_refs
             {
                 return Err(conflict(
                     "allocation id already has a different task/purpose/relationship basis",
@@ -561,7 +615,11 @@ pub fn allocate(scope: &Scope, input: &Value, now: u64) -> io::Result<Value> {
     check_allocation_protection(scope, &path, &policy)?;
     scope.reconcile(None, &[])?;
     let mut record = NowRecord {
-        schema: NOW_SCHEMA.into(),
+        schema: if work_refs.is_empty() {
+            NOW_SCHEMA.into()
+        } else {
+            NOW_SCHEMA_V2.into()
+        },
         now_ref,
         source_ref: scope.source_ref(&path),
         scope_ref: scope.world_ref.clone(),
@@ -575,6 +633,7 @@ pub fn allocate(scope: &Scope, input: &Value, now: u64) -> io::Result<Value> {
         obligations: vec![],
         continuation_refs: vec![],
         archive_ref: None,
+        work_refs,
     };
     let mut created = true;
     // A process may die after publishing now.json but before binding it. Resume
@@ -582,7 +641,7 @@ pub fn allocate(scope: &Scope, input: &Value, now: u64) -> io::Result<Value> {
     match crate::source_safety::read(&scope.root, &path) {
         Ok(raw) => {
             let previous: NowRecord = serde_json::from_str(&raw)?;
-            if previous.schema != record.schema
+            if previous.schema != schema_for(&record)
                 || previous.now_ref != record.now_ref
                 || previous.source_ref != record.source_ref
                 || previous.scope_ref != record.scope_ref
@@ -590,6 +649,7 @@ pub fn allocate(scope: &Scope, input: &Value, now: u64) -> io::Result<Value> {
                 || previous.purpose != record.purpose
                 || previous.participant_refs != record.participant_refs
                 || previous.source_refs != record.source_refs
+                || previous.work_refs != record.work_refs
                 || previous.lifecycle != "active"
             {
                 return Err(conflict("unbound NOW bytes disagree with allocation; inspect recovery instead of overwriting"));
