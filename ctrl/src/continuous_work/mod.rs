@@ -66,6 +66,11 @@ pub fn execute_with_token_at(
         )?)?),
         "now_read" => {
             let (record, reading) = placement::read_now(&scope, source::text(input, "now_ref")?)?;
+            // The read-model join: compose the receiving Returns already keyed
+            // to this NOW so the reading discloses its consequential output, not
+            // only the frozen allocation basis. Read-only over the existing
+            // receiving ledger — it allocates nothing and adds no new store.
+            let returns = temporal::composed_returns(&scope, &record.now_ref, &record.source_ref)?;
             match input.get("with_placement") {
                 Some(Value::Bool(true)) => {
                     // Current acting facts are explicitly requested. Ordinary
@@ -78,6 +83,7 @@ pub fn execute_with_token_at(
                         placement::allocation_reading(&scope, &record, &reading, policy, false)?;
                     result["schema"] = json!("central.now-reading/v1");
                     result["placement_included"] = json!(true);
+                    result["returns"] = Value::Array(returns);
                     result
                         .as_object_mut()
                         .expect("native reading object")
@@ -85,7 +91,7 @@ pub fn execute_with_token_at(
                     Ok(result)
                 }
                 None | Some(Value::Bool(false)) => Ok(
-                    json!({"schema":"central.now-reading/v1","record":record,"source":reading.source,"revision":reading.revision,"automatic_agent_or_model_invocation":false,
+                    json!({"schema":"central.now-reading/v1","record":record,"source":reading.source,"revision":reading.revision,"returns":returns,"automatic_agent_or_model_invocation":false,
                         "pointer_note":"Records are pointers, not authority: follow the governing guidance, and search the native surface before building anything new."}),
                 ),
                 _ => Err(invalid("with_placement must be a boolean")),

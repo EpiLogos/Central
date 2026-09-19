@@ -243,8 +243,17 @@ pub fn day_lifecycle(
     save_relations(scope, &relations, &basis)?;
     day_read(scope, input)
 }
-fn outstanding_returns(scope: &Scope, now_ref: &str, source_ref: &str) -> io::Result<Vec<String>> {
-    let mut pending = Vec::new();
+/// Every receiving Return item keyed to this NOW/source, paired with its
+/// on-disk path (the return_ref's fallback identity). One scan feeds both the
+/// archive-gate obligation check (`outstanding_returns`) and the read-model
+/// composition (`composed_returns`), so the two can never disagree about what
+/// a NOW is answerable for.
+fn scan_returns(
+    scope: &Scope,
+    now_ref: &str,
+    source_ref: &str,
+) -> io::Result<Vec<(String, Value)>> {
+    let mut items = Vec::new();
     for directory in [
         ".central/source-returns",
         ".central/source-returns/contributions",
@@ -270,21 +279,72 @@ fn outstanding_returns(scope: &Scope, now_ref: &str, source_ref: &str) -> io::Re
             if item["now_ref"] != now_ref && item["source_ref"] != source_ref {
                 continue;
             }
-            // Legacy source-return acceptance already committed its source
-            // effect. New receiving acceptance explicitly has NOT included it.
-            let settled = matches!(
-                item["status"].as_str(),
-                Some("included" | "rejected" | "cancelled")
-            ) || (item["schema"] == "central.source-return/v1"
-                && item["status"] == "accepted");
-            if !settled {
-                pending.push(item["return_ref"].as_str().unwrap_or(&path).into());
-            }
+            items.push((path, item));
         }
     }
+    Ok(items)
+}
+
+// Legacy source-return acceptance already committed its source effect. New
+// receiving acceptance explicitly has NOT included it.
+fn return_is_settled(item: &Value) -> bool {
+    matches!(
+        item["status"].as_str(),
+        Some("included" | "rejected" | "cancelled")
+    ) || (item["schema"] == "central.source-return/v1" && item["status"] == "accepted")
+}
+
+fn outstanding_returns(scope: &Scope, now_ref: &str, source_ref: &str) -> io::Result<Vec<String>> {
+    let mut pending: Vec<String> = scan_returns(scope, now_ref, source_ref)?
+        .into_iter()
+        .filter(|(_, item)| !return_is_settled(item))
+        .map(|(path, item)| item["return_ref"].as_str().unwrap_or(&path).into())
+        .collect();
     pending.sort();
     pending.dedup();
     Ok(pending)
+}
+
+/// The read-model join a NOW reading composes over its own consequential
+/// output: every receiving Return keyed to this NOW/source, with its status
+/// and the run/session/day/task refs the producer already stamped. This is a
+/// read over the existing receiving ledger — it allocates nothing, mutates
+/// nothing and introduces no new store. It answers FACTORY-AGENCY §11 ("NOW
+/// composes … consequential output refs") and SESSION-GROUNDING §10: a NOW
+/// reading now discloses what actually happened beneath it, not only the
+/// frozen basis it was allocated with. `settled` distinguishes a resolved
+/// Return from one still awaiting review, so a reader never mistakes a pending
+/// outcome for a closed one.
+pub(crate) fn composed_returns(
+    scope: &Scope,
+    now_ref: &str,
+    source_ref: &str,
+) -> io::Result<Vec<Value>> {
+    let mut rows: Vec<Value> = scan_returns(scope, now_ref, source_ref)?
+        .into_iter()
+        .map(|(path, item)| {
+            let return_ref = item["return_ref"].as_str().unwrap_or(&path).to_string();
+            json!({
+                "return_ref": return_ref,
+                "status": item["status"].as_str().unwrap_or("unknown"),
+                "settled": return_is_settled(&item),
+                "schema": item["schema"].as_str(),
+                "run_ref": item.get("run_ref").cloned().unwrap_or(Value::Null),
+                "session_ref": item.get("session_ref").cloned().unwrap_or(Value::Null),
+                "day_ref": item.get("day_ref").cloned().unwrap_or(Value::Null),
+                "task_ref": item.get("task_ref").cloned().unwrap_or(Value::Null),
+                "source_ref": item.get("source_ref").cloned().unwrap_or(Value::Null),
+            })
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        a["return_ref"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(b["return_ref"].as_str().unwrap_or_default())
+    });
+    rows.dedup_by(|a, b| a["return_ref"] == b["return_ref"]);
+    Ok(rows)
 }
 pub fn now_lifecycle(
     scope: &Scope,
@@ -452,5 +512,87 @@ mod receiving_obligation_tests {
         assert!(outstanding_returns(&scope, "now:test", "source:test")
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn composed_returns_discloses_pending_and_settled_output_with_correlation_refs() {
+        let world = super::super::tests::world();
+        let scope = Scope::resolve(world.path(), None).unwrap();
+        let area = scope.root.join(".central/source-returns");
+        fs::create_dir_all(&area).unwrap();
+        // A Factory Run Return keyed to this NOW, still awaiting review, carrying
+        // the run/session/day refs its producer stamped.
+        fs::write(
+            area.join("run.json"),
+            encoded(&json!({
+                "schema": "central.received-return/v1",
+                "return_ref": "return:run-a",
+                "now_ref": "now:test",
+                "status": "pending",
+                "run_ref": "run:a",
+                "session_ref": "ses:a",
+                "day_ref": "day:2026-09-19"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        // A second Return, already included (settled), matched by source_ref.
+        fs::write(
+            area.join("done.json"),
+            encoded(&json!({
+                "schema": "central.received-return/v1",
+                "return_ref": "return:done",
+                "source_ref": "source:test",
+                "status": "included"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        // A Return for a different NOW must not leak into this reading.
+        fs::write(
+            area.join("other.json"),
+            encoded(&json!({
+                "schema": "central.received-return/v1",
+                "return_ref": "return:other",
+                "now_ref": "now:elsewhere",
+                "status": "pending"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let rows = composed_returns(&scope, "now:test", "source:test").unwrap();
+        let refs: Vec<&str> = rows
+            .iter()
+            .map(|r| r["return_ref"].as_str().unwrap())
+            .collect();
+        // Both this NOW's Returns compose in (sorted); the other NOW's does not.
+        assert_eq!(refs, vec!["return:done", "return:run-a"]);
+
+        let run = rows
+            .iter()
+            .find(|r| r["return_ref"] == "return:run-a")
+            .unwrap();
+        assert_eq!(run["status"], "pending");
+        assert_eq!(run["settled"], false);
+        // Producer correlation refs are surfaced verbatim, not invented.
+        assert_eq!(run["run_ref"], "run:a");
+        assert_eq!(run["session_ref"], "ses:a");
+        assert_eq!(run["day_ref"], "day:2026-09-19");
+
+        let done = rows
+            .iter()
+            .find(|r| r["return_ref"] == "return:done")
+            .unwrap();
+        assert_eq!(done["settled"], true);
+        // Absent correlation refs are disclosed as null, never fabricated.
+        assert_eq!(done["run_ref"], Value::Null);
+
+        // The read-model join and the archive gate agree on what is still
+        // outstanding: exactly the one pending Return.
+        assert_eq!(
+            outstanding_returns(&scope, "now:test", "source:test").unwrap(),
+            vec!["return:run-a"]
+        );
     }
 }
