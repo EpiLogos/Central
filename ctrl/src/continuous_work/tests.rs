@@ -401,3 +401,155 @@ fn now_listing_lists_allocations_and_filters_by_participant() {
     assert_eq!(none["schema"], "central.now-listing/v1");
     assert_eq!(none["records"].as_array().unwrap().len(), 0);
 }
+
+#[test]
+fn v2_clearing_record_with_work_refs_deserializes_and_round_trips() {
+    // Exactly the shape that broke the v1-only reader: a `central.now-clearing/v2`
+    // record carrying `work_refs`. Before v2 support this failed to deserialize
+    // with "unknown field `work_refs`", which blocked every root `central.now.*`
+    // read and lifecycle operation for the whole World.
+    let v2 = r#"{
+        "schema": "central.now-clearing/v2",
+        "now_ref": "central:now:control:root:test-v2",
+        "source_ref": "central:source:control:root:Control/agents/now/clearings/test-v2/now.json",
+        "scope_ref": "control:root",
+        "task_ref": "control:task:test-v2",
+        "purpose": "a lane-owning clearing",
+        "participant_refs": [],
+        "source_refs": [],
+        "policy_revision_at_allocation": "central.content-fnv1a64/v1:2872:2aa797052872efe8",
+        "created_at_unix_seconds": 1789672633,
+        "lifecycle": "active",
+        "obligations": [],
+        "continuation_refs": [],
+        "archive_ref": null,
+        "work_refs": [
+            {"repo": "Work/O-I", "branch": "techne/convergence", "worktree_path": "/x/Work/O-I/.agent-worktrees/techne"},
+            {"repo": "Work/Actuation", "branch": "act-rust/vak-control"}
+        ]
+    }"#;
+    let record: placement::NowRecord =
+        serde_json::from_str(v2).expect("v2 clearing record must deserialize");
+    assert_eq!(record.schema, placement::NOW_SCHEMA_V2);
+    assert_eq!(record.work_refs.len(), 2);
+    assert_eq!(record.work_refs[0].repo, "Work/O-I");
+    assert_eq!(
+        record.work_refs[0].worktree_path.as_deref(),
+        Some("/x/Work/O-I/.agent-worktrees/techne")
+    );
+    assert_eq!(record.work_refs[1].branch, "act-rust/vak-control");
+    assert!(record.work_refs[1].worktree_path.is_none());
+
+    // Re-serialisation (what a lifecycle close does via `encoded(&record)`)
+    // preserves the v2 schema and the lane claims verbatim.
+    let reserialized = serde_json::to_string(&record).unwrap();
+    assert!(reserialized.contains("central.now-clearing/v2"));
+    assert!(reserialized.contains("act-rust/vak-control"));
+    assert!(reserialized.contains("worktree_path"));
+
+    // A v1 record (no `work_refs`) still reads, defaults to an empty lane set,
+    // and re-emits without a `work_refs` key — older readers stay unaffected.
+    let v1 = r#"{
+        "schema": "central.now-clearing/v1",
+        "now_ref": "central:now:control:root:test-v1",
+        "source_ref": "central:source:control:root:Control/agents/now/clearings/test-v1/now.json",
+        "scope_ref": "control:root",
+        "task_ref": "control:task:test-v1",
+        "purpose": "an ordinary clearing",
+        "participant_refs": [],
+        "source_refs": [],
+        "policy_revision_at_allocation": "central.content-fnv1a64/v1:2872:2aa797052872efe8",
+        "created_at_unix_seconds": 1789672633,
+        "lifecycle": "active",
+        "obligations": [],
+        "continuation_refs": [],
+        "archive_ref": null
+    }"#;
+    let v1_record: placement::NowRecord =
+        serde_json::from_str(v1).expect("v1 clearing record must still deserialize");
+    assert_eq!(v1_record.schema, placement::NOW_SCHEMA);
+    assert!(v1_record.work_refs.is_empty());
+    assert!(!serde_json::to_string(&v1_record)
+        .unwrap()
+        .contains("work_refs"));
+}
+
+#[test]
+fn allocate_with_work_refs_emits_v2_and_now_read_and_list_surface_lane_claims() {
+    let temp = world();
+    let root = temp.path();
+    let mut input = request(root, None, "task:lanes");
+    input["work_refs"] = serde_json::json!([
+        {"repo": "Work/one", "branch": "techne/lane-one"},
+        {"repo": "Work/two", "branch": "techne/lane-two", "worktree_path": "Work/two/.aikit/tasks/lane-two"}
+    ]);
+    let allocated = execute_at(root, "allocate", &input, 100).unwrap();
+
+    // The record on disk carries the v2 schema so a v1-only reader fails loudly
+    // on schema rather than confusingly on an unknown field.
+    let mut raw = String::new();
+    for entry in fs::read_dir(root.join("Control/agents/now/clearings"))
+        .unwrap()
+        .flatten()
+    {
+        let path = entry.path().join("now.json");
+        if let Ok(content) = fs::read_to_string(&path) {
+            if content.contains("task:lanes") {
+                raw = content;
+                break;
+            }
+        }
+    }
+    assert!(raw.contains("central.now-clearing/v2"), "record: {raw}");
+
+    // central.now.read returns the record with its lane claims intact.
+    let read = execute_at(
+        root,
+        "now_read",
+        &serde_json::json!({"now_ref": allocated["now_ref"]}),
+        100,
+    )
+    .unwrap();
+    assert_eq!(read["record"]["schema"], "central.now-clearing/v2");
+    assert_eq!(read["record"]["work_refs"].as_array().unwrap().len(), 2);
+
+    // central.now.list surfaces the declared lanes.
+    let listed = execute_at(root, "now_list", &serde_json::json!({}), 100).unwrap();
+    let row = listed["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["now_ref"] == allocated["now_ref"])
+        .unwrap();
+    assert_eq!(
+        row["work_refs"],
+        serde_json::json!([
+            {"repo": "Work/one", "branch": "techne/lane-one"},
+            {"repo": "Work/two", "branch": "techne/lane-two", "worktree_path": "Work/two/.aikit/tasks/lane-two"}
+        ])
+    );
+
+    // Idempotent re-allocation reads the v2 record back through read_now; a
+    // different lane basis conflicts rather than silently overwriting.
+    execute_at(root, "allocate", &input, 101).unwrap();
+    let mut changed = input.clone();
+    changed["work_refs"] = serde_json::json!([{"repo": "Work/one", "branch": "other"}]);
+    assert_eq!(
+        execute_at(root, "allocate", &changed, 102)
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::AlreadyExists
+    );
+
+    // A plain allocation without work_refs keeps the v1 schema and an empty
+    // lane set in the listing.
+    let plain = execute_at(root, "allocate", &request(root, None, "task:plain"), 103).unwrap();
+    let plain_listed = execute_at(root, "now_list", &serde_json::json!({}), 103).unwrap();
+    let plain_row = plain_listed["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["now_ref"] == plain["now_ref"])
+        .unwrap();
+    assert_eq!(plain_row["work_refs"], serde_json::json!([]));
+}
