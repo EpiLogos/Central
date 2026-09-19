@@ -708,3 +708,51 @@ fn a_corrupt_bound_clearing_names_itself_in_the_listing_failure() {
     let listed = execute_at(root, "now_list", &serde_json::json!({}), 103).unwrap();
     assert_eq!(listed["records"].as_array().unwrap().len(), 2);
 }
+
+#[test]
+fn now_read_composes_receiving_returns_keyed_to_the_now() {
+    let temp = world();
+    let root = temp.path();
+    let allocated =
+        execute_at(root, "allocate", &request(root, None, "task:returns"), 100).unwrap();
+    let now_ref = allocated["now_ref"].as_str().unwrap().to_owned();
+
+    // A receiving Return lands on disk under this NOW exactly as
+    // central.receiving.submit persists it, carrying the run/session/day refs
+    // its producer stamped.
+    let area = root.join(".central/source-returns");
+    fs::create_dir_all(&area).unwrap();
+    fs::write(
+        area.join("run-return.json"),
+        serde_json::to_string(&serde_json::json!({
+            "schema": "central.received-return/v1",
+            "return_ref": "return:run-x",
+            "now_ref": now_ref,
+            "status": "pending",
+            "run_ref": "run:x",
+            "session_ref": "ses:x",
+            "day_ref": "day:2026-09-19"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    // central.now.read composes that Return into the reading's `returns` field
+    // — the read-model join, end to end through the real action, not a fixture.
+    let read = execute_at(
+        root,
+        "now_read",
+        &serde_json::json!({"now_ref": now_ref}),
+        100,
+    )
+    .unwrap();
+    let returns = read["returns"]
+        .as_array()
+        .expect("now-reading composes its receiving returns");
+    assert_eq!(returns.len(), 1);
+    assert_eq!(returns[0]["return_ref"], "return:run-x");
+    assert_eq!(returns[0]["settled"], false);
+    assert_eq!(returns[0]["run_ref"], "run:x");
+    assert_eq!(returns[0]["session_ref"], "ses:x");
+    assert_eq!(returns[0]["day_ref"], "day:2026-09-19");
+}
