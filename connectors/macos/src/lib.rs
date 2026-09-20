@@ -71,6 +71,7 @@ impl MacOsNativeConnector {
                     "macOS Notification settings govern notification presentation".to_owned(),
                 ],
                 mutation_scope: "externally-mutating".to_owned(),
+                known_limitations: Vec::new(),
             },
             brew_executable,
             open_executable: PathBuf::from("/usr/bin/open"),

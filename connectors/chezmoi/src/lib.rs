@@ -48,6 +48,7 @@ impl ChezmoiConnector {
                         .to_owned(),
                 ],
                 mutation_scope: "locally-mutating".to_owned(),
+                known_limitations: Vec::new(),
             },
             executable,
             destination,

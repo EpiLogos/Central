@@ -131,6 +131,7 @@ impl FixtureSynchronizer {
                 dependency_probes: Vec::new(),
                 configuration_requirements: Vec::new(),
                 mutation_scope: "externally-mutating".to_owned(),
+                known_limitations: Vec::new(),
             },
             state,
         }
@@ -213,6 +214,7 @@ impl LyingPackageConnector {
                 dependency_probes: Vec::new(),
                 configuration_requirements: Vec::new(),
                 mutation_scope: "locally-mutating".to_owned(),
+                known_limitations: Vec::new(),
             },
         }
     }

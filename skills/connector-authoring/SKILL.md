@@ -99,7 +99,7 @@ Two vocabulary rules that come from the resolver, not preference:
   architecture-qualified declaration never matches and makes the Connector
   permanently ineligible with no hint. Put the tested architecture
   (`aarch64`, `x86_64`) in the runtime requirements instead.
-- **State real limitations in the manifest's known-limitations place and in
+- **State real limitations in the manifest's `known_limitations` field and in
   your README.** A Connector that manages only one slice of a target's
   surface (for example, a package manager that reconciles only a target's
   *tool* state) says so where an operator choosing between Connectors will

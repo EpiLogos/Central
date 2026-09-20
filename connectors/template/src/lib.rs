@@ -26,6 +26,11 @@ impl TemplateWorkConnector {
                 dependency_probes: Vec::new(),
                 configuration_requirements: Vec::new(),
                 mutation_scope: "read-only".to_owned(),
+                // Where a Connector author declares this provider's real
+                // limitations, one non-empty string each, e.g.:
+                // known_limitations: vec!["manages tool state only; does not
+                //     touch the wider target system".to_owned()],
+                known_limitations: Vec::new(),
             },
         }
     }

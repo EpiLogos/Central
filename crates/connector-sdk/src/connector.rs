@@ -1,13 +1,45 @@
-use crate::notification::UserNotification;
+use crate::git_state::GIT_STATE_PORT;
+use crate::notification::{UserNotification, USER_NOTIFICATION_PORT};
 use crate::port::{
     Automation, ConfigurationManager, MachineInspector, NativeOpen, NativeReveal, PackageManager,
-    PortContract, ServiceManager, Synchronizer, TagStore, WorkDiscovery,
+    PortContract, ServiceManager, Synchronizer, TagStore, WorkDiscovery, AUTOMATION_PORT,
+    CONFIGURATION_MANAGER_PORT, MACHINE_INSPECTOR_PORT, NATIVE_OPEN_PORT, NATIVE_REVEAL_PORT,
+    PACKAGE_MANAGER_PORT, SERVICE_MANAGER_PORT, SYNCHRONIZER_PORT, TAG_STORE_PORT,
+    WORK_DISCOVERY_PORT,
 };
-use crate::source_history::SourceHistory;
+use crate::source_history::{SourceHistory, SOURCE_HISTORY_PORT};
 use serde::Serialize;
 use std::collections::BTreeSet;
 
 pub const CONNECTOR_API_VERSION: &str = "central.connector/v1";
+
+/// The Port contracts this SDK publishes. A Connector manifest may only
+/// declare these Ports, at their published versions, so a wrong-version or
+/// unknown-Port declaration is refused at manifest validation instead of
+/// surfacing later at registry resolution or conformance.
+pub const PUBLISHED_PORTS: &[&PortContract] = &[
+    &AUTOMATION_PORT,
+    &CONFIGURATION_MANAGER_PORT,
+    &GIT_STATE_PORT,
+    &MACHINE_INSPECTOR_PORT,
+    &NATIVE_OPEN_PORT,
+    &NATIVE_REVEAL_PORT,
+    &PACKAGE_MANAGER_PORT,
+    &SERVICE_MANAGER_PORT,
+    &SOURCE_HISTORY_PORT,
+    &SYNCHRONIZER_PORT,
+    &TAG_STORE_PORT,
+    &USER_NOTIFICATION_PORT,
+    &WORK_DISCOVERY_PORT,
+];
+
+/// Returns the published contract for a Port id, if this SDK publishes one.
+pub fn published_port(port_id: &str) -> Option<&'static PortContract> {
+    PUBLISHED_PORTS
+        .iter()
+        .copied()
+        .find(|contract| contract.id == port_id)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ConnectorPortDeclaration {
@@ -28,6 +60,10 @@ pub struct ConnectorManifest {
     pub dependency_probes: Vec<String>,
     pub configuration_requirements: Vec<String>,
     pub mutation_scope: String,
+    /// Provider-specific limitations an operator choosing between Connectors
+    /// should know about. Every entry must be non-empty.
+    #[serde(default)]
+    pub known_limitations: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -105,6 +141,40 @@ pub fn validate_connector_manifest(manifest: &ConnectorManifest) -> Result<(), M
                     "Duplicate Connector Port declaration: {} {}",
                     port.id, port.version
                 ),
+            ));
+        }
+        match published_port(&port.id) {
+            Some(published) if port.version == published.version => {}
+            Some(published) => {
+                return Err(ManifestError::new(
+                    "unsupported_port_version",
+                    format!(
+                        "Connector Port {} declares version {}, but this SDK publishes version {}.",
+                        port.id, port.version, published.version
+                    ),
+                ));
+            }
+            None => {
+                let published_ids = PUBLISHED_PORTS
+                    .iter()
+                    .map(|contract| contract.id)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(ManifestError::new(
+                    "unknown_port",
+                    format!(
+                        "Unknown Connector Port: {}. Published Ports: {}.",
+                        port.id, published_ids
+                    ),
+                ));
+            }
+        }
+    }
+    for limitation in &manifest.known_limitations {
+        if limitation.trim().is_empty() {
+            return Err(ManifestError::new(
+                "invalid_known_limitation",
+                "Connector manifest known limitations must be non-empty.",
             ));
         }
     }
@@ -312,5 +382,121 @@ impl ConnectorRegistry {
                 selected_connector,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn valid_manifest() -> ConnectorManifest {
+        ConnectorManifest {
+            api_version: CONNECTOR_API_VERSION.to_owned(),
+            id: "test.connector".to_owned(),
+            version: "0.1.0".to_owned(),
+            display_name: "Test connector".to_owned(),
+            ports: vec![ConnectorPortDeclaration {
+                id: WORK_DISCOVERY_PORT.id.to_owned(),
+                version: WORK_DISCOVERY_PORT.version.to_owned(),
+            }],
+            platforms: vec!["*".to_owned()],
+            entrypoint: "rust:test::Connector".to_owned(),
+            runtime_requirements: Vec::new(),
+            dependency_probes: Vec::new(),
+            configuration_requirements: Vec::new(),
+            mutation_scope: "read-only".to_owned(),
+            known_limitations: Vec::new(),
+        }
+    }
+
+    struct DeclaredConnector {
+        manifest: ConnectorManifest,
+    }
+
+    impl Connector for DeclaredConnector {
+        fn manifest(&self) -> &ConnectorManifest {
+            &self.manifest
+        }
+
+        fn probe(&self, _port: &PortContract, _context: &ConnectorContext) -> CapabilityProbe {
+            CapabilityProbe::available()
+        }
+    }
+
+    #[test]
+    fn correct_manifest_passes() {
+        assert!(validate_connector_manifest(&valid_manifest()).is_ok());
+    }
+
+    #[test]
+    fn manifest_with_known_limitations_passes() {
+        let mut manifest = valid_manifest();
+        manifest.known_limitations = vec!["manages formulae and casks only".to_owned()];
+        assert!(validate_connector_manifest(&manifest).is_ok());
+    }
+
+    #[test]
+    fn unknown_port_id_is_refused() {
+        let mut manifest = valid_manifest();
+        manifest.ports[0].id = "NotAPublishedPort".to_owned();
+        let error = validate_connector_manifest(&manifest).unwrap_err();
+        assert_eq!(error.code, "unknown_port");
+        assert!(error.message.contains("NotAPublishedPort"));
+        assert!(error.message.contains(WORK_DISCOVERY_PORT.id));
+    }
+
+    #[test]
+    fn wrong_port_version_is_refused() {
+        let mut manifest = valid_manifest();
+        manifest.ports[0].version = "2.0.0".to_owned();
+        let error = validate_connector_manifest(&manifest).unwrap_err();
+        assert_eq!(error.code, "unsupported_port_version");
+        assert!(error.message.contains(WORK_DISCOVERY_PORT.id));
+        assert!(error.message.contains("2.0.0"));
+        assert!(error.message.contains(WORK_DISCOVERY_PORT.version));
+    }
+
+    #[test]
+    fn empty_known_limitation_entry_is_refused() {
+        for entry in ["", "   \t"] {
+            let mut manifest = valid_manifest();
+            manifest.known_limitations = vec![entry.to_owned()];
+            let error = validate_connector_manifest(&manifest).unwrap_err();
+            assert_eq!(error.code, "invalid_known_limitation");
+        }
+    }
+
+    #[test]
+    fn published_ports_have_unique_ids_and_carry_the_separate_module_ports() {
+        let ids: BTreeSet<&str> = PUBLISHED_PORTS.iter().map(|contract| contract.id).collect();
+        assert_eq!(ids.len(), PUBLISHED_PORTS.len());
+        for port_id in [
+            "Automation",
+            "GitState",
+            "SourceHistory",
+            "UserNotification",
+        ] {
+            assert!(
+                published_port(port_id).is_some(),
+                "published registry must carry {port_id}"
+            );
+        }
+        assert_eq!(
+            published_port("PackageManager").map(|contract| contract.version),
+            Some(PACKAGE_MANAGER_PORT.version)
+        );
+        assert!(published_port("NotAPublishedPort").is_none());
+    }
+
+    #[test]
+    fn registry_register_refuses_wrong_port_version_up_front() {
+        let mut manifest = valid_manifest();
+        manifest.ports[0].version = "2.0.0".to_owned();
+        let mut registry = ConnectorRegistry::default();
+        let error = registry
+            .register(DeclaredConnector { manifest })
+            .err()
+            .expect("registration must refuse a wrong Port version up front");
+        assert_eq!(error.code, "unsupported_port_version");
     }
 }

@@ -62,6 +62,7 @@ impl GitSynchronizerConnector {
                     "{TARGET_ENV} is required only for Synchronizer; SourceHistory uses the request-scoped world root."
                 )],
                 mutation_scope: "externally-mutating".to_owned(),
+                known_limitations: Vec::new(),
             },
             git,
             target,

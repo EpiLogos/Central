@@ -106,6 +106,7 @@ impl HarnessCapabilityConnector {
                 ],
                 configuration_requirements: Vec::new(),
                 mutation_scope: "read-only".to_owned(),
+                known_limitations: Vec::new(),
             },
             actuation_executable,
             workcell_registry,

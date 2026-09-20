@@ -111,9 +111,15 @@ configuration requirements
 mutation scope
 ```
 
-It can also declare provider-specific Actions and known limitations.
+It can also declare provider-specific Actions and known limitations. A known
+limitation is a non-empty string in the manifest's `known_limitations` field;
+validation refuses empty entries.
 
 A Connector must not claim Port support when it cannot pass the Port conformance suite.
+
+A Connector may only declare Ports that the SDK publishes, at the versions the
+published Port contracts declare; manifest validation refuses unknown Port ids
+and wrong versions up front.
 
 ## 6. Discovery and eligibility
 

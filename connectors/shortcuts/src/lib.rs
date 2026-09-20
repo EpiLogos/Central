@@ -43,6 +43,7 @@ impl ShortcutsAutomationConnector {
                 dependency_probes: vec!["/usr/bin/shortcuts".to_owned()],
                 configuration_requirements: Vec::new(),
                 mutation_scope: "externally-mutating".to_owned(),
+                known_limitations: Vec::new(),
             },
             executable: path.into(),
         }

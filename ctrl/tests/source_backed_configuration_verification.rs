@@ -95,6 +95,7 @@ impl SourceAwareConfigurationConnector {
                 dependency_probes: Vec::new(),
                 configuration_requirements: Vec::new(),
                 mutation_scope: "locally-mutating".to_owned(),
+                known_limitations: Vec::new(),
             },
             state: SourceState::new(matches_authored_source),
         }
