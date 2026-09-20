@@ -1,0 +1,49 @@
+name: Central root source and Day proof
+on:
+  push:
+    branches: [agent/w2-central-root-day-document-20260920]
+  pull_request:
+    paths:
+      - 'ctrl/src/world_source.rs'
+      - 'ctrl/src/source_horizon*.rs'
+      - 'ctrl/src/continuous_work/temporal.rs'
+      - 'ctrl/tests/root_source_day.rs'
+      - '.github/workflows/central-root-day-proof.yml'
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Source receipt
+        run: |
+          mkdir -p "$RUNNER_TEMP/w2-native"
+          git rev-parse HEAD > "$RUNNER_TEMP/w2-native/source-revision.txt"
+          git archive HEAD | gzip > "$RUNNER_TEMP/w2-native/source.tar.gz"
+      - name: Root and Day regressions
+        run: cargo test --locked -p ctrl --test root_source_day -- --nocapture 2>&1 | tee "$RUNNER_TEMP/w2-native/root-source-day.log"
+      - name: Whole workspace, no failed-target suppression
+        if: always()
+        run: cargo test --workspace --locked --no-fail-fast -- --nocapture 2>&1 | tee "$RUNNER_TEMP/w2-native/workspace.log"
+      - name: Separately repeat the original failing harness target
+        if: always()
+        run: cargo test --locked -p central-harness-connector --test acceptance inspect_reports_detected_harness_capabilities_with_sources -- --exact --nocapture 2>&1 | tee "$RUNNER_TEMP/w2-native/harness-isolated.log"
+      - name: Compile native consumer binary
+        if: always()
+        run: |
+          cargo build --locked -p ctrl 2>&1 | tee "$RUNNER_TEMP/w2-native/build.log"
+          cp target/debug/ctrl "$RUNNER_TEMP/w2-native/ctrl"
+          sha256sum target/debug/ctrl > "$RUNNER_TEMP/w2-native/binary-sha256.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: central-root-day-${{ github.sha }}
+          path: ${{ runner.temp }}/w2-native
+          retention-days: 7
