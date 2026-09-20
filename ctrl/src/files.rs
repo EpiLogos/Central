@@ -210,6 +210,15 @@ pub(crate) fn participating_source(
     root: &Path,
     relative: &str,
 ) -> Option<crate::source_horizon::SourceBinding> {
+    // Control is the root meta-Project's native authored ground, not an
+    // ordinary unowned file merely because no child Project holds it.
+    // Identity comes from the existing binding, never from its filename.
+    if Path::new(relative).starts_with("Control") {
+        return crate::source_horizon::control_source_bindings(root)
+            .ok()?
+            .into_iter()
+            .find(|binding| binding.path == relative);
+    }
     let project = file_project(root, relative)?;
     project.project_ref.as_ref()?;
     let within_project = Path::new(relative)
