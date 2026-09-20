@@ -1,0 +1,121 @@
+name: Agent profile acceptance
+on:
+  push:
+    branches: [agent/accepted-agent-definitions-20260920]
+  pull_request:
+    paths: ['ctrl/src/agent_profile*', 'ctrl/tests/agent_profile*', '.github/workflows/agent-profile-acceptance.yml']
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Finish bounded owner registration on this isolated implementation branch
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          if 'pub mod agent_profile_acceptance;' in Path('ctrl/src/lib.rs').read_text():
+              raise SystemExit(0)
+          def replace(p,a,b):
+              f=Path(p);t=f.read_text();n=t.count(a);assert n==1,(p,n,a[:100]);f.write_text(t.replace(a,b))
+          replace('ctrl/src/lib.rs','pub mod agent_profile;', 'pub mod agent_profile;\npub mod agent_profile_acceptance;')
+          replace('ctrl/src/agent_profile.rs','    pub agent_ref: String,\n    pub scope:', '    pub agent_ref: String,\n    /// Human display name, distinct from a temporary role or runtime label.\n    #[serde(default, skip_serializing_if = "Option::is_none")]\n    pub name: Option<String>,\n    pub scope:')
+          replace('ctrl/src/agent_profile.rs','            agent_ref: required(agent_ref.into(), "Agent ref")?,','            agent_ref: required(agent_ref.into(), "Agent ref")?,\n            name: None,')
+          replace('ctrl/src/agent_profile.rs','    fn validate_shape(&self)', '    pub(crate) fn validate_shape(&self)')
+          replace('ctrl/src/agent_profile.rs','        validate_optional_text(&self.role, "Agent Profile role")?;', '        validate_optional_text(&self.name, "Agent Profile name")?;\n        if self.name.as_ref().is_some_and(|name| name.len() > 256 || name.chars().any(char::is_control)) {\n            return Err(AgentProfileError::InvalidText("Agent Profile name".into()));\n        }\n        validate_optional_text(&self.role, "Agent Profile role")?;')
+          replace('ctrl/src/agent_profile_store.rs','    pub fn scope(&self) -> AgentProfileScope {', '''    pub(crate) fn owner_root(&self) -> &Path { &self.owner_root }
+              /// Serialize writes and acceptance for the same profile identity.
+              /// This lock is not permission to author or accept source.
+              pub(crate) fn mutation_lock(&self, reference: &str) -> Result<crate::source_safety::SourceLock, AgentProfileStoreError> {
+                  self.validate_root()?;
+                  validate_ref(reference)?;
+                  crate::source_safety::lock(&self.owner_root, &format!("agent-profile-{}.lock", profile_key(reference))).map_err(Into::into)
+              }
+              pub fn scope(&self) -> AgentProfileScope {''')
+          replace('ctrl/src/agent_profile_store.rs','        self.validate_root()?;\n        if profile.scope != self.scope {','        let _lock = self.mutation_lock(&profile.profile_ref)?;\n        self.validate_loaded(&profile.profile_ref, profile)?;\n        if profile.scope != self.scope {')
+          replace('ctrl/src/agent_profile_store.rs','        let reading = self.read(profile_ref)?;\n        if reading.profile.revision != expected_revision {','        let _lock = self.mutation_lock(profile_ref)?;\n        let reading = self.read(profile_ref)?;\n        if reading.profile.revision != expected_revision {')
+          replace('ctrl/src/agent_profile_store.rs','        let profile = read_profile_file(&path)?;\n        self.validate_loaded(profile_ref, &profile)?;', '        crate::source_safety::reject_symlink_components(&self.owner_root, path.strip_prefix(&self.owner_root).map_err(|_| AgentProfileStoreError::UnsafeSource(path.clone()))?)?;\n        let profile = read_profile_file(&path)?;\n        self.validate_loaded(profile_ref, &profile)?;')
+          p=Path('ctrl/src/agent_profile_store.rs');t=p.read_text();needle='    fn validate_loaded(';start=t.index(needle);end=t.index('\n    }',start)
+          t=t[:end]+'\n        profile.validate_shape().map_err(|e| AgentProfileStoreError::InvalidProfile(e.to_string()))?;'+t[end:]
+          # Insert validation before the existing final Ok, not after a tail expression.
+          t=t.replace('        Ok(())\n        profile.validate_shape().map_err(|e| AgentProfileStoreError::InvalidProfile(e.to_string()))?;','        profile.validate_shape().map_err(|e| AgentProfileStoreError::InvalidProfile(e.to_string()))?;\n        Ok(())')
+          start=t.index('fn atomic_write(');end=t.index('\nfn relative(',start)
+          t=t[:start]+'''fn atomic_write(root: &Path, path: &Path, bytes: &[u8]) -> Result<(), AgentProfileStoreError> {
+              let relative = path.strip_prefix(root).map_err(|_| AgentProfileStoreError::UnsafeSource(path.to_path_buf()))?
+                  .to_str().ok_or_else(|| AgentProfileStoreError::UnsafeSource(path.to_path_buf()))?;
+              let content = std::str::from_utf8(bytes).map_err(|e| AgentProfileStoreError::InvalidProfile(e.to_string()))?;
+              match crate::source_safety::read(root, relative) {
+                  Ok(current) => crate::source_safety::replace(root, relative, &crate::source_safety::content_revision_bytes(current.as_bytes()), content)?,
+                  Err(error) if error.kind() == std::io::ErrorKind::NotFound => { crate::continuous_work::source::put_new(root, relative, content)?; }
+                  Err(error) => return Err(error.into()),
+              }
+              Ok(())
+          }
+          '''+t[end:]
+          assert 'atomic_write(&path, &bytes)?;' in t
+          t=t.replace('atomic_write(&path, &bytes)?;', 'atomic_write(&self.owner_root, &path, &bytes)?;');p.write_text(t)
+          replace('ctrl/src/agent_profile_actions.rs','fn resolve_store(\n','pub(crate) fn resolve_store(\n')
+          replace('ctrl/src/agent_profile_actions.rs','    if let Some(value) = optional_text(input, "role") {','    if let Some(value) = optional_text(input, "name") {\n        profile.name = Some(value);\n    }\n    if let Some(value) = optional_text(input, "role") {')
+          replace('ctrl/src/agent_profile_actions.rs','    for field in ["role", "purpose"] {','    // Requested references remain intent, not activation or permission.\n    for field in ["name", "role", "purpose", "skill_refs", "skill_set_refs", "method_refs", "routine_refs", "governance_refs", "knowledge_source_refs", "computer_access_intent_refs", "placement_intent_refs", "provenance_refs"] {')
+          replace('ctrl/src/agent_profile_actions.rs','pub fn register_agent_profile_actions(registry: &mut ActionRegistry) {','pub fn register_agent_profile_actions(registry: &mut ActionRegistry) {\n    crate::agent_profile_acceptance::register(registry);')
+          replace('ctrl/src/agent_profile_actions.rs','    let world_ref = match required_text(input, "world_ref", action) {','    if input.get("intent_expression").and_then(Value::as_str) != Some(intent_expression.as_str()) {\n        return ActionResult::failure(Some(action), ResultStatus::InvalidInput, "Intent must be nonempty and trimmed; it is never silently rewritten.", None);\n    }\n    let world_ref = match required_text(input, "world_ref", action) {')
+          p=Path('ctrl/src/agent_profile_actions.rs');t=p.read_text();t=t.replace('        ("role", false),','        ("name", false),\n        ("role", false),');t=t.replace('input("role", "string", false),','input("name", "string", false),\n        input("role", "string", false),');needle='        input("purpose", "string", false),';assert t.count(needle)==1;t=t.replace(needle,needle+'\n'+''.join('        input("'+f+'", "array", false),\n' for f in ['skill_refs','skill_set_refs','method_refs','routine_refs','governance_refs','knowledge_source_refs','computer_access_intent_refs','placement_intent_refs','provenance_refs']));p.write_text(t)
+          PY
+          cargo fmt --all
+          git config user.name Epii
+          git config user.email agent-session@users.noreply.github.com
+          git add ctrl/src/lib.rs ctrl/src/agent_profile.rs ctrl/src/agent_profile_actions.rs ctrl/src/agent_profile_store.rs ctrl/src/agent_profile_acceptance.rs ctrl/tests/agent_profile_acceptance.rs
+          if ! git diff --cached --quiet; then
+            git commit -m 'feat(agent): wire native authenticated acceptance and serialized exact-source storage'
+            git push origin HEAD:refs/heads/agent/accepted-agent-definitions-20260920
+          fi
+      - name: Record exact tested source
+        if: always()
+        run: |
+          mkdir -p acceptance-evidence
+          git rev-parse HEAD > acceptance-evidence/source-revision.txt
+          git diff > acceptance-evidence/uncommitted.patch
+          git archive --format=tar.gz HEAD > acceptance-evidence/source.tar.gz
+      - name: Production acceptance and CLI tests
+        id: focused
+        continue-on-error: true
+        shell: bash
+        run: cargo test --locked -p central-ctrl --test agent_profile_acceptance -- --nocapture 2>&1 | tee acceptance-evidence/focused.log
+      - name: Full native repository tests
+        id: all
+        continue-on-error: true
+        shell: bash
+        run: cargo test --workspace --all-targets --locked 2>&1 | tee acceptance-evidence/workspace.log
+      - name: Formatting and lint
+        id: lint
+        continue-on-error: true
+        shell: bash
+        run: |
+          cargo fmt --all --check 2>&1 | tee acceptance-evidence/fmt.log
+          cargo clippy --workspace --all-targets --locked -- -D warnings 2>&1 | tee acceptance-evidence/clippy.log
+      - name: Build native CLI
+        id: build
+        continue-on-error: true
+        shell: bash
+        run: cargo build --locked -p central-ctrl --bin ctrl 2>&1 | tee acceptance-evidence/build.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agent-profile-acceptance-evidence
+          path: acceptance-evidence/
+          retention-days: 7
+      - name: Retain every failed gate
+        if: steps.focused.outcome != 'success' || steps.all.outcome != 'success' || steps.lint.outcome != 'success' || steps.build.outcome != 'success'
+        run: exit 1
