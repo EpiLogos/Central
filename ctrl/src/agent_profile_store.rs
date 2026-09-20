@@ -148,6 +148,10 @@ impl AgentProfileStore {
         let dir = self.source_dir();
         ensure_directory_path(&self.owner_root, &dir)?;
         let path = self.source_path(&profile.profile_ref)?;
+        // The read-compare-write window must be exclusive per profile file:
+        // two concurrent saves of the same revision otherwise both pass the
+        // CAS check and the loser's write silently wins or collides.
+        let _lock = profile_lock(&self.owner_root, &path)?;
         let existing = if path.exists() {
             Some(read_profile_file(&path)?)
         } else {
@@ -224,6 +228,7 @@ impl AgentProfileStore {
             });
         }
         let path = self.source_path(profile_ref)?;
+        let _lock = profile_lock(&self.owner_root, &path)?;
         fs::remove_file(path)?;
         Ok(reading)
     }
@@ -327,20 +332,77 @@ fn ensure_directory_not_symlink(path: &Path) -> Result<(), AgentProfileStoreErro
     }
 }
 
+/// Exclusive per-profile-file lock held across read-compare-write. Without
+/// it, two concurrent saves of the same revision both pass the CAS check and
+/// the shared fixed temp name made the loser fail with a bare ENOENT. Lock
+/// files live under the owner's `.central/` area so the profile source
+/// directory keeps holding exactly the authored profile documents.
+fn profile_lock(owner_root: &Path, path: &Path) -> std::io::Result<ProfileLockGuard> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+    let key = profile_key(&path.to_string_lossy());
+    let lock_dir = owner_root.join(".central/agent-profile-locks");
+    std::fs::create_dir_all(&lock_dir)?;
+    let lock_path = lock_dir.join(format!("{key}.lock"));
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(lock_path)?;
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(ProfileLockGuard { file })
+}
+
+struct ProfileLockGuard {
+    file: std::fs::File,
+}
+
+impl Drop for ProfileLockGuard {
+    fn drop(&mut self) {
+        use std::os::fd::AsRawFd;
+        unsafe {
+            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), AgentProfileStoreError> {
     let parent = path
         .parent()
         .ok_or_else(|| AgentProfileStoreError::UnsafeSource(path.to_path_buf()))?;
     ensure_directory_not_symlink(parent)?;
+    // Per-writer temp name: a shared name collided under concurrency when one
+    // writer renamed it away before another's remove/write ran.
     let tmp = parent.join(format!(
         ".agent-profile-{}.tmp",
         profile_key(&path.to_string_lossy())
     ));
-    if tmp.exists() {
-        fs::remove_file(&tmp)?;
-    }
-    fs::write(&tmp, bytes)?;
-    fs::rename(&tmp, path)?;
+    let tmp = {
+        let mut candidate = tmp.into_os_string();
+        candidate.push(format!(
+            ".{}.{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or_default()
+        ));
+        std::path::PathBuf::from(candidate)
+    };
+    let write = || -> std::io::Result<()> {
+        fs::write(&tmp, bytes)?;
+        fs::rename(&tmp, path)?;
+        Ok(())
+    };
+    write().map_err(|error| {
+        let _ = fs::remove_file(&tmp);
+        AgentProfileStoreError::Io(error.to_string())
+    })?;
     Ok(())
 }
 
