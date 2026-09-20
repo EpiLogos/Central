@@ -1,6 +1,7 @@
 pub mod action;
 pub mod agent_governance;
 pub mod agent_profile;
+pub mod agent_profile_acceptance;
 pub mod agent_profile_actions;
 pub mod agent_profile_store;
 pub mod agent_set_actions;

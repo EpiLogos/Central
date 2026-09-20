@@ -114,6 +114,9 @@ pub struct AgentProfile {
     pub profile_ref: String,
     pub revision: String,
     pub agent_ref: String,
+    /// Human display name, distinct from a temporary role or runtime label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub scope: AgentProfileScope,
     pub world_ref: WorldRef,
     /// When this profile was intentionally derived from another authored profile,
@@ -177,6 +180,7 @@ impl AgentProfile {
             profile_ref: required(profile_ref.into(), "Agent Profile ref")?,
             revision: required(revision.into(), "Agent Profile revision")?,
             agent_ref: required(agent_ref.into(), "Agent ref")?,
+            name: None,
             scope,
             world_ref: world_ref.clone(),
             source_profile_ref: None,
@@ -330,7 +334,7 @@ impl AgentProfile {
         }
     }
 
-    fn validate_shape(&self) -> Result<(), AgentProfileError> {
+    pub(crate) fn validate_shape(&self) -> Result<(), AgentProfileError> {
         if self.schema != AGENT_PROFILE_SCHEMA {
             return Err(AgentProfileError::Schema(self.schema.clone()));
         }
@@ -346,6 +350,14 @@ impl AgentProfile {
             return Err(AgentProfileError::NoRatifiedWorlds);
         }
         validate_world_refs(&self.ratified_world_refs)?;
+        validate_optional_text(&self.name, "Agent Profile name")?;
+        if self
+            .name
+            .as_ref()
+            .is_some_and(|name| name.len() > 256 || name.chars().any(char::is_control))
+        {
+            return Err(AgentProfileError::InvalidText("Agent Profile name".into()));
+        }
         validate_optional_text(&self.role, "Agent Profile role")?;
         validate_optional_text(&self.purpose, "Agent Profile purpose")?;
         validate_refs("governance refs", &self.governance_refs)?;
