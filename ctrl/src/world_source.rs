@@ -16,8 +16,8 @@ use crate::projectcentral::read_project_manifest;
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
 use crate::source_horizon::{
-    read_project_change_horizon, reconcile_project_source_writes, SourceBinding, SourceRevision,
-    SourceWriteAttribution,
+    read_project_change_horizon, reconcile_control_source_writes, reconcile_control_sources,
+    reconcile_project_source_writes, SourceBinding, SourceRevision, SourceWriteAttribution,
 };
 use crate::source_safety::{relative_member, safe_source_member_path, validate_actor_kind};
 use serde::Serialize;
@@ -77,7 +77,9 @@ fn recognised_human_source(binding: &SourceBinding) -> bool {
 fn authored_human_ground(binding: &SourceBinding) -> bool {
     recognised_human_source(binding)
         || binding.roles.iter().any(|role| {
-            role == "agent-governance-source" || role == "project-human-source-aperture"
+            role == "agent-governance-source"
+                || role == "project-human-source-aperture"
+                || role == "personal-human-source-aperture"
         })
 }
 
@@ -135,7 +137,25 @@ pub(crate) fn enforce_write_authority(
 }
 
 pub fn read_world_source(project_root: &Path, source_ref: &str) -> io::Result<WorldSourceReading> {
-    let horizon = read_project_change_horizon(project_root, None)?;
+    read_scoped_source(project_root, source_ref, false)
+}
+
+/// The root meta-Project uses its existing Control horizon. No ProjectCentral
+/// manifest, adoption, copied source, or path-derived SourceRef is needed.
+pub fn read_control_world_source(root: &Path, source_ref: &str) -> io::Result<WorldSourceReading> {
+    read_scoped_source(root, source_ref, true)
+}
+
+fn read_scoped_source(
+    project_root: &Path,
+    source_ref: &str,
+    root_register: bool,
+) -> io::Result<WorldSourceReading> {
+    let horizon = if root_register {
+        reconcile_control_sources(project_root)?.horizon
+    } else {
+        read_project_change_horizon(project_root, None)?
+    };
     let observed = horizon
         .sources
         .iter()
@@ -143,7 +163,7 @@ pub fn read_world_source(project_root: &Path, source_ref: &str) -> io::Result<Wo
         .ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotFound,
-                "source_ref is not a participating World source of this Project",
+                "source_ref is not a participating source of the requested World",
             )
         })?;
     require_retrieval(&observed.binding)?;
@@ -177,6 +197,50 @@ pub fn write_world_source(
     actor_kind: &str,
     agent_session_ref: Option<String>,
 ) -> io::Result<WorldSourceWriteReceipt> {
+    write_scoped_source(
+        project_root,
+        source_ref,
+        expected_revision,
+        content,
+        actor,
+        actor_kind,
+        agent_session_ref,
+        false,
+    )
+}
+
+pub fn write_control_world_source(
+    root: &Path,
+    source_ref: &str,
+    expected_revision: &str,
+    content: &str,
+    actor: &str,
+    actor_kind: &str,
+    agent_session_ref: Option<String>,
+) -> io::Result<WorldSourceWriteReceipt> {
+    write_scoped_source(
+        root,
+        source_ref,
+        expected_revision,
+        content,
+        actor,
+        actor_kind,
+        agent_session_ref,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_scoped_source(
+    project_root: &Path,
+    source_ref: &str,
+    expected_revision: &str,
+    content: &str,
+    actor: &str,
+    actor_kind: &str,
+    agent_session_ref: Option<String>,
+    root_register: bool,
+) -> io::Result<WorldSourceWriteReceipt> {
     let _lock = crate::source_safety::lock(project_root, "source-mutation.lock")?;
     validate_actor_kind(actor_kind)?;
     validate_attribution(actor_kind, agent_session_ref.as_deref())?;
@@ -186,7 +250,11 @@ pub fn write_world_source(
             "expected_revision is required for a World source write",
         ));
     }
-    let horizon = read_project_change_horizon(project_root, None)?;
+    let horizon = if root_register {
+        reconcile_control_sources(project_root)?.horizon
+    } else {
+        read_project_change_horizon(project_root, None)?
+    };
     let basis = horizon
         .sources
         .iter()
@@ -194,7 +262,7 @@ pub fn write_world_source(
         .ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotFound,
-                "source_ref is not a participating World source of this Project",
+                "source_ref is not a participating source of the requested World",
             )
         })?;
     let binding = basis.binding.clone();
@@ -218,7 +286,11 @@ pub fn write_world_source(
             agent_session_ref: agent_session_ref.clone(),
         },
     );
-    let report = reconcile_project_source_writes(project_root, &attributions)?;
+    let report = if root_register {
+        reconcile_control_source_writes(project_root, &attributions)?
+    } else {
+        reconcile_project_source_writes(project_root, &attributions)?
+    };
     let observed = report
         .horizon
         .sources
@@ -227,7 +299,7 @@ pub fn write_world_source(
         .ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
-                "written World source left its Project horizon",
+                "written World source left its requested horizon",
             )
         })?;
     let change = report
@@ -320,6 +392,27 @@ fn project_root(
     })?;
     Ok(project_root)
 }
+/// Absent/null is the explicit root scope; malformed or empty project input
+/// is not absence. The legacy action spelling remains wire compatible.
+fn source_scope(
+    action: &str,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> Result<(PathBuf, bool), ActionResult> {
+    if input.get("project").is_none_or(Value::is_null) {
+        let root = resolve_central_root(context.root_options)
+            .map_err(|message| {
+                ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None)
+            })?
+            .path;
+        let scope = crate::continuous_work::source::Scope::resolve(&root, None)
+            .map_err(|error| io_failure(action, error))?;
+        Ok((scope.root, true))
+    } else {
+        project_root(action, input, context).map(|root| (root, false))
+    }
+}
+
 fn io_failure(action: &str, error: io::Error) -> ActionResult {
     let status = match error.kind() {
         io::ErrorKind::InvalidInput | io::ErrorKind::NotFound => ResultStatus::InvalidInput,
@@ -336,7 +429,7 @@ fn read_action(
     context: &ActionExecutionContext<'_>,
 ) -> ActionResult {
     let action = "projectcentral.source.read";
-    let root = match project_root(action, input, context) {
+    let (root, root_register) = match source_scope(action, input, context) {
         Ok(root) => root,
         Err(result) => return result,
     };
@@ -344,7 +437,7 @@ fn read_action(
         Ok(value) => value,
         Err(result) => return result,
     };
-    read_world_source(&root, &source_ref)
+    read_scoped_source(&root, &source_ref, root_register)
         .map(|value| {
             ActionResult::success(
                 action,
@@ -359,7 +452,7 @@ fn write_action(
     context: &ActionExecutionContext<'_>,
 ) -> ActionResult {
     let action = "projectcentral.source.write";
-    let root = match project_root(action, input, context) {
+    let (root, root_register) = match source_scope(action, input, context) {
         Ok(root) => root,
         Err(result) => return result,
     };
@@ -380,7 +473,7 @@ fn write_action(
         Err(result) => return result,
     };
     let content = input.get("content").and_then(Value::as_str).unwrap_or("");
-    write_world_source(&root,&source_ref,&expected_revision,content,&actor,&actor_kind,optional(input, "agent_session_ref"))
+    write_scoped_source(&root,&source_ref,&expected_revision,content,&actor,&actor_kind,optional(input, "agent_session_ref"),root_register)
         .map(|value| ActionResult::success(action,json!({"receipt":serde_json::to_value(value).expect("World source write receipt serialises"),"automatic_agent_or_model_invocation":false})))
         .unwrap_or_else(|error| io_failure(action, error))
 }
@@ -428,10 +521,10 @@ pub fn register_world_source_actions(registry: &mut ActionRegistry) {
             descriptor(
                 "projectcentral.source.read",
                 "Read live World source",
-                "Read one participating Project World source by SourceRef with its exact content revision, provenance, standing and treatment. Reconciles the Source Change Horizon (derived .central state only) and never invokes an Agent or model. Sources excluded by .no-agent-retrieval are not disclosed here; masking is not missing.",
+                "Read one participating World source (omit project for the Central root meta-Project) by SourceRef with its exact content revision, provenance, standing and treatment. Reconciles the Source Change Horizon (derived .central state only) and never invokes an Agent or model. Sources excluded by .no-agent-retrieval are not disclosed here; masking is not missing.",
                 MutationClass::LocallyMutating,
                 "projectcentral-world-source-reading",
-                &[("project", true), ("source_ref", true)],
+                &[("project", false), ("source_ref", true)],
             ),
             read_action as fn(&ActionRegistry, &Value, &ActionExecutionContext<'_>) -> ActionResult,
         ),
@@ -439,10 +532,10 @@ pub fn register_world_source_actions(registry: &mut ActionRegistry) {
             descriptor(
                 "projectcentral.source.write",
                 "Write live World source revision",
-                "Revision-safe canonical whole-file write on one participating Project World source: a stale expected_revision fails without mutating, and the emitted Source Change Horizon change carries the declared actor, actor_kind and optional agent_session_ref. Attribution is declared, not proven: a write declaring actor_kind human never carries an agent_session_ref, and recognised human-authored or human-adopted sources, human-source aperture material and agent-governance sources refuse declared non-human callers and refuse every agent-session write — those callers propose instead of writing. Native Day, NOW, contribution and authority sources require their dedicated authenticated owner operations even for a declared-human caller. Never invokes an Agent or model.",
+                "Revision-safe canonical whole-file write on one participating World source (omit project for the Central root meta-Project): a stale expected_revision fails without mutating, and the emitted Source Change Horizon change carries the declared actor, actor_kind and optional agent_session_ref. Attribution is declared, not proven: a write declaring actor_kind human never carries an agent_session_ref, and recognised human-authored or human-adopted sources, human-source aperture material and agent-governance sources refuse declared non-human callers and refuse every agent-session write — those callers propose instead of writing. Native Day, NOW, contribution and authority sources require their dedicated authenticated owner operations even for a declared-human caller. Never invokes an Agent or model.",
                 MutationClass::LocallyMutating,
                 "projectcentral-world-source-write-receipt",
-                &[("project",true),("source_ref",true),("expected_revision",true),("content",false),("actor",true),("actor_kind",true),("agent_session_ref",false)],
+                &[("project",false),("source_ref",true),("expected_revision",true),("content",false),("actor",true),("actor_kind",true),("agent_session_ref",false)],
             ),
             write_action,
         ),

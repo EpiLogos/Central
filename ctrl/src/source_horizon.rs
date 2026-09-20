@@ -4,8 +4,8 @@ use crate::action::{
 };
 use crate::control::AGENT_RETRIEVAL_DENY_MARKER;
 use crate::projectcentral::{
-    AGENT_GOVERNANCE_DIR, ROOT_AGENT_GOVERNANCE_DIR, ROOT_HUMAN_SOURCE_DIR, ROOT_WIKI_DIR,
-    WIKI_DIR, read_project_manifest,
+    read_project_manifest, AGENT_GOVERNANCE_DIR, ROOT_AGENT_GOVERNANCE_DIR, ROOT_HUMAN_SOURCE_DIR,
+    ROOT_WIKI_DIR, WIKI_DIR,
 };
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
@@ -956,12 +956,29 @@ fn horizon_action(
     context: &ActionExecutionContext<'_>,
 ) -> ActionResult {
     let action = "projectcentral.change.horizon";
-    let root = match project_root(action, input, context) {
-        Ok(root) => root,
-        Err(result) => return result,
-    };
     let since = input.get("cursor").and_then(Value::as_u64);
-    read_project_change_horizon(&root, since)
+    let result = if input.get("project").is_none_or(Value::is_null) {
+        let root = match resolve_central_root(context.root_options) {
+            Ok(root) => root.path,
+            Err(message) => {
+                return ActionResult::failure(
+                    Some(action),
+                    ResultStatus::InvalidInput,
+                    message,
+                    None,
+                )
+            }
+        };
+        crate::continuous_work::source::Scope::resolve(&root, None)
+            .and_then(|scope| read_control_change_horizon(&scope.root, since))
+    } else {
+        let root = match project_root(action, input, context) {
+            Ok(root) => root,
+            Err(result) => return result,
+        };
+        read_project_change_horizon(&root, since)
+    };
+    result
         .map(|value| {
             ActionResult::success(
                 action,
@@ -1032,9 +1049,9 @@ pub fn register_source_horizon_actions(registry: &mut ActionRegistry) {
             descriptor(
                 "projectcentral.change.horizon",
                 "Read current Source Change Horizon",
-                "Reconcile participating Project sources into deterministic revisions and return the current change horizon. This updates derived .central state only and never invokes an Agent/model.",
+                "Reconcile participating sources (omit project for the Central root meta-Project) into deterministic revisions and return the current change horizon. This updates derived .central state only and never invokes an Agent/model.",
                 MutationClass::LocallyMutating,
-                vec![action_input("project", true), action_input("cursor", false)],
+                vec![action_input("project", false), action_input("cursor", false)],
                 "central-source-change-horizon",
             ),
             horizon_action
