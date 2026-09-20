@@ -1,0 +1,46 @@
+name: W2 root file source join
+on:
+  push:
+    branches: [agent/w2-central-root-day-document-20260920]
+permissions:
+  contents: write
+defaults:
+  run:
+    shell: bash
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply only the owned native file seam
+        run: |
+          python3 .github/w2-file-source-apply.py
+          rustfmt --edition 2021 ctrl/src/files.rs ctrl/tests/root_source_day.rs
+          git diff --check
+          git add ctrl/src/files.rs ctrl/tests/root_source_day.rs
+          git rm .github/w2-file-source-apply.py
+          git -c user.name='EpiLogos W2' -c user.email='186434782+EpiLogos@users.noreply.github.com' commit -m 'fix(central): disclose root Control source bindings to native file consumers'
+          git push origin HEAD:refs/heads/agent/w2-central-root-day-document-20260920
+          mkdir -p "$RUNNER_TEMP/w2-files"
+          git rev-parse HEAD > "$RUNNER_TEMP/w2-files/revision.txt"
+          git archive HEAD | gzip > "$RUNNER_TEMP/w2-files/source.tar.gz"
+      - name: Actual root, Day and large-input regression targets
+        run: cargo test --locked -p ctrl --test root_source_day --test action_stdin -- --nocapture 2>&1 | tee "$RUNNER_TEMP/w2-files/targeted.log"
+      - name: Complete native workspace
+        if: always()
+        run: cargo test --workspace --locked --no-fail-fast -- --nocapture 2>&1 | tee "$RUNNER_TEMP/w2-files/workspace.log"
+      - name: Build exact native owner for desktop proof
+        if: always()
+        run: |
+          cargo build --locked -p ctrl
+          cp target/debug/ctrl "$RUNNER_TEMP/w2-files/ctrl"
+          sha256sum target/debug/ctrl > "$RUNNER_TEMP/w2-files/binary-sha256.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: w2-root-files-proof
+          path: ${{ runner.temp }}/w2-files
+          retention-days: 7
