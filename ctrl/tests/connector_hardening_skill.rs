@@ -45,6 +45,7 @@ fn work_manifest() -> ConnectorManifest {
         dependency_probes: Vec::new(),
         configuration_requirements: Vec::new(),
         mutation_scope: "read-only".to_owned(),
+        known_limitations: Vec::new(),
     }
 }
 

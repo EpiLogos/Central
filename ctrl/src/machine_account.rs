@@ -417,6 +417,7 @@ fn account_action(
                                 dependency_probes: Vec::new(),
                                 configuration_requirements: Vec::new(),
                                 mutation_scope: String::new(),
+                                known_limitations: Vec::new(),
                             });
                         Some((observation, manifest.id, manifest.version))
                     }

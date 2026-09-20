@@ -697,6 +697,7 @@ mod tests {
                     dependency_probes: Vec::new(),
                     configuration_requirements: Vec::new(),
                     mutation_scope: "externally-mutating".to_owned(),
+                    known_limitations: Vec::new(),
                 },
             }
         }

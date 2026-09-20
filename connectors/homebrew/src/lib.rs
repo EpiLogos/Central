@@ -38,6 +38,10 @@ impl HomebrewConnector {
                 dependency_probes: vec!["brew --version".to_owned()],
                 configuration_requirements: Vec::new(),
                 mutation_scope: "locally-mutating".to_owned(),
+                known_limitations: vec![
+                    "manages Homebrew formulae and casks; does not touch Mac App Store apps"
+                        .to_owned(),
+                ],
             },
             executable,
         }

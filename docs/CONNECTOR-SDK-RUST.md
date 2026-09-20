@@ -33,8 +33,12 @@ The current Rust integration surface publishes these `1.0.0` Port contracts:
 | `ConfigurationManager` | `preview`, `apply` | preview before idempotent local reconciliation |
 | `ServiceManager` | `preview`, `apply` | preview before idempotent local reconciliation |
 | `Synchronizer` | `preview`, `apply` | preview before idempotent external synchronization |
+| `Automation` | `run` | externally mutating |
+| `UserNotification` | `capabilities`, `deliver` | read-only capabilities; externally mutating delivery |
+| `GitState` | `census` | read-only observation |
+| `SourceHistory` | `history`, `compare`, `read_revision` | read-only observation |
 
-The public constants are respectively `WORK_DISCOVERY_PORT`, `NATIVE_OPEN_PORT`, `NATIVE_REVEAL_PORT`, `TAG_STORE_PORT`, `MACHINE_INSPECTOR_PORT`, `PACKAGE_MANAGER_PORT`, `CONFIGURATION_MANAGER_PORT`, `SERVICE_MANAGER_PORT`, and `SYNCHRONIZER_PORT`.
+The public constants are respectively `WORK_DISCOVERY_PORT`, `NATIVE_OPEN_PORT`, `NATIVE_REVEAL_PORT`, `TAG_STORE_PORT`, `MACHINE_INSPECTOR_PORT`, `PACKAGE_MANAGER_PORT`, `CONFIGURATION_MANAGER_PORT`, `SERVICE_MANAGER_PORT`, `SYNCHRONIZER_PORT`, `AUTOMATION_PORT`, `USER_NOTIFICATION_PORT`, `GIT_STATE_PORT`, and `SOURCE_HISTORY_PORT`. The SDK publishes them as one enforced registry, `PUBLISHED_PORTS` (lookup via `published_port`); manifest validation refuses Port declarations outside it.
 
 The optional macOS Automation/launcher feature line separately proves an `Automation 1.0.0` Port for Shortcuts. It remains a personal feature branch until its named workstation acceptance gate is complete; stock `ctrl` does not depend on it.
 
@@ -47,7 +51,9 @@ A Connector implements the public `Connector` trait and supplies a complete `Con
 - a valid mutation scope;
 - at least one supported platform/environment;
 - at least one typed Port declaration;
-- duplicate and malformed Port declarations.
+- duplicate and malformed Port declarations;
+- Port declarations that name published Ports at their published versions (unknown ids and wrong versions are refused up front, before registry resolution or conformance);
+- non-empty known-limitation entries (`known_limitations`).
 
 `ConnectorRegistry::register` accepts implementations through this public contract. Resolution considers compatible Port/version declarations, platform eligibility, and the Connector's read-only capability probe, then returns eligible, ineligible, and selected-Connector diagnostics. Selection is deterministic; core Actions do not branch on provider IDs.
 

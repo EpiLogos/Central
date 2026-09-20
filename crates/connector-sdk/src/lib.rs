@@ -20,10 +20,10 @@ pub use conformance::{
     WorkDiscoveryConformanceFixture,
 };
 pub use connector::{
-    validate_connector_manifest, CapabilityProbe, Connector, ConnectorContext,
+    published_port, validate_connector_manifest, CapabilityProbe, Connector, ConnectorContext,
     ConnectorDiagnostics, ConnectorManifest, ConnectorPortDeclaration, ConnectorRegistry,
     ConnectorResolution, ConnectorSummary, IneligibleConnector, ManifestError,
-    CONNECTOR_API_VERSION,
+    CONNECTOR_API_VERSION, PUBLISHED_PORTS,
 };
 pub use git_state::{
     GitBranchObservation, GitCensusRequest, GitRepoCensus, GitState, GitWorktreeObservation,

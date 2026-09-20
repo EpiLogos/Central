@@ -35,6 +35,7 @@ fn manifest_with_scope(
         dependency_probes: Vec::new(),
         configuration_requirements: Vec::new(),
         mutation_scope: mutation_scope.to_owned(),
+        known_limitations: Vec::new(),
     }
 }
 
