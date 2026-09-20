@@ -91,6 +91,20 @@ For a Connector implementing several Ports, declare every Port/version it actual
 
 The manifest's mutation scope must describe the strongest mutation the package can perform. A read-only inspection Connector must not be marked mutating merely because the target technology can mutate; a package that performs local mutation must not claim to be read-only.
 
+Two vocabulary rules that come from the resolver, not preference:
+
+- **Platform names are operating-system names.** `ConnectorContext` carries
+  `std::env::consts::OS`, so declare `"macos"`, `"linux"`, `"windows"` —
+  not architecture-qualified strings like `"macos-aarch64"`. An
+  architecture-qualified declaration never matches and makes the Connector
+  permanently ineligible with no hint. Put the tested architecture
+  (`aarch64`, `x86_64`) in the runtime requirements instead.
+- **State real limitations in the manifest's known-limitations place and in
+  your README.** A Connector that manages only one slice of a target's
+  surface (for example, a package manager that reconciles only a target's
+  *tool* state) says so where an operator choosing between Connectors will
+  read it; the Port contract is not the place to narrow.
+
 Never declare a Port merely to make resolution succeed. Declared support means the implementation is intended to pass that Port's shared conformance suite.
 
 ### 5. Implement safe eligibility first
