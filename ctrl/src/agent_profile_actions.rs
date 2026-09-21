@@ -99,7 +99,7 @@ fn valid_project_member(raw: &str) -> bool {
             .all(|component| matches!(component, Component::Normal(_)))
 }
 
-fn resolve_store(
+pub(crate) fn resolve_store(
     action: &str,
     input: &Value,
     context: &ActionExecutionContext<'_>,
@@ -569,6 +569,9 @@ fn propose_action_with_origin(
             );
         }
     };
+    if let Some(value) = optional_text(input, "name") {
+        profile.name = Some(value);
+    }
     if let Some(value) = optional_text(input, "role") {
         profile.role = Some(value);
     }
@@ -663,6 +666,14 @@ fn express_action(
         Ok(value) => value,
         Err(result) => return result,
     };
+    if input.get("intent_expression").and_then(Value::as_str) != Some(intent_expression.as_str()) {
+        return ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            "Intent must be nonempty and trimmed; it is never silently rewritten.",
+            None,
+        );
+    }
     let world_ref = match required_text(input, "world_ref", action) {
         Ok(value) => value,
         Err(result) => return result,
@@ -707,7 +718,21 @@ fn express_action(
     if let Some(project) = input.get("project") {
         proposal["project"] = project.clone();
     }
-    for field in ["role", "purpose"] {
+    // Requested references remain intent, not activation or permission.
+    for field in [
+        "name",
+        "role",
+        "purpose",
+        "skill_refs",
+        "skill_set_refs",
+        "method_refs",
+        "routine_refs",
+        "governance_refs",
+        "knowledge_source_refs",
+        "computer_access_intent_refs",
+        "placement_intent_refs",
+        "provenance_refs",
+    ] {
         if let Some(value) = input.get(field) {
             proposal[field] = value.clone();
         }
@@ -729,6 +754,7 @@ fn express_action(
 }
 
 pub fn register_agent_profile_actions(registry: &mut ActionRegistry) {
+    crate::agent_profile_acceptance::register(registry);
     let common = vec![scope_input(), input("project", "string", false)];
     registry
         .register(
@@ -801,6 +827,7 @@ pub fn register_agent_profile_actions(registry: &mut ActionRegistry) {
         ("revision", true),
         ("world_ref", true),
         ("intent_expression", true),
+        ("name", false),
         ("role", false),
         ("purpose", false),
         ("source_profile_ref", false),
@@ -831,8 +858,18 @@ pub fn register_agent_profile_actions(registry: &mut ActionRegistry) {
         input("world_ref", "string", true),
         input("intent_expression", "string", true),
         input("ratified_world_refs", "array", true),
+        input("name", "string", false),
         input("role", "string", false),
         input("purpose", "string", false),
+        input("skill_refs", "array", false),
+        input("skill_set_refs", "array", false),
+        input("method_refs", "array", false),
+        input("routine_refs", "array", false),
+        input("governance_refs", "array", false),
+        input("knowledge_source_refs", "array", false),
+        input("computer_access_intent_refs", "array", false),
+        input("placement_intent_refs", "array", false),
+        input("provenance_refs", "array", false),
     ];
     registry
         .register(

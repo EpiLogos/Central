@@ -47,6 +47,23 @@ impl AgentProfileStore {
         }
     }
 
+    pub(crate) fn owner_root(&self) -> &Path {
+        &self.owner_root
+    }
+    /// Serialize writes and acceptance for the same profile identity.
+    /// This lock is not permission to author or accept source.
+    pub(crate) fn mutation_lock(
+        &self,
+        reference: &str,
+    ) -> Result<crate::source_safety::SourceLock, AgentProfileStoreError> {
+        self.validate_root()?;
+        validate_ref(reference)?;
+        crate::source_safety::lock(
+            &self.owner_root,
+            &format!("agent-profile-{}.lock", profile_key(reference)),
+        )
+        .map_err(Into::into)
+    }
     pub fn scope(&self) -> AgentProfileScope {
         self.scope
     }
@@ -68,6 +85,11 @@ impl AgentProfileStore {
     pub fn read(&self, profile_ref: &str) -> Result<AgentProfileReading, AgentProfileStoreError> {
         self.validate_root()?;
         let path = self.source_path(profile_ref)?;
+        crate::source_safety::reject_symlink_components(
+            &self.owner_root,
+            path.strip_prefix(&self.owner_root)
+                .map_err(|_| AgentProfileStoreError::UnsafeSource(path.clone()))?,
+        )?;
         let profile = read_profile_file(&path)?;
         self.validate_loaded(profile_ref, &profile)?;
         Ok(AgentProfileReading {
@@ -125,7 +147,8 @@ impl AgentProfileStore {
         profile: &AgentProfile,
         expected_revision: Option<&str>,
     ) -> Result<AgentProfileWriteReceipt, AgentProfileStoreError> {
-        self.validate_root()?;
+        let _lock = self.mutation_lock(&profile.profile_ref)?;
+        self.validate_loaded(&profile.profile_ref, profile)?;
         if profile.scope != self.scope {
             return Err(AgentProfileStoreError::ScopeMismatch {
                 store: self.scope,
@@ -197,7 +220,7 @@ impl AgentProfileStore {
         let mut bytes = serde_json::to_vec_pretty(profile)
             .map_err(|error| AgentProfileStoreError::InvalidProfile(error.to_string()))?;
         bytes.push(b'\n');
-        atomic_write(&path, &bytes)?;
+        atomic_write(&self.owner_root, &path, &bytes)?;
 
         Ok(AgentProfileWriteReceipt {
             profile_ref: profile.profile_ref.clone(),
@@ -215,6 +238,7 @@ impl AgentProfileStore {
         profile_ref: &str,
         expected_revision: &str,
     ) -> Result<AgentProfileReading, AgentProfileStoreError> {
+        let _lock = self.mutation_lock(profile_ref)?;
         let reading = self.read(profile_ref)?;
         if reading.profile.revision != expected_revision {
             return Err(AgentProfileStoreError::RevisionConflict {
@@ -260,6 +284,9 @@ impl AgentProfileStore {
             });
         }
         validate_ref(&profile.profile_ref)?;
+        profile
+            .validate_shape()
+            .map_err(|e| AgentProfileStoreError::InvalidProfile(e.to_string()))?;
         Ok(())
     }
 }
@@ -327,20 +354,26 @@ fn ensure_directory_not_symlink(path: &Path) -> Result<(), AgentProfileStoreErro
     }
 }
 
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), AgentProfileStoreError> {
-    let parent = path
-        .parent()
+fn atomic_write(root: &Path, path: &Path, bytes: &[u8]) -> Result<(), AgentProfileStoreError> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| AgentProfileStoreError::UnsafeSource(path.to_path_buf()))?
+        .to_str()
         .ok_or_else(|| AgentProfileStoreError::UnsafeSource(path.to_path_buf()))?;
-    ensure_directory_not_symlink(parent)?;
-    let tmp = parent.join(format!(
-        ".agent-profile-{}.tmp",
-        profile_key(&path.to_string_lossy())
-    ));
-    if tmp.exists() {
-        fs::remove_file(&tmp)?;
+    let content = std::str::from_utf8(bytes)
+        .map_err(|e| AgentProfileStoreError::InvalidProfile(e.to_string()))?;
+    match crate::source_safety::read(root, relative) {
+        Ok(current) => crate::source_safety::replace(
+            root,
+            relative,
+            &crate::source_safety::content_revision_bytes(current.as_bytes()),
+            content,
+        )?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            crate::continuous_work::source::put_new(root, relative, content)?;
+        }
+        Err(error) => return Err(error.into()),
     }
-    fs::write(&tmp, bytes)?;
-    fs::rename(&tmp, path)?;
     Ok(())
 }
 
