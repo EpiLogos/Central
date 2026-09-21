@@ -5,27 +5,16 @@ A desktop or provider does not keep its own return store. Returned bytes remain
 proposal material until a native operation applies them. None of these Actions
 invokes an agent or model.
 
-## Flow disclosure seam
+## Flow disclosure seam (retired)
 
-`projectcentral.flow.inspect` takes `flow_ref` and optional `project`. Absent
-`project` names the root register `control:root`. A supplied `project` names
-that Work project's register. The Action returns
-`central.project-flow-inspection/v1`, the existing `flow` record,
-`revision_observation: last-observed`, and `capabilities.read/write/history` with
-`available` and `reason`. It reads owner metadata and checks native access; it
-never returns the source body. Its revision is deliberately the registry's last
-observation, not a claim to have read current bytes.
-
-`projectcentral.flow.read` accepts optional `project` (absent names the root
-register) and optional `expected_revision`. It reconciles
-external edits, verifies that the returned content matches that revision and
-refuses a stale expectation. Flow bodies are bounded to 4 MiB UTF-8 without NUL.
-Retrieval exclusions apply to body reads, history and adoption; excluded Flows
-can retain last-observed identity in the list but do not acquire new snapshots.
-Flow mutation retains native source authority even after source recognition
-changes. Source and Flow writers use the same cross-process lock and atomic
-publication primitive. Noncooperating external writers retain the documented
-POSIX final-check/rename limitation from ordinary file recovery.
+The Flow disclosure Actions were retired with the legacy FlowRef registry
+(Central #177): `projectcentral.flow.inspect`, `projectcentral.flow.read` and
+`projectcentral.flow.write` no longer exist, and `.central/flows.json` /
+`.central/flow-revisions` are no longer read or written. The owner's dated
+Flow documents remain ordinary files under `Control/user/flows/`, carried by
+the ordinary file CAS and its native history. A ground with leftover registry
+files stays visible: the world map discloses the residue instead of silently
+looking clean.
 
 ## Return operations
 
@@ -50,9 +39,8 @@ Creation with a stale source basis returns `outcome: conflict` and current sourc
 without storing a proposal. Acceptance also compares the immutable proposal
 basis against both supplied expectation and current source. Conflict leaves the
 proposal pending and the concurrent source intact. Rejection never writes source.
-Accepted Flow returns invoke native `projectcentral.flow.write` so Flow revision
-history retains agent attribution. Other eligible source returns use the native
-source writer. Proposal/list memory and body sizes are bounded.
+Eligible source returns use the native source writer. Proposal/list memory and
+body sizes are bounded.
 
 ## Human authority remains an explicit integration obligation
 
@@ -86,8 +74,8 @@ Run real acceptance with the explicit candidate `CTRL_BIN`:
 CTRL_BIN="$PWD/target/debug/ctrl" python3 ctrl/tests/native/source_returns.py
 ```
 
-Native tests cover exact Flow bytes/revision, retrieval refusal, returned-work
+Native tests cover retrieval refusal, returned-work
 persistence, conflict, explicit collaborative application and native provenance,
-rejection, paging and protected human-source refusal. Existing source authority,
-Flow and Control tests remain required. Desktop/native-human acceptance remains
+rejection, paging and protected human-source refusal. Existing source authority
+and Control tests remain required. Desktop/native-human acceptance remains
 separate from this owner candidate.
