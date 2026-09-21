@@ -1,0 +1,90 @@
+name: Native first save
+on:
+  pull_request:
+    paths: ['ctrl/**', '.github/workflows/native-first-save.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  register:
+    # Temporary, exact source delivery on the commissioned companion branch.
+    # No main write, force push, owner data or deployment. Remove before final.
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'codex/techne-native-first-save-20260920'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      revision: ${{ steps.source.outputs.revision }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt
+      - name: Join the existing ordinary-file owner policy and registry
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path=Path('ctrl/src/file_mutation.rs')
+          source=path.read_text()
+          if 'fn ordinary_policy(' not in source:
+              before='pub(crate) fn ordinary_address(root: &Path, loc: &CentralPathRef) -> io::Result<PathBuf> {\n    let path = loc.resolve(root)?;\n'
+              after=before+'    ordinary_policy(root, loc)?;\n    Ok(path)\n}\nfn ordinary_policy(root: &Path, loc: &CentralPathRef) -> io::Result<()> {\n'
+              assert source.count(before)==1
+              source=source.replace(before,after)
+              before='    Ok(path)\n}\nfn ordinary(root: &Path, loc: &CentralPathRef)'
+              assert source.count(before)==1
+              source=source.replace(before,'    Ok(())\n}\nfn ordinary(root: &Path, loc: &CentralPathRef)')
+          if '    register_create(registry);' not in source:
+              before='pub fn register(registry: &mut ActionRegistry) {\n'
+              assert source.count(before)==1
+              source=source.replace(before,before+'    register_create(registry);\n')
+          if 'include!("file_creation.rs");' not in source:
+              source+='\ninclude!("file_creation.rs");\n'
+          path.write_text(source)
+          PY
+          rustfmt --edition 2021 ctrl/src/file_creation.rs ctrl/tests/file_creation.rs
+          git add ctrl/src/file_creation.rs ctrl/src/file_mutation.rs ctrl/tests/file_creation.rs
+          if ! git diff --cached --quiet; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'feat(files): register no-overwrite first save on the native owner'
+            git push origin HEAD:refs/heads/codex/techne-native-first-save-20260920
+          fi
+          echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+  proof:
+    needs: register
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.register.outputs.revision }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Native creation and existing write/history regression proofs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/native-first-save"
+          git rev-parse HEAD > "$RUNNER_TEMP/native-first-save/revision"
+          git archive --format=tar HEAD | gzip > "$RUNNER_TEMP/native-first-save/source.tar.gz"
+          cargo test --locked --manifest-path ctrl/Cargo.toml --test file_creation --test file_mutation_create -- --nocapture 2>&1 | tee "$RUNNER_TEMP/native-first-save/tests.log"
+          cargo test --locked --manifest-path ctrl/Cargo.toml --lib files:: 2>&1 | tee "$RUNNER_TEMP/native-first-save/file-tests.log"
+          cargo build --locked --manifest-path ctrl/Cargo.toml --bin ctrl
+          cp target/debug/ctrl "$RUNNER_TEMP/native-first-save/"
+          cargo clippy --locked --manifest-path ctrl/Cargo.toml --lib -- -D warnings 2>&1 | tee "$RUNNER_TEMP/native-first-save/clippy.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-first-save-${{ needs.register.outputs.revision }}
+          path: ${{ runner.temp }}/native-first-save
+          retention-days: 7
+          if-no-files-found: error

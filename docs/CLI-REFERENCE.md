@@ -30,6 +30,7 @@ The composed registry is deliberately discovered at runtime through `action.list
 | `central.files.list` | list actual Central directories without adoption | `action run central.files.list` |
 | `central.files.read` | read a validated owner location as bounded UTF-8 text | `action run central.files.read` |
 | `central.files.write` | atomically replace ordinary text under owner CAS | `action run central.files.write` |
+| `central.files.create` | explicit first save into an existing owner directory, atomic no-overwrite admission | `action run central.files.create` |
 | `central.files.history` | page native ordinary-file revision history | `action run central.files.history` |
 | `central.files.recovery_preview` | preview exact historical bytes against current basis | `action run central.files.recovery_preview` |
 | `central.files.restore` | restore an ordinary-file revision through the same CAS | `action run central.files.restore` |

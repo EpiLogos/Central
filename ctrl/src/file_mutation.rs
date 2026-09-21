@@ -126,6 +126,10 @@ pub(crate) fn create_in(parent: &File, name: &str, mode: u32) -> io::Result<File
 }
 pub(crate) fn ordinary_address(root: &Path, loc: &CentralPathRef) -> io::Result<PathBuf> {
     let path = loc.resolve(root)?;
+    ordinary_policy(root, loc)?;
+    Ok(path)
+}
+fn ordinary_policy(root: &Path, loc: &CentralPathRef) -> io::Result<()> {
     let components: Vec<_> = Path::new(&loc.path)
         .components()
         .map(|p| p.as_os_str().to_string_lossy().into_owned())
@@ -158,7 +162,7 @@ pub(crate) fn ordinary_address(root: &Path, loc: &CentralPathRef) -> io::Result<
     if participating_source(root, &loc.path).is_some() {
         return Err(denied("Participating SourceRef must use projectcentral.source operations; filesystem identity cannot bypass source authority"));
     }
-    Ok(path)
+    Ok(())
 }
 fn ordinary(root: &Path, loc: &CentralPathRef) -> io::Result<PathBuf> {
     let path = ordinary_address(root, loc)?;
@@ -755,6 +759,7 @@ fn action(op: &str, id: &str, input: &Value, context: &ActionExecutionContext<'_
     }
 }
 pub fn register(registry: &mut ActionRegistry) {
+    register_create(registry);
     type Handler = fn(&ActionRegistry, &Value, &ActionExecutionContext<'_>) -> ActionResult;
     for (op, handler) in [
         (
@@ -814,3 +819,5 @@ pub fn register(registry: &mut ActionRegistry) {
         registry.register(ActionDescriptor{id:format!("central.files.{op}"),title:format!("Ordinary file {op}"),description:"Native ordinary-file history and CAS. Protected ground and participating SourceRefs must use their authored operations. An absent file is created only as a flow instance under Control/user/flows/ with an empty expected revision. Attribution is declared, not an authentication credential.".into(),inputs,output:ActionOutputDefinition{output_type:format!("central-file-{op}")},mutation_class:if op=="history" || op=="recovery_preview" {MutationClass::ReadOnly}else{MutationClass::LocallyMutating},preview_supported:false,required_ports:vec![],availability:ActionAvailability{available:true,reason:None}},handler).expect("unique file mutation action");
     }
 }
+
+include!("file_creation.rs");
