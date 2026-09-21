@@ -7,7 +7,13 @@ use serde_json::{json, Value};
 use std::{
     fs,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
+
+// A per-process monotonic sequence guarantees a distinct ground per Ground even
+// when two parallel test threads read the clock within the same tick (a coarse
+// clock, e.g. on macOS, otherwise lets nonces collide and grounds overlap).
+static GROUND_SEQ: AtomicU64 = AtomicU64::new(0);
 
 struct Ground(PathBuf);
 impl Ground {
@@ -16,8 +22,11 @@ impl Ground {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root =
-            std::env::temp_dir().join(format!("central-first-save-{}-{nonce}", std::process::id()));
+        let seq = GROUND_SEQ.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "central-first-save-{}-{nonce}-{seq}",
+            std::process::id()
+        ));
         fs::create_dir_all(&root).unwrap();
         let ground = Self(root.canonicalize().unwrap());
         assert_eq!(
