@@ -56,8 +56,9 @@ mod unix_tests {
     #[test]
     fn macos_action_registry_extends_current_projectcentral_without_mutating_core_identity() {
         let core = create_core_action_registry();
-        assert_eq!(core.list().len(), 35);
+        assert_eq!(core.list().len(), 36);
         assert!(core.get("automation.run").is_none());
+        assert!(core.get("central.files.create").is_some(), "Core lost the native first-save Action");
         assert!(core.get("central.files.list").is_some());
         assert_eq!(core.get("central.recognize").unwrap().mutation_class.as_str(),"read-only");
         assert!(core.get("central.files.read").is_some());
