@@ -171,6 +171,9 @@ impl AgentProfileStore {
         let dir = self.source_dir();
         ensure_directory_path(&self.owner_root, &dir)?;
         let path = self.source_path(&profile.profile_ref)?;
+        // The read-compare-write window must be exclusive per profile file:
+        // two concurrent saves of the same revision otherwise both pass the
+        // CAS check and the loser's write silently wins or collides.
         let existing = if path.exists() {
             Some(read_profile_file(&path)?)
         } else {

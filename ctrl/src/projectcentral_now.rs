@@ -21,6 +21,12 @@ pub const NOW_DAY_DIR: &str = "ProjectCentral/now/day";
 pub const NOW_POLICY: &str = "ProjectCentral/now/policy.json";
 pub const NOW_PROMOTIONS: &str = "ProjectCentral/now/promotions.json";
 pub const WIKI_RETURN_DIR: &str = "ProjectCentral/agents/wiki/returns";
+/// The root register's NOW agents area. One implementation serves both
+/// registers: root scope is the absent `project` argument, and a root-scope
+/// `projectcentral.now.return` writes the same `central.project-now.handoff/v1`
+/// record form here (created on write when absent) that a project-scope return
+/// writes under `ProjectCentral/now/agents`.
+pub const ROOT_NOW_AGENT_DIR: &str = "Control/agents/now/agents";
 
 const POLICY_SCHEMA: &str = "central.project-now.policy/v1";
 const HANDOFF_SCHEMA: &str = "central.project-now.handoff/v1";
@@ -493,21 +499,20 @@ fn unique_id(prefix: &str) -> String {
 
 /// Default handoff id per the naming law: slug of the subject + local civil
 /// date, counter-disambiguated against ids already present in the field.
-fn default_handoff_id(project_root: &Path, subject: &str, kind: &str) -> String {
-    let existing: std::collections::HashSet<String> =
-        fs::read_dir(project_root.join(NOW_AGENT_DIR))
-            .map(|entries| {
-                entries
-                    .filter_map(|entry| entry.ok())
-                    .filter_map(|entry| {
-                        entry
-                            .path()
-                            .file_stem()
-                            .map(|stem| stem.to_string_lossy().into_owned())
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+fn default_handoff_id(agents_dir: &Path, subject: &str, kind: &str) -> String {
+    let existing: std::collections::HashSet<String> = fs::read_dir(agents_dir)
+        .map(|entries| {
+            entries
+                .filter_map(|entry| entry.ok())
+                .filter_map(|entry| {
+                    entry
+                        .path()
+                        .file_stem()
+                        .map(|stem| stem.to_string_lossy().into_owned())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let taken = |candidate: &str| existing.contains(candidate);
     crate::names::descriptive_id(&crate::names::slugify(subject, 6), kind, &taken)
 }
@@ -763,7 +768,7 @@ fn validate_kind(kind: &str) -> io::Result<()> {
 
 fn create_handoff(
     input: &Value,
-    project_root: &Path,
+    agents_dir: &Path,
     action: &str,
 ) -> Result<NowHandoff, ActionResult> {
     let actor = required(input, "actor", action)?;
@@ -789,7 +794,7 @@ fn create_handoff(
     })?;
 
     let id =
-        optional(input, "id").unwrap_or_else(|| default_handoff_id(project_root, &subject, &kind));
+        optional(input, "id").unwrap_or_else(|| default_handoff_id(agents_dir, &subject, &kind));
     validate_id(&id).map_err(|error| {
         ActionResult::failure(
             Some(action),
@@ -798,7 +803,7 @@ fn create_handoff(
             None,
         )
     })?;
-    let path = project_root.join(NOW_AGENT_DIR).join(format!("{id}.json"));
+    let path = agents_dir.join(format!("{id}.json"));
     if path.exists() {
         return Err(ActionResult::failure(
             Some(action),
@@ -1577,31 +1582,54 @@ fn return_action(
     context: &ActionExecutionContext<'_>,
 ) -> ActionResult {
     let action = "projectcentral.now.return";
-    let project_root = match project_context(action, input, context) {
+    // One implementation serves both registers: a present `project` argument
+    // selects that project's ProjectCentral/now; the absent argument is root
+    // scope, where the same handoff record lands in the Central root
+    // register's NOW agents area. A present-but-empty or non-string `project`
+    // still fails exactly as before through `project_context`.
+    let project_present = input
+        .get("project")
+        .map(|value| !value.is_null())
+        .unwrap_or(false);
+    let (field_root, agents_dir) = if project_present {
+        let project_root = match project_context(action, input, context) {
+            Ok(value) => value,
+            Err(result) => return result,
+        };
+        let paths = now_paths(&project_root);
+        if !paths.root.is_dir() {
+            return io_failure(
+                action,
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "NOW has not been initialized for this ProjectCentral",
+                ),
+            );
+        }
+        (project_root, paths.agents)
+    } else {
+        let central = match resolve_central_root(context.root_options) {
+            Ok(value) => value,
+            Err(message) => {
+                return ActionResult::failure(
+                    Some(action),
+                    ResultStatus::InvalidInput,
+                    message,
+                    None,
+                )
+            }
+        };
+        (central.path.clone(), central.path.join(ROOT_NOW_AGENT_DIR))
+    };
+    let handoff = match create_handoff(input, &agents_dir, action) {
         Ok(value) => value,
         Err(result) => return result,
     };
-    let paths = now_paths(&project_root);
-    if !paths.root.is_dir() {
-        return io_failure(
-            action,
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                "NOW has not been initialized for this ProjectCentral",
-            ),
-        );
-    }
-    let handoff = match create_handoff(input, &project_root, action) {
-        Ok(value) => value,
-        Err(result) => return result,
-    };
-    let path = project_root
-        .join(NOW_AGENT_DIR)
-        .join(format!("{}.json", handoff.id));
+    let path = agents_dir.join(format!("{}.json", handoff.id));
     match write_json(&path, &handoff, false) {
         Ok(()) => ActionResult::success(
             action,
-            json!({"source": relative(&project_root, &path), "handoff": handoff}),
+            json!({"source": relative(&field_root, &path), "handoff": handoff}),
         ),
         Err(error) => io_failure(action, error),
     }
@@ -1777,11 +1805,11 @@ pub fn register_projectcentral_now_actions(registry: &mut ActionRegistry) {
             descriptor(
                 "projectcentral.now.return",
                 "Write bounded Agent return",
-                "Write one attributed Agent handoff/question/note/learning into NOW. External Run/Session/Focus/source identities remain refs rather than being duplicated.",
+                "Write one attributed Agent handoff/question/note/learning into NOW. With `project`, the return lands in that project's ProjectCentral/now; with `project` absent, root scope, it lands in the Central root register's NOW agents area with the same record form. External Run/Session/Focus/source identities remain refs rather than being duplicated.",
                 MutationClass::LocallyMutating,
                 "projectcentral-now-handoff",
                 &[
-                    ("project", true),
+                    ("project", false),
                     ("actor", true),
                     ("kind", true),
                     ("subject", true),
@@ -2155,5 +2183,151 @@ mod attribution_tests {
         );
         assert!(plain.ok, "{plain:?}");
         assert!(plain.data.as_ref().unwrap()["handoff"]["attributed_to"].is_null());
+    }
+}
+
+#[cfg(test)]
+mod root_scope_tests {
+    use super::*;
+    use crate::action::create_core_action_registry;
+    use crate::projectcentral_ops::initialize_projectcentral;
+    use crate::tempdir;
+    use central_connector_sdk::{ConnectorContext, ConnectorRegistry};
+    use serde_json::json;
+
+    fn drive(
+        mut input: serde_json::Value,
+        project: Option<&str>,
+    ) -> (tempfile::TempDir, ActionResult) {
+        let temp = tempdir().unwrap();
+        let central = temp.path().join("Central");
+        fs::create_dir_all(central.join("Control")).unwrap();
+        let mut registry = create_core_action_registry();
+        register_projectcentral_now_actions(&mut registry);
+        let options = crate::root::RootOptions {
+            explicit_root: Some(central),
+            configured_root: None,
+            home: None,
+        };
+        let connectors = ConnectorRegistry::default();
+        let connector_context = ConnectorContext {
+            platform: "test".into(),
+        };
+        let context = ActionExecutionContext {
+            root_options: &options,
+            connectors: &connectors,
+            connector_context: &connector_context,
+        };
+        if let Some(project) = project {
+            input["project"] = json!(project);
+        }
+        let result = registry.execute("projectcentral.now.return", &input, &context);
+        (temp, result)
+    }
+
+    fn verification_input() -> serde_json::Value {
+        json!({
+            "actor": "root-scope-fix-verification",
+            "kind": "note",
+            "subject": "root scope return verification — safe to clean",
+            "result": "Root-register return recorded with the project handoff shape.",
+            "status": "active",
+            "source_refs": [],
+            "evidence_refs": ["Control/agents/now/flows/"]
+        })
+    }
+
+    /// Root scope is the absent `project` argument: the same
+    /// `central.project-now.handoff/v1` record the project action writes lands
+    /// under the root register's NOW agents area, created on write.
+    #[test]
+    fn absent_project_writes_root_register_return() {
+        let (temp, recorded) = drive(verification_input(), None);
+        assert!(recorded.ok, "{recorded:?}");
+        let central = temp.path().join("Central");
+        let handoff_value = &recorded.data.as_ref().unwrap()["handoff"];
+        let id = handoff_value["id"].as_str().unwrap().to_owned();
+        assert_eq!(
+            recorded.data.as_ref().unwrap()["source"],
+            json!(format!("Control/agents/now/agents/{id}.json"))
+        );
+
+        // The root record is readable back by the same reader that reads
+        // project returns — same schema, same fields, attributed.
+        let stored =
+            read_handoff(&central.join(ROOT_NOW_AGENT_DIR).join(format!("{id}.json"))).unwrap();
+        assert_eq!(stored.schema, HANDOFF_SCHEMA);
+        assert_eq!(stored.provenance, "agent-authored-bounded-return");
+        assert_eq!(stored.actor, "root-scope-fix-verification");
+        assert_eq!(stored.kind, "note");
+        assert_eq!(
+            stored.subject,
+            "root scope return verification — safe to clean"
+        );
+        assert_eq!(stored.status, "active");
+        assert!(stored.recorded_at_unix_seconds > 0);
+        assert_eq!(stored.source_refs, Vec::<String>::new());
+        assert_eq!(
+            stored.evidence_refs,
+            vec!["Control/agents/now/flows/".to_string()]
+        );
+    }
+
+    /// A present `project` argument behaves exactly as before: the record
+    /// lands in that project's ProjectCentral/now/agents and nowhere in the
+    /// root register.
+    #[test]
+    fn present_project_return_is_unchanged() {
+        let temp = tempdir().unwrap();
+        let central = temp.path().join("Central");
+        let project = central.join("Work/example");
+        fs::create_dir_all(&project).unwrap();
+        initialize_projectcentral(&central, &project, "example/project").unwrap();
+        initialize_now(&project).unwrap();
+
+        let mut registry = create_core_action_registry();
+        register_projectcentral_now_actions(&mut registry);
+        let options = crate::root::RootOptions {
+            explicit_root: Some(central.clone()),
+            configured_root: None,
+            home: None,
+        };
+        let connectors = ConnectorRegistry::default();
+        let connector_context = ConnectorContext {
+            platform: "test".into(),
+        };
+        let context = ActionExecutionContext {
+            root_options: &options,
+            connectors: &connectors,
+            connector_context: &connector_context,
+        };
+        let mut input = verification_input();
+        input["project"] = json!("example");
+        let recorded = registry.execute("projectcentral.now.return", &input, &context);
+        assert!(recorded.ok, "{recorded:?}");
+
+        let handoff_value = &recorded.data.as_ref().unwrap()["handoff"];
+        let id = handoff_value["id"].as_str().unwrap().to_owned();
+        assert_eq!(
+            recorded.data.as_ref().unwrap()["source"],
+            json!(format!("ProjectCentral/now/agents/{id}.json"))
+        );
+        assert!(project
+            .join(NOW_AGENT_DIR)
+            .join(format!("{id}.json"))
+            .is_file());
+        assert!(!central.join(ROOT_NOW_AGENT_DIR).exists());
+    }
+
+    /// Root scope keeps the project record's validation: an invalid kind is
+    /// refused before anything is written, in either register.
+    #[test]
+    fn root_scope_return_keeps_project_record_validation() {
+        let mut input = verification_input();
+        input["kind"] = json!("diary");
+        let (temp, refused) = drive(input, None);
+        assert!(!refused.ok);
+        let central = temp.path().join("Central");
+        assert!(!central.join(ROOT_NOW_AGENT_DIR).exists());
     }
 }
