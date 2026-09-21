@@ -4,7 +4,7 @@
 standing: architecture-contract
 register: episteme
 provenance: human-adopted
-temporal: docs update after Central #134
+temporal: docs update after Central #207
 ```
 
 **Ordinary correctness:** no QL, AIKit, Factory, O:I, database, session or chat dependency.
@@ -46,7 +46,8 @@ Root operational Flow state lives at the Central root (`.central/flows.json`, `.
 Implementation standing:
 
 - `projectcentral.flow.*` Actions serve both registers. Absent `project` names the root.
-- `projectcentral.now.*` Actions currently require `project` and operate on a Work project. The root field is present under `Control/agents/now/` (stamped as a distributed default). Its lifecycle — inspect / init / return / update / promote / rollover — is executed by the session-strap mirroring procedure until a native root NOW Action exists.
+- `projectcentral.now.return` serves both registers. Absent `project` is root scope and writes the same `central.project-now.handoff/v1` form under `Control/agents/now/agents`, created on write when absent. Present `project` still uses that project's `ProjectCentral/now` (must already be initialised).
+- `projectcentral.now.inspect` / `init` / `update` / `promote` / `rollover` still require `project` and operate on a Work project. The root field is present under `Control/agents/now/` (stamped as a distributed default). Root inspect / init / update / promote / rollover, including DAY close, remain executed by the session-strap mirroring procedure until native root NOW Actions exist for those operations.
 
 ## Why this exists
 
@@ -229,7 +230,7 @@ A Factory Artifact, Run, accepted canonical relation or another durable owner ca
 ```text
 projectcentral.now.inspect    read current temporal field; non-mutating; requires project
 projectcentral.now.init       opt a valid ProjectCentral into NOW/DAY; requires project
-projectcentral.now.return     write attributed bounded Agent return; requires project
+projectcentral.now.return     write attributed bounded Agent return; serves both registers (absent project = root)
 projectcentral.now.update     update status / add preserve refs; requires project
 projectcentral.now.promote    explicit return into human ground or Agent Wiki owner path; requires project
 projectcentral.now.rollover   snapshot DAY, then clean/carry NOW; requires project
