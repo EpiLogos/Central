@@ -79,3 +79,12 @@ Use this mode when the human chooses the sixfold consolidation convention. The C
 Validate the Central pilot from its repository root with `python3 tools/check_product_ground.py`, then inspect the actual rendered account and its source relationships. Structural validation does not establish human adoption or prove a capability. For consolidation, preserve source meaning and identity while bringing selected carriers into the single protocol. Broader source retirement follows a successor review: Central owns the filesystem structure and AIKit owns the operations. The links and tags prepare future disclosure without making the wiki another authority in the development chain.
 
 For continuing product development, use the capability-matrices Skill’s CLI-maintenance and directional reconciliation procedure. A completed feature change includes its discoverable command mapping or explicit composed/library boundary, dated execution reference, current code basis and reconciled account units. CI checks this maintained relationship against the actual product executable; the author reviews its meaning.
+
+
+## Operative Jev/NOW use
+
+When an undertaking needs the authored document organisation made operative, keep this methodology as the meaning source and use AIKit's general Jev capability only as an attributable reading over that source. A prepared NOW view may retain the applicable whole/seed/expanded account passages, capability records, UX conditions, practices, exact SourceRefs/revisions and routes; Redis is a hot participant-specific copy, never a new document owner.
+
+For a full declared account or matrix scope, enumerate the declared inventory before asking relevance questions. For smaller work, select only the needed source units while retaining explicit dependencies and jointly required capabilities. A Jev result may identify several complementary contributions or report that the catalogue is insufficient; it must not manufacture a capability or silently collapse need, operation, outcome, source standing, implementation status and operational readiness.
+
+After work, classify the actual result only to decide the next native operation: remain task-local, update Wiki understanding, revise a reusable practice, or propose an account/matrix change. Perform any warranted document mutation through the existing coherent source operations, preserve unknown fields and companion-file parity, and retain its exact source revision. The Jev determination is evidence for the decision, not authorship or human adoption.
