@@ -342,6 +342,7 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
 
     let mut structured = false;
     let mut explicit_root = None;
+    let mut projection_reading_path: Option<PathBuf> = None;
     let mut positional = Vec::new();
     let mut index = 0;
 
@@ -363,6 +364,33 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
                 return Err((structured, "--root requires a path.".to_owned()));
             }
             explicit_root = Some(PathBuf::from(value));
+        } else if argument == "--projection-reading" {
+            // An optional AIKit worktree-projection reading file (JSON), read by
+            // ctrl and passed through to `machine plan` / `machine verify` as the
+            // `projection_reading` input. ctrl reads this caller-supplied file; it
+            // never runs git or derives the projection itself.
+            index += 1;
+            let Some(value) = args.get(index) else {
+                return Err((
+                    structured,
+                    "--projection-reading requires a path.".to_owned(),
+                ));
+            };
+            if value.starts_with("--") {
+                return Err((
+                    structured,
+                    "--projection-reading requires a path.".to_owned(),
+                ));
+            }
+            projection_reading_path = Some(PathBuf::from(value));
+        } else if let Some(value) = argument.strip_prefix("--projection-reading=") {
+            if value.is_empty() {
+                return Err((
+                    structured,
+                    "--projection-reading requires a path.".to_owned(),
+                ));
+            }
+            projection_reading_path = Some(PathBuf::from(value));
         } else if argument.starts_with("--") {
             return Err((
                 structured,
@@ -388,7 +416,7 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         return Err((structured, "pick takes no positional input.".to_owned()));
     }
 
-    let (action_id, input): (&str, Value) = match positional.as_slice() {
+    let (action_id, mut input): (&str, Value) = match positional.as_slice() {
         [command] if command == "root" => ("central.root", json!({})),
         [command] if command == "init" => ("central.init", json!({})),
         [command] if command == "doctor" => ("central.doctor", json!({})),
@@ -650,6 +678,37 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
             ));
         }
     };
+
+    if let Some(path) = projection_reading_path {
+        if action_id != "machine.plan" && action_id != "machine.verify" {
+            return Err((
+                structured,
+                "--projection-reading applies only to `machine plan` and `machine verify`."
+                    .to_owned(),
+            ));
+        }
+        let text = std::fs::read_to_string(&path).map_err(|error| {
+            (
+                structured,
+                format!(
+                    "--projection-reading cannot read {}: {error}",
+                    path.display()
+                ),
+            )
+        })?;
+        let reading: Value = serde_json::from_str(&text).map_err(|error| {
+            (
+                structured,
+                format!(
+                    "--projection-reading {} is not valid JSON: {error}",
+                    path.display()
+                ),
+            )
+        })?;
+        if let Some(object) = input.as_object_mut() {
+            object.insert("projection_reading".to_owned(), reading);
+        }
+    }
 
     Ok(ParsedCommand {
         structured,

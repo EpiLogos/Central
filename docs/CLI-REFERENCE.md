@@ -59,9 +59,9 @@ The composed registry is deliberately discovered at runtime through `action.list
 | `machine.inspect` | inspect current observed machine state | `machine inspect` |
 | `machine.account` | compose the current-machine account (identity, observed state, authored roles, drift) | `machine account` |
 | `machine.adopt-current` | adopt the current machine into an authored role declaration under `Control/machines/<role>.json`, seeding observed capabilities and recording the Workcell reference as an opaque binding; idempotent, conflict-surfacing | `machine adopt-current [<role>]` |
-| `machine.plan` | compare authored intent with observed state | `machine plan <role>` |
+| `machine.plan` | compare authored intent with observed state; surfaces a projects-`main` policy's drift verdict when given an AIKit reading | `machine plan <role> [--projection-reading <file.json>]` |
 | `machine.apply` | apply the planned portable reconciliation | `machine apply <role>` |
-| `machine.verify` | verify authored intent against fresh observation | `machine verify <role>` |
+| `machine.verify` | verify authored intent against fresh observation; verifies a projects-`main` policy when given an AIKit reading | `machine verify <role> [--projection-reading <file.json>]` |
 | `work.list` | discover ordinary Work directories | `work list` |
 | `work.search` | search discovered Work by name | `work search <query>` |
 | `work.open` | open a Work item through `NativeOpen` | `work open <query>`, `open <query>` |
