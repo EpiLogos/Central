@@ -6,10 +6,15 @@ use sha2::{Digest, Sha256};
 use std::{
     fs,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 const AGENT: &str = "controlled-join-agent-not-a-personal-credential";
+// macOS SystemTime::now() has ~microsecond real granularity, so pid+nanos alone
+// collides when several tests in this process start inside the same microsecond
+// under parallel load; the per-process sequence makes each root unique.
+static WORLD_SEQ: AtomicU64 = AtomicU64::new(0);
 struct World(PathBuf);
 impl Drop for World {
     fn drop(&mut self) {
@@ -19,8 +24,9 @@ impl Drop for World {
 impl World {
     fn new() -> Self {
         let root = std::env::temp_dir().join(format!(
-            "central-joined-admission-{}-{}",
+            "central-joined-admission-{}-{}-{}",
             std::process::id(),
+            WORLD_SEQ.fetch_add(1, Ordering::Relaxed),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
