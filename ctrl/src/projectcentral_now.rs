@@ -2111,9 +2111,7 @@ mod attribution_tests {
         let mut registry = create_core_action_registry();
         register_projectcentral_now_actions(&mut registry);
         let descriptor = registry
-            .descriptors()
-            .into_iter()
-            .find(|row| row.id.as_str() == "projectcentral.now.return")
+            .get("projectcentral.now.return")
             .expect("NOW return descriptor");
         assert!(
             descriptor.inputs.iter().any(|input| input.name == "work_refs"),
