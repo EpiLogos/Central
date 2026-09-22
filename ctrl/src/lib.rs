@@ -229,10 +229,11 @@ pub use machine::{
     MachineAdoption, MachineAdoptionOutcome, MachineApplyOperation, MachineApplyOutcome,
     MachineApplyReport, MachineBinding, MachineDeclaration, MachineDeclarationError,
     MachineDeclarationSource, MachineObservationSource, MachinePlan, MachinePlanEntry,
-    MachinePlanStatus, MachinePlanSummary, MachineRequirements, MachineSourceReference,
-    MachineVerification, ObservedMachine, PackageRequirement, PresenceState, ServiceRequirement,
-    MACHINE_ADOPTION_SCHEMA, MACHINE_DECLARATION_SCHEMA, MACHINE_DECLARATION_VERSION,
-    WORKCELL_BINDING_KIND,
+    MachinePlanStatus, MachinePlanSummary, MachineProjectionPolicy, MachineRequirements,
+    MachineSourceReference, MachineVerification, ObservedMachine, ObservedProjectionAction,
+    ObservedProjectionReading, ObservedRepoProjection, PackageRequirement, PresenceState,
+    ServiceRequirement, MACHINE_ADOPTION_SCHEMA, MACHINE_DECLARATION_SCHEMA,
+    MACHINE_DECLARATION_VERSION, WORKCELL_BINDING_KIND, WORKTREE_PROJECTION_READING_SCHEMA,
 };
 pub use machine_account::{
     explain_account, AuthoredRoleSummary, DriftStatus, MachineAccount, MachineDriftEntry,

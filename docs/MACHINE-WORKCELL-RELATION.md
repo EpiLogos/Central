@@ -85,6 +85,38 @@ ctrl --json action run machine.oi-suite-policy '{"role":"current"}'
 
 It reports `absent`, one `authored-intent`, or `ambiguous-human-decision-required` when several different policy refs are authored. It never interprets the reference and never reports installed product versions as though they were authored machine intent. `machine.adopt-current` continues to touch only the `workcell` binding kind, so the two relations remain independent.
 
+## Worktree-projection policy is authored desired state, verdict is AIKit's
+
+Where `oi-suite-policy` is an *opaque* binding, a machine role may also carry a *structured* `projection` policy: the desired state that this machine keeps its suite repository checkouts projected onto one canonical target (e.g. `origin/main`).
+
+```json
+"projection": {
+  "target": "origin/main",
+  "projects": []
+}
+```
+
+`target` is the canonical revision every covered checkout tracks; `projects` names the suite project keys the policy covers, and an empty list means the whole suite. The field is additive — declarations authored before it existed parse and serialise identically because a `None` is skipped.
+
+This is authored intent only. **Central declares the target; it never runs git or computes the drift.** Repository/worktree state — and the projection drift verdict — belong to AIKit (`aikit worktree project`, `aikit.worktree-projection/v1`), per the suite ownership law (`Work/Workcell/docs/DEVELOPMENT-WORLDS.md`). `machine.plan` / `machine.verify` surface the verdict for the policy only from an AIKit reading supplied to Central:
+
+```text
+no reading supplied      Unsupported — the verdict is computed by
+                         `aikit worktree project --json`; Central names the
+                         verifier rather than inventing a git answer, exactly as
+                         an empty capability slot is Unsupported when no
+                         reconciliation Port observes it
+every covered checkout   Satisfied
+  projected
+any covered checkout     Missing — the drifted repo keys are named, and the
+  not projected (or a     repair is `aikit worktree project --apply` (AIKit owns
+  named project absent,    it). Never Changeable: Central owns no git Port, so
+  or the reading against   `machine.apply` has nothing to run for it
+  another target)
+```
+
+The reading is passed as the `projection_reading` input (an inline `aikit.worktree-projection/v1` object), or through the CLI as `machine plan <role> --projection-reading <file.json>` / `machine verify <role> --projection-reading <file.json>` — ctrl reads that caller-supplied file and passes it through; ctrl never shells to git.
+
 ## Bootstrap binary
 
 The `central-machine-adopt` binary (shipped with `ctrl`) performs the same bootstrap through the same `machine.inspect` application path and writes the same ground; it predates the native Action and remains available for scripted first establishment:

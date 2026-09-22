@@ -88,6 +88,26 @@ pub struct MachineRequirements {
     pub services: Vec<ServiceRequirement>,
 }
 
+/// A "projects `main`" desired-state policy: this machine keeps its suite
+/// repository checkouts projected onto one canonical target (e.g.
+/// `origin/main`). This is authored intent only. Central declares the target
+/// and which suite projects it covers; it never runs git or computes the drift.
+/// Repository/worktree state — and the projection drift verdict — belong to
+/// AIKit (`aikit worktree project`, `aikit.worktree-projection/v1`), per the
+/// suite ownership law (Work/Workcell/docs/DEVELOPMENT-WORLDS.md). The verdict
+/// is surfaced through `machine.plan` / `machine.verify` only from an AIKit
+/// reading supplied to Central; Central never derives it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MachineProjectionPolicy {
+    /// The canonical target every covered suite checkout projects onto, e.g.
+    /// `origin/main`.
+    pub target: String,
+    /// The suite project keys this policy covers. Empty means the whole suite:
+    /// every checkout carried in the supplied reading.
+    #[serde(default)]
+    pub projects: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MachineDeclaration {
     pub schema: String,
@@ -102,6 +122,102 @@ pub struct MachineDeclaration {
     /// serialise identically because an empty list is skipped.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bindings: Vec<MachineBinding>,
+    /// Optional "projects `main`" desired-state policy. Additive: declarations
+    /// authored before it existed parse and serialise identically because a
+    /// `None` is skipped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection: Option<MachineProjectionPolicy>,
+}
+
+/// The schema of the AIKit worktree-projection reading Central surfaces. Central
+/// parses (never emits) this document; AIKit owns its shape and its production.
+pub const WORKTREE_PROJECTION_READING_SCHEMA: &str = "aikit.worktree-projection/v1";
+
+/// Central's read-only mirror of the parts of AIKit's
+/// `aikit.worktree-projection/v1` `SuiteProjection` that the projection-policy
+/// drift verdict reads. Extra fields AIKit carries per checkout are ignored:
+/// Central needs only which target the reading witnessed and, per checkout,
+/// whether it ended up projected. Central deserialises this from a
+/// caller-supplied reading and never computes it (git repository/worktree state
+/// is AIKit's).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ObservedProjectionReading {
+    /// The reading's own schema string, surfaced back for provenance.
+    pub version: String,
+    /// The target every checkout in this reading was compared against
+    /// (qualified, e.g. `origin/main`).
+    pub target: String,
+    /// Whether AIKit actually performed fast-forwards (apply mode) or only
+    /// observed. Surfaced for provenance; the verdict does not depend on it.
+    #[serde(default)]
+    pub applied: bool,
+    #[serde(default)]
+    pub entries: Vec<ObservedRepoProjection>,
+}
+
+/// The projection reading for one repository checkout, as Central reads it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ObservedRepoProjection {
+    /// The caller's stable key for this checkout (the suite project key).
+    pub key: String,
+    /// The target this checkout was projected onto, if the reading names it
+    /// per checkout.
+    #[serde(default)]
+    pub target: Option<String>,
+    pub action: ObservedProjectionAction,
+}
+
+/// What AIKit's projection did (or would do) to one checkout. Central reads only
+/// the tag; any payload AIKit carries (revisions, reasons) is optional here.
+/// Mirrors `aikit_core::resource::worktree_projection::ProjectionAction`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "action", rename_all = "kebab-case")]
+pub enum ObservedProjectionAction {
+    /// HEAD already sits at the target; nothing was done.
+    AlreadyProjected,
+    /// A clean, strictly-behind checkout a fast-forward would advance (observe
+    /// mode). Not yet projected.
+    WouldFastForward,
+    /// A clean, strictly-behind checkout that was fast-forwarded to the target.
+    FastForwarded,
+    /// Drift a human must resolve (dirty, ahead, diverged, or missing target).
+    Surfaced {
+        #[serde(default)]
+        reason: Option<String>,
+    },
+    /// This checkout could not be read or fast-forwarded.
+    Failed {
+        #[serde(default)]
+        reason: Option<String>,
+    },
+}
+
+impl ObservedProjectionAction {
+    /// Whether this checkout ends the projection sitting at the target, mirroring
+    /// AIKit's `ProjectionAction::is_projected` (`already-projected` or
+    /// `fast-forwarded`). Everything else is not yet projected.
+    fn is_projected(&self) -> bool {
+        matches!(self, Self::AlreadyProjected | Self::FastForwarded)
+    }
+
+    /// The short state label AIKit uses in its own reading.
+    fn label(&self) -> &'static str {
+        match self {
+            Self::AlreadyProjected => "projected",
+            Self::WouldFastForward => "behind",
+            Self::FastForwarded => "fast-forwarded",
+            Self::Surfaced { .. } => "surfaced",
+            Self::Failed { .. } => "failed",
+        }
+    }
+
+    /// The reason a checkout was surfaced or failed, when the reading carries it.
+    fn detail(&self) -> Option<&str> {
+        match self {
+            Self::Surfaced { reason } | Self::Failed { reason } => reason.as_deref(),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -789,6 +905,7 @@ fn adopt_current_action(
                 kind: WORKCELL_BINDING_KIND.to_owned(),
                 reference: workcell_ref.clone(),
             }],
+            projection: None,
         };
         let value = to_value(&declaration).expect("machine declaration serializes");
         if let Err(result) = write_machine_declaration_value(ACTION, &path, &value) {
@@ -938,6 +1055,179 @@ fn unsupported_entry(
         reason: Some(reason),
         diagnostics: None,
     }
+}
+
+const PROJECTION_KIND: &str = "projection";
+const PROJECTION_ID: &str = "worktree-projection";
+
+/// A `Missing` projection difference: drift the reading witnessed that Central
+/// cannot itself repair. Central owns no git-reconciliation Port (by the suite
+/// ownership law), so this is deliberately `Missing`, not `Changeable`:
+/// `machine.apply` has nothing to execute for it, and the repair is AIKit's
+/// (`aikit worktree project --apply`). `Missing` keeps apply honest — it reports
+/// the plan only partially satisfiable rather than pretending to reconcile git.
+fn projection_missing(desired: Value, observed: Value, reason: String) -> MachinePlanEntry {
+    MachinePlanEntry {
+        kind: PROJECTION_KIND.to_owned(),
+        id: PROJECTION_ID.to_owned(),
+        status: MachinePlanStatus::Missing,
+        desired,
+        observed,
+        port: None,
+        connector: None,
+        preview: None,
+        reason: Some(reason),
+        diagnostics: None,
+    }
+}
+
+/// Surface the worktree-projection desired-state policy as one plan entry.
+///
+/// Central declares the target; the drift verdict is an AIKit fact. So:
+///   * no reading supplied -> `Unsupported`, naming the AIKit verifier that
+///     computes it (`aikit worktree project --json`). This mirrors how empty
+///     capability slots are deliberately `Unsupported` when no reconciliation
+///     Port observes them (Control/machines/agent-system.md).
+///   * every covered checkout projected -> `Satisfied`.
+///   * any covered checkout not projected (or a named project absent, or the
+///     reading taken against a different target) -> `Missing`, naming the repos
+///     and pointing at the owner command. Never `Changeable`: Central does not
+///     run the git projection, so there is nothing for `machine.apply` to do.
+fn projection_entry(
+    policy: &MachineProjectionPolicy,
+    reading: Option<&ObservedProjectionReading>,
+) -> MachinePlanEntry {
+    let desired = json!({
+        "target": policy.target,
+        "projects": policy.projects,
+    });
+
+    let Some(reading) = reading else {
+        return unsupported_entry(
+            PROJECTION_KIND,
+            PROJECTION_ID,
+            desired,
+            json!({
+                "reading": "absent",
+                "owner": "aikit",
+                "verifier": "aikit worktree project --json",
+            }),
+            format!(
+                "Projection onto '{}' is authored intent; its drift verdict is computed by AIKit (which owns repository/worktree state) via `aikit worktree project --json`. No reading was supplied, so Central cannot surface it — Central never inspects git itself.",
+                policy.target
+            ),
+        );
+    };
+
+    // The reading must witness the authored target; one taken against another
+    // target does not verify this policy.
+    if reading.target != policy.target {
+        return projection_missing(
+            desired,
+            json!({
+                "reading_schema": reading.version,
+                "reading_target": reading.target,
+                "issue": "target-mismatch",
+            }),
+            format!(
+                "The supplied projection reading targets '{}', not the authored target '{}', so it does not verify this policy. Re-read with `aikit worktree project --target {} --json`.",
+                reading.target, policy.target, policy.target
+            ),
+        );
+    }
+
+    // Which checkouts this policy covers. Empty `projects` = the whole suite.
+    let covers =
+        |key: &str| policy.projects.is_empty() || policy.projects.iter().any(|value| value == key);
+    let covered: Vec<&ObservedRepoProjection> = reading
+        .entries
+        .iter()
+        .filter(|entry| covers(&entry.key))
+        .collect();
+
+    // Named projects the reading does not carry at all cannot be witnessed.
+    let absent_projects: Vec<&str> = policy
+        .projects
+        .iter()
+        .filter(|key| !reading.entries.iter().any(|entry| &entry.key == *key))
+        .map(String::as_str)
+        .collect();
+
+    if covered.is_empty() && absent_projects.is_empty() {
+        // A whole-suite policy whose reading carried no checkouts witnesses
+        // nothing; it cannot confirm the suite is projected.
+        return projection_missing(
+            desired,
+            json!({
+                "reading_schema": reading.version,
+                "reading_target": reading.target,
+                "covered": 0,
+                "issue": "empty-reading",
+            }),
+            format!(
+                "The projection reading against '{}' carried no checkouts, so it cannot confirm this policy. Run `aikit worktree project --json` with the suite's checkouts.",
+                policy.target
+            ),
+        );
+    }
+
+    let not_projected: Vec<&ObservedRepoProjection> = covered
+        .iter()
+        .copied()
+        .filter(|entry| !entry.action.is_projected())
+        .collect();
+
+    if not_projected.is_empty() && absent_projects.is_empty() {
+        return satisfied_entry(
+            PROJECTION_KIND,
+            PROJECTION_ID,
+            desired,
+            json!({
+                "reading_schema": reading.version,
+                "target": reading.target,
+                "covered": covered.len(),
+                "projected": covered.len(),
+                "applied": reading.applied,
+            }),
+        );
+    }
+
+    let surfaced: Vec<Value> = not_projected
+        .iter()
+        .map(|entry| {
+            json!({
+                "key": entry.key,
+                "state": entry.action.label(),
+                "detail": entry.action.detail(),
+            })
+        })
+        .collect();
+    let absent_note = if absent_projects.is_empty() {
+        String::new()
+    } else {
+        format!(
+            ", and {} named project(s) are absent from the reading ({})",
+            absent_projects.len(),
+            absent_projects.join(", ")
+        )
+    };
+    projection_missing(
+        desired,
+        json!({
+            "reading_schema": reading.version,
+            "target": reading.target,
+            "covered": covered.len(),
+            "not_projected": surfaced,
+            "absent_projects": absent_projects,
+        }),
+        format!(
+            "{} of {} covered checkout(s) are not projected onto '{}'{}. Run `aikit worktree project --apply` (AIKit owns the git projection); Central surfaces the drift but never repairs it.",
+            not_projected.len(),
+            covered.len(),
+            policy.target,
+            absent_note,
+        ),
+    )
 }
 
 fn unavailable_difference(
@@ -1266,6 +1556,7 @@ fn service_difference(
 fn compare_machine(
     authored: AuthoredMachineDeclaration,
     observed: ObservedMachine,
+    observed_projection: Option<&ObservedProjectionReading>,
     context: &ActionExecutionContext<'_>,
     action: &str,
 ) -> Result<MachinePlan, ActionResult> {
@@ -1428,6 +1719,13 @@ fn compare_machine(
         }
     }
 
+    // The projects-`main` desired-state policy, when authored, is surfaced as one
+    // entry. Central declares the target; the drift verdict comes from a
+    // caller-supplied AIKit reading (never computed here — see `projection_entry`).
+    if let Some(policy) = &declaration.projection {
+        entries.push(projection_entry(policy, observed_projection));
+    }
+
     let mut summary = MachinePlanSummary::default();
     for entry in &entries {
         match entry.status {
@@ -1470,12 +1768,40 @@ fn inspection_input(declaration: &MachineDeclaration) -> MachineInspectionInput 
     }
 }
 
+/// Parse the optional caller-supplied AIKit worktree-projection reading from the
+/// action input. Absent or explicit-null means "no reading" (the projection
+/// verdict is then `Unsupported`). Central reads this value; it never derives it.
+fn parse_projection_reading(
+    input: &Value,
+    action: &str,
+) -> Result<Option<ObservedProjectionReading>, ActionResult> {
+    let Some(raw) = input.get("projection_reading") else {
+        return Ok(None);
+    };
+    if raw.is_null() {
+        return Ok(None);
+    }
+    serde_json::from_value::<ObservedProjectionReading>(raw.clone())
+        .map(Some)
+        .map_err(|error| {
+            ActionResult::failure(
+                Some(action),
+                ResultStatus::InvalidInput,
+                format!(
+                    "projection_reading is not a valid {WORKTREE_PROJECTION_READING_SCHEMA} reading: {error}"
+                ),
+                Some(json!({ "field": "projection_reading" })),
+            )
+        })
+}
+
 fn load_plan(
     input: &Value,
     context: &ActionExecutionContext<'_>,
     action: &str,
 ) -> Result<MachinePlan, ActionResult> {
     let role = required_role(input, action)?;
+    let projection_reading = parse_projection_reading(input, action)?;
     let root = resolve_central_root(context.root_options).map_err(|message| {
         ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None)
     })?;
@@ -1483,7 +1809,13 @@ fn load_plan(
         .map_err(|error| declaration_failure(action, error))?;
     let inspection = inspection_input(&authored.declaration);
     let observed = inspect_current_machine(context, action, &inspection)?;
-    compare_machine(authored, observed, context, action)
+    compare_machine(
+        authored,
+        observed,
+        projection_reading.as_ref(),
+        context,
+        action,
+    )
 }
 
 fn plan_action(
@@ -1858,6 +2190,19 @@ fn role_input() -> ActionInputDefinition {
     }
 }
 
+/// The optional AIKit worktree-projection reading (`aikit.worktree-projection/v1`)
+/// a caller passes to surface the projects-`main` drift verdict. It is an inline
+/// JSON object; the CLI's `--projection-reading <file>` reads a file into it.
+fn projection_reading_input() -> ActionInputDefinition {
+    ActionInputDefinition {
+        name: "projection_reading".to_owned(),
+        input_type: "object".to_owned(),
+        required: false,
+        choices: None,
+        selection: None,
+    }
+}
+
 pub(crate) fn register_machine_actions(registry: &mut ActionRegistry) {
     registry.register(
         ActionDescriptor {
@@ -1922,8 +2267,8 @@ pub(crate) fn register_machine_actions(registry: &mut ActionRegistry) {
         ActionDescriptor {
             id: "machine.plan".to_owned(),
             title: "Plan machine changes".to_owned(),
-            description: "Compare authored machine intent with observed host state and produce a non-mutating structured change plan with Connector previews.".to_owned(),
-            inputs: vec![role_input()],
+            description: "Compare authored machine intent with observed host state and produce a non-mutating structured change plan with Connector previews. When the declaration carries a projects-`main` policy, an optional AIKit worktree-projection reading (`projection_reading`) surfaces the projection drift verdict; Central never inspects git itself.".to_owned(),
+            inputs: vec![role_input(), projection_reading_input()],
             output: ActionOutputDefinition { output_type: "machine-change-plan".to_owned() },
             mutation_class: MutationClass::ReadOnly,
             preview_supported: true,
@@ -1954,8 +2299,8 @@ pub(crate) fn register_machine_actions(registry: &mut ActionRegistry) {
         ActionDescriptor {
             id: "machine.verify".to_owned(),
             title: "Verify machine declaration".to_owned(),
-            description: "Observe the current machine and verify it against the authored machine-role declaration, including source-backed configuration state through public ConfigurationManager preview when required.".to_owned(),
-            inputs: vec![role_input()],
+            description: "Observe the current machine and verify it against the authored machine-role declaration, including source-backed configuration state through public ConfigurationManager preview when required. An optional AIKit worktree-projection reading (`projection_reading`) verifies a projects-`main` policy; without it the projection verdict is Unsupported.".to_owned(),
+            inputs: vec![role_input(), projection_reading_input()],
             output: ActionOutputDefinition { output_type: "machine-verification".to_owned() },
             mutation_class: MutationClass::ReadOnly,
             preview_supported: false,
@@ -2042,6 +2387,28 @@ pub fn explain_machine_declaration(data: &Value) -> String {
                 .unwrap_or_default();
             lines.push(format!("  - {kind}: {reference}"));
         }
+    }
+
+    if let Some(projection) = declaration.get("projection") {
+        let target = projection
+            .get("target")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let projects = projection
+            .get("projects")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let scope = if projects.is_empty() {
+            "whole suite".to_owned()
+        } else {
+            projects
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        lines.push(format!("Projection: {target} ({scope})"));
     }
 
     let requirements = declaration.get("requirements").unwrap_or(&Value::Null);
