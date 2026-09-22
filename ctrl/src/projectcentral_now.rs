@@ -1823,6 +1823,7 @@ pub fn register_projectcentral_now_actions(registry: &mut ActionRegistry) {
                     ("source_refs", false),
                     ("evidence_refs", false),
                     ("preserve_refs", false),
+                    ("work_refs", false),
                 ],
             ),
             return_action,
@@ -2095,6 +2096,53 @@ mod attribution_tests {
         let mut input = input;
         input["project"] = json!("example");
         registry.execute("projectcentral.now.return", &input, &context)
+    }
+
+
+    #[test]
+    fn return_action_publicly_admits_lane_work_refs_and_persists_them() {
+        let temp = tempdir().unwrap();
+        let central = temp.path().join("Central");
+        let project = central.join("Work/example");
+        fs::create_dir_all(&project).unwrap();
+        initialize_projectcentral(&central, &project, "example/project").unwrap();
+        initialize_now(&project).unwrap();
+
+        let mut registry = create_core_action_registry();
+        register_projectcentral_now_actions(&mut registry);
+        let descriptor = registry
+            .descriptors()
+            .into_iter()
+            .find(|row| row.id.as_str() == "projectcentral.now.return")
+            .expect("NOW return descriptor");
+        assert!(
+            descriptor.inputs.iter().any(|input| input.name == "work_refs"),
+            "work_refs must be visible at the public Action boundary"
+        );
+
+        let recorded = drive_return(
+            &central,
+            json!({
+                "actor":"prime-child-proof",
+                "kind":"handoff",
+                "subject":"bounded continuation",
+                "result":"Continue from the exact source and next action refs.",
+                "status":"active",
+                "session_ref":"agent-session/prime-child-proof",
+                "source_refs":["source:ql:#0"],
+                "evidence_refs":["evidence:faculty:#0"],
+                "work_refs":[{
+                    "repo":"EpiLogos/O-I",
+                    "branch":"feature/prime-child-proof",
+                    "worktree_path":"/bounded/worktree"
+                }]
+            }),
+        );
+        assert!(recorded.ok, "{recorded:?}");
+        let handoff=&recorded.data.as_ref().unwrap()["handoff"];
+        assert_eq!(handoff["work_refs"][0]["repo"],"EpiLogos/O-I");
+        assert_eq!(handoff["work_refs"][0]["branch"],"feature/prime-child-proof");
+        assert_eq!(handoff["work_refs"][0]["worktree_path"],"/bounded/worktree");
     }
 
     /// W10 V2 extension: a now.return can attribute itself to its bounded
