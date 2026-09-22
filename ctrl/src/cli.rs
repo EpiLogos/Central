@@ -55,6 +55,30 @@ fn parse_action_input(
     action_id: &str,
     raw: &str,
 ) -> Result<Value, (bool, String)> {
+    // Explicit '-' carries the same JSON-object input on stdin. Large source
+    // and original-form payloads must not depend on OS argv limits. This is
+    // only transport: registry, authority and per-operation bounds still apply.
+    let from_stdin;
+    let raw = if raw == "-" {
+        use std::io::Read;
+        const MAX_ACTION_INPUT: u64 = 16 * 1024 * 1024;
+        let mut bytes = Vec::new();
+        std::io::stdin()
+            .take(MAX_ACTION_INPUT + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|error| (structured, format!("read action JSON from stdin: {error}")))?;
+        if bytes.len() as u64 > MAX_ACTION_INPUT {
+            return Err((
+                structured,
+                "action stdin JSON exceeds the 16 MiB input bound".to_owned(),
+            ));
+        }
+        from_stdin = String::from_utf8(bytes)
+            .map_err(|_| (structured, "action stdin JSON must be UTF-8".to_owned()))?;
+        from_stdin.as_str()
+    } else {
+        raw
+    };
     let value: Value = serde_json::from_str(raw).map_err(|error| {
         (
             structured,

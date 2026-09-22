@@ -98,8 +98,33 @@ fn reading(
     entry: &Value,
 ) -> io::Result<Value> {
     let source = scope.read(text(entry, "ref")?)?;
+    // The temporal carrier is not automatically a Daily Die. Only the native
+    // document relation selects a document; no filename/template search and
+    // no catch-and-empty downgrade of a broken/denied document reading.
+    let document = if let Some(meta) = entry.get("document") {
+        if meta["kind"] != "day" {
+            return Err(invalid("human Day source is bound to a non-Day document"));
+        }
+        let value = super::documents::read(
+            scope,
+            &json!({
+                "source_ref": source.source.source_ref, "document_id": text(meta, "document_id")?
+            }),
+        )?;
+        if value["source"]["ref"] != source.source.source_ref
+            || value["revision"]["revision"] != source.revision.revision
+            || value["document"]["day_ref"] != entry["temporal"]["day_ref"]
+        {
+            return Err(conflict(
+                "Day/document binding or revision changed during resolution",
+            ));
+        }
+        value
+    } else {
+        Value::Null
+    };
     Ok(
-        json!({"schema":"central.day-reading/v1","day_ref":entry["temporal"]["day_ref"],"source":source.source,"revision":source.revision,"content":source.content,"temporal":entry["temporal"],"relations_revision":relation_basis,"today":relations["temporal"]["today"],"automatic_agent_or_model_invocation":false}),
+        json!({"schema":"central.day-reading/v1","day_ref":entry["temporal"]["day_ref"],"source":source.source,"revision":source.revision,"content":source.content,"temporal":entry["temporal"],"relations_revision":relation_basis,"today":relations["temporal"]["today"],"document_state":if document.is_null(){"uninitialised"}else{"ready"},"document":document,"automatic_agent_or_model_invocation":false}),
     )
 }
 pub fn day_read(scope: &Scope, input: &Value) -> io::Result<Value> {
