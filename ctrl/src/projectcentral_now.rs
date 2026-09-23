@@ -178,6 +178,13 @@ pub struct RolloverReport {
     /// repository. Empty when no census ran.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub open_lanes: Vec<Value>,
+    /// The Project's native NOW horizon across this close: active Workcell
+    /// root/child clearings carry, quiescent ones are released from the live
+    /// horizon and stay retained. The close never closes, completes or
+    /// archives a clearing. Absent when the Project carries no horizon
+    /// clearings (or is not inside a Central root at all).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub now_horizon: Option<Value>,
 }
 
 fn now_paths(project_root: &Path) -> NowPaths {
@@ -1337,6 +1344,7 @@ pub fn rollover_with_census(
         }));
     }
 
+    let now_horizon = project_now_horizon(project_root);
     Ok(RolloverReport {
         day: day.into(),
         next_day: next_day.into(),
@@ -1351,7 +1359,28 @@ pub fn rollover_with_census(
         cleanup_failures,
         git_census: git_census_value,
         open_lanes,
+        now_horizon,
     })
+}
+
+/// Read-only horizon reading of this Project's native clearings for the close
+/// report. A Project outside a Central root has no native clearing scope, so
+/// it reports nothing; a scope that cannot be read reports that as data rather
+/// than failing a close that has already been written.
+fn project_now_horizon(project_root: &Path) -> Option<Value> {
+    let member = project_root.file_name()?.to_str()?;
+    let central = project_root.parent()?.parent()?;
+    let scope = crate::continuous_work::source::Scope::resolve(central, Some(member)).ok()?;
+    match crate::continuous_work::placement::horizon_reading(&scope) {
+        Ok(reading)
+            if reading["carried"].as_array().is_some_and(Vec::is_empty)
+                && reading["released"].as_array().is_some_and(Vec::is_empty) =>
+        {
+            None
+        }
+        Ok(reading) => Some(reading),
+        Err(error) => Some(json!({"state":"unavailable","reason":error.to_string()})),
+    }
 }
 
 fn safe_source(project_root: &Path, raw: &str, expected_root: &str) -> io::Result<PathBuf> {
@@ -2098,7 +2127,6 @@ mod attribution_tests {
         registry.execute("projectcentral.now.return", &input, &context)
     }
 
-
     #[test]
     fn return_action_publicly_admits_lane_work_refs_and_persists_them() {
         let temp = tempdir().unwrap();
@@ -2114,7 +2142,10 @@ mod attribution_tests {
             .get("projectcentral.now.return")
             .expect("NOW return descriptor");
         assert!(
-            descriptor.inputs.iter().any(|input| input.name == "work_refs"),
+            descriptor
+                .inputs
+                .iter()
+                .any(|input| input.name == "work_refs"),
             "work_refs must be visible at the public Action boundary"
         );
 
@@ -2137,10 +2168,16 @@ mod attribution_tests {
             }),
         );
         assert!(recorded.ok, "{recorded:?}");
-        let handoff=&recorded.data.as_ref().unwrap()["handoff"];
-        assert_eq!(handoff["work_refs"][0]["repo"],"EpiLogos/O-I");
-        assert_eq!(handoff["work_refs"][0]["branch"],"feature/prime-child-proof");
-        assert_eq!(handoff["work_refs"][0]["worktree_path"],"/bounded/worktree");
+        let handoff = &recorded.data.as_ref().unwrap()["handoff"];
+        assert_eq!(handoff["work_refs"][0]["repo"], "EpiLogos/O-I");
+        assert_eq!(
+            handoff["work_refs"][0]["branch"],
+            "feature/prime-child-proof"
+        );
+        assert_eq!(
+            handoff["work_refs"][0]["worktree_path"],
+            "/bounded/worktree"
+        );
     }
 
     /// W10 V2 extension: a now.return can attribute itself to its bounded

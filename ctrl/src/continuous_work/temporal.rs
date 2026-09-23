@@ -651,6 +651,10 @@ pub fn ensure_day(
     result["open_editor_changed"] = json!(false);
     result["tasks_carried_or_ticked"] = json!(false);
     result["now_cleared_or_archived"] = json!(false);
+    // The live NOW horizon crosses the Day boundary untouched: active Workcell
+    // root and child clearings carry, quiescent ones are reported released.
+    result["now_horizon"] = placement::horizon_reading(scope)
+        .unwrap_or_else(|error| json!({"state":"unavailable","reason":error.to_string()}));
     Ok(result)
 }
 pub fn day_lifecycle(
