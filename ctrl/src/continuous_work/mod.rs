@@ -108,6 +108,7 @@ pub fn execute_with_token_at(
         "learnings_read" => thoughts::learnings_read(&scope, input),
         "learnings_distill" => thoughts::learnings_distill(&scope, input, now),
         "time_policy" => Ok(serde_json::to_value(temporal::time_policy(&scope, now)?)?),
+        "time_occurrences" => temporal::time_occurrences(&scope, input),
         "day_read" => temporal::day_read(&scope, input),
         "source_history" => history::read(&scope, input),
         "day_ensure" | "day_lifecycle" | "now_lifecycle" | "now_obligations" => {
@@ -211,6 +212,11 @@ handler!(validate_action, "central.work.validate", "validate");
 handler!(now_read_action, "central.now.read", "now_read");
 handler!(now_list_action, "central.now.list", "now_list");
 handler!(time_action, "central.time.policy", "time_policy");
+handler!(
+    time_occurrences_action,
+    "central.time.occurrences",
+    "time_occurrences"
+);
 handler!(day_read_action, "central.day.read", "day_read");
 handler!(day_ensure_action, "central.day.ensure", "day_ensure");
 handler!(
@@ -317,6 +323,7 @@ pub fn register_actions(registry: &mut ActionRegistry) {
         ("central.now.read", "Read allocated NOW source", "Read exact NOW identity, lifecycle and source revision; optionally include current native placement without allocating or re-entering the task.", false, now_read_action, &[("now_ref","string",true),("with_placement","boolean",false)]),
         ("central.now.list", "List allocated NOWs by participant", "List the World's allocated NOW clearings with identity, lifecycle and source revision, optionally filtered to records carrying any of the given participant refs; read-only.", false, now_list_action, &[("participant_refs","array",false)]),
         ("central.time.policy", "Read native civil-time policy", "Read the recognised root IANA timezone and local Day boundary, never the harness timezone.", false, time_action, &[]),
+        ("central.time.occurrences", "Resolve schedule occurrences in civil time", "Resolve a daily/cron/every/once schedule into deterministic occurrence instants over the recognised civil-time policy: policy timezone, spring-forward nonexistent local times resolved forward by the gap and named, autumn-fold ambiguous times as two distinct occurrences. Resolves instants only — never advances today and never touches the Day lifecycle. Read-only.", false, time_occurrences_action, &[("schedule","object",true),("window_from_unix_ms","integer",true),("window_to_unix_ms","integer",true)]),
         ("central.day.read", "Read human Day source", "Read a stable DayRef or the current today pointer without replacing the open editor.", false, day_read_action, &[("day_ref","string",false)]),
         ("central.day.ensure", "Ensure the current blank Day", "Create a blank native Day and advance today only under the current authenticated human time policy; never close old writing or clear NOW.", true, day_ensure_action, &[("expected_time_policy_revision","string",true),("expected_authority_revision","string",false)]),
         ("central.day.lifecycle", "Change human Day lifecycle", "Human-authenticated close or reopen with exact content and relation revisions; retain every authored byte.", true, day_lifecycle_action, &[("day_ref","string",true),("expected_revision","string",true),("expected_relations_revision","string",true),("lifecycle","string",true),("expected_authority_revision","string",false)]),

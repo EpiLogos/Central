@@ -3,10 +3,11 @@ use super::{
     history, placement,
     source::{self, conflict, denied, encoded, invalid, text, Scope},
 };
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Datelike, Duration, Offset, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{fs, io, path::Path};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,6 +70,425 @@ pub fn time_policy(scope: &Scope, now: u64) -> io::Result<TimeReading> {
         observed_at_unix_seconds: now,
     })
 }
+/// Deterministic occurrence resolution for scheduled automations, over the
+/// recognised root civil-time policy.
+///
+/// Central owns all calendar meaning: the schedule is resolved in the policy
+/// timezone, a spring-forward nonexistent local time resolves forward by the
+/// transition gap and is named in the response, and an autumn-fold ambiguous
+/// local time yields two distinct instants (and therefore two distinct
+/// occurrence refs). The action resolves instants only — it never advances
+/// "today", never implies Day closure and never invokes the Day lifecycle.
+///
+/// An `occurrence_ref` is a pure function of (schedule, instant). It is stable
+/// across windows — so a delivered occurrence stays delivered when the caller's
+/// horizon slides — and across policy edits — so a policy re-baseline changes
+/// the reading basis without changing occurrence identity. The response is
+/// deterministic given (policy revision, schedule, window).
+pub fn time_occurrences(scope: &Scope, input: &Value) -> io::Result<Value> {
+    const OCCURRENCES_SCHEMA: &str = "central.time-occurrences/v1";
+    const MAX_OCCURRENCES: usize = 4096;
+    let root = Scope::resolve(&scope.central_root, None)?;
+    let (reading, _, basis) = authority::recognised_source(&root, "civil-time-policy")?;
+    let policy: TimePolicy = serde_json::from_str(&reading.content)?;
+    if policy.schema != "central.civil-time-policy/v1"
+        || policy.scope_ref != root.world_ref
+        || policy.day_boundary_minutes >= 1440
+    {
+        return Err(invalid(
+            "invalid root civil-time policy; no harness-local fallback",
+        ));
+    }
+    let timezone: Tz = policy
+        .timezone
+        .parse()
+        .map_err(|_| invalid("civil-time policy requires an IANA timezone"))?;
+    let schedule = input
+        .get("schedule")
+        .ok_or_else(|| invalid("schedule required"))?;
+    if !schedule.is_object() {
+        return Err(invalid("schedule must be an object"));
+    }
+    let window_from = window_ms(input, "window_from_unix_ms")?;
+    let window_to = window_ms(input, "window_to_unix_ms")?;
+    if window_to < window_from {
+        return Err(invalid("window_to_unix_ms precedes window_from_unix_ms"));
+    }
+    validate_schedule(schedule)?;
+
+    let mut resolved = Vec::new();
+    let mut named = Vec::new();
+    match schedule["kind"].as_str().unwrap_or_default() {
+        "daily" => {
+            let (hour, minute) = parse_hh_mm(schedule["time"].as_str().unwrap_or_default())?;
+            let start = DateTime::<Utc>::from_timestamp_millis(window_from)
+                .ok_or_else(|| invalid("window_from_unix_ms outside the supported range"))?
+                .with_timezone(&timezone)
+                .date_naive();
+            let end = DateTime::<Utc>::from_timestamp_millis(window_to)
+                .ok_or_else(|| invalid("window_to_unix_ms outside the supported range"))?
+                .with_timezone(&timezone)
+                .date_naive();
+            let mut date = start;
+            while date <= end {
+                let naive = date
+                    .and_hms_opt(hour, minute, 0)
+                    .ok_or_else(|| invalid("daily time does not exist on this calendar"))?;
+                match timezone.from_local_datetime(&naive) {
+                    chrono::LocalResult::Single(local) => resolved.push(local.with_timezone(&Utc)),
+                    chrono::LocalResult::Ambiguous(earliest, latest) => {
+                        resolved.push(earliest.with_timezone(&Utc));
+                        resolved.push(latest.with_timezone(&Utc));
+                    }
+                    chrono::LocalResult::None => {
+                        // Spring-forward gap: the requested local time does not
+                        // exist. Policy rule: resolve forward by the transition
+                        // gap and say so, never silently skip or drop.
+                        let gap_seconds = transition_gap(&timezone, &naive)?;
+                        let shifted = naive + Duration::seconds(gap_seconds);
+                        let local = match timezone.from_local_datetime(&shifted) {
+                            chrono::LocalResult::Single(local) => local,
+                            _ => {
+                                return Err(invalid(
+                                    "spring-forward gap rule did not resolve to one instant",
+                                ))
+                            }
+                        };
+                        named.push(json!({
+                            "requested_local_time": naive.to_string(),
+                            "resolved_due_unix_ms": local.with_timezone(&Utc).timestamp_millis(),
+                            "rule": "spring-forward-nonexistent-local-time-resolved-forward-by-gap",
+                        }));
+                        resolved.push(local.with_timezone(&Utc));
+                    }
+                }
+                date += Duration::days(1);
+            }
+        }
+        "cron" => {
+            let expression = schedule["expression"].as_str().unwrap_or_default();
+            let matcher = CronExpression::parse(expression)?;
+            // Walk UTC minutes and match each instant's local wall time. A
+            // nonexistent local time in a spring-forward gap never occurs (no
+            // UTC instant maps into the gap); an autumn-fold local hour occurs
+            // twice and yields two distinct instants/refs.
+            let first_minute = ceil_div(window_from, 60_000) * 60_000;
+            let mut minute = first_minute;
+            while minute <= window_to {
+                let utc = DateTime::<Utc>::from_timestamp_millis(minute)
+                    .ok_or_else(|| invalid("window outside the supported range"))?;
+                let local = utc.with_timezone(&timezone).naive_local();
+                if matcher.matches(&local) {
+                    resolved.push(utc);
+                }
+                minute += 60_000;
+            }
+        }
+        "every" => {
+            let interval_ms = schedule["interval_ms"].as_u64().unwrap_or(0);
+            if interval_ms == 0 {
+                return Err(invalid("every interval_ms must be a positive integer"));
+            }
+            // Anchored at Unix-epoch multiples so overlapping windows agree on
+            // the same instants — a slid horizon never mints a second series.
+            let mut instant_ms = ceil_div(window_from, interval_ms as i64) * interval_ms as i64;
+            while instant_ms <= window_to {
+                resolved.push(
+                    DateTime::<Utc>::from_timestamp_millis(instant_ms)
+                        .ok_or_else(|| invalid("resolved instant outside the supported range"))?,
+                );
+                instant_ms += interval_ms as i64;
+            }
+        }
+        "once" => {
+            let instant_ms = if let Some(due) = schedule.get("due_unix_ms") {
+                due.as_i64()
+                    .ok_or_else(|| invalid("once due_unix_ms must be an integer"))?
+            } else {
+                let rfc3339 = schedule["rfc3339"].as_str().unwrap_or_default();
+                DateTime::parse_from_rfc3339(rfc3339)
+                    .map_err(|_| invalid("once rfc3339 is not an RFC 3339 timestamp"))?
+                    .with_timezone(&Utc)
+                    .timestamp_millis()
+            };
+            if instant_ms >= window_from && instant_ms <= window_to {
+                resolved.push(
+                    DateTime::<Utc>::from_timestamp_millis(instant_ms)
+                        .ok_or_else(|| invalid("resolved instant outside the supported range"))?,
+                );
+            }
+        }
+        _ => unreachable!("validate_schedule rejects unknown kinds"),
+    }
+
+    resolved.sort();
+    resolved.dedup();
+    // The window bounds the resolved instants themselves: a local calendar date
+    // that begins inside the horizon but resolves outside it is not an
+    // occurrence of this window.
+    resolved.retain(|instant| {
+        let due = instant.timestamp_millis();
+        due >= window_from && due <= window_to
+    });
+    if resolved.len() > MAX_OCCURRENCES {
+        return Err(invalid(format!(
+            "window resolves more than {MAX_OCCURRENCES} occurrences; narrow the window"
+        )));
+    }
+    let occurrences: Vec<Value> = resolved
+        .iter()
+        .map(|instant| {
+            let due_unix_ms = instant.timestamp_millis();
+            json!({
+                "occurrence_ref": occurrence_ref(schedule, due_unix_ms),
+                "due_unix_ms": due_unix_ms,
+            })
+        })
+        .collect();
+    let mut result = json!({
+        "schema": OCCURRENCES_SCHEMA,
+        "time_policy_ref": reading.source.source_ref,
+        "time_policy_revision": basis,
+        "timezone": policy.timezone,
+        "day_boundary_minutes": policy.day_boundary_minutes,
+        "occurrences": occurrences,
+    });
+    if !named.is_empty() {
+        result["named_resolutions"] = json!(named);
+    }
+    Ok(result)
+}
+
+fn window_ms(input: &Value, field: &str) -> io::Result<i64> {
+    input
+        .get(field)
+        .and_then(Value::as_i64)
+        .ok_or_else(|| invalid(format!("{field} must be an integer")))
+}
+
+fn ceil_div(value: i64, divisor: i64) -> i64 {
+    value.div_euclid(divisor) + i64::from(value.rem_euclid(divisor) != 0)
+}
+
+fn parse_hh_mm(raw: &str) -> io::Result<(u32, u32)> {
+    let (hour, minute) = raw
+        .split_once(':')
+        .ok_or_else(|| invalid("daily time must be HH:MM"))?;
+    let hour: u32 = hour
+        .parse()
+        .map_err(|_| invalid("daily hour must be an integer"))?;
+    let minute: u32 = minute
+        .parse()
+        .map_err(|_| invalid("daily minute must be an integer"))?;
+    if hour > 23 || minute > 59 {
+        return Err(invalid("daily time must be a valid HH:MM wall time"));
+    }
+    Ok((hour, minute))
+}
+
+fn validate_schedule(schedule: &Value) -> io::Result<()> {
+    let kind = schedule["kind"].as_str().unwrap_or_default();
+    match kind {
+        "daily" => {
+            parse_hh_mm(schedule["time"].as_str().unwrap_or_default())?;
+        }
+        "cron" => {
+            CronExpression::parse(schedule["expression"].as_str().unwrap_or_default())?;
+        }
+        "every" => {
+            let interval = schedule["interval_ms"].as_u64().unwrap_or(0);
+            if interval == 0 {
+                return Err(invalid("every interval_ms must be a positive integer"));
+            }
+        }
+        "once" => {
+            let due = schedule.get("due_unix_ms");
+            let rfc3339 = schedule.get("rfc3339");
+            match (due, rfc3339) {
+                (Some(value), None) => {
+                    if value.as_i64().is_none() {
+                        return Err(invalid("once due_unix_ms must be an integer"));
+                    }
+                }
+                (None, Some(value)) => {
+                    let raw = value.as_str().unwrap_or_default();
+                    DateTime::parse_from_rfc3339(raw)
+                        .map_err(|_| invalid("once rfc3339 is not an RFC 3339 timestamp"))?;
+                }
+                _ => {
+                    return Err(invalid(
+                        "once requires exactly one of due_unix_ms or rfc3339",
+                    ))
+                }
+            }
+        }
+        other => {
+            return Err(invalid(format!(
+                "schedule kind must be daily, cron, every or once, not `{other}`"
+            )))
+        }
+    }
+    Ok(())
+}
+
+/// Offset jump across the DST transition enclosing `naive`, in seconds.
+/// Probes both wall-clock sides; a real transition separates them.
+fn transition_gap(timezone: &Tz, naive: &chrono::NaiveDateTime) -> io::Result<i64> {
+    let before = *naive - Duration::hours(2);
+    let after = *naive + Duration::hours(2);
+    let before_offset = match timezone.from_local_datetime(&before) {
+        chrono::LocalResult::Single(local) => local.offset().fix().local_minus_utc(),
+        _ => return Err(invalid("cannot locate the spring-forward transition")),
+    };
+    let after_offset = match timezone.from_local_datetime(&after) {
+        chrono::LocalResult::Single(local) => local.offset().fix().local_minus_utc(),
+        _ => return Err(invalid("cannot locate the spring-forward transition")),
+    };
+    Ok((after_offset - before_offset) as i64)
+}
+
+/// Stable occurrence identity: a pure function of the schedule and the instant,
+/// never of the caller's window or the current policy revision — a slid horizon
+/// or a policy re-baseline must not mint a second identity for one occurrence.
+/// Two instants in a DST fold differ in `due_unix_ms` and therefore stay distinct.
+fn occurrence_ref(schedule: &Value, due_unix_ms: i64) -> String {
+    let canonical = serde_json::to_string(&json!({
+        "schema": "central.time-occurrence-ref/v1",
+        "schedule": schedule,
+        "due_unix_ms": due_unix_ms,
+    }))
+    .unwrap_or_default();
+    let digest = Sha256::digest(canonical.as_bytes());
+    format!("central:occurrence/{digest:x}")
+}
+
+/// One parsed 5-field cron expression over local wall time.
+struct CronExpression {
+    minute: CronField,
+    hour: CronField,
+    day_of_month: CronField,
+    month: CronField,
+    day_of_week: CronField,
+}
+
+impl CronExpression {
+    fn parse(raw: &str) -> io::Result<Self> {
+        let fields: Vec<&str> = raw.split_whitespace().collect();
+        if fields.len() != 5 {
+            return Err(invalid(
+                "cron expression must have exactly 5 fields: minute hour day-of-month month day-of-week",
+            ));
+        }
+        Ok(Self {
+            minute: CronField::parse(fields[0], 0, 59, false)?,
+            hour: CronField::parse(fields[1], 0, 23, false)?,
+            day_of_month: CronField::parse(fields[2], 1, 31, false)?,
+            month: CronField::parse(fields[3], 1, 12, false)?,
+            day_of_week: CronField::parse(fields[4], 0, 7, true)?,
+        })
+    }
+
+    fn matches(&self, local: &chrono::NaiveDateTime) -> bool {
+        let month = local.month();
+        let day_of_month = local.day();
+        let day_of_week = local.weekday().num_days_from_sunday();
+        let day_matches = match (
+            self.day_of_month == CronField::Any,
+            self.day_of_week == CronField::Any,
+        ) {
+            // Vixie semantics: when both day fields are restricted, either may
+            // fire; when one is `*`, only the restricted one speaks.
+            (false, false) => {
+                self.day_of_month.contains(day_of_month) || self.day_of_week.contains(day_of_week)
+            }
+            (false, true) => self.day_of_month.contains(day_of_month),
+            (true, false) => self.day_of_week.contains(day_of_week),
+            (true, true) => true,
+        };
+        self.minute.contains(local.minute())
+            && self.hour.contains(local.hour())
+            && self.month.contains(month)
+            && day_matches
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CronField {
+    Any,
+    Set(u128),
+}
+
+impl CronField {
+    fn parse(raw: &str, min: u32, max: u32, wrap_sunday: bool) -> io::Result<Self> {
+        let mut set: u128 = 0;
+        for part in raw.split(',') {
+            let (range, step) = match part.split_once('/') {
+                Some((range, step)) => (range, step),
+                None => (part, ""),
+            };
+            let step: u32 = match step {
+                "" => 1,
+                _ => step
+                    .parse()
+                    .map_err(|_| invalid(format!("cron step `{step}` is not an integer")))?,
+            };
+            if step == 0 {
+                return Err(invalid("cron step must be positive"));
+            }
+            let (low, high) = if range == "*" {
+                (min, max)
+            } else if let Some((start, end)) = range.split_once('-') {
+                let start: u32 = start
+                    .parse()
+                    .map_err(|_| invalid(format!("cron value `{start}` is not an integer")))?;
+                let end: u32 = end
+                    .parse()
+                    .map_err(|_| invalid(format!("cron value `{end}` is not an integer")))?;
+                (start, end)
+            } else {
+                let value: u32 = range
+                    .parse()
+                    .map_err(|_| invalid(format!("cron value `{range}` is not an integer")))?;
+                (value, value)
+            };
+            if low < min || high > max || low > high {
+                return Err(invalid(format!(
+                    "cron range {low}-{high} is outside {min}-{max}"
+                )));
+            }
+            let mut value = low;
+            while value <= high {
+                set |= 1u128 << value;
+                value += step;
+            }
+        }
+        if set == 0 {
+            return Err(invalid("cron field selects no values"));
+        }
+        // 0 and 7 both name Sunday; fold 7 onto 0 after range expansion.
+        if wrap_sunday && set & (1u128 << 7) != 0 {
+            set = (set & !(1u128 << 7)) | 1;
+        }
+        // A field that selects every value in range is the `*` case for the
+        // day-field semantics.
+        let full: u128 = (min..=max)
+            .map(|value| 1u128 << value)
+            .fold(0, |a, b| a | b);
+        if set == full {
+            Ok(CronField::Any)
+        } else {
+            Ok(CronField::Set(set))
+        }
+    }
+
+    fn contains(&self, value: u32) -> bool {
+        match self {
+            CronField::Any => true,
+            CronField::Set(set) => set & (1u128 << value) != 0,
+        }
+    }
+}
+
 pub(crate) fn save_relations(scope: &Scope, relations: &Value, basis: &str) -> io::Result<()> {
     let content = encoded(relations)?;
     if basis == "absent" {
