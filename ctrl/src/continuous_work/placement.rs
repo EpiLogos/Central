@@ -131,6 +131,146 @@ fn absolute(scope: &Scope, raw: &str) -> io::Result<PathBuf> {
     }
     Ok(scope.root.join(relative_member(raw)?))
 }
+
+fn git_pointer(path: &Path, prefix: &str) -> io::Result<PathBuf> {
+    if !fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file()) {
+        return Err(denied("worktree has an invalid native Git registration"));
+    }
+    let raw = fs::read_to_string(path)
+        .map_err(|_| denied("worktree is missing its native Git registration"))?;
+    let value = raw
+        .strip_prefix(prefix)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && !value.contains(['\n', '\r']))
+        .ok_or_else(|| denied("worktree has an invalid native Git registration"))?;
+    let value = Path::new(value);
+    Ok(if value.is_absolute() {
+        value.to_path_buf()
+    } else {
+        path.parent()
+            .ok_or_else(|| denied("worktree Git registration has no parent"))?
+            .join(value)
+    })
+}
+
+fn canonical_registration_path(root: &Path, path: &Path) -> io::Result<PathBuf> {
+    let root = fs::canonicalize(root)
+        .map_err(|_| denied("Central root is unavailable for worktree registration"))?;
+    // macOS may spell the same filesystem root as /tmp and /private/tmp. Find
+    // the outermost raw ancestor that is the Central root by filesystem
+    // identity, then inspect every component below it without following links.
+    let raw_root = path
+        .ancestors()
+        .filter(|ancestor| fs::canonicalize(ancestor).is_ok_and(|value| value == root))
+        .last()
+        .ok_or_else(|| denied("worktree Git registration leaves Central"))?;
+    let relative = path
+        .strip_prefix(raw_root)
+        .map_err(|_| denied("worktree Git registration leaves Central"))?;
+    let mut normal = root.clone();
+    for component in relative.components() {
+        match component {
+            std::path::Component::Normal(component) => {
+                normal.push(component);
+                if fs::symlink_metadata(&normal)
+                    .is_ok_and(|metadata| metadata.file_type().is_symlink())
+                {
+                    return Err(denied("worktree Git registration contains a symlink"));
+                }
+            }
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir if normal != root => {
+                normal.pop();
+            }
+            _ => return Err(denied("worktree Git registration leaves Central")),
+        }
+    }
+    let raw =
+        fs::canonicalize(path).map_err(|_| denied("worktree Git registration is unavailable"))?;
+    let normal =
+        fs::canonicalize(normal).map_err(|_| denied("worktree Git registration is unavailable"))?;
+    if raw != normal {
+        return Err(denied(
+            "worktree Git registration has ambiguous path traversal",
+        ));
+    }
+    Ok(normal)
+}
+
+/// A root policy may explicitly grant one checkout under Central/worktrees,
+/// but only when Git's two-way administrative registration proves that it is a
+/// worktree of an ordinary Work repository already granted by the same policy.
+fn validate_registered_worktree(
+    scope: &Scope,
+    policy: &PlacementPolicy,
+    path: &Path,
+) -> io::Result<PathBuf> {
+    if !path.is_dir() {
+        return Err(denied("worktree grant must name an existing checkout"));
+    }
+    let marker = path.join(".git");
+    if !marker.is_file() {
+        return Err(denied(
+            "worktree grant requires a registered linked Git checkout",
+        ));
+    }
+    let admin =
+        canonical_registration_path(&scope.central_root, &git_pointer(&marker, "gitdir: ")?)?;
+    if !admin.is_dir() {
+        return Err(denied("worktree Git administration is unavailable"));
+    }
+    let common = canonical_registration_path(
+        &scope.central_root,
+        &git_pointer(&admin.join("commondir"), "")?,
+    )?;
+    if !common.is_dir() {
+        return Err(denied("worktree common Git directory is unavailable"));
+    }
+    let registered_marker = canonical_registration_path(
+        &scope.central_root,
+        &git_pointer(&admin.join("gitdir"), "")?,
+    )?;
+    let marker = canonical_registration_path(&scope.central_root, &marker)?;
+    if registered_marker != marker || admin.parent() != Some(common.join("worktrees").as_path()) {
+        return Err(denied(
+            "worktree Git registration does not match this checkout",
+        ));
+    }
+
+    let mut authorised_repository = false;
+    for grant in &policy.writable {
+        if grant.class != "repository" {
+            continue;
+        }
+        let repository = absolute(scope, &grant.path)?;
+        let relative = repository
+            .strip_prefix(&scope.central_root)
+            .map_err(|_| denied("repository grant outside Central"))?;
+        if relative
+            .components()
+            .next()
+            .and_then(|part| part.as_os_str().to_str())
+            != Some("Work")
+        {
+            continue;
+        }
+        let Ok(repository_git) =
+            canonical_registration_path(&scope.central_root, &repository.join(".git"))
+        else {
+            continue;
+        };
+        if repository_git == common {
+            authorised_repository = true;
+            break;
+        }
+    }
+    if !authorised_repository {
+        return Err(denied(
+            "worktree common Git directory is not an authorised Work repository",
+        ));
+    }
+    Ok(common)
+}
 fn recognised(source: &SourceBinding) -> bool {
     matches!(
         source.provenance.as_str(),
@@ -245,7 +385,12 @@ fn destinations(scope: &Scope, policy: &PlacementPolicy) -> io::Result<Vec<Writa
         }
         if scope.project.is_none() {
             let parts: Vec<_> = relative.components().collect();
-            if parts.len() < 2 || parts[0].as_os_str() != "Work" {
+            let registered_worktree = parts.len() >= 3
+                && parts[0].as_os_str() == "worktrees"
+                && grant.class == "worktree";
+            if registered_worktree {
+                validate_registered_worktree(scope, policy, &path)?;
+            } else if parts.len() < 2 || parts[0].as_os_str() != "Work" {
                 return Err(denied("root engineering grant must name a Work member, not Central/Work structural scratch"));
             }
             if parts.len() == 2 && path.is_file() && grant.class != "declared-exception" {
@@ -271,6 +416,27 @@ fn protection(scope: &Scope, policy: &PlacementPolicy) -> io::Result<Vec<PathBuf
         scope.root.join(&scope.prefix).join("user"),
         scope.root.join(&scope.relations_path),
     ];
+    if scope.project.is_none() {
+        for grant in &policy.writable {
+            if grant.class != "worktree" {
+                continue;
+            }
+            let worktree = absolute(scope, &grant.path)?;
+            let relative = worktree
+                .strip_prefix(&scope.central_root)
+                .map_err(|_| denied("worktree grant outside Central"))?;
+            let parts = relative.components().collect::<Vec<_>>();
+            if parts.len() >= 3 && parts[0].as_os_str() == "worktrees" {
+                let common = validate_registered_worktree(scope, policy, &worktree)?;
+                paths.extend([
+                    worktree.join(".git"),
+                    worktree.join(".central"),
+                    worktree.join("ProjectCentral"),
+                    common,
+                ]);
+            }
+        }
+    }
     paths.extend(explicit_protection(scope, policy)?);
     Ok(paths)
 }

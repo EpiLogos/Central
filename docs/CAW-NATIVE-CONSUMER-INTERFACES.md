@@ -20,6 +20,19 @@ Success is the ordinary ActionResult envelope, `{"ok":true,"status":"success","a
 
 Recognised source law is selected through the existing root/Project source relations and the `work-placement-policy` role. No recognized root policy is an explicit refusal, not a permissive default. A Project-local policy pins its root policy SourceRef/content revision and can narrow, not widen, root grants. Do not manufacture Recognition or adopt private governance while integrating a consumer.
 
+A root policy can also explicitly grant an existing linked checkout under
+`worktrees/<slot>/<checkout>` with class `worktree`. Its primary repository must
+already have a `repository` grant under `Work`. Central checks Git's checkout
+marker, administrative directory, common directory and backlink together; a
+directory name or copied marker does not establish registration. Symlinked
+registration components are refused, including a symlink followed by `..`.
+Ordinary Git `commondir` parent traversal remains supported. The grant covers
+only the selected checkout, not its siblings. Its `.git`, `.central` and
+`ProjectCentral` paths and the primary repository's common Git directory remain
+protected. This allows an assigned development checkout without granting shared
+Git administration or authored Project ground to the executing agent. Policy
+changes still require a fresh effective revision at dispatch.
+
 Pass the returned effective revision unchanged:
 
 ```json
@@ -101,6 +114,7 @@ Mutations requiring authenticated authorship use a recognized root `native-actio
 ```sh
 python3 scripts/prove-continuous-work.py --ctrl /path/to/built/ctrl
 cargo test -p ctrl --test continuous_work_native
+cargo test -p ctrl --test continuous_work_registered_worktree
 cargo test -p ctrl continuous_work::tests
 ```
 
