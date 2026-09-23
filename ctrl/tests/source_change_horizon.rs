@@ -333,3 +333,75 @@ fn action_surface_reconciles_implicitly_and_contains_no_model_operation() {
     assert_eq!(data["changes"].as_array().unwrap().len(), 1);
     assert_eq!(data["automatic_agent_or_model_invocation"], false);
 }
+
+fn rewrite_horizon_world(project: &Path, world_ref: &str) {
+    let path = project.join(PROJECT_HORIZON_STATE);
+    let mut state: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    state["world_ref"] = json!(world_ref);
+    fs::write(&path, serde_json::to_vec_pretty(&state).unwrap()).unwrap();
+}
+
+fn horizon_world(project: &Path) -> String {
+    let state: Value =
+        serde_json::from_slice(&fs::read(project.join(PROJECT_HORIZON_STATE)).unwrap()).unwrap();
+    state["world_ref"].as_str().unwrap().to_owned()
+}
+
+#[test]
+fn a_horizon_under_the_legacy_project_identity_follows_the_renamed_world() {
+    let (_temp, _central, project) = project_fixture("Renamed-World");
+    let source = project.join("ProjectCentral/user/intent.md");
+    fs::write(&source, "alpha\n").unwrap();
+    reconcile_project_sources(&project).unwrap();
+    fs::write(&source, "beta\n").unwrap();
+    reconcile_project_sources(&project).unwrap();
+    acknowledge_project_cursor(&project, "aikit", 1).unwrap();
+    let manifest: Value =
+        serde_json::from_slice(&fs::read(project.join("ProjectCentral/project.json")).unwrap())
+            .unwrap();
+    let project_id = manifest["project_id"].as_str().unwrap().to_owned();
+    let current = horizon_world(&project);
+    assert_eq!(current, format!("project:{project_id}"));
+
+    // The pre-2026-09-14 grammar stored `project:project:<id lowercased>`.
+    rewrite_horizon_world(
+        &project,
+        &format!("project:project:{}", project_id.to_lowercase()),
+    );
+    fs::write(&source, "gamma\n").unwrap();
+    let report = reconcile_project_sources(&project).unwrap();
+    assert!(
+        !report.initialized,
+        "the legacy horizon is continued, not refounded"
+    );
+    assert_eq!(report.new_changes.len(), 1);
+    assert_eq!(
+        report.horizon.cursor, 2,
+        "cursor history survives the re-key"
+    );
+    assert_eq!(report.horizon.consumer_cursors.get("aikit"), Some(&1));
+    assert_eq!(horizon_world(&project), current);
+}
+
+#[test]
+fn a_horizon_for_another_world_is_refused_with_its_next_step() {
+    let (_temp, _central, project) = project_fixture("Other-World");
+    reconcile_project_sources(&project).unwrap();
+    rewrite_horizon_world(&project, "project:someone-else");
+    let error = reconcile_project_sources(&project).unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("project:someone-else"), "{message}");
+    assert!(
+        message.contains("Nothing was reconciled or written"),
+        "{message}"
+    );
+    assert!(
+        message.contains("projectcentral.change.horizon"),
+        "{message}"
+    );
+    assert_eq!(
+        horizon_world(&project),
+        "project:someone-else",
+        "nothing was written"
+    );
+}
