@@ -781,7 +781,7 @@ pub(crate) fn scan_now(scope: &Scope) -> io::Result<Vec<(NowRecord, source::Sour
         .into_iter()
         .filter(|b| b.roles.iter().any(|r| r == "now-clearing"))
     {
-        let source = scope.read(&binding.source_ref)?;
+        let source = scope.read_bound(binding.clone())?;
         let record: NowRecord = serde_json::from_str(&source.content).map_err(|error| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
