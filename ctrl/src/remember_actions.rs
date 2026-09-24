@@ -521,13 +521,13 @@ mod tests {
     }
 
     fn context<'a>(
-        root: &'a PathBuf,
+        root: &'a Path,
         options: &'a mut Option<RootOptions>,
         connectors: &'a mut Option<ConnectorRegistry>,
         connector_context: &'a mut Option<ConnectorContext>,
     ) -> ActionExecutionContext<'a> {
         *options = Some(RootOptions {
-            explicit_root: Some(root.clone()),
+            explicit_root: Some(root.to_path_buf()),
             configured_root: None,
             home: None,
         });

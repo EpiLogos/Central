@@ -5,7 +5,7 @@ use central_ctrl::{
 };
 use serde_json::json;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temporary_directory(label: &str) -> PathBuf {
@@ -21,7 +21,7 @@ fn temporary_directory(label: &str) -> PathBuf {
     path
 }
 
-fn write_role(root: &PathBuf, role: &str, declaration: serde_json::Value) {
+fn write_role(root: &Path, role: &str, declaration: serde_json::Value) {
     fs::write(
         root.join("Control/machines").join(format!("{role}.json")),
         serde_json::to_string_pretty(&declaration).unwrap(),
@@ -29,14 +29,14 @@ fn write_role(root: &PathBuf, role: &str, declaration: serde_json::Value) {
     .unwrap();
 }
 
-fn execute(root: &PathBuf, role: &str) -> central_ctrl::ActionResult {
+fn execute(root: &Path, role: &str) -> central_ctrl::ActionResult {
     let registry = create_core_action_registry();
     let connectors = ConnectorRegistry::default();
     let connector_context = ConnectorContext {
         platform: "test".to_owned(),
     };
     let root_options = RootOptions {
-        explicit_root: Some(root.clone()),
+        explicit_root: Some(root.to_path_buf()),
         ..RootOptions::default()
     };
     let context = ActionExecutionContext {

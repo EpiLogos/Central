@@ -2,7 +2,7 @@ use central_ctrl::CliEnvironment;
 use serde_json::{json, Value};
 use std::fs;
 use std::net::{Ipv4Addr, TcpListener};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -20,7 +20,7 @@ fn temporary_root() -> PathBuf {
     ))
 }
 
-fn run(root: &PathBuf, action: &str, input: Value) -> central_ctrl::CliExecution {
+fn run(root: &Path, action: &str, input: Value) -> central_ctrl::CliExecution {
     central_ctrl::run_cli(
         &[
             "--json".to_owned(),
@@ -35,7 +35,7 @@ fn run(root: &PathBuf, action: &str, input: Value) -> central_ctrl::CliExecution
     )
 }
 
-fn init(root: &PathBuf) {
+fn init(root: &Path) {
     let root_init = central_ctrl::run_cli(
         &[
             "--json".to_owned(),

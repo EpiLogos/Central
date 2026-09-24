@@ -319,14 +319,13 @@ impl RelationRecordStore {
     pub fn load_typed<T: serde::de::DeserializeOwned>(
         &self,
     ) -> Result<Vec<T>, RelationRecordStoreError> {
-        Ok(self
-            .list()?
+        self.list()?
             .into_iter()
             .map(|reading| {
                 serde_json::from_value(reading.record)
                     .map_err(|error| RelationRecordStoreError::InvalidRecord(error.to_string()))
             })
-            .collect::<Result<Vec<_>, _>>()?)
+            .collect::<Result<Vec<_>, _>>()
     }
 
     fn validate_typed(&self, record: &serde_json::Value) -> Result<(), RelationRecordStoreError> {
@@ -775,7 +774,7 @@ mod tests {
 
         let root_store = RelationRecordStore::agent_sets_at_root(root.clone());
         let project_store = RelationRecordStore::agent_sets_in_project(project.clone());
-        assert!(!project_store.is_project_scope() == false);
+        assert!(project_store.is_project_scope());
         assert!(!root_store.is_project_scope());
 
         root_store

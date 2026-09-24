@@ -33,16 +33,14 @@ fn run(root: &Path, action: &str, input: &[u8]) -> (bool, Value) {
     (output.status.success(), value)
 }
 fn ground() -> Ground {
-    let root = Ground(
-        std::env::temp_dir().join(format!(
+    let root = Ground(std::env::temp_dir().join(format!(
             "central-stdin-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
-        )),
-    );
+        )));
     central_ctrl::initialize_central(&root.0).unwrap();
     root
 }

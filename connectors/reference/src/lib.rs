@@ -305,11 +305,12 @@ impl InMemoryMachineConnector {
             .lock()
             .expect("reference machine state lock poisoned");
         let current = state.services.iter().find(|item| item.id == input.id);
-        input.running.map_or(false, |value| {
-            current.map_or(value, |item| item.running != value)
-        }) || input.enabled.map_or(false, |value| {
-            current.map_or(value, |item| item.enabled != value)
-        })
+        input
+            .running
+            .is_some_and(|value| current.map_or(value, |item| item.running != value))
+            || input
+                .enabled
+                .is_some_and(|value| current.map_or(value, |item| item.enabled != value))
     }
 }
 

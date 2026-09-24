@@ -8,7 +8,7 @@ use central_ctrl::{
 };
 use serde_json::json;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -25,7 +25,7 @@ fn temporary_directory(label: &str) -> PathBuf {
     path
 }
 
-fn write_role(root: &PathBuf) {
+fn write_role(root: &Path) {
     let declaration = json!({
         "schema": "central.machine",
         "version": 1,
@@ -173,7 +173,7 @@ impl Connector for SourceAwareConfigurationConnector {
 }
 
 fn execute(
-    root: &PathBuf,
+    root: &Path,
     connectors: &ConnectorRegistry,
     action: &str,
 ) -> central_ctrl::ActionResult {
@@ -181,7 +181,7 @@ fn execute(
         platform: "test".to_owned(),
     };
     let root_options = RootOptions {
-        explicit_root: Some(root.clone()),
+        explicit_root: Some(root.to_path_buf()),
         ..RootOptions::default()
     };
     let context = ActionExecutionContext {

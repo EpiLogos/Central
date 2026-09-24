@@ -116,7 +116,7 @@ impl CentralPathRef {
                 "Central location must contain only relative path components",
             ));
         }
-        reject_symlink_components(&root, &relative)?;
+        reject_symlink_components(&root, relative)?;
         let path = root.join(relative);
         if path.canonicalize()? != path {
             return Err(io::Error::new(

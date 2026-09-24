@@ -1,13 +1,13 @@
 #[cfg(unix)]
 mod unix_tests {
     use central_connector_sdk::{ConnectorContext, ConnectorRegistry};
-    use central_reference_connectors::FilesystemWorkConnector;
-    use central_shortcuts_connector::ShortcutsAutomationConnector;
     use central_ctrl::{
         create_core_action_registry, initialize_central, run_cli_with_runtime, CliEnvironment,
         NullTerminalSurface,
     };
     use central_macos_host::{create_macos_action_registry, run_macos_cli_with_runtime};
+    use central_reference_connectors::FilesystemWorkConnector;
+    use central_shortcuts_connector::ShortcutsAutomationConnector;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
@@ -59,13 +59,33 @@ mod unix_tests {
         assert_eq!(core.list().len(), 37);
         assert!(core.get("central.files.resolve").is_some());
         assert!(core.get("automation.run").is_none());
-        assert!(core.get("central.files.create").is_some(), "Core lost the native first-save Action");
+        assert!(
+            core.get("central.files.create").is_some(),
+            "Core lost the native first-save Action"
+        );
         assert!(core.get("central.files.list").is_some());
-        assert_eq!(core.get("central.recognize").unwrap().mutation_class.as_str(),"read-only");
+        assert_eq!(
+            core.get("central.recognize")
+                .unwrap()
+                .mutation_class
+                .as_str(),
+            "read-only"
+        );
         assert!(core.get("central.files.read").is_some());
-        assert!(core.get("central.wiki.read").is_some(), "Core lost wiki-reading Action");
-        for id in ["central.files.write","central.files.history","central.files.recovery_preview","central.files.restore"] {
-            assert!(core.get(id).is_some(), "Core lost ordinary-file Action {id}");
+        assert!(
+            core.get("central.wiki.read").is_some(),
+            "Core lost wiki-reading Action"
+        );
+        for id in [
+            "central.files.write",
+            "central.files.history",
+            "central.files.recovery_preview",
+            "central.files.restore",
+        ] {
+            assert!(
+                core.get(id).is_some(),
+                "Core lost ordinary-file Action {id}"
+            );
         }
 
         let runtime = central_ctrl::cli::create_runtime_action_registry();

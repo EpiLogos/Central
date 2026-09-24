@@ -15,7 +15,10 @@ fn raycast_surface_is_descriptor_driven_and_does_not_reimplement_work_actions() 
         "actionHotkeys",
         "shortcut=",
     ] {
-        assert!(RAYCAST_SOURCE.contains(required), "Raycast Surface is missing {required}");
+        assert!(
+            RAYCAST_SOURCE.contains(required),
+            "Raycast Surface is missing {required}"
+        );
     }
 
     assert!(!RAYCAST_SOURCE.contains("\"work.open\""));

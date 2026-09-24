@@ -844,7 +844,7 @@ mod tests {
         .unwrap();
         profile.computer_access_intent_refs = vec![access.intent_ref.clone()];
         profile
-            .validate_computer_access_intents(&[access.clone()])
+            .validate_computer_access_intents(std::slice::from_ref(&access))
             .unwrap();
 
         let mut wrong = access;

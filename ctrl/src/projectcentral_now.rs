@@ -496,14 +496,6 @@ fn unix_seconds() -> u64 {
         .as_secs()
 }
 
-fn unique_id(prefix: &str) -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!("{prefix}-{nanos}")
-}
-
 /// Default handoff id per the naming law: slug of the subject + local civil
 /// date, counter-disambiguated against ids already present in the field.
 fn default_handoff_id(agents_dir: &Path, subject: &str, kind: &str) -> String {
@@ -1025,6 +1017,10 @@ fn snapshot_ref(project_root: &Path, snapshot_root: &Path, class: &str, suffix: 
     relative(project_root, &snapshot_root.join(class).join(suffix))
 }
 
+// Renders the dated close reading from the fully classified day: each list is a
+// distinct source (scratch, handoffs, carried/removed/protected, promotions,
+// streams) passed positionally rather than bundled into a throwaway struct.
+#[allow(clippy::too_many_arguments)]
 fn render_day(
     project_root: &Path,
     snapshot_root: &Path,
@@ -2131,7 +2127,7 @@ mod tests {
 #[cfg(test)]
 mod attribution_tests {
     use super::*;
-    use crate::action::{create_core_action_registry, ActionExecutionContext, ActionRegistry};
+    use crate::action::{create_core_action_registry, ActionExecutionContext};
     use crate::projectcentral_ops::initialize_projectcentral;
     use crate::tempdir;
     use central_connector_sdk::{ConnectorContext, ConnectorRegistry};

@@ -38,7 +38,8 @@ impl ShortcutsAutomationConnector {
                     version: AUTOMATION_PORT.version.to_owned(),
                 }],
                 platforms: vec!["macos".to_owned()],
-                entrypoint: "rust:central-shortcuts-connector::ShortcutsAutomationConnector".to_owned(),
+                entrypoint: "rust:central-shortcuts-connector::ShortcutsAutomationConnector"
+                    .to_owned(),
                 runtime_requirements: vec!["macOS".to_owned()],
                 dependency_probes: vec!["/usr/bin/shortcuts".to_owned()],
                 configuration_requirements: Vec::new(),
@@ -102,10 +103,10 @@ impl Automation for ShortcutsAutomationConnector {
             } else {
                 format!("exit status: {}; stderr: {stderr}", output.status)
             };
-            return Err(
-                PortError::provider(format!("Shortcut '{automation}' did not complete successfully."))
-                    .with_provider_detail(detail),
-            );
+            return Err(PortError::provider(format!(
+                "Shortcut '{automation}' did not complete successfully."
+            ))
+            .with_provider_detail(detail));
         }
 
         Ok(AutomationRunOutput {

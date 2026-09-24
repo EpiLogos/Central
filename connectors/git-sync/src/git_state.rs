@@ -475,7 +475,7 @@ mod tests {
 
         assert!(result.unmerged_tips.contains(&"lane/one".to_owned()));
         assert_eq!(
-            result.dirty_paths.as_ref().map(|paths| paths.as_slice()),
+            result.dirty_paths.as_deref(),
             Some(&["dirty.txt".to_owned()][..])
         );
         let _ = fs::remove_dir_all(root);

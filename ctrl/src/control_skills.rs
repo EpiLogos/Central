@@ -862,16 +862,10 @@ fn skill_target(
             )
         })
     });
-    let scope = match scope {
-        Ok(value) => value,
-        Err(result) => return Err(result),
-    };
+    let scope = scope?;
     let machine = optional(input, "machine");
     let project = optional(input, "project");
-    let name = match required(input, "name", action) {
-        Ok(value) => value,
-        Err(result) => return Err(result),
-    };
+    let name = required(input, "name", action)?;
     Ok((scope, machine, project, name))
 }
 
