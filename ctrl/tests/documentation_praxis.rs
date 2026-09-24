@@ -210,13 +210,14 @@ fn string_value(value: &str) -> String {
 }
 
 /// Reads the fixed registry index shape (`schema`, `[[skillset]]`,
-/// `[skillset.package]`). ctrl carries no TOML dependency; AIKit owns the
+/// `[skillset.package]`, `[skillset.package.author]`). ctrl carries no TOML dependency; AIKit owns the
 /// authoritative parser.
 fn registry_index() -> (u32, Vec<Entry>) {
     let text = read("skillsets/index.toml");
     let mut schema = 0;
     let mut entries: Vec<Entry> = Vec::new();
     let mut in_package = false;
+    let mut package_prefix = "";
     for line in text.lines().map(str::trim) {
         if line.is_empty() || line.starts_with('#') {
             continue;
@@ -224,10 +225,17 @@ fn registry_index() -> (u32, Vec<Entry>) {
         if line == "[[skillset]]" {
             entries.push(Entry::default());
             in_package = false;
+            package_prefix = "";
             continue;
         }
         if line == "[skillset.package]" {
             in_package = true;
+            package_prefix = "";
+            continue;
+        }
+        if line == "[skillset.package.author]" {
+            in_package = true;
+            package_prefix = "author.";
             continue;
         }
         assert!(!line.starts_with('['), "unexpected table {line}");
@@ -239,7 +247,9 @@ fn registry_index() -> (u32, Vec<Entry>) {
                 schema = value.trim().parse().unwrap();
             }
             (Some(entry), true) => {
-                entry.package.insert(key.to_string(), string_value(value));
+                entry
+                    .package
+                    .insert(format!("{package_prefix}{key}"), string_value(value));
             }
             (Some(entry), false) => match key {
                 "semantic_ref" => entry.semantic_ref = string_value(value),
@@ -343,4 +353,9 @@ fn registry_skillsets_resolve_without_duplication() {
         documentation.package.get("version").map(String::as_str),
         Some("0.1.0")
     );
+    // Claude Code's strict plugin validation requires an author.
+    assert!(documentation
+        .package
+        .get("author.name")
+        .is_some_and(|name| !name.is_empty()));
 }
