@@ -2,9 +2,9 @@
 mod unix_tests {
     use central_chezmoi_connector::ChezmoiConnector;
     use central_connector_sdk::{
-        run_configuration_manager_conformance, ConfigurationManager, ConfigurationManagerConformanceFixture,
-        ConfigurationStateRequest, Connector, ConnectorContext, ReconciliationSourceReference,
-        CONFIGURATION_MANAGER_PORT,
+        run_configuration_manager_conformance, ConfigurationManager,
+        ConfigurationManagerConformanceFixture, ConfigurationStateRequest, Connector,
+        ConnectorContext, ReconciliationSourceReference, CONFIGURATION_MANAGER_PORT,
     };
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
@@ -140,12 +140,13 @@ exit 64
             },
         );
         assert!(!off_platform.available);
-        assert!(off_platform.reason.unwrap().contains("does not support platform"));
+        assert!(off_platform
+            .reason
+            .unwrap()
+            .contains("does not support platform"));
 
-        let missing = ChezmoiConnector::with_paths(
-            PathBuf::from("/definitely/missing/chezmoi"),
-            destination,
-        );
+        let missing =
+            ChezmoiConnector::with_paths(PathBuf::from("/definitely/missing/chezmoi"), destination);
         let missing_probe = missing.probe(
             &CONFIGURATION_MANAGER_PORT,
             &ConnectorContext {

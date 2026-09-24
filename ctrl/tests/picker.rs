@@ -9,7 +9,7 @@ use serde_json::json;
 use std::collections::VecDeque;
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -112,13 +112,13 @@ impl Connector for PickerNativeConnector {
 }
 
 fn context<'a>(
-    root: &'a PathBuf,
+    root: &'a Path,
     connectors: &'a ConnectorRegistry,
     connector_context: &'a ConnectorContext,
     options: &'a mut RootOptions,
 ) -> ActionExecutionContext<'a> {
     *options = RootOptions {
-        explicit_root: Some(root.clone()),
+        explicit_root: Some(root.to_path_buf()),
         ..RootOptions::default()
     };
     ActionExecutionContext {

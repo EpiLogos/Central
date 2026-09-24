@@ -299,6 +299,10 @@ pub(crate) fn collect_files(
     Ok(())
 }
 
+// Collects a subtree's source bindings under one provenance/standing/treatment;
+// the descriptor fields are passed positionally into the shared accumulator
+// rather than bundled into a struct that exists only for this call.
+#[allow(clippy::too_many_arguments)]
 fn insert_tree_bindings(
     world_root: &Path,
     scan_root: &Path,

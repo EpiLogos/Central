@@ -1,6 +1,6 @@
 use central_connector_sdk::{
     run_machine_inspector_conformance, Connector, ConnectorContext, ConnectorRegistry,
-    MachineInspector, MachineInspectorConformanceFixture, MachineInspectionInput,
+    MachineInspectionInput, MachineInspector, MachineInspectorConformanceFixture,
     MACHINE_INSPECTOR_PORT, TAG_STORE_PORT,
 };
 use central_harness_connector::{HarnessCapabilityConnector, CONNECTOR_ID};
@@ -43,7 +43,12 @@ enum StubScript {
 /// A fixture Actuation CLI: a shell stub that serves canned read-model
 /// documents. `$2` is the subcommand because the connector invokes
 /// `<stub> harness detect --json` / `<stub> harness capability --json`.
-fn stub_actuation(dir: &Path, detect_document: &str, capability_document: &str, script: StubScript) -> PathBuf {
+fn stub_actuation(
+    dir: &Path,
+    detect_document: &str,
+    capability_document: &str,
+    script: StubScript,
+) -> PathBuf {
     let detect = dir.join("detect.json");
     fs::write(&detect, detect_document).unwrap();
     let capability = dir.join("capability.json");
@@ -155,12 +160,13 @@ fn probe_is_eligible_when_a_source_exists_and_unavailable_when_neither_does() {
         Some(root.join("stub-actuation")),
         root.join("missing-registry.json"),
     );
-    assert!(actuation_only
-        .probe(&MACHINE_INSPECTOR_PORT, &context)
-        .available);
+    assert!(
+        actuation_only
+            .probe(&MACHINE_INSPECTOR_PORT, &context)
+            .available
+    );
 
-    let absent =
-        HarnessCapabilityConnector::with_sources(None, root.join("missing-registry.json"));
+    let absent = HarnessCapabilityConnector::with_sources(None, root.join("missing-registry.json"));
     let probe = absent.probe(&MACHINE_INSPECTOR_PORT, &context);
     assert!(!probe.available);
     let reason = probe.reason.unwrap();
@@ -183,7 +189,9 @@ fn inspect_reports_detected_harness_capabilities_with_sources() {
     );
     let registry = write_registry(&root, &registry_with_instances());
     let connector = HarnessCapabilityConnector::with_sources(Some(actuation), registry);
-    let observation = connector.inspect(&MachineInspectionInput::default()).unwrap();
+    let observation = connector
+        .inspect(&MachineInspectionInput::default())
+        .unwrap();
     assert_eq!(observation.platform, std::env::consts::OS);
     assert_eq!(observation.architecture, std::env::consts::ARCH);
     assert!(observation.packages.is_empty());
@@ -207,7 +215,9 @@ fn absent_sources_are_disclosed_and_inspection_stays_clean() {
     let root = temporary_directory("absent");
     let connector =
         HarnessCapabilityConnector::with_sources(None, root.join("missing/registry.json"));
-    let observation = connector.inspect(&MachineInspectionInput::default()).unwrap();
+    let observation = connector
+        .inspect(&MachineInspectionInput::default())
+        .unwrap();
     assert_eq!(
         observation.capabilities,
         vec![
@@ -224,7 +234,9 @@ fn refused_actuation_is_a_valid_state_disclosed_as_unavailable() {
     let actuation = stub_actuation(&root, "", "", StubScript::Refuse);
     let connector =
         HarnessCapabilityConnector::with_sources(Some(actuation), root.join("missing.json"));
-    let observation = connector.inspect(&MachineInspectionInput::default()).unwrap();
+    let observation = connector
+        .inspect(&MachineInspectionInput::default())
+        .unwrap();
     assert_eq!(
         observation.capabilities,
         vec![
@@ -239,12 +251,12 @@ fn refused_actuation_is_a_valid_state_disclosed_as_unavailable() {
 fn wedged_actuation_is_bounded_by_the_command_timeout() {
     let root = temporary_directory("wedged");
     let actuation = stub_actuation(&root, "", "", StubScript::Wedged);
-    let connector = HarnessCapabilityConnector::with_sources(
-        Some(actuation),
-        root.join("missing.json"),
-    )
-    .with_command_timeout(Duration::from_millis(300));
-    let observation = connector.inspect(&MachineInspectionInput::default()).unwrap();
+    let connector =
+        HarnessCapabilityConnector::with_sources(Some(actuation), root.join("missing.json"))
+            .with_command_timeout(Duration::from_millis(300));
+    let observation = connector
+        .inspect(&MachineInspectionInput::default())
+        .unwrap();
     assert!(observation
         .capabilities
         .contains(&"actuation-harness-detect@source:unavailable".to_owned()));
@@ -261,7 +273,9 @@ fn malformed_detection_output_is_disclosed_as_unavailable() {
     );
     let connector =
         HarnessCapabilityConnector::with_sources(Some(actuation), root.join("missing.json"));
-    let observation = connector.inspect(&MachineInspectionInput::default()).unwrap();
+    let observation = connector
+        .inspect(&MachineInspectionInput::default())
+        .unwrap();
     assert!(observation
         .capabilities
         .contains(&"actuation-harness-detect@source:unavailable".to_owned()));
@@ -278,7 +292,9 @@ fn detection_without_capability_catalog_still_discloses_detected_harnesses() {
     );
     let connector =
         HarnessCapabilityConnector::with_sources(Some(actuation), root.join("missing.json"));
-    let observation = connector.inspect(&MachineInspectionInput::default()).unwrap();
+    let observation = connector
+        .inspect(&MachineInspectionInput::default())
+        .unwrap();
     assert!(observation
         .capabilities
         .contains(&"claude-code@source:actuation-harness-detection".to_owned()));
@@ -296,7 +312,9 @@ fn registry_with_unexpected_schema_is_disclosed_as_unavailable() {
     let root = temporary_directory("schema");
     let registry = write_registry(&root, r#"{ "schema": "something.else/v9" }"#);
     let connector = HarnessCapabilityConnector::with_sources(None, registry);
-    let observation = connector.inspect(&MachineInspectionInput::default()).unwrap();
+    let observation = connector
+        .inspect(&MachineInspectionInput::default())
+        .unwrap();
     assert!(observation
         .capabilities
         .contains(&"workcell-harness-instances@source:unavailable".to_owned()));
@@ -375,7 +393,9 @@ fn registry_selection_prefers_the_harness_inspector_when_eligible_and_falls_back
         resolution.connector.unwrap().manifest().id,
         "reference.machine-host"
     );
-    assert!(resolution.diagnostics.ineligible.iter().any(|ineligible| {
-        ineligible.connector.id == "read-models.harness-capability"
-    }));
+    assert!(resolution
+        .diagnostics
+        .ineligible
+        .iter()
+        .any(|ineligible| { ineligible.connector.id == "read-models.harness-capability" }));
 }

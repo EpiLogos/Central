@@ -81,6 +81,9 @@ mod unix_tests {
             },
         );
         assert!(probe.available, "{:?}", probe.reason);
-        assert_eq!(connector.executable(), std::path::Path::new("/usr/bin/shortcuts"));
+        assert_eq!(
+            connector.executable(),
+            std::path::Path::new("/usr/bin/shortcuts")
+        );
     }
 }

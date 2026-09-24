@@ -37,9 +37,9 @@
 
 use central_connector_sdk::{
     machine_capability::{
-        with_source, ACTUATION_DETECT_DISCLOSURE_NAME, SOURCE_ABSENT,
-        SOURCE_ACTUATION_CAPABILITY, SOURCE_ACTUATION_DETECTION, SOURCE_UNAVAILABLE,
-        SOURCE_WORKCELL_INSTANCE, WORKCELL_REGISTRY_DISCLOSURE_NAME,
+        with_source, ACTUATION_DETECT_DISCLOSURE_NAME, SOURCE_ABSENT, SOURCE_ACTUATION_CAPABILITY,
+        SOURCE_ACTUATION_DETECTION, SOURCE_UNAVAILABLE, SOURCE_WORKCELL_INSTANCE,
+        WORKCELL_REGISTRY_DISCLOSURE_NAME,
     },
     CapabilityProbe, Connector, ConnectorContext, ConnectorManifest, ConnectorPortDeclaration,
     MachineInspectionInput, MachineInspectionOutput, MachineInspector, PortContract, PortError,
@@ -135,8 +135,7 @@ impl HarnessCapabilityConnector {
         let Some(executable) = &self.actuation_executable else {
             return vec![with_source(ACTUATION_DETECT_DISCLOSURE_NAME, SOURCE_ABSENT)];
         };
-        let Some(detection) =
-            self.run_read_model(executable, &["harness", "detect", "--json"])
+        let Some(detection) = self.run_read_model(executable, &["harness", "detect", "--json"])
         else {
             return vec![with_source(
                 ACTUATION_DETECT_DISCLOSURE_NAME,
@@ -177,7 +176,10 @@ impl HarnessCapabilityConnector {
 
     fn workcell_capabilities(&self) -> Vec<String> {
         if !self.workcell_registry.is_file() {
-            return vec![with_source(WORKCELL_REGISTRY_DISCLOSURE_NAME, SOURCE_ABSENT)];
+            return vec![with_source(
+                WORKCELL_REGISTRY_DISCLOSURE_NAME,
+                SOURCE_ABSENT,
+            )];
         }
         let parsed = std::fs::read_to_string(&self.workcell_registry)
             .ok()
@@ -203,7 +205,7 @@ impl HarnessCapabilityConnector {
                     .filter(|record| {
                         record.get("liveness").and_then(Value::as_str) == Some(WORKCELL_LIVE)
                     })
-                    .filter_map(|record| harness_name(record))
+                    .filter_map(harness_name)
                     .map(|name| with_source(&name, SOURCE_WORKCELL_INSTANCE))
                     .collect()
             })

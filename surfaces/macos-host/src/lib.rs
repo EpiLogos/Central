@@ -1,13 +1,13 @@
 use central_connector_sdk::{ConnectorContext, ConnectorRegistry};
-use central_git_sync_connector::GitSynchronizerConnector;
-use central_macos_connectors::MacOsNativeConnector;
-use central_reference_connectors::create_default_connector_registry;
-use central_shortcuts_connector::ShortcutsAutomationConnector;
 use central_ctrl::{
     create_core_action_registry, register_automation_actions, run_cli_with_runtime,
     ActionExecutionContext, ActionRegistry, ActionResult, CliEnvironment, CliExecution,
     ResultStatus, RootOptions, TerminalSurface,
 };
+use central_git_sync_connector::GitSynchronizerConnector;
+use central_macos_connectors::MacOsNativeConnector;
+use central_reference_connectors::create_default_connector_registry;
+use central_shortcuts_connector::ShortcutsAutomationConnector;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
@@ -235,11 +235,5 @@ pub fn run_macos_cli(
 ) -> CliExecution {
     let connectors = create_macos_connector_registry();
     let connector_context = ConnectorContext::current();
-    run_macos_cli_with_runtime(
-        args,
-        environment,
-        surface,
-        &connectors,
-        &connector_context,
-    )
+    run_macos_cli_with_runtime(args, environment, surface, &connectors, &connector_context)
 }

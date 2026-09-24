@@ -1,7 +1,7 @@
 use central_connector_sdk::{
     CapabilityProbe, Connector, ConnectorContext, ConnectorManifest, ConnectorPortDeclaration,
-    PackageManager, PackageStateRequest, PortContract, PortError, PortErrorCode, StateChangePreview,
-    StateChangeResult, CONNECTOR_API_VERSION, PACKAGE_MANAGER_PORT,
+    PackageManager, PackageStateRequest, PortContract, PortError, PortErrorCode,
+    StateChangePreview, StateChangeResult, CONNECTOR_API_VERSION, PACKAGE_MANAGER_PORT,
 };
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -59,15 +59,18 @@ impl HomebrewConnector {
     }
 
     fn run(&self, args: &[&str]) -> Result<Output, PortError> {
-        Command::new(&self.executable).args(args).output().map_err(|error| {
-            let code = match error.kind() {
-                std::io::ErrorKind::NotFound => PortErrorCode::MissingDependency,
-                std::io::ErrorKind::PermissionDenied => PortErrorCode::PermissionFailure,
-                _ => PortErrorCode::ProviderOperationFailed,
-            };
-            PortError::new(code, "Homebrew command could not be started.")
-                .with_provider_detail(error.to_string())
-        })
+        Command::new(&self.executable)
+            .args(args)
+            .output()
+            .map_err(|error| {
+                let code = match error.kind() {
+                    std::io::ErrorKind::NotFound => PortErrorCode::MissingDependency,
+                    std::io::ErrorKind::PermissionDenied => PortErrorCode::PermissionFailure,
+                    _ => PortErrorCode::ProviderOperationFailed,
+                };
+                PortError::new(code, "Homebrew command could not be started.")
+                    .with_provider_detail(error.to_string())
+            })
     }
 
     fn package_present(&self, id: &str) -> Result<bool, PortError> {
@@ -81,13 +84,15 @@ impl HomebrewConnector {
             return Ok(());
         }
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        Err(PortError::provider(format!("Homebrew {operation} failed.")).with_provider_detail(
-            if stderr.is_empty() {
-                format!("exit status: {}", output.status)
-            } else {
-                stderr
-            },
-        ))
+        Err(
+            PortError::provider(format!("Homebrew {operation} failed.")).with_provider_detail(
+                if stderr.is_empty() {
+                    format!("exit status: {}", output.status)
+                } else {
+                    stderr
+                },
+            ),
+        )
     }
 
     fn dependency_available(&self) -> bool {

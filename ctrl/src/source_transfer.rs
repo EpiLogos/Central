@@ -439,14 +439,16 @@ fn export_action(
             .find(|source| &source.binding.source_ref == reference)
         {
             Some(value) => value,
-            None => return ActionResult::failure(
-                Some(action),
-                ResultStatus::InvalidInput,
-                format!(
+            None => {
+                return ActionResult::failure(
+                    Some(action),
+                    ResultStatus::InvalidInput,
+                    format!(
                     "source_ref is not a participating World source of this Project: {reference}"
                 ),
-                None,
-            ),
+                    None,
+                )
+            }
         };
         if !observed.binding.agent_retrieval_allowed {
             return ActionResult::failure(
@@ -1595,10 +1597,8 @@ fn array_input(name: &str, required: bool) -> ActionInputDefinition {
 
 #[allow(clippy::too_many_lines)]
 pub fn register_source_transfer_actions(registry: &mut ActionRegistry) {
-    let actions: Vec<(
-        ActionDescriptor,
-        fn(&ActionRegistry, &Value, &ActionExecutionContext<'_>) -> ActionResult,
-    )> = vec![
+    type Handler = fn(&ActionRegistry, &Value, &ActionExecutionContext<'_>) -> ActionResult;
+    let actions: Vec<(ActionDescriptor, Handler)> = vec![
         (
             descriptor_read(
                 "projectcentral.source.transfer.export",
