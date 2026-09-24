@@ -38,7 +38,7 @@ fn not_agent_readable_control_subtree_is_excluded_from_stock_retrieval() {
     );
     assert_eq!(result.files_scanned, 1);
     assert!(result.skipped_sources.iter().any(|source| {
-        source.source_path == PathBuf::from("Control/user/private-context")
+        source.source_path == *"Control/user/private-context"
             && source.reason == "not_agent_readable"
     }));
 

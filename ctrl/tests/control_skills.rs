@@ -260,13 +260,13 @@ fn skills_participate_in_ground_relations_with_control_skill_treatment_and_manif
     fs::create_dir_all(central.join("Control/agents/wiki")).unwrap();
     fs::create_dir_all(central.join("Control/machines/primary-workstation")).unwrap();
     let personal = seed_skill(
-        &central,
+        central,
         "Control/user/skills/central-ground-keeping",
         "control-user",
         "central-ground-keeping",
     );
     let machine = seed_skill(
-        &central,
+        central,
         "Control/machines/primary-workstation/skills/brandkit",
         "control-machine",
         "brandkit",

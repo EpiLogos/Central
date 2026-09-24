@@ -1,7 +1,7 @@
 use central_ctrl::CliEnvironment;
 use serde_json::Value;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -19,7 +19,7 @@ fn temporary_root() -> PathBuf {
     ))
 }
 
-fn run(root: &PathBuf, action: &str, input: &str) -> central_ctrl::CliExecution {
+fn run(root: &Path, action: &str, input: &str) -> central_ctrl::CliExecution {
     central_ctrl::run_cli(
         &[
             "--json".to_owned(),

@@ -287,7 +287,7 @@ pub fn index_governance(central_root: &Path) -> io::Result<GovernanceIndex> {
         let topic = text
             .lines()
             .find_map(|line| line.strip_prefix("# "))
-            .unwrap_or_else(|| "")
+            .unwrap_or("")
             .trim()
             .to_owned();
         statements.push(GovernanceIndexEntry {

@@ -102,9 +102,7 @@ fn first_positional(args: &[String]) -> Option<usize> {
         match args[index].as_str() {
             "--json" => index += 1,
             "--root" => {
-                if args.get(index + 1).is_none() {
-                    return None;
-                }
+                args.get(index + 1)?;
                 index += 2;
             }
             argument if argument.starts_with("--root=") => index += 1,

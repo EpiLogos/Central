@@ -246,7 +246,7 @@ fn drift_for_role(
                 kind: "package".to_owned(),
                 id: package.id.clone(),
                 status,
-                intended: to_value(&package.state).unwrap_or(Value::Null),
+                intended: to_value(package.state).unwrap_or(Value::Null),
                 observed: json!(observed),
             });
         }
@@ -265,7 +265,7 @@ fn drift_for_role(
                 kind: "configuration".to_owned(),
                 id: configuration.id.clone(),
                 status,
-                intended: to_value(&configuration.state).unwrap_or(Value::Null),
+                intended: to_value(configuration.state).unwrap_or(Value::Null),
                 observed: json!(observed),
             });
         }

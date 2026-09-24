@@ -1,6 +1,6 @@
 use central_ctrl::{initialize_central, run_cli, CliEnvironment, ResultStatus};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temporary_directory(label: &str) -> PathBuf {
@@ -16,9 +16,9 @@ fn temporary_directory(label: &str) -> PathBuf {
     path
 }
 
-fn environment(root: &PathBuf) -> CliEnvironment {
+fn environment(root: &Path) -> CliEnvironment {
     CliEnvironment {
-        configured_root: Some(root.clone()),
+        configured_root: Some(root.to_path_buf()),
         home: None,
     }
 }

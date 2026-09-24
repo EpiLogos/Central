@@ -1,3 +1,8 @@
+//! Ubuntu platform integration tests. The whole file drives the real
+//! Ubuntu toolchain, so it compiles and runs only on Linux; elsewhere it is
+//! empty rather than a pile of dead helpers.
+#![cfg(target_os = "linux")]
+
 use central_ctrl::{
     create_default_connector_registry, initialize_central, run_cli_with_runtime, CliEnvironment,
     ConnectorContext, ConnectorRegistry, NullTerminalSurface, ResultStatus,

@@ -91,7 +91,7 @@ impl MacOsNativeConnector {
     }
 
     fn using_production_open(&self) -> bool {
-        self.open_executable == PathBuf::from("/usr/bin/open")
+        self.open_executable == Path::new("/usr/bin/open")
     }
 
     fn ensure_target(target: &Path, operation: &str) -> Result<(), PortError> {

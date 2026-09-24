@@ -1,12 +1,11 @@
 use central_ctrl::{
-    create_core_action_registry, initialize_central, run_cli, ActionExecutionContext,
-    CliEnvironment, ConnectorContext, ConnectorRegistry, MachineInspectionOutput,
-    ObservedConfiguration, ObservedPackage, ObservedService, ResultStatus, RootOptions,
-    StaticMachineInspectorConnector,
+    create_core_action_registry, initialize_central, ActionExecutionContext, ConnectorContext,
+    ConnectorRegistry, MachineInspectionOutput, ObservedConfiguration, ObservedPackage,
+    ObservedService, ResultStatus, RootOptions, StaticMachineInspectorConnector,
 };
 use serde_json::json;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temporary_directory(label: &str) -> PathBuf {
@@ -22,7 +21,7 @@ fn temporary_directory(label: &str) -> PathBuf {
     path
 }
 
-fn write_role(root: &PathBuf, role: &str, capabilities: &[&str]) {
+fn write_role(root: &Path, role: &str, capabilities: &[&str]) {
     let declaration = json!({
         "schema": "central.machine",
         "version": 1,
@@ -74,10 +73,10 @@ fn registry_with_observation(observation: MachineInspectionOutput) -> ConnectorR
     connectors
 }
 
-fn execute_account(connectors: &ConnectorRegistry, root: &PathBuf) -> central_ctrl::ActionResult {
+fn execute_account(connectors: &ConnectorRegistry, root: &Path) -> central_ctrl::ActionResult {
     let registry = create_core_action_registry();
     let options = RootOptions {
-        explicit_root: Some(root.clone()),
+        explicit_root: Some(root.to_path_buf()),
         ..RootOptions::default()
     };
     let connector_context = ConnectorContext {
@@ -214,7 +213,10 @@ fn observation_record_persists_under_central_for_stale_fallback() {
     let record: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&record_path).unwrap()).unwrap();
     assert_eq!(record["machine_id"], json!(machine_id));
-    assert!(record["observed_at"].as_str().unwrap_or_default().len() > 0);
+    assert!(!record["observed_at"]
+        .as_str()
+        .unwrap_or_default()
+        .is_empty());
 
     // Without any connector, the account falls back to the last capture and
     // reports staleness truthfully instead of inventing fresh observation.
@@ -240,7 +242,7 @@ fn cli_projects_machine_account() {
     let connectors = registry_with_observation(observation(&["remote-shell"]));
     let registry = create_core_action_registry();
     let options = RootOptions {
-        explicit_root: Some(root.clone()),
+        explicit_root: Some(root.to_path_buf()),
         ..RootOptions::default()
     };
     let connector_context = ConnectorContext {

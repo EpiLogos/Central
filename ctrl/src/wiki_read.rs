@@ -18,9 +18,7 @@ use crate::action::{
     ActionAvailability, ActionDescriptor, ActionExecutionContext, ActionInputDefinition,
     ActionOutputDefinition, ActionRegistry, MutationClass,
 };
-use crate::projectcentral::{
-    read_project_manifest, ProjectCentralManifest, ROOT_WIKI_SOURCE, WIKI_PROFILE,
-};
+use crate::projectcentral::{read_project_manifest, ROOT_WIKI_SOURCE, WIKI_PROFILE};
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
 use crate::source_horizon::source_ref;

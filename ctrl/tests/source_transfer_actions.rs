@@ -292,7 +292,7 @@ fn export_refuses_own_ground_destination_and_foreign_and_masked_sources() {
         "shared fork\n",
     );
     let horizon = read_project_change_horizon(&project_a, None).unwrap();
-    let source_ref = source_ref_of(&horizon, "case6-note.md");
+    let _source_ref = source_ref_of(&horizon, "case6-note.md");
 
     let foreign = export(
         &central_a,
@@ -321,7 +321,7 @@ fn export_refuses_own_ground_destination_and_foreign_and_masked_sources() {
         .iter()
         .find(|source| source.binding.path.ends_with("masked/secret.md"))
         .expect("masked source participates with disclosure refused");
-    assert_eq!(masked.binding.agent_retrieval_allowed, false);
+    assert!(!masked.binding.agent_retrieval_allowed);
     let refused = export(
         &central_a,
         &project_a,
@@ -344,7 +344,7 @@ fn export_refuses_own_ground_destination_and_foreign_and_masked_sources() {
 
 #[test]
 fn apply_fast_forwards_from_the_recorded_base_and_emits_an_attributed_change() {
-    let ((temp_a, central_a, project_a), (temp_b, central_b, project_b), source_ref) =
+    let ((_temp_a, central_a, project_a), (temp_b, central_b, project_b), source_ref) =
         forked_grounds("fast-forward");
     let revision_a1 = write_via_action(
         &central_a,
@@ -409,7 +409,7 @@ fn apply_fast_forwards_from_the_recorded_base_and_emits_an_attributed_change() {
 
 #[test]
 fn divergent_change_conflicts_is_recorded_and_overwrites_nothing() {
-    let ((temp_a, central_a, project_a), (temp_b, central_b, project_b), source_ref) =
+    let ((_temp_a, central_a, project_a), (temp_b, central_b, project_b), source_ref) =
         forked_grounds("conflict");
     let revision_shared = current_revision(&project_a, &source_ref);
 
@@ -497,7 +497,7 @@ fn divergent_change_conflicts_is_recorded_and_overwrites_nothing() {
 
 #[test]
 fn resolve_accept_incoming_requires_the_exact_recorded_local_revision() {
-    let ((temp_a, central_a, project_a), (temp_b, central_b, project_b), source_ref) =
+    let ((_temp_a, central_a, project_a), (temp_b, central_b, project_b), source_ref) =
         forked_grounds("resolve");
     let revision_shared = current_revision(&project_a, &source_ref);
     let _origin_revision = write_via_action(
@@ -568,8 +568,7 @@ fn resolve_accept_incoming_requires_the_exact_recorded_local_revision() {
     let change = horizon
         .changes
         .iter()
-        .filter(|change| change.source_ref == source_ref)
-        .last()
+        .rfind(|change| change.source_ref == source_ref)
         .unwrap();
     assert_eq!(change.actor.as_deref(), Some("resolver"));
 
@@ -594,7 +593,7 @@ fn resolve_accept_incoming_requires_the_exact_recorded_local_revision() {
 
 #[test]
 fn resolve_keep_local_records_the_decision_without_touching_the_source() {
-    let ((temp_a, central_a, project_a), (temp_b, central_b, project_b), source_ref) =
+    let ((_temp_a, central_a, project_a), (temp_b, central_b, project_b), source_ref) =
         forked_grounds("keep-local");
     let revision_shared = current_revision(&project_a, &source_ref);
     let _ = write_via_action(
@@ -640,7 +639,7 @@ fn resolve_keep_local_records_the_decision_without_touching_the_source() {
 
 #[test]
 fn apply_refuses_direction_and_payload_violations_without_mutating() {
-    let ((temp_a, central_a, project_a), (temp_b, central_b, project_b), source_ref) =
+    let ((_temp_a, central_a, project_a), (temp_b, central_b, project_b), source_ref) =
         forked_grounds("refuse");
     let _ = write_via_action(
         &central_a,

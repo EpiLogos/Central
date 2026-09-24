@@ -1597,10 +1597,8 @@ fn array_input(name: &str, required: bool) -> ActionInputDefinition {
 
 #[allow(clippy::too_many_lines)]
 pub fn register_source_transfer_actions(registry: &mut ActionRegistry) {
-    let actions: Vec<(
-        ActionDescriptor,
-        fn(&ActionRegistry, &Value, &ActionExecutionContext<'_>) -> ActionResult,
-    )> = vec![
+    type Handler = fn(&ActionRegistry, &Value, &ActionExecutionContext<'_>) -> ActionResult;
+    let actions: Vec<(ActionDescriptor, Handler)> = vec![
         (
             descriptor_read(
                 "projectcentral.source.transfer.export",

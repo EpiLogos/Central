@@ -195,7 +195,7 @@ impl HarnessCapabilityConnector {
                     .filter(|record| {
                         record.get("liveness").and_then(Value::as_str) == Some(WORKCELL_LIVE)
                     })
-                    .filter_map(|record| harness_name(record))
+                    .filter_map(harness_name)
                     .map(|name| with_source(&name, SOURCE_WORKCELL_INSTANCE))
                     .collect()
             })

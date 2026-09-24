@@ -1,8 +1,8 @@
 use central_ctrl::projectcentral_ops::register_projectcentral_actions;
 use central_ctrl::{
     create_core_action_registry, create_default_connector_registry, read_project_change_horizon,
-    read_world_source, run_cli, write_world_source, ActionExecutionContext, CliEnvironment,
-    ConnectorContext, ConnectorRegistry, ResultStatus, RootOptions, WORLD_SOURCE_READING_SCHEMA,
+    read_world_source, run_cli, ActionExecutionContext, CliEnvironment, ConnectorContext,
+    ConnectorRegistry, ResultStatus, RootOptions, WORLD_SOURCE_READING_SCHEMA,
     WORLD_SOURCE_WRITE_RECEIPT_SCHEMA,
 };
 use serde_json::{json, Value};
@@ -563,7 +563,7 @@ fn cli_doorway_discovers_and_serves_world_source_actions() {
 
 #[test]
 fn ground_inspection_discloses_the_ref_source_read_accepts() {
-    let (temp, central, project) = project_fixture("canonical-ref", "canonical-project");
+    let (temp, _central, project) = project_fixture("canonical-ref", "canonical-project");
     let user = project.join("ProjectCentral").join("user").join("notes");
     fs::create_dir_all(&user).unwrap();
     fs::write(user.join("one.md"), "one").unwrap();
@@ -590,7 +590,7 @@ fn ground_inspection_discloses_the_ref_source_read_accepts() {
             source_ref.starts_with(&expected_prefix),
             "canonical horizon grammar, got {source_ref}"
         );
-        let reading = central_ctrl::read_world_source(&project, &source_ref).unwrap();
+        let reading = central_ctrl::read_world_source(&project, source_ref).unwrap();
         assert_eq!(reading.source.source_ref, *source_ref);
     }
 
