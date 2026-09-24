@@ -99,15 +99,11 @@ pub(crate) fn validate_attribution(
     Ok(())
 }
 
-/// Legacy declared attribution remains explicit for existing source clients.
-/// Native Day/contribution documents require their authenticated owner operation;
-/// a bare actor_kind=human never bypasses document-local contribution protection.
-pub(crate) fn enforce_write_authority(
-    binding: &SourceBinding,
-    actor_kind: &str,
-    agent_session_ref: Option<&str>,
-) -> io::Result<()> {
-    if binding.roles.iter().any(|role| {
+/// A source with native temporal, document or authority ownership: only its
+/// authenticated owner operation changes it, never a generic whole-file write
+/// and never a source transfer.
+pub(crate) fn natively_owned(binding: &SourceBinding) -> bool {
+    binding.roles.iter().any(|role| {
         matches!(
             role.as_str(),
             "protected-contribution-document"
@@ -117,7 +113,18 @@ pub(crate) fn enforce_write_authority(
                 | "civil-time-policy"
                 | "native-action-authority"
         )
-    }) {
+    })
+}
+
+/// Legacy declared attribution remains explicit for existing source clients.
+/// Native Day/contribution documents require their authenticated owner operation;
+/// a bare actor_kind=human never bypasses document-local contribution protection.
+pub(crate) fn enforce_write_authority(
+    binding: &SourceBinding,
+    actor_kind: &str,
+    agent_session_ref: Option<&str>,
+) -> io::Result<()> {
+    if natively_owned(binding) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "this source has native temporal/document/authority ownership; use its authenticated owner operation or explicit source review, not a generic declared-human whole-file write",
