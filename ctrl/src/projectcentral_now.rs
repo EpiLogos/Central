@@ -735,16 +735,21 @@ pub fn inspect_now(project_root: &Path) -> io::Result<NowInspection> {
     })
 }
 
+/// Opt a ProjectCentral into the NOW field, or complete a partially created
+/// one. Additive only: missing directories and ledgers are created, nothing
+/// that exists is rewritten (a field created before `user/` or `day/` existed
+/// would otherwise fail every Day close with a bare NotFound).
 pub fn initialize_now(project_root: &Path) -> io::Result<NowInspection> {
     let paths = now_paths(project_root);
-    if paths.root.exists() {
-        return inspect_now(project_root);
-    }
     fs::create_dir_all(&paths.user)?;
     fs::create_dir_all(&paths.agents)?;
     fs::create_dir_all(&paths.day)?;
-    write_json(&paths.policy, &NowPolicy::default(), false)?;
-    write_json(&paths.promotions, &PromotionLedger::default(), false)?;
+    if !paths.policy.exists() {
+        write_json(&paths.policy, &NowPolicy::default(), false)?;
+    }
+    if !paths.promotions.exists() {
+        write_json(&paths.promotions, &PromotionLedger::default(), false)?;
+    }
     inspect_now(project_root)
 }
 
@@ -1256,6 +1261,9 @@ pub fn rollover_with_census(
             format!("DAY is already closed: {day}"),
         ));
     }
+    // A field opened before `day/` existed still closes: the Day record and
+    // its source snapshot need only their directory.
+    fs::create_dir_all(&paths.day)?;
 
     let (snapshot_root, streams) =
         snapshot_day_sources(project_root, &paths.day, day, &human_scratch, &handoffs)?;
@@ -1937,6 +1945,33 @@ mod tests {
             promoted_to: vec![],
             work_refs: vec![],
         }
+    }
+
+    #[test]
+    fn a_partially_created_now_field_is_completed_by_init_and_still_closes_a_day() {
+        let temp = tempdir().unwrap();
+        let central = temp.path().join("Central");
+        let project = central.join("Work/example");
+        fs::create_dir_all(&project).unwrap();
+        initialize_projectcentral(&central, &project, "example/project").unwrap();
+        initialize_now(&project).unwrap();
+        let paths = now_paths(&project);
+        // The live shape found on 2026-09-24 (Factory, Workcell, ai-kit): the
+        // field exists with agents/ and its ledgers, but no user/ and no day/.
+        fs::remove_dir_all(&paths.user).unwrap();
+        fs::remove_dir_all(&paths.day).unwrap();
+        let policy_before = fs::read(&paths.policy).unwrap();
+
+        // The Day still closes: absent scratch is no scratch, day/ is created.
+        let report = rollover(&project, "2026-09-23", "2026-09-24").unwrap();
+        assert!(paths.day.join("2026-09-23.md").is_file(), "{report:?}");
+
+        // init completes what is missing and rewrites nothing that exists.
+        fs::remove_dir_all(&paths.user).ok();
+        initialize_now(&project).unwrap();
+        assert!(paths.user.is_dir());
+        assert!(paths.day.join("2026-09-23.md").is_file());
+        assert_eq!(fs::read(&paths.policy).unwrap(), policy_before);
     }
 
     #[test]
