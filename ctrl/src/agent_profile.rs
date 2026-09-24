@@ -134,8 +134,15 @@ pub struct AgentProfile {
     /// projection remain AIKit-owned.
     #[serde(default)]
     pub skill_refs: Vec<String>,
+    /// The preferred authored repertoire relation: the SkillSets this Agent
+    /// carries (e.g. `central:documentation`). An Agent ordinarily carries
+    /// Intent + SkillSet refs + World relation rather than enumerating Skills.
     #[serde(default)]
     pub skill_set_refs: Vec<String>,
+    /// Compatibility and explicit assignment over `METHOD:`-classified Skill
+    /// identity; a Method is a Skill, not a separate kind. There is no
+    /// `methodology_refs`: Methodologies are disclosed through carried
+    /// SkillSets.
     #[serde(default)]
     pub method_refs: Vec<String>,
     /// Authored/default repeatable-praxis assignments. Central stores only the

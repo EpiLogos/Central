@@ -15,6 +15,39 @@ import re
 PROTOCOL = "ql-capability-matrix/1"
 COLUMNS = "id record_type view_id row_id column_id capability_refs need operation outcome implementation_status standing source_refs code_refs test_refs account_ref relation coverage extensions".split()
 STANDINGS = {"authored-human-position", "design-commitment", "architecture-contract", "implementation-fact", "observed-evidence", "agent-inference"}
+DOCUMENTATION_REF_KEYS = ("vision_refs", "design_refs", "mockup_refs", "architecture_refs", "diagram_refs", "praxis_refs")
+DOCUMENTATION_RELATIONS = {
+    "develops", "expresses", "projects", "requires", "implements", "described-by", "visualises", "supports",
+    "verified-by", "pressures", "returns-to", "supersedes", "packages-as", "exports-to", "participates-in", "presented-by",
+}
+
+
+def validate_documentation_extension(key, documentation):
+    """Validate the optional extensions.documentation object of one record."""
+    if not isinstance(documentation, dict):
+        return [f"Matrix row {key} extensions.documentation must be an object"]
+    errors = []
+    for field in sorted(set(documentation) - set(DOCUMENTATION_REF_KEYS) - {"relations"}):
+        errors.append(f"Matrix row {key} extensions.documentation has unknown key: {field}")
+    for field in DOCUMENTATION_REF_KEYS:
+        if field not in documentation:
+            continue
+        refs = documentation[field]
+        if (not isinstance(refs, list) or any(not isinstance(ref, str) or not ref.strip() for ref in refs)
+                or len(refs) != len(set(refs))):
+            errors.append(f"Matrix row {key} extensions.documentation.{field} must be a unique list of nonempty strings")
+    if "relations" in documentation:
+        relations = documentation["relations"]
+        if not isinstance(relations, list):
+            errors.append(f"Matrix row {key} extensions.documentation.relations must be a list")
+            relations = []
+        for relation in relations:
+            if (not isinstance(relation, dict) or set(relation) != {"relation", "target"}
+                    or not isinstance(relation["target"], str) or not relation["target"].strip()):
+                errors.append(f"Matrix row {key} extensions.documentation.relations entries require exactly relation and nonempty target")
+            elif not isinstance(relation["relation"], str) or relation["relation"] not in DOCUMENTATION_RELATIONS:
+                errors.append(f"Matrix row {key} extensions.documentation has unknown relation: {relation['relation']}")
+    return errors
 
 
 def load(manifest_path: Path, csv_path: Path | None = None):
@@ -149,6 +182,8 @@ def validate_data(manifest, header, records):
         except (ValueError, TypeError) as exc:
             errors.append(f"Matrix row {key} invalid extensions JSON: {exc}")
             extensions = {}
+        if "documentation" in extensions:
+            errors.extend(validate_documentation_extension(key, extensions["documentation"]))
         for ref in refs:
             if ref not in capability_ids:
                 errors.append(f"Matrix row {key} has unknown capability reference: {ref}")

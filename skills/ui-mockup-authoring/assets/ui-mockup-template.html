@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<meta name="color-scheme" content="light dark" />
+<title>[SURFACE] · Mockup</title>
+<meta name="description" content="[One sentence: which surface this mockup renders and which Design it realises.]" />
+<style>
+/* Tokens copied from skill/aikit/html-account full-account-template.html; keep them in step. */
+:root{
+  --paper:#f5f8fb;--sheet:#ffffff;--sheet-2:#eef4f8;--ink:#132235;--muted:#5e6d7f;--faint:#8c98a7;
+  --line:#d8e1e9;--line-strong:#bdcad6;--blue:#1f5f9d;--blue-deep:#184c7c;--blue-soft:#e7f0fa;
+  --teal:#197f82;--teal-soft:#e6f4f3;--orange:#a45c2e;--orange-soft:#f5ece6;--danger:#9b4e50;--success:#477a5e;
+  --focus:#2a78c5;--shadow:0 12px 34px rgba(22,43,68,.08);--radius:14px;
+  --ui:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  --serif:Georgia,"Times New Roman",Times,serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+}
+html[data-theme="dark"]{
+  --paper:#071320;--sheet:#0c1b2c;--sheet-2:#10243a;--ink:#e7edf5;--muted:#a7b4c4;--faint:#7c8ba0;
+  --line:#21364d;--line-strong:#35536f;--blue:#77abe5;--blue-deep:#9bc5ef;--blue-soft:#102e4d;
+  --teal:#5ab5b3;--teal-soft:#103536;--orange:#c57a45;--orange-soft:#3b281d;--danger:#ce8587;--success:#80ad92;
+  --focus:#8ec3ff;--shadow:0 18px 42px rgba(0,0,0,.3);
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--ui);font-size:15px;line-height:1.55}
+:focus-visible{outline:3px solid color-mix(in srgb,var(--focus) 65%,transparent);outline-offset:2px}
+.bar{position:sticky;top:0;z-index:10;display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 16px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--sheet) 94%,transparent);backdrop-filter:blur(12px)}
+.bar strong{font-size:12px;letter-spacing:.05em;text-transform:uppercase;margin-right:auto}
+.switcher{display:flex;flex-wrap:wrap;gap:6px}
+.switcher button,.icon-btn{border:1px solid var(--line);border-radius:9px;background:var(--sheet);padding:6px 10px;cursor:pointer;font:600 12.5px/1 var(--ui);color:var(--ink)}
+.switcher button[aria-pressed="true"]{background:var(--blue-soft);border-color:var(--blue);color:var(--blue-deep)}
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:18px;max-width:1280px;margin:0 auto;padding:18px 16px}
+@media (max-width:860px){.layout{grid-template-columns:1fr}}
+.frame{border:1px solid var(--line);border-radius:var(--radius);background:var(--sheet);box-shadow:var(--shadow);overflow:hidden}
+.frame-toolbar{display:flex;gap:6px;padding:9px 12px;border-bottom:1px solid var(--line);background:var(--sheet-2)}
+.frame-toolbar span{width:9px;height:9px;border-radius:50%;background:var(--line-strong)}
+.state{display:none;padding:22px;min-height:360px}
+.state.active{display:block;animation:fade .18s ease}
+@keyframes fade{from{opacity:.4}to{opacity:1}}
+.state h2{margin:0 0 8px;font-family:var(--serif);font-weight:500}
+.notice{border-left:3px solid var(--orange);background:var(--orange-soft);padding:10px 12px;border-radius:8px}
+.notice.failure{border-color:var(--danger)}
+.trace{border:1px solid var(--line);border-radius:var(--radius);background:var(--sheet);padding:14px;font-size:13px;align-self:start;position:sticky;top:64px}
+.trace h3{margin:0 0 6px;font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+.trace dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:4px 10px}
+.trace dt{color:var(--muted)}.trace dd{margin:0;font-family:var(--mono);font-size:12px;overflow-wrap:anywhere}
+</style>
+</head>
+<body data-doc-role="mockup">
+<script type="application/json" id="mockup-provenance">
+{
+  "uid": "[product]-[surface]-mockup",
+  "role": "mockup",
+  "title": "[SURFACE] · Mockup",
+  "standing": "agent-inference",
+  "status": "draft",
+  "design_refs": ["[design.md#unit-id]"],
+  "vision_refs": ["[vision.html#unit-id]"],
+  "capability_refs": ["[cap.id]"],
+  "updated": "[YYYY-MM-DD]",
+  "generator": "[MODEL / AGENT / SKILL VERSION]"
+}
+</script>
+<header class="bar">
+  <strong>[SURFACE] · Mockup</strong>
+  <div class="switcher" role="group" aria-label="Mockup state" id="switcher"></div>
+  <button class="icon-btn" id="themeToggle" aria-label="Switch theme">◐</button>
+</header>
+<div class="layout">
+  <div class="frame" aria-live="polite">
+    <div class="frame-toolbar" aria-hidden="true"><span></span><span></span><span></span></div>
+
+    <!-- One <section class="state"> per state. Every state carries its trace back to
+         the exact Design, Vision and capability units it renders. -->
+    <section class="state active" id="state-default" data-state="default" data-label="Default"
+      data-design-ref="[design.md#journey-unit]" data-vision-ref="[vision.html#q2-ordinary-use]" data-capability-ref="[cap.id]"
+      data-transition-to="loading">
+      <h2>[Default state]</h2>
+      <p>[Build the real surface here: the content, controls and attention order a person meets first.]</p>
+      <button type="button" data-goto="loading">[Primary action]</button>
+    </section>
+
+    <section class="state" id="state-loading" data-state="loading" data-label="Loading"
+      data-design-ref="[design.md#state-loading]" data-vision-ref="[vision.html#q2-ordinary-use]" data-capability-ref="[cap.id]"
+      data-transition-to="success failure">
+      <h2>[Loading]</h2>
+      <p>[What is shown while work is in progress, and what remains usable.]</p>
+    </section>
+
+    <section class="state" id="state-empty" data-state="empty" data-label="Empty"
+      data-design-ref="[design.md#state-empty]" data-vision-ref="[vision.html#q2-first-encounter]" data-capability-ref="[cap.id]">
+      <h2>[Empty]</h2>
+      <p>[What a newcomer sees before anything exists, and the next step offered.]</p>
+    </section>
+
+    <section class="state" id="state-degraded" data-state="degraded" data-label="Degraded"
+      data-design-ref="[design.md#state-degraded]" data-vision-ref="[vision.html#q2-failure]" data-capability-ref="[cap.id]">
+      <h2>[Degraded]</h2>
+      <p class="notice">[A dependency is partly unavailable. Say what still works and what does not.]</p>
+    </section>
+
+    <section class="state" id="state-failure" data-state="failure" data-label="Failure"
+      data-design-ref="[design.md#state-failure]" data-vision-ref="[vision.html#q2-failure]" data-capability-ref="[cap.id]"
+      data-transition-to="default">
+      <h2>[Failure]</h2>
+      <p class="notice failure">[What failed, in plain words, and how to recover.]</p>
+      <button type="button" data-goto="default">[Retry]</button>
+    </section>
+  </div>
+
+  <aside class="trace" aria-label="State trace">
+    <h3>Current state</h3>
+    <dl>
+      <dt>state</dt><dd id="t-state"></dd>
+      <dt>design</dt><dd id="t-design"></dd>
+      <dt>vision</dt><dd id="t-vision"></dd>
+      <dt>capability</dt><dd id="t-capability"></dd>
+      <dt>next</dt><dd id="t-next"></dd>
+    </dl>
+  </aside>
+</div>
+<script>
+(() => {
+  const states = [...document.querySelectorAll('.state')];
+  const switcher = document.getElementById('switcher');
+  const set = (id, value) => { document.getElementById(id).textContent = value || '—'; };
+  function show(name) {
+    const target = states.find(s => s.dataset.state === name) || states[0];
+    states.forEach(s => s.classList.toggle('active', s === target));
+    switcher.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.state === target.dataset.state)));
+    set('t-state', target.dataset.state); set('t-design', target.dataset.designRef);
+    set('t-vision', target.dataset.visionRef); set('t-capability', target.dataset.capabilityRef);
+    set('t-next', target.dataset.transitionTo);
+    if (location.hash.slice(1) !== target.dataset.state) history.replaceState(null, '', '#' + target.dataset.state);
+  }
+  states.forEach(s => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.dataset.state = s.dataset.state; b.textContent = s.dataset.label || s.dataset.state;
+    b.addEventListener('click', () => show(s.dataset.state));
+    switcher.appendChild(b);
+  });
+  document.addEventListener('click', e => { const g = e.target.closest('[data-goto]'); if (g) show(g.dataset.goto); });
+  document.getElementById('themeToggle').addEventListener('click', () => {
+    const root = document.documentElement; root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
+  });
+  window.addEventListener('hashchange', () => show(location.hash.slice(1)));
+  show(location.hash.slice(1));
+})();
+</script>
+</body>
+</html>
