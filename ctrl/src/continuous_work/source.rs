@@ -152,6 +152,13 @@ impl Scope {
             .ok_or_else(|| {
                 io::Error::new(io::ErrorKind::NotFound, "SourceRef is not in this World")
             })?;
+        self.read_bound(source)
+    }
+    /// Read one source through a binding already taken from `bindings()`.
+    /// Callers that visit many sources resolve the World's horizon once and
+    /// read each binding through here, instead of re-walking the whole source
+    /// tree per reference (a NOW scan over N clearings was N full walks).
+    pub fn read_bound(&self, source: SourceBinding) -> io::Result<SourceReading> {
         if !source.agent_retrieval_allowed {
             return Err(denied("SourceRef is excluded from Agent retrieval"));
         }

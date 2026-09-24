@@ -756,3 +756,78 @@ fn now_read_composes_receiving_returns_keyed_to_the_now() {
     assert_eq!(returns[0]["session_ref"], "ses:x");
     assert_eq!(returns[0]["day_ref"], "day:2026-09-19");
 }
+
+/// A clearing written before the World-inhabitation horizon existed carries
+/// no workcell_ref / parent_now_ref / horizon. Reading it and writing it back
+/// (as every lifecycle/obligation transition does) must reproduce the exact
+/// bytes, for both the v1 and the v2 (lane work_refs) shape.
+#[test]
+fn pre_horizon_v1_and_v2_clearings_round_trip_byte_identical() {
+    let v1 = r#"{
+  "schema": "central.now-clearing/v1",
+  "now_ref": "central:now:control:root:0000000000000000000000000000000000000000000000000000000000000001",
+  "source_ref": "central:source:control:root:Control/agents/now/clearings/0000000000000000000000000000000000000000000000000000000000000001/now.json",
+  "scope_ref": "control:root",
+  "task_ref": "task:pre-horizon",
+  "purpose": "written before horizons existed",
+  "participant_refs": [
+    "agent:test"
+  ],
+  "source_refs": [],
+  "policy_revision_at_allocation": "central.content-fnv1a64/v1:10:0000000000000000",
+  "created_at_unix_seconds": 100,
+  "lifecycle": "active",
+  "obligations": [],
+  "continuation_refs": [],
+  "archive_ref": null
+}
+"#;
+    let v2 = r#"{
+  "schema": "central.now-clearing/v2",
+  "now_ref": "central:now:project:test/one:0000000000000000000000000000000000000000000000000000000000000002",
+  "source_ref": "central:source:project:test/one:ProjectCentral/agents/now/clearings/0000000000000000000000000000000000000000000000000000000000000002/now.json",
+  "scope_ref": "project:test/one",
+  "task_ref": "task:pre-horizon-lane",
+  "purpose": "lane owner written before horizons existed",
+  "participant_refs": [],
+  "source_refs": [],
+  "policy_revision_at_allocation": "central.content-fnv1a64/v1:10:0000000000000000",
+  "created_at_unix_seconds": 100,
+  "lifecycle": "quiescent",
+  "obligations": [],
+  "continuation_refs": [],
+  "archive_ref": null,
+  "work_refs": [
+    {
+      "repo": "Work/one",
+      "branch": "topic",
+      "worktree_path": "worktrees/env-2/one"
+    }
+  ]
+}
+"#;
+    for raw in [v1, v2] {
+        let record: placement::NowRecord = serde_json::from_str(raw).unwrap();
+        assert!(record.workcell_ref.is_none() && record.parent_now_ref.is_none());
+        assert!(record.horizon.is_none());
+        assert_eq!(source::encoded(&record).unwrap(), raw);
+    }
+    // A clearing allocated today without horizon inputs is still exactly the
+    // pre-horizon shape: no new key appears on disk.
+    let temp = world();
+    let allocation = execute_at(
+        temp.path(),
+        "allocate",
+        &request(temp.path(), Some("one"), "task:standalone"),
+        100,
+    )
+    .unwrap();
+    let path = allocation["source"]["path"].as_str().unwrap();
+    let bytes = fs::read_to_string(temp.path().join("Work/one").join(path)).unwrap();
+    for key in ["workcell_ref", "parent_now_ref", "horizon"] {
+        assert!(!bytes.contains(key), "{key} leaked into {bytes}");
+    }
+    let record: placement::NowRecord = serde_json::from_str(&bytes).unwrap();
+    assert_eq!(source::encoded(&record).unwrap(), bytes);
+    assert_eq!(record.schema, placement::NOW_SCHEMA);
+}

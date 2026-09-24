@@ -44,7 +44,9 @@ pub mod system_disclosure;
 pub mod template_stamp;
 pub mod wiki_read;
 pub mod world;
+pub mod world_here;
 pub mod world_map;
+pub mod world_position;
 pub mod world_source;
 pub mod projectcentral_ops {
     pub use super::projectcentral_ops_base::{
@@ -70,6 +72,8 @@ pub mod projectcentral_ops {
         super::world_source::register_world_source_actions(registry);
         super::wiki_read::register_projectcentral_wiki_read_action(registry);
         super::continuous_work::register_actions(registry);
+        super::world_here::register_world_here_action(registry);
+        super::world_position::register_world_position_actions(registry);
     }
 }
 pub mod recovery;

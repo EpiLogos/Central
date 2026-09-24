@@ -660,6 +660,16 @@ fn public_horizon(state: &SourceHorizonState, since: Option<u64>) -> SourceHoriz
     }
 }
 
+/// A horizon written before Project identities were bare manifest ids stored
+/// `project:project:<id lowercased>` (the manifest then read
+/// `"project_id": "project:<id>"`). That is the same World as `project:<id>`.
+fn is_legacy_project_identity(stored: &str, current: &str) -> bool {
+    let Some(id) = current.strip_prefix("project:") else {
+        return false;
+    };
+    stored == format!("project:project:{}", id.to_lowercase())
+}
+
 fn reconcile(
     world_root: &Path,
     state_path: &Path,
@@ -682,10 +692,26 @@ fn reconcile(
         reconciled_at_unix_seconds: now,
     });
     if state.world_ref != world_ref {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "source horizon world identity changed",
-        ));
+        if is_legacy_project_identity(&state.world_ref, world_ref) {
+            // The same Project under the pre-2026-09-14 identity grammar
+            // (`project_id: "project:o-i"` rendered `project:project:o-i`).
+            // The manifest's rename is authored; the derived horizon follows
+            // it, keeping its cursors, consumer acknowledgements and changes.
+            state.world_ref = world_ref.to_owned();
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "source horizon world identity changed: {} holds a horizon for {} but this \
+                     World is {world_ref}. Nothing was reconciled or written. If the World was \
+                     deliberately renamed, move that state file aside (it is derived, never \
+                     source) and rerun `ctrl --json action run projectcentral.change.horizon` \
+                     to found a fresh horizon; otherwise restore the manifest identity.",
+                    state_path.display(),
+                    state.world_ref
+                ),
+            ));
+        }
     }
 
     let mut new_changes = Vec::new();

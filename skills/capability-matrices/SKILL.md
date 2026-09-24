@@ -32,3 +32,12 @@ Recover the current native CLI inventory before mapping commands. Declare its re
 When a seed or capability changes, use `tools/reconcile_product_ground.py plan` with an explicit HTML-to-CSV or CSV-to-HTML direction. Read and refine the affected expanded sections, regenerate the final plan, then apply with the reviewed sections and actual change reference. Hashes record that review; do not refresh them to silence a check without reading the changed source. The transaction receipt supports exact recovery while protecting later edits.
 
 Run `tools/product_maintenance.py` against the built native CLI and actual source. Use the PR comparison base to find newly changed code outside the matrix. Update the capability, command exposure, evidence and linked account together. Maintain the same deterministic CI bundle across the six product repositories through `tools/package_product_ground.py`; never hand-edit generated bundles.
+
+
+## Jev-assisted matrix readings
+
+AIKit may ask its general Jev capability typed questions over an explicitly selected matrix view. Build that question from the view's own question, ordered axis meanings, governing account passages and the selected capabilities' need/operation/outcome/source standing. For full-scope work, account for every declared member before selection; search hits are not a substitute for the inventory.
+
+Do not force one winning capability when several contributions are jointly required. Retain a legitimate “catalogue insufficient for this need” determination. Keep the returned model/version, question basis, source revisions, usage and evidence standing with the invocation receipt. A repeated warm NOW read does not justify another Jev call unless a relevant semantic source, dependency, Return or selected practice changed.
+
+If the reading warrants a matrix update, apply it through the normal CSV/companion reconciliation path above. The classifier can expose pressure on a relation; it does not change the matrix, source standing, implementation status or human-authored product position by itself.

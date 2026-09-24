@@ -20,6 +20,19 @@ Success is the ordinary ActionResult envelope, `{"ok":true,"status":"success","a
 
 Recognised source law is selected through the existing root/Project source relations and the `work-placement-policy` role. No recognized root policy is an explicit refusal, not a permissive default. A Project-local policy pins its root policy SourceRef/content revision and can narrow, not widen, root grants. Do not manufacture Recognition or adopt private governance while integrating a consumer.
 
+A root policy can also explicitly grant an existing linked checkout under
+`worktrees/<slot>/<checkout>` with class `worktree`. Its primary repository must
+already have a `repository` grant under `Work`. Central checks Git's checkout
+marker, administrative directory, common directory and backlink together; a
+directory name or copied marker does not establish registration. Symlinked
+registration components are refused, including a symlink followed by `..`.
+Ordinary Git `commondir` parent traversal remains supported. The grant covers
+only the selected checkout, not its siblings. Its `.git`, `.central` and
+`ProjectCentral` paths and the primary repository's common Git directory remain
+protected. This allows an assigned development checkout without granting shared
+Git administration or authored Project ground to the executing agent. Policy
+changes still require a fresh effective revision at dispatch.
+
 Pass the returned effective revision unchanged:
 
 ```json
@@ -92,6 +105,8 @@ A representable boundary must carry the exact policy ref/revision, authority ref
 
 `central.time.policy` reads the recognised **root** `civil-time-policy` SourceRef, IANA timezone and local boundary, including DST. `central.day.ensure` requires its exact `expected_time_policy_revision`; `central.day.read` reads a DayRef or today pointer. Blank native text is distinguished from unavailable exact HTML-template fidelity. Day creation/rollover does not replace open writing, close the previous Day, carry/tick tasks, clear/archive NOW, or invoke a model.
 
+Clearings may carry a material horizon (O-I `docs/contracts/WORLD-INHABITATION-V1.md` §1). `central.now.workcell-root {workcell_ref}` idempotently ensures the one root NOW of a Workcell in the root register (task `central:task:control:root:workcell-root:<workcell_ref>`, `horizon: "workcell-root"`). `central.now.allocate` accepts `parent_now_ref` — an allocated NOW of the same scope or of the root scope, never another Project's — which makes the clearing a `horizon: "child"`, and a declared `workcell_ref`. `central.now.children {now_ref}` lists every child, uncapped, across the root register and all Projects for a root parent. The three fields are optional and skipped when absent, so standalone clearings keep their exact bytes and schema. `central.day.ensure` and `projectcentral.now.rollover` report `now_horizon` (active horizon clearings `carried`, quiescent ones `released` and retained) and never close, complete or archive a clearing.
+
 `central.day.lifecycle` needs exact source and relation revisions and a human-scoped native credential. `central.now.lifecycle` needs exact NOW and placement-policy revisions; archive refuses recorded pending receiving/obligations, retains source history and artifacts, and does not claim to have stopped external processes. `central.now.obligations` adds, never silently removes, native obligation references. `central.temporal.source-history` reads the existing native file-history store by SourceRef.
 
 Mutations requiring authenticated authorship use a recognized root `native-action-authority` source with exact scope/action grants and SHA-256 bearer credential digests. The host passes `CENTRAL_NATIVE_TOKEN` through its protected process channel, **not document JSON**. An `H` label, `actor_kind:human`, or a claimed acceptance string is not a credential. A bearer authenticates its declared principal, not physical human presence; same-UID malicious processes require credential isolation at the host/material boundary. No personal authority source is installed by these handlers or this PR.
@@ -101,6 +116,7 @@ Mutations requiring authenticated authorship use a recognized root `native-actio
 ```sh
 python3 scripts/prove-continuous-work.py --ctrl /path/to/built/ctrl
 cargo test -p ctrl --test continuous_work_native
+cargo test -p ctrl --test continuous_work_registered_worktree
 cargo test -p ctrl continuous_work::tests
 ```
 
