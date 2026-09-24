@@ -1,0 +1,13 @@
+%% source_id: [product]-sequence-[flow]
+%% visual_question: In what order do participants exchange messages for [flow]?
+%% companion_doc: [architecture.md#interfaces]
+%% revision: [YYYY-MM-DD or sha256 of the companion unit]
+%% provenance: [author / Agent · standing agent-inference until recognised]
+sequenceDiagram
+  participant actor_user as [Person]
+  participant comp_cli as [CLI]
+  participant comp_core as [Core]
+  actor_user->>comp_cli: [command]
+  comp_cli->>comp_core: [request]
+  comp_core-->>comp_cli: [result or refusal]
+  comp_cli-->>actor_user: [output]

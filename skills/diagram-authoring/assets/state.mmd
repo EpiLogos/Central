@@ -1,0 +1,12 @@
+%% source_id: [product]-state-[object]
+%% visual_question: Which states can [object] be in, and what moves it between them?
+%% companion_doc: [design.md#state]
+%% revision: [YYYY-MM-DD or sha256 of the companion unit]
+%% provenance: [author / Agent · standing agent-inference until recognised]
+stateDiagram-v2
+  [*] --> state_draft
+  state_draft --> state_active: [adopted]
+  state_active --> state_degraded: [dependency lost]
+  state_degraded --> state_active: [recovered]
+  state_active --> state_retired: [superseded]
+  state_retired --> [*]

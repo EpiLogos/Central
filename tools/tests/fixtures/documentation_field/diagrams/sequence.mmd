@@ -1,0 +1,10 @@
+%% source_id: ledger-record-sequence
+%% visual_question: In what order does a record move from the CLI to the store?
+%% companion_doc: ../architecture.md#contracts
+%% revision: 2026-09-24
+%% provenance: fixture · agent-inference
+sequenceDiagram
+  participant actor_session as Session
+  participant comp_store as Store
+  actor_session->>comp_store: record(return)
+  comp_store-->>actor_session: id or refusal

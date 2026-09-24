@@ -79,6 +79,53 @@ class MatrixTests(unittest.TestCase):
         self.records[-1]["id"] = self.records[0]["id"]
         self.assert_error("Duplicate matrix id")
 
+    def capability(self):
+        return next(r for r in self.records if r["record_type"] == "capability")
+
+    def set_documentation(self, documentation):
+        row = self.capability()
+        extensions = json.loads(row["extensions"])
+        extensions["documentation"] = documentation
+        row["extensions"] = json.dumps(extensions)
+
+    def test_documentation_extension_accepts_refs_and_typed_relations(self):
+        self.set_documentation({
+            "vision_refs": ["vision.html#q0-need"], "design_refs": ["design.md#journeys"],
+            "mockup_refs": ["mockup.html#state-failure"], "architecture_refs": ["architecture.md#contracts"],
+            "diagram_refs": ["topology.mmd"], "praxis_refs": ["skill/central/product-development"],
+            "relations": [{"relation": "implements", "target": "architecture.md#contracts"},
+                          {"relation": "verified-by", "target": "tools/tests/test_capability_matrix.py"}],
+        })
+        self.assertEqual([], self.errors())
+
+    def test_documentation_extension_rejects_unknown_key(self):
+        self.set_documentation({"vision_refs": ["vision.html"], "wiki_refs": ["x"]})
+        self.assert_error("extensions.documentation has unknown key: wiki_refs")
+
+    def test_documentation_extension_rejects_duplicate_or_empty_refs(self):
+        self.set_documentation({"design_refs": ["design.md", "design.md"]})
+        self.assert_error("extensions.documentation.design_refs must be a unique list")
+        self.set_documentation({"vision_refs": [" "]})
+        self.assert_error("extensions.documentation.vision_refs must be a unique list")
+        self.set_documentation({"diagram_refs": "topology.mmd"})
+        self.assert_error("extensions.documentation.diagram_refs must be a unique list")
+
+    def test_documentation_extension_rejects_unknown_relation(self):
+        self.set_documentation({"relations": [{"relation": "inspires", "target": "vision.html"}]})
+        self.assert_error("unknown relation: inspires")
+
+    def test_documentation_extension_rejects_malformed_relation(self):
+        self.set_documentation({"relations": [{"relation": "implements"}]})
+        self.assert_error("relations entries require exactly relation and nonempty target")
+        self.set_documentation({"relations": [{"relation": ["implements"], "target": "a"}]})
+        self.assert_error("unknown relation")
+        self.set_documentation({"relations": {"relation": "implements", "target": "a"}})
+        self.assert_error("relations must be a list")
+
+    def test_documentation_extension_must_be_object(self):
+        self.set_documentation(["vision.html"])
+        self.assert_error("extensions.documentation must be an object")
+
     def test_duplicate_members(self):
         view = self.manifest["views"][0]
         view["row_axis"]["members"].append(dict(view["row_axis"]["members"][0]))
