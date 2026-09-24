@@ -19,6 +19,10 @@ display_name = "Epi-Logos Documentation Field"
 short_description = "Author and reconcile Vision, Design, Mockup, Architecture and diagrams against a capability matrix, with explicit claim standing."
 license = "UNLICENSED"
 
+[skillset.package.author]
+name = "Epi-Logos"
+url = "https://github.com/EpiLogos"
+
 # Developmental repertoire. Provenance: upstream mattpocock/skills@2ab958093e83e0ec752e6c1c5932da465bf23e0c.
 # wayfinder, grilling and prototype are locally adopted in Control/user/skills with
 # praxis classification (wayfinder METHODOLOGY:, grilling and prototype METHOD:);
