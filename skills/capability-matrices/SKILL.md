@@ -41,3 +41,28 @@ AIKit may ask its general Jev capability typed questions over an explicitly sele
 Do not force one winning capability when several contributions are jointly required. Retain a legitimate “catalogue insufficient for this need” determination. Keep the returned model/version, question basis, source revisions, usage and evidence standing with the invocation receipt. A repeated warm NOW read does not justify another Jev call unless a relevant semantic source, dependency, Return or selected practice changed.
 
 If the reading warrants a matrix update, apply it through the normal CSV/companion reconciliation path above. The classifier can expose pressure on a relation; it does not change the matrix, source standing, implementation status or human-authored product position by itself.
+
+### Situate the concern before asking
+
+A Jev reading is only as good as the selection you give it. Gather first, then ask a few precise questions; never send whole matrices or unrelated documents.
+
+Run this step at two moments:
+
+- **Planning (forward)**, before a change or while charting a wayfinder map: which cells and capabilities does the intended work touch, what must be tested, and is the catalogue sufficient for the need?
+- **After CI or a merge (returning)**, alongside `tools/product_maintenance.py --base <PR base>`: what did the change do to which cells, capabilities and evidence, and what now needs updating?
+
+1. **Name the concern.** State the feature, product domain and UX concern in a sentence. Name the telos goal/track it serves: `Control/user/telos/<goal>/` at the root, `ProjectCentral/user/telos/` per product.
+2. **Code.** Take the changed paths from `git diff --name-only <base>..<head>`. Read derived structure through the GitNexus lens: `aikit knowledge code changes --repo <repo> --scope compare --base-ref <base>`, then `aikit knowledge code impact|context --repo <repo> --symbol <S> --file <F>` for the symbols that matter. `aikit now-context field --repo <repo> --base <base> --projectcentral <ProjectCentral>` gives the explicit changed-path → capability (`code_refs`) → `test_refs` joins with revisions in one reading. GitNexus output is derived; it never outranks authored source.
+3. **Documents.** Read the governing account passages (`account_ref`), the product's docs and the wiki (`aikit wiki query search --file <wiki.json> "<terms>"`). Pull related concepts from the source pool through `aikit knowledge search`.
+4. **Select from the matrices.** For each product the concern touches, open its matrix (telos folder first) and pick the view whose question fits:
+   - the product-field view crosses the product's six seed questions with S and the other products;
+   - `suite-relations` carries the product↔product readings.
+
+   Select the affected cells and the capability rows they reference, with all fields. Check the same capabilities in O:I's suite matrix (`suite/capability-matrix.json`, the `capability-matrix` Method) for their cross-product standing.
+5. **Ask Jev a few questions** over exactly that selection. The state holds the view's question and axis meanings, the selected cells and rows, and the account passages. The questions are two to five precise determinations, for example:
+   - which selected cells does this change;
+   - is the catalogue sufficient for this need;
+   - which implicated capability's evidence is stale after this merge.
+
+   Write a request file and run `aikit --json jev invoke --request-file <request.json> --limits-file <limits.json> --credential-ref <ref>`. Read the provider outcome in `data.answer` and `data.attempts`, not the envelope's `ok`. Keep the request under the provider's ~32k-token input ceiling; over it the provider refuses with an opaque HTTP 400.
+6. **Read the answers yourself** against what you gathered. Act through this skill's normal path: a reconciled record, a test to run, a wayfinder ticket, or a "catalogue insufficient" note on the relevant cell. Keep the invocation receipt with the change.
