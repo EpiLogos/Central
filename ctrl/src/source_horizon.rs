@@ -30,6 +30,54 @@ pub const CONTROL_WORLD_REF: &str = "control:root";
 
 const MAX_SCAN_DEPTH: usize = 24;
 
+/// The Control trees that participate in the root horizon by tree stamp:
+/// `(directory, role, provenance, treatment)`. Declared Control relations
+/// override the stamp for their exact paths. The owner's personal ground,
+/// the Agent governance and the root Wiki are the original participants; the
+/// root agent ground (AgentProfiles, agent expressions, AgentSets) is the
+/// material an agent host needs, and participates so a root source transfer
+/// can carry it through the same revisioned seam as every other source. It
+/// is agent ground, not authored human ground: its roles are not in the
+/// authored-human set, so a declared agent may carry it.
+pub(crate) const CONTROL_TREE_BINDINGS: [(&str, &str, &str, &str); 6] = [
+    (
+        ROOT_HUMAN_SOURCE_DIR,
+        "personal-human-source-aperture",
+        "unresolved",
+        "control-user",
+    ),
+    (
+        ROOT_AGENT_GOVERNANCE_DIR,
+        "agent-governance-source",
+        "unresolved",
+        "control-agent-governance",
+    ),
+    (
+        ROOT_WIKI_DIR,
+        "agent-wiki-source",
+        "agent-maintained",
+        "control-agent-wiki",
+    ),
+    (
+        crate::agent_profile_store::ROOT_AGENT_PROFILE_DIR,
+        "agent-profile-source",
+        "unresolved",
+        "control-agent-profiles",
+    ),
+    (
+        crate::world_map::ROOT_AGENT_EXPRESSIONS_DIR,
+        "agent-expression-source",
+        "unresolved",
+        "control-agent-expressions",
+    ),
+    (
+        crate::agent_set_store::ROOT_AGENT_SET_DIR,
+        "agent-set-source",
+        "unresolved",
+        "control-agent-sets",
+    ),
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SourceChangeKind {
@@ -539,36 +587,18 @@ pub fn control_source_bindings(central_root: &Path) -> io::Result<Vec<SourceBind
             )?;
         }
     }
-    insert_tree_bindings(
-        central_root,
-        &central_root.join(ROOT_HUMAN_SOURCE_DIR),
-        world_ref,
-        &["personal-human-source-aperture"],
-        "unresolved",
-        "unspecified",
-        "control-user",
-        &mut bindings,
-    )?;
-    insert_tree_bindings(
-        central_root,
-        &central_root.join(ROOT_AGENT_GOVERNANCE_DIR),
-        world_ref,
-        &["agent-governance-source"],
-        "unresolved",
-        "unspecified",
-        "control-agent-governance",
-        &mut bindings,
-    )?;
-    insert_tree_bindings(
-        central_root,
-        &central_root.join(ROOT_WIKI_DIR),
-        world_ref,
-        &["agent-wiki-source"],
-        "agent-maintained",
-        "unspecified",
-        "control-agent-wiki",
-        &mut bindings,
-    )?;
+    for (dir, role, provenance, treatment) in CONTROL_TREE_BINDINGS {
+        insert_tree_bindings(
+            central_root,
+            &central_root.join(dir),
+            world_ref,
+            &[role],
+            provenance,
+            "unspecified",
+            treatment,
+            &mut bindings,
+        )?;
+    }
 
     for relation in read_control_ground_relations(central_root)? {
         let relative = relation.path.clone();
