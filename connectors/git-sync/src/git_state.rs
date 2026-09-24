@@ -329,6 +329,7 @@ pub(crate) fn census(git: &Path, input: &GitCensusRequest) -> Result<GitRepoCens
         unborn,
         bare,
         head_branch,
+        head_sha: git_optional(git, repo, &["rev-parse", "--verify", "HEAD"]),
         remote,
         default_branch,
         worktrees,
@@ -339,6 +340,7 @@ pub(crate) fn census(git: &Path, input: &GitCensusRequest) -> Result<GitRepoCens
 }
 
 impl GitState for super::GitSynchronizerConnector {
+    fn diff(&self, input: &central_connector_sdk::GitDiffRequest) -> Result<central_connector_sdk::GitDiffReading, PortError> { super::git_diff::read(self.git_path(),input) }
     fn census(&self, input: &GitCensusRequest) -> Result<GitRepoCensus, PortError> {
         census(self.git_path(), input)
     }

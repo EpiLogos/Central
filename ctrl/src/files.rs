@@ -354,6 +354,7 @@ pub fn read_file(
     }
     let revision = content_revision_bytes(&bytes);
     let byte_len = bytes.len() as u64;
+    let is_text = std::str::from_utf8(&bytes).is_ok_and(|text| !text.contains('\0'));
     let (content_encoding, content, mime_hint) = match encoding {
         FileEncoding::Utf8 => {
             let content = String::from_utf8(bytes).map_err(|_| {
@@ -376,7 +377,11 @@ pub fn read_file(
     };
     let unavailable = crate::file_mutation::ordinary_address(&root, location)
         .err()
-        .map(|e| e.to_string());
+        .map(|e| e.to_string())
+        .or_else(|| {
+            (byte_len > crate::file_mutation::MAX as u64)
+                .then(|| "File exceeds the bounded native mutation and recovery size".into())
+        });
     let history = FileOperationAvailability {
         available: unavailable.is_none(),
         reason: unavailable.clone(),
@@ -391,11 +396,17 @@ pub fn read_file(
             None
         }
     });
+    let text_write_reason = write_reason.clone().or_else(|| {
+        (!is_text).then(|| {
+            "Ordinary writes require UTF-8 text; binary bytes retain native history and restore"
+                .into()
+        })
+    });
     Ok(FileReading {
         operations: FileOperations {
             write: FileOperationAvailability {
-                available: write_reason.is_none(),
-                reason: write_reason.clone(),
+                available: text_write_reason.is_none(),
+                reason: text_write_reason,
             },
             history,
             restore: FileOperationAvailability {
@@ -460,7 +471,11 @@ fn result(input: &Value, context: &ActionExecutionContext<'_>, read: bool) -> Ac
         ),
     }
 }
+#[path = "file_resolution.rs"]
+mod resolution;
+
 pub fn register_file_actions(registry: &mut ActionRegistry) {
+    resolution::register(registry);
     crate::file_mutation::register(registry);
     for (id, title, read) in [
         ("central.files.list", "List native Central directory", false),

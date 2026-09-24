@@ -50,7 +50,8 @@ struct ParsedCommand {
     target: CommandTarget,
 }
 
-fn parse_action_input(
+/// Shared bounded Action JSON transport for core and native host surfaces.
+pub fn parse_action_input(
     structured: bool,
     action_id: &str,
     raw: &str,
@@ -1100,16 +1101,7 @@ pub fn run_cli_with_runtime(
         connectors,
         connector_context,
     };
-    let mut registry = create_core_action_registry();
-    register_projectcentral_actions(&mut registry);
-    crate::template_stamp::register_template_stamp_actions(&mut registry);
-    crate::engineering_ground::register_engineering_ground_actions(&mut registry);
-    register_agent_profile_actions(&mut registry);
-    crate::agent_set_actions::register_agent_set_actions(&mut registry);
-    crate::remember_actions::register_remember_actions(&mut registry);
-    crate::system_disclosure::register_system_disclosure_action(&mut registry);
-    crate::git_census::register_git_actions(&mut registry);
-    crate::configuration::register_configuration_actions(&mut registry);
+    let registry = create_runtime_action_registry();
     let result = match parsed.target {
         CommandTarget::Direct { action_id, input } => {
             registry.execute(&action_id, &input, &context)
@@ -1166,4 +1158,19 @@ pub fn run_cli_with_surface(
 pub fn run_cli(args: &[String], environment: &CliEnvironment) -> CliExecution {
     let mut surface = NullTerminalSurface;
     run_cli_with_surface(args, environment, &mut surface)
+}
+
+/// One runtime Action catalogue shared by ordinary and native host surfaces.
+pub fn create_runtime_action_registry() -> crate::action::ActionRegistry {
+    let mut registry = create_core_action_registry();
+    register_projectcentral_actions(&mut registry);
+    crate::template_stamp::register_template_stamp_actions(&mut registry);
+    crate::engineering_ground::register_engineering_ground_actions(&mut registry);
+    register_agent_profile_actions(&mut registry);
+    crate::agent_set_actions::register_agent_set_actions(&mut registry);
+    crate::remember_actions::register_remember_actions(&mut registry);
+    crate::system_disclosure::register_system_disclosure_action(&mut registry);
+    crate::git_census::register_git_actions(&mut registry);
+    crate::configuration::register_configuration_actions(&mut registry);
+    registry
 }
