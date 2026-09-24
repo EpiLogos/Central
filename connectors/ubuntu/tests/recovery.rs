@@ -9,7 +9,10 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temporary_directory(label: &str) -> PathBuf {
-    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let path = std::env::temp_dir().join(format!(
         "central-ubuntu-recovery-{label}-{}-{nonce}",
         std::process::id()
@@ -30,7 +33,9 @@ fn run(
     ];
     args.extend(command.iter().map(|value| (*value).to_owned()));
     let mut surface = NullTerminalSurface;
-    let connector_context = ConnectorContext { platform: "linux".to_owned() };
+    let connector_context = ConnectorContext {
+        platform: "linux".to_owned(),
+    };
     run_cli_with_runtime(
         &args,
         &CliEnvironment::default(),
@@ -55,9 +60,9 @@ fn canonical_recovery_reuses_the_real_ubuntu_reconciliation_connectors() {
     // the platform under test.
     let ubuntu_tooling = std::env::var("PATH")
         .map(|paths| {
-            paths.split(':').any(|dir| {
-                std::path::Path::new(dir).join("dpkg").is_file()
-            })
+            paths
+                .split(':')
+                .any(|dir| std::path::Path::new(dir).join("dpkg").is_file())
         })
         .unwrap_or(false);
     if !ubuntu_tooling {

@@ -45,7 +45,11 @@ impl UbuntuServerConnector {
         }
     }
 
-    fn error(code: PortErrorCode, message: impl Into<String>, detail: impl Into<String>) -> PortError {
+    fn error(
+        code: PortErrorCode,
+        message: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> PortError {
         let mut error = PortError::new(code, message);
         error.provider_detail = Some(detail.into());
         error
@@ -58,7 +62,11 @@ impl UbuntuServerConnector {
                 std::io::ErrorKind::PermissionDenied => PortErrorCode::PermissionFailure,
                 _ => PortErrorCode::ProviderOperationFailed,
             };
-            Self::error(code, format!("Ubuntu {operation} could not start."), error.to_string())
+            Self::error(
+                code,
+                format!("Ubuntu {operation} could not start."),
+                error.to_string(),
+            )
         })
     }
 
@@ -71,8 +79,7 @@ impl UbuntuServerConnector {
     }
 
     fn is_ubuntu() -> bool {
-        std::env::consts::OS == "linux"
-            && Self::os_release_value("ID").as_deref() == Some("ubuntu")
+        std::env::consts::OS == "linux" && Self::os_release_value("ID").as_deref() == Some("ubuntu")
     }
 
     fn validate_package_id(id: &str) -> Result<(), PortError> {
@@ -157,7 +164,10 @@ impl UbuntuServerConnector {
         let source = input.source.as_ref().ok_or_else(|| {
             PortError::new(
                 PortErrorCode::InvalidConfiguration,
-                format!("Configuration {} requires source kind=file when present=true.", input.id),
+                format!(
+                    "Configuration {} requires source kind=file when present=true.",
+                    input.id
+                ),
             )
         })?;
         if source.kind != "file" {
@@ -173,7 +183,10 @@ impl UbuntuServerConnector {
         if !path.is_file() {
             return Err(PortError::new(
                 PortErrorCode::InvalidConfiguration,
-                format!("Configuration source is not a readable file: {}", path.display()),
+                format!(
+                    "Configuration source is not a readable file: {}",
+                    path.display()
+                ),
             ));
         }
         Ok(path)
@@ -257,7 +270,10 @@ impl Default for UbuntuServerConnector {
 }
 
 impl MachineInspector for UbuntuServerConnector {
-    fn inspect(&self, input: &MachineInspectionInput) -> Result<MachineInspectionOutput, PortError> {
+    fn inspect(
+        &self,
+        input: &MachineInspectionInput,
+    ) -> Result<MachineInspectionOutput, PortError> {
         let mut packages = Vec::with_capacity(input.package_ids.len());
         for id in &input.package_ids {
             packages.push(ObservedPackage {
@@ -355,7 +371,10 @@ impl ConfigurationManager for UbuntuServerConnector {
                 fs::create_dir_all(parent).map_err(|error| {
                     Self::error(
                         PortErrorCode::PermissionFailure,
-                        format!("Could not create configuration directory {}.", parent.display()),
+                        format!(
+                            "Could not create configuration directory {}.",
+                            parent.display()
+                        ),
                         error.to_string(),
                     )
                 })?;
@@ -389,7 +408,10 @@ impl ConfigurationManager for UbuntuServerConnector {
         if Self::configuration_changed(input)? {
             return Err(PortError::new(
                 PortErrorCode::VerificationFailure,
-                format!("Configuration {} did not reach the requested state.", input.id),
+                format!(
+                    "Configuration {} did not reach the requested state.",
+                    input.id
+                ),
             ));
         }
         Ok(StateChangeResult {
@@ -416,7 +438,9 @@ impl Connector for UbuntuServerConnector {
             ));
         }
         if !Self::is_ubuntu() {
-            return CapabilityProbe::unavailable("Linux host is not identified as Ubuntu by /etc/os-release.");
+            return CapabilityProbe::unavailable(
+                "Linux host is not identified as Ubuntu by /etc/os-release.",
+            );
         }
         if !self
             .manifest
@@ -432,10 +456,14 @@ impl Connector for UbuntuServerConnector {
         if matches!(port.id, "MachineInspector" | "PackageManager")
             && !Path::new("/usr/bin/dpkg-query").is_file()
         {
-            return CapabilityProbe::unavailable("Required dependency is missing: /usr/bin/dpkg-query");
+            return CapabilityProbe::unavailable(
+                "Required dependency is missing: /usr/bin/dpkg-query",
+            );
         }
         if port.id == PACKAGE_MANAGER_PORT.id && !Path::new("/usr/bin/apt-get").is_file() {
-            return CapabilityProbe::unavailable("Required dependency is missing: /usr/bin/apt-get");
+            return CapabilityProbe::unavailable(
+                "Required dependency is missing: /usr/bin/apt-get",
+            );
         }
         CapabilityProbe::available()
     }

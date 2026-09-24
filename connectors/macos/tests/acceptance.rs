@@ -4,8 +4,8 @@ mod macos_acceptance {
         run_machine_inspector_conformance, run_native_open_conformance,
         run_native_reveal_conformance, run_tag_store_conformance, Connector, ConnectorContext,
         ConnectorRegistry, MachineInspectorConformanceFixture, NativeTargetConformanceFixture,
-        TagStoreConformanceFixture, MACHINE_INSPECTOR_PORT, NATIVE_OPEN_PORT,
-        NATIVE_REVEAL_PORT, TAG_STORE_PORT,
+        TagStoreConformanceFixture, MACHINE_INSPECTOR_PORT, NATIVE_OPEN_PORT, NATIVE_REVEAL_PORT,
+        TAG_STORE_PORT,
     };
     use central_ctrl::{
         create_core_action_registry, initialize_central, ActionExecutionContext, ResultStatus,
@@ -45,7 +45,9 @@ mod macos_acceptance {
         let mut connectors = ConnectorRegistry::default();
         connectors.register(FilesystemWorkConnector::new()).unwrap();
         connectors
-            .register(MacOsNativeConnector::new().with_open_executable(stub_open_executable("registry")))
+            .register(
+                MacOsNativeConnector::new().with_open_executable(stub_open_executable("registry")),
+            )
             .unwrap();
         connectors
     }
@@ -54,7 +56,9 @@ mod macos_acceptance {
     fn manifest_and_capability_probes_are_real_macos_eligible() {
         let connector = MacOsNativeConnector::new();
         assert_eq!(connector.manifest().mutation_scope, "externally-mutating");
-        let context = ConnectorContext { platform: "macos".to_owned() };
+        let context = ConnectorContext {
+            platform: "macos".to_owned(),
+        };
         for port in [
             NATIVE_OPEN_PORT,
             NATIVE_REVEAL_PORT,
@@ -148,8 +152,13 @@ mod macos_acceptance {
         let mut connectors = ConnectorRegistry::default();
         connectors.register(FilesystemWorkConnector::new()).unwrap();
         connectors.register(MacOsNativeConnector::new()).unwrap();
-        let connector_context = ConnectorContext { platform: "macos".to_owned() };
-        let root_options = RootOptions { explicit_root: Some(root), ..RootOptions::default() };
+        let connector_context = ConnectorContext {
+            platform: "macos".to_owned(),
+        };
+        let root_options = RootOptions {
+            explicit_root: Some(root),
+            ..RootOptions::default()
+        };
         let context = ActionExecutionContext {
             root_options: &root_options,
             connectors: &connectors,
@@ -159,8 +168,15 @@ mod macos_acceptance {
 
         let open = actions.execute("work.open", &json!({ "query": "native-project" }), &context);
         assert_eq!(open.status, ResultStatus::ConnectorFailure, "{open:?}");
-        let message = open.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
-        assert!(message.contains("suppressed"), "unexpected failure: {message}");
+        let message = open
+            .error
+            .as_ref()
+            .map(|e| e.message.clone())
+            .unwrap_or_default();
+        assert!(
+            message.contains("suppressed"),
+            "unexpected failure: {message}"
+        );
     }
 
     #[test]
@@ -171,7 +187,9 @@ mod macos_acceptance {
         fs::create_dir(&project).unwrap();
 
         let connectors = macos_registry();
-        let connector_context = ConnectorContext { platform: "macos".to_owned() };
+        let connector_context = ConnectorContext {
+            platform: "macos".to_owned(),
+        };
         let root_options = RootOptions {
             explicit_root: Some(root),
             ..RootOptions::default()
@@ -189,19 +207,30 @@ mod macos_acceptance {
             open.data.as_ref().unwrap()["native"]["diagnostics"]["selected_connector"]["id"],
             "personal.macos-native"
         );
-        assert_eq!(open.data.as_ref().unwrap()["native"]["port"], NATIVE_OPEN_PORT.id);
+        assert_eq!(
+            open.data.as_ref().unwrap()["native"]["port"],
+            NATIVE_OPEN_PORT.id
+        );
 
-        let reveal = actions.execute("work.reveal", &json!({ "query": "native-project" }), &context);
+        let reveal = actions.execute(
+            "work.reveal",
+            &json!({ "query": "native-project" }),
+            &context,
+        );
         assert_eq!(reveal.status, ResultStatus::Success);
         assert_eq!(
             reveal.data.as_ref().unwrap()["native"]["diagnostics"]["selected_connector"]["id"],
             "personal.macos-native"
         );
-        assert_eq!(reveal.data.as_ref().unwrap()["native"]["port"], NATIVE_REVEAL_PORT.id);
+        assert_eq!(
+            reveal.data.as_ref().unwrap()["native"]["port"],
+            NATIVE_REVEAL_PORT.id
+        );
     }
 
     #[test]
-    fn machine_inspect_and_plan_use_the_macos_inspector_without_mixing_authored_and_observed_state() {
+    fn machine_inspect_and_plan_use_the_macos_inspector_without_mixing_authored_and_observed_state()
+    {
         let root = temporary_directory("machine-plan").join("Central");
         initialize_central(&root).unwrap();
         let declaration = json!({
@@ -222,7 +251,9 @@ mod macos_acceptance {
         .unwrap();
 
         let connectors = macos_registry();
-        let connector_context = ConnectorContext { platform: "macos".to_owned() };
+        let connector_context = ConnectorContext {
+            platform: "macos".to_owned(),
+        };
         let root_options = RootOptions {
             explicit_root: Some(root),
             ..RootOptions::default()
@@ -239,9 +270,16 @@ mod macos_acceptance {
         let inspection = inspect.data.unwrap();
         assert_eq!(inspection["observation"]["platform"], "macos");
         assert_eq!(inspection["source"]["source_class"], "observed");
-        assert_eq!(inspection["source"]["connector"]["id"], "personal.macos-native");
+        assert_eq!(
+            inspection["source"]["connector"]["id"],
+            "personal.macos-native"
+        );
 
-        let plan = actions.execute("machine.plan", &json!({ "role": "mac-workstation" }), &context);
+        let plan = actions.execute(
+            "machine.plan",
+            &json!({ "role": "mac-workstation" }),
+            &context,
+        );
         assert_eq!(plan.status, ResultStatus::Success);
         let data = plan.data.unwrap();
         assert_eq!(data["summary"]["satisfied"], 2);
@@ -250,7 +288,10 @@ mod macos_acceptance {
         assert_eq!(data["summary"]["unsupported"], 0);
         assert_eq!(data["authored"]["source"]["source_class"], "authored");
         assert_eq!(data["observed"]["source"]["source_class"], "observed");
-        assert_eq!(data["observed"]["source"]["connector"]["id"], "personal.macos-native");
+        assert_eq!(
+            data["observed"]["source"]["connector"]["id"],
+            "personal.macos-native"
+        );
     }
 }
 
@@ -263,7 +304,9 @@ fn macos_connector_is_explicitly_ineligible_off_platform() {
     let connector = MacOsNativeConnector::new();
     let probe = connector.probe(
         &NATIVE_OPEN_PORT,
-        &ConnectorContext { platform: std::env::consts::OS.to_owned() },
+        &ConnectorContext {
+            platform: std::env::consts::OS.to_owned(),
+        },
     );
     assert!(!probe.available);
     assert!(probe.reason.unwrap().contains("does not support platform"));

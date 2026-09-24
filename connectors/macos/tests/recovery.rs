@@ -187,7 +187,11 @@ exit 64
         let source = fixture.join("source");
         fs::create_dir_all(&home).unwrap();
         fs::create_dir_all(&source).unwrap();
-        fs::write(source.join("fixture.txt"), "authored recovery configuration\n").unwrap();
+        fs::write(
+            source.join("fixture.txt"),
+            "authored recovery configuration\n",
+        )
+        .unwrap();
         initialize_central(&root).unwrap();
 
         let machine = json!({
@@ -274,7 +278,13 @@ exit 64
         let first = first.data.unwrap();
         assert_eq!(first["outcome"], "complete");
         assert_eq!(first["synchronization"]["changed"], true);
-        assert_eq!(first["machine_apply"]["operations"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            first["machine_apply"]["operations"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
         assert_eq!(first["verification"]["satisfied"], true);
         assert_eq!(
             fs::read_to_string(home.join("fixture.txt")).unwrap(),
@@ -286,7 +296,13 @@ exit 64
         assert_eq!(second.status, ResultStatus::Success);
         let second = second.data.unwrap();
         assert!(second["synchronization"].is_null());
-        assert_eq!(second["machine_apply"]["operations"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            second["machine_apply"]["operations"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
         assert_eq!(second["verification"]["satisfied"], true);
         assert_eq!(*sync_state.applies.lock().unwrap(), 1);
     }

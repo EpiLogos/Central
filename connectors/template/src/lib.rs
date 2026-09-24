@@ -77,7 +77,8 @@ mod tests {
                 platform: std::env::consts::OS.to_owned(),
                 expected_names: Some(Vec::new()),
             },
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(report.port_id, WORK_DISCOVERY_PORT.id);
     }
 }

@@ -41,7 +41,10 @@ fn skip_without_ubuntu_tooling() -> bool {
 }
 
 fn temporary_directory(label: &str) -> PathBuf {
-    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let path = std::env::temp_dir().join(format!(
         "central-ubuntu-{label}-{}-{nonce}",
         std::process::id()
@@ -55,7 +58,9 @@ fn off_platform_probe_is_explicitly_unavailable() {
     let connector = UbuntuServerConnector::new();
     let probe = connector.probe(
         &CONFIGURATION_MANAGER_PORT,
-        &ConnectorContext { platform: "macos".to_owned() },
+        &ConnectorContext {
+            platform: "macos".to_owned(),
+        },
     );
     assert!(!probe.available);
     assert!(probe.reason.unwrap().contains("does not support platform"));
@@ -130,7 +135,10 @@ fn ubuntu_configuration_manager_passes_shared_conformance_with_a_real_file_fixtu
     .expect("Ubuntu ConfigurationManager should satisfy the public contract");
 
     assert_eq!(report.connector.id, "personal.ubuntu-server");
-    assert_eq!(fs::read_to_string(&target).unwrap(), "central_ubuntu_fixture=1\n");
+    assert_eq!(
+        fs::read_to_string(&target).unwrap(),
+        "central_ubuntu_fixture=1\n"
+    );
     fs::remove_dir_all(root).unwrap();
 }
 

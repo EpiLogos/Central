@@ -439,14 +439,16 @@ fn export_action(
             .find(|source| &source.binding.source_ref == reference)
         {
             Some(value) => value,
-            None => return ActionResult::failure(
-                Some(action),
-                ResultStatus::InvalidInput,
-                format!(
+            None => {
+                return ActionResult::failure(
+                    Some(action),
+                    ResultStatus::InvalidInput,
+                    format!(
                     "source_ref is not a participating World source of this Project: {reference}"
                 ),
-                None,
-            ),
+                    None,
+                )
+            }
         };
         if !observed.binding.agent_retrieval_allowed {
             return ActionResult::failure(
