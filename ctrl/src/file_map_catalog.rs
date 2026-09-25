@@ -14,7 +14,7 @@ use std::{
 pub const SCHEMA: &str = "central.file-map/v1";
 const INDEX: &str = ".central/bkmr/bindings.json";
 const TEXT_LIMIT: usize = 32768;
-pub(crate) const MAX_ENTRIES: usize = 10000;
+pub(crate) const MAX_ENTRIES: usize = 1_000_000;
 #[derive(Clone, Debug)]
 pub(crate) struct Scope {
     pub root: PathBuf,
@@ -90,7 +90,11 @@ pub(crate) struct Indexed {
     #[serde(default)]
     pub source_path: String,
     pub generated_title: String,
-    pub generated_description: String,
+    /// Digest of the description last written to bkmr (marker + content).
+    /// The text itself lives in bkmr; storing the digest keeps the derived
+    /// index compact enough to pool whole trees.
+    #[serde(default)]
+    pub description_hash: String,
     #[serde(default)]
     pub retained_description: Option<String>,
     #[serde(default)]
@@ -165,11 +169,10 @@ pub(crate) fn read_json(path: &Path) -> io::Result<Value> {
     serde_json::from_slice(&fs::read(path)?)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
-/// The derived bindings index is not authored ground: a fully pooled scope
-/// carries per-entry reconciliation state (roughly 7 KB per source), so its
-/// read bound is sized for a full 10000-source map rather than the
-/// authored-document bound above.
-const INDEX_JSON_BOUND: u64 = 128 * 1024 * 1024;
+/// The derived bindings index is not authored ground: pooled scopes carry a
+/// digest per source, so its read bound is sized for a fully pooled world
+/// rather than the authored-document bound above.
+const INDEX_JSON_BOUND: u64 = 512 * 1024 * 1024;
 fn read_index_json(path: &Path) -> io::Result<Value> {
     if fs::metadata(path)?.len() > INDEX_JSON_BOUND {
         return Err(invalid("Bindings index exceeds size bound"));
@@ -408,7 +411,7 @@ pub(crate) fn entries(scope: &Scope) -> io::Result<Vec<Entry>> {
         )?;
     }
     if sources.len() > MAX_ENTRIES {
-        return Err(invalid("File map exceeds 10000-source bound"));
+        return Err(invalid("File map exceeds the 1000000-source bound"));
     }
     let mut result = Vec::new();
     for (reference, mut source) in sources {

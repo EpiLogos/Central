@@ -1,6 +1,7 @@
 //! Incremental native bkmr maintenance and scoped query federation.
 use super::file_map::*;
 use crate::file_map_backend::{self as native, Backend};
+use crate::source_safety::content_revision_bytes;
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -48,6 +49,8 @@ pub(crate) fn refresh(scope: &Scope, embeddings: bool) -> io::Result<Value> {
             changes.push(format!("withdrawn:{reference}"));
         }
     }
+    let mut added_without_embed = 0usize;
+    let mut checkpointed = 0usize;
     for entry in entries {
         let entry = with_revision(entry)?;
         let reference = &entry.source.source_ref;
@@ -79,7 +82,14 @@ pub(crate) fn refresh(scope: &Scope, embeddings: bool) -> io::Result<Value> {
             record_id = old.id;
             if old.revision != entry.revision || old.url != url || index.embeddings != embeddings {
                 let current_desc = row["description"].as_str().unwrap();
-                if current_desc != old.generated_description {
+                // Indexes from before the digest era stored the whole text;
+                // migrate them by trusting the marker-verified row once.
+                let stored_hash = if old.description_hash.is_empty() {
+                    content_revision_bytes(current_desc.as_bytes())
+                } else {
+                    old.description_hash.clone()
+                };
+                if content_revision_bytes(current_desc.as_bytes()) != stored_hash {
                     return Err(conflict(
                         "Managed indexed description was edited in bkmr; preserve/reconcile it before refresh",
                     ));
@@ -130,14 +140,15 @@ pub(crate) fn refresh(scope: &Scope, embeddings: bool) -> io::Result<Value> {
                     "--description".into(),
                     generated.clone(),
                     "--no-web".into(),
+                    // Embedding happens once, in bulk, after the pass: the
+                    // per-row path would spawn the embedder for every file.
+                    "--no-embed".into(),
                 ];
-                if !embeddings {
-                    args.push("--no-embed".into());
-                }
                 if !entry.tags.is_empty() {
                     args.push(entry.tags.join(","));
                 }
                 backend.run(&args)?;
+                added_without_embed += 1;
                 records = backend.records()?;
                 record_id = native::id(
                     records
@@ -219,19 +230,25 @@ pub(crate) fn refresh(scope: &Scope, embeddings: bool) -> io::Result<Value> {
                 revision: entry.revision,
                 url,
                 generated_title: entry.title,
-                generated_description: generated,
+                description_hash: content_revision_bytes(generated.as_bytes()),
                 retained_description: existing
                     .as_ref()
                     .and_then(|v| v.retained_description.clone()),
                 import_id,
             },
         );
-        // Checkpoint every record; another process can resume without rebuilding.
-        scope.save_index(&index)?;
+        // Checkpoint in batches: a resumed refresh replays at most this many
+        // bkmr writes, while per-record saves would rewrite a pooled scope's
+        // whole index for every file.
+        checkpointed += 1;
+        if checkpointed >= 256 {
+            scope.save_index(&index)?;
+            checkpointed = 0;
+        }
     }
-    // Only rows the clear removed still lack vectors; backfill regenerates
-    // exactly those under the configured model.
-    if model_changed {
+    // Rows the clear removed and rows added this pass all lack vectors;
+    // backfill regenerates them in one bulk pass under the configured model.
+    if embeddings && (model_changed || added_without_embed > 0) {
         backend.run_allowance(&["backfill".into()], 3600)?;
     }
     if embeddings {
