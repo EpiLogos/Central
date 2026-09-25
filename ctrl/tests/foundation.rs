@@ -260,6 +260,7 @@ fn registry_has_stable_ids_and_complete_descriptors() {
             "central.files.list",
             "central.files.read",
             "central.files.recovery_preview",
+            "central.files.resolve",
             "central.files.restore",
             "central.files.write",
             "central.init",
