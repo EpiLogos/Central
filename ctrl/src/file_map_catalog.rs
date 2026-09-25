@@ -165,6 +165,18 @@ pub(crate) fn read_json(path: &Path) -> io::Result<Value> {
     serde_json::from_slice(&fs::read(path)?)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
+/// The derived bindings index is not authored ground: a fully pooled scope
+/// carries per-entry reconciliation state (roughly 7 KB per source), so its
+/// read bound is sized for a full 10000-source map rather than the
+/// authored-document bound above.
+const INDEX_JSON_BOUND: u64 = 128 * 1024 * 1024;
+fn read_index_json(path: &Path) -> io::Result<Value> {
+    if fs::metadata(path)?.len() > INDEX_JSON_BOUND {
+        return Err(invalid("Bindings index exceeds size bound"));
+    }
+    serde_json::from_slice(&fs::read(path)?)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
 impl Scope {
     pub fn project(root: PathBuf, project: Option<String>) -> io::Result<Self> {
         let manifest = crate::projectcentral::read_project_manifest(&root)?;
@@ -250,7 +262,8 @@ impl Scope {
                 ..Default::default()
             });
         }
-        let index: Index = serde_json::from_value(read_json(&path)?).map_err(io::Error::other)?;
+        let index: Index = serde_json::from_value(read_index_json(&path)?)
+            .map_err(io::Error::other)?;
         if index.schema != SCHEMA || index.world_ref != self.world {
             return Err(invalid("bkmr bindings belong to another World or schema"));
         }
