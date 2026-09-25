@@ -40,6 +40,10 @@ pub(crate) struct MapGround {
 pub(crate) struct ContentPool {
     #[serde(default)]
     pub enabled: bool,
+    /// Relative-path subtrees kept out of the pool, matched at component
+    /// boundaries ("Seeds" excludes "Seeds/x" but not "Seeds-2/x").
+    #[serde(default)]
+    pub exclude: Vec<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Resource {
@@ -320,13 +324,16 @@ pub(crate) fn pool(all: &[Scope], input: &Value) -> io::Result<Value> {
         .as_bool()
         .ok_or_else(|| invalid("pool requires enable: true|false"))?;
     let mut ground = scope.ground()?;
-    ground.content_pool.enabled = enable;
-    let doc = scope.document()?;
-    scope.save(&ground, doc)?;
+    if let Some(exclude) = input.get("exclude").and_then(Value::as_array) {
+        ground.content_pool.exclude = exclude
+            .iter()
+            .filter_map(|value| value.as_str().map(str::to_owned))
+            .collect();
+    }
     let mut pooled = 0usize;
     if enable {
         let mut sources: BTreeMap<String, SourceBinding> = BTreeMap::new();
-        source_horizon::insert_tree_bindings(
+        pooled = source_horizon::insert_tree_bindings(
             &scope.root,
             &scope.root,
             &scope.world,
@@ -334,11 +341,21 @@ pub(crate) fn pool(all: &[Scope], input: &Value) -> io::Result<Value> {
             "pooled",
             "scope-content",
             "pooled-content",
+            &ground.content_pool.exclude,
             &mut sources,
         )?;
-        pooled = sources.len();
+        // Refuse at enable time, with the count and the remedy, rather than
+        // poison every later enumeration with an over-bound pool.
+        if pooled > MAX_ENTRIES {
+            return Err(invalid(format!(
+                "pool would add {pooled} sources, over the {MAX_ENTRIES}-source bound; exclude subtrees and retry"
+            )));
+        }
     }
-    Ok(json!({"world_ref": scope.world, "content_pool": {"enabled": enable}, "pooled_sources": pooled}))
+    ground.content_pool.enabled = enable;
+    let doc = scope.document()?;
+    scope.save(&ground, doc)?;
+    Ok(json!({"world_ref": scope.world, "content_pool": {"enabled": enable}, "exclude": ground.content_pool.exclude, "pooled_sources": pooled}))
 }
 pub(crate) fn entries(scope: &Scope) -> io::Result<Vec<Entry>> {
     let ground = scope.ground()?;
@@ -373,6 +390,7 @@ pub(crate) fn entries(scope: &Scope) -> io::Result<Vec<Entry>> {
             "pooled",
             "scope-content",
             "pooled-content",
+            &ground.content_pool.exclude,
             &mut sources,
         )?;
     }

@@ -350,6 +350,17 @@ pub(crate) fn collect_files(
 // Collects a subtree's source bindings under one provenance/standing/treatment;
 // the descriptor fields are passed positionally into the shared accumulator
 // rather than bundled into a struct that exists only for this call.
+/// Does a normalized relative path sit inside an excluded subtree? An
+/// exclusion matches at component boundaries: "Seeds" excludes "Seeds/x"
+/// but not "Seeds-2/x".
+fn excluded_relative(relative: &str, excluded: &str) -> bool {
+    let excluded = excluded.trim_matches('/');
+    if excluded.is_empty() {
+        return false;
+    }
+    relative == excluded || relative.starts_with(&format!("{excluded}/"))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn insert_tree_bindings(
     world_root: &Path,
@@ -359,14 +370,23 @@ pub(crate) fn insert_tree_bindings(
     provenance: &str,
     standing: &str,
     treatment: &str,
+    exclude: &[String],
     bindings: &mut BTreeMap<String, SourceBinding>,
-) -> io::Result<()> {
+) -> io::Result<usize> {
     let mut files = Vec::new();
     collect_files(scan_root, world_root, 0, &mut files)?;
+    let mut seen = 0usize;
     for file in files {
         let relative = normalize_relative(file.strip_prefix(world_root).map_err(|_| {
             io::Error::new(io::ErrorKind::InvalidData, "source escaped its world root")
         })?);
+        if exclude
+            .iter()
+            .any(|excluded| excluded_relative(&relative, excluded))
+        {
+            continue;
+        }
+        seen += 1;
         let reference = source_ref(world_ref, &relative);
         bindings.entry(reference.clone()).or_insert(SourceBinding {
             source_ref: reference,
@@ -378,7 +398,7 @@ pub(crate) fn insert_tree_bindings(
             agent_retrieval_allowed: retrieval_allowed(world_root, &file),
         });
     }
-    Ok(())
+    Ok(seen)
 }
 
 fn read_relations_file(
@@ -490,6 +510,7 @@ pub fn project_source_bindings(project_root: &Path) -> io::Result<Vec<SourceBind
         "unresolved",
         "unspecified",
         "projectcentral-user",
+        &[],
         &mut bindings,
     )?;
     insert_tree_bindings(
@@ -500,6 +521,7 @@ pub fn project_source_bindings(project_root: &Path) -> io::Result<Vec<SourceBind
         "unresolved",
         "unspecified",
         "projectcentral-agent-governance",
+        &[],
         &mut bindings,
     )?;
     insert_tree_bindings(
@@ -510,6 +532,7 @@ pub fn project_source_bindings(project_root: &Path) -> io::Result<Vec<SourceBind
         "agent-maintained",
         "unspecified",
         "projectcentral-agent-wiki",
+        &[],
         &mut bindings,
     )?;
 
@@ -596,6 +619,7 @@ pub fn control_source_bindings(central_root: &Path) -> io::Result<Vec<SourceBind
             provenance,
             "unspecified",
             treatment,
+            &[],
             &mut bindings,
         )?;
     }

@@ -294,10 +294,18 @@ pub(crate) fn search(all: &[Scope], input: &Value) -> io::Result<Value> {
             absences.push(format!("{}: embeddings not ready", scope.world));
             continue;
         }
-        let current: BTreeMap<_, _> = entries(scope)?
-            .into_iter()
-            .map(|e| (e.source.source_ref.clone(), e))
-            .collect();
+        let current: BTreeMap<_, _> = match entries(scope) {
+            Ok(items) => items
+                .into_iter()
+                .map(|e| (e.source.source_ref.clone(), e))
+                .collect(),
+            // One scope's broken enumeration must not take the whole
+            // federated query down: name it in the absences and move on.
+            Err(error) => {
+                absences.push(format!("{}: source enumeration failed: {}", scope.world, error));
+                continue;
+            }
+        };
         // Apply live authority and revisions BEFORE returning any cached snippet.
         for (rank, value) in backend
             .search(query, &tags, mode == "hybrid", MAX_ENTRIES)?
