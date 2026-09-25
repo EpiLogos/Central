@@ -284,7 +284,7 @@ pub(crate) fn search(all: &[Scope], input: &Value) -> io::Result<Value> {
         }
     }
     let selected_world = scope.world.clone();
-    let query = input["query"].as_str().unwrap_or("");
+    let raw_query = input["query"].as_str().unwrap_or("");
     let mode = input["mode"].as_str().unwrap_or("fulltext");
     if !matches!(mode, "fulltext" | "hybrid") {
         return Err(invalid(
@@ -300,13 +300,27 @@ pub(crate) fn search(all: &[Scope], input: &Value) -> io::Result<Value> {
         .transpose()
         .map_err(io::Error::other)?;
     let excluded = context_exclusions(all, selected(all, input)?)?;
+    if limit == 0 {
+        return Ok(json!({"hits":Vec::<Value>::new(),"absences":Vec::<Value>::new()}));
+    }
+    // Full-text matching requires every token to hit; a long phrase that
+    // misses everywhere relaxes by dropping trailing tokens (to a floor of
+    // one) instead of answering nothing. The relaxed query is disclosed.
+    let tokens: Vec<&str> = raw_query.split_whitespace().collect();
+    let attempts = tokens.len().clamp(1, 4);
     let mut hits = Vec::new();
     let mut absences = Vec::new();
     let mut seen = BTreeSet::new();
-    if limit == 0 {
-        return Ok(json!({"hits":hits,"absences":absences}));
-    }
-    for scope in chosen {
+    let mut effective = raw_query.to_owned();
+    let mut relaxed = false;
+    for attempt in 0..attempts {
+        effective = tokens[..tokens.len() - attempt].join(" ");
+        relaxed = attempt > 0;
+        hits.clear();
+        seen.clear();
+        absences.clear();
+        let query = effective.as_str();
+        for scope in chosen.iter().copied() {
         let index = scope.index()?;
         let backend = Backend::new(&scope.root);
         if !backend.present() {
@@ -386,6 +400,10 @@ pub(crate) fn search(all: &[Scope], input: &Value) -> io::Result<Value> {
             hits.push(json!({"source":entry.source,"world_ref":scope.world,"project":scope.project,"path":entry.path,"kind":entry.kind,"revision":entry.revision,"title":native::record(&value)["title"],"tags":native::tags(&value)?,"snippet":content(&entry).unwrap_or_default().chars().take(1000).collect::<String>(),"provider_binding":id.to_string(),"score":value["rrf_score"].as_f64().unwrap_or(1.0/(rank+1) as f64),"mode":mode}));
         }
     }
+        if !hits.is_empty() {
+            break;
+        }
+    }
     let current_exclusions = context_exclusions(all, selected(all, input)?)?;
     hits.retain(|hit| {
         hit["source"]["ref"]
@@ -404,5 +422,5 @@ pub(crate) fn search(all: &[Scope], input: &Value) -> io::Result<Value> {
             })
     });
     hits.truncate(limit);
-    Ok(json!({"hits":hits,"absences":absences}))
+    Ok(json!({"hits":hits,"absences":absences,"query":effective,"query_relaxed":relaxed}))
 }
