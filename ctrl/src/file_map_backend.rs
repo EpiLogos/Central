@@ -42,7 +42,7 @@ impl Backend {
         self.db().is_file()
     }
     pub fn version(&self) -> io::Result<String> {
-        invoke(&["--version".into()], None, None)
+        invoke(&["--version".into()], None, None, DEFAULT_TIMEOUT_SECS)
     }
     pub fn prepare(&self) -> io::Result<()> {
         super::file_map::safe_directory(&self.root, Path::new(".central/bkmr/home/.config/bkmr"))?;
@@ -65,6 +65,11 @@ impl Backend {
         Ok(())
     }
     pub fn run(&self, args: &[String]) -> io::Result<String> {
+        self.run_allowance(args, DEFAULT_TIMEOUT_SECS)
+    }
+    /// Commands that legitimately re-embed a whole scope — `backfill` after a
+    /// model switch — need minutes, not the default per-call ceiling.
+    pub fn run_allowance(&self, args: &[String], timeout_secs: u64) -> io::Result<String> {
         super::file_map::safe_member(&self.root, ".central/bkmr", true)?;
         for name in [
             "index.db",
@@ -95,7 +100,12 @@ impl Backend {
             "--no-color".into(),
         ];
         argv.extend_from_slice(args);
-        invoke(&argv, Some(&self.root), Some(&self.area.join("home")))
+        invoke(
+            &argv,
+            Some(&self.root),
+            Some(&self.area.join("home")),
+            timeout_secs,
+        )
     }
     pub fn records(&self) -> io::Result<Vec<Value>> {
         if !self.present() {
@@ -237,7 +247,14 @@ fn drain(mut stream: impl Read) -> io::Result<Vec<u8>> {
         Ok(bytes)
     }
 }
-fn invoke(args: &[String], cwd: Option<&Path>, home: Option<&Path>) -> io::Result<String> {
+const DEFAULT_TIMEOUT_SECS: u64 = 120;
+
+fn invoke(
+    args: &[String],
+    cwd: Option<&Path>,
+    home: Option<&Path>,
+    timeout_secs: u64,
+) -> io::Result<String> {
     let binary = std::env::var_os("CENTRAL_BKMR_BIN").unwrap_or_else(|| "bkmr".into());
     let mut command = Command::new(binary);
     command
@@ -287,7 +304,7 @@ fn invoke(args: &[String], cwd: Option<&Path>, home: Option<&Path>) -> io::Resul
         if let Some(status) = child.try_wait()? {
             break status;
         }
-        if start.elapsed() > Duration::from_secs(120) {
+        if start.elapsed() > Duration::from_secs(timeout_secs) {
             timeout = true;
             unsafe {
                 libc::kill(-(child.id() as i32), libc::SIGKILL);

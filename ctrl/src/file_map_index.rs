@@ -18,6 +18,16 @@ pub(crate) fn refresh(scope: &Scope, embeddings: bool) -> io::Result<Value> {
         .collect();
     let mut changes = Vec::new();
     let mut diagnostics = Vec::new();
+    // A changed embedder poisons every stored vector. Clear before the entry
+    // pass so rows added below embed under the configured model, then fill
+    // everything the clear removed once the pass is done. Backfill can
+    // re-embed thousands of rows, so it runs with its own long allowance.
+    let model = native::embedding_model();
+    let model_changed =
+        embeddings && index.embedding_model.as_deref() != Some(model.as_str());
+    if model_changed {
+        backend.run(&["clear-embeddings".into()])?;
+    }
     // Withdraw only our rows. Unknown/user bookmarks are never deleted.
     for (reference, old) in index.entries.clone() {
         if !allowed.contains(reference.as_str()) {
@@ -219,14 +229,10 @@ pub(crate) fn refresh(scope: &Scope, embeddings: bool) -> io::Result<Value> {
         // Checkpoint every record; another process can resume without rebuilding.
         scope.save_index(&index)?;
     }
-    // Vectors produced by a different embedder are wrong-shaped for hybrid
-    // search. When the configured model changed, clear every stored vector
-    // and regenerate the whole set under the configured model before the
-    // index may claim embeddings again.
-    let model = native::embedding_model();
-    if embeddings && index.embedding_model.as_deref() != Some(model.as_str()) {
-        backend.run(&["clear-embeddings".into()])?;
-        backend.run(&["backfill".into(), "--force".into()])?;
+    // Only rows the clear removed still lack vectors; backfill regenerates
+    // exactly those under the configured model.
+    if model_changed {
+        backend.run_allowance(&["backfill".into()], 3600)?;
     }
     if embeddings {
         index.embedding_model = Some(model);
