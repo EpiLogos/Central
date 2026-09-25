@@ -12,6 +12,16 @@ use std::{
 pub(crate) const VERSION: &str = "7.6.7";
 const OUTPUT_LIMIT: usize = 32 * 1024 * 1024;
 
+/// The embedder every scope's bkmr runs with. One name, written into each
+/// scope's config and surfaced by `central.file-map.inspect` — never ambient
+/// and never silently defaulted twice.
+pub(crate) fn embedding_model() -> String {
+    std::env::var("CENTRAL_BKMR_EMBEDDING_MODEL")
+        .ok()
+        .filter(|model| !model.trim().is_empty())
+        .unwrap_or_else(|_| "NomicEmbedTextV15".into())
+}
+
 pub(crate) struct Backend {
     pub root: PathBuf,
     pub area: PathBuf,
@@ -35,9 +45,10 @@ impl Backend {
     pub fn prepare(&self) -> io::Result<()> {
         super::file_map::safe_directory(&self.root, Path::new(".central/bkmr/home/.config/bkmr"))?;
         let config = format!(
-            "db_url = {}\n[base_paths]\nWORLD = {}\n\n[embeddings]\nmodel = \"NomicEmbedTextV15\"\n",
+            "db_url = {}\n[base_paths]\nWORLD = {}\n\n[embeddings]\nmodel = {}\n",
             serde_json::to_string(&self.db().to_string_lossy())?,
-            serde_json::to_string(&self.root.to_string_lossy())?
+            serde_json::to_string(&self.root.to_string_lossy())?,
+            serde_json::to_string(&embedding_model())?
         );
         let path = self.area.join("home/.config/bkmr/config.toml");
         // bkmr 7.6.7's importer reloads default settings instead of the supplied
@@ -238,6 +249,18 @@ fn invoke(args: &[String], cwd: Option<&Path>, home: Option<&Path>) -> io::Resul
     }
     if let Some(home) = home {
         command.env("HOME", home);
+        // The isolated HOME would otherwise give every scope its own fastembed
+        // model download; share the invoking user's cache unless the caller
+        // pinned one.
+        if std::env::var_os("FASTEMBED_CACHE_DIR").is_none() {
+            if let Some(user_home) = std::env::var_os("HOME") {
+                #[cfg(target_os = "macos")]
+                let cache = PathBuf::from(&user_home).join("Library/Caches/bkmr/models");
+                #[cfg(not(target_os = "macos"))]
+                let cache = PathBuf::from(&user_home).join(".cache/bkmr/models");
+                command.env("FASTEMBED_CACHE_DIR", cache);
+            }
+        }
     }
     command.env_remove("BKMR_DB_URL").env("NO_COLOR", "1");
     let deleting = args.first().is_some_and(|arg| arg == "delete")

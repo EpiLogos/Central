@@ -328,6 +328,7 @@ fn inspect(all: &[Scope], input: &Value) -> io::Result<Value> {
         "resources":resources,"links":scope.ground()?.links,"database":backend.db(),
         "provider":{"available":available,"version":version.as_ref().ok().map(|v|v.trim()),
         "tested_version":native::VERSION,"fulltext":available,"hybrid":hybrid,"semantic":hybrid,
+        "embedding_model":native::embedding_model(),
         "reason":version.err().map(|e|e.to_string())}}),
     )
 }
