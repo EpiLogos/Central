@@ -10,7 +10,10 @@ use std::{
 };
 
 pub(crate) const VERSION: &str = "7.6.7";
-const OUTPUT_LIMIT: usize = 32 * 1024 * 1024;
+/// A pooled scope's full row listing scales with its source count (tens of
+/// MB at tens of thousands of rows). Bounded, but bounded for a world of
+/// pooled trees, not for one repo.
+const OUTPUT_LIMIT: usize = 512 * 1024 * 1024;
 
 /// The embedder every scope's bkmr runs with. One name, written into each
 /// scope's config and surfaced by `central.file-map.inspect` — never ambient
