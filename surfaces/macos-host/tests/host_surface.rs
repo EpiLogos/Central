@@ -54,9 +54,10 @@ mod unix_tests {
     }
 
     #[test]
-    fn macos_action_registry_extends_current_projectcentral_without_mutating_core_identity() {
+    fn macos_action_registry_extends_current_runtime_without_mutating_owner_identity() {
         let core = create_core_action_registry();
-        assert_eq!(core.list().len(), 36);
+        assert_eq!(core.list().len(), 37);
+        assert!(core.get("central.files.resolve").is_some());
         assert!(core.get("automation.run").is_none());
         assert!(
             core.get("central.files.create").is_some(),
@@ -87,21 +88,20 @@ mod unix_tests {
             );
         }
 
-        let mut projectcentral = create_core_action_registry();
-        central_ctrl::projectcentral_ops::register_projectcentral_actions(&mut projectcentral);
-        let projectcentral_descriptors = projectcentral.list();
+        let runtime = central_ctrl::cli::create_runtime_action_registry();
+        let runtime_descriptors = runtime.list();
 
         let macos = create_macos_action_registry();
         assert_eq!(
             macos.list().len(),
-            projectcentral_descriptors.len() + 1,
-            "macOS host should be the current ProjectCentral registry plus automation.run"
+            runtime_descriptors.len() + 1,
+            "macOS host should be the current runtime owner registry plus automation.run"
         );
-        for descriptor in projectcentral_descriptors {
+        for descriptor in runtime_descriptors {
             assert_eq!(
                 macos.get(&descriptor.id),
                 Some(&descriptor),
-                "macOS host lost or changed ProjectCentral Action {}",
+                "macOS host lost or changed native owner Action {}",
                 descriptor.id
             );
         }
