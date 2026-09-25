@@ -134,7 +134,10 @@ html,body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--ui
     set('t-state', target.dataset.state); set('t-design', target.dataset.designRef);
     set('t-vision', target.dataset.visionRef); set('t-capability', target.dataset.capabilityRef);
     set('t-next', target.dataset.transitionTo);
-    if (location.hash.slice(1) !== target.dataset.state) history.replaceState(null, '', '#' + target.dataset.state);
+    // Opaque-origin transports (a sandboxed srcdoc frame) have no URL to
+    // rewrite; the state trace above still names the state, so hash
+    // restoration is a best effort, never a failure.
+    if (location.hash.slice(1) !== target.dataset.state) { try { history.replaceState(null, '', '#' + target.dataset.state); } catch { /* no URL in this transport */ } }
   }
   states.forEach(s => {
     const b = document.createElement('button');

@@ -7,6 +7,7 @@ use crate::{
     root::resolve_central_root,
     source_safety::{content_revision_bytes, reject_symlink_components},
 };
+use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::os::unix::{
@@ -19,7 +20,7 @@ use std::{
     io::{self, Read, Write},
     path::{Path, PathBuf},
 };
-const MAX: usize = 4 * 1024 * 1024;
+pub(crate) const MAX: usize = 4 * 1024 * 1024;
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
 }
@@ -166,7 +167,7 @@ fn ordinary_policy(root: &Path, loc: &CentralPathRef) -> io::Result<()> {
 }
 fn ordinary(root: &Path, loc: &CentralPathRef) -> io::Result<PathBuf> {
     let path = ordinary_address(root, loc)?;
-    let reading = read_file(root, loc, crate::files::FileEncoding::Utf8)?;
+    let reading = read_file(root, loc, crate::files::FileEncoding::Base64)?;
     if reading.source.is_some() {
         return Err(denied("Participating source requires source authority"));
     }
@@ -253,23 +254,75 @@ fn area(dir: &Path, loc: &CentralPathRef) -> io::Result<PathBuf> {
     }
     Ok(area)
 }
+// Existing UTF-8 snapshots remain readable byte-for-byte. Binary snapshots
+// retain the same content-revision identity and owner recovery namespace.
+fn utf8_encoding() -> String {
+    "utf-8".into()
+}
+fn is_utf8(encoding: &String) -> bool {
+    encoding == "utf-8"
+}
+fn decode_content(content: &str, encoding: &str) -> io::Result<Vec<u8>> {
+    let bytes = match encoding {
+        "utf-8" if content.len() <= MAX && !content.contains('\0') => content.as_bytes().to_vec(),
+        "base64" if content.len() <= MAX.div_ceil(3) * 4 => STANDARD
+            .decode(content)
+            .map_err(|_| invalid("Content is not canonical base64"))?,
+        _ => {
+            return Err(invalid(
+                "Content must be bounded UTF-8 without NUL or base64",
+            ))
+        }
+    };
+    if bytes.len() > MAX {
+        return Err(invalid("Content exceeds the native byte limit"));
+    }
+    Ok(bytes)
+}
+fn encode_content(bytes: &[u8]) -> (String, String) {
+    match std::str::from_utf8(bytes) {
+        Ok(text) if !text.contains('\0') => ("utf-8".into(), text.into()),
+        _ => ("base64".into(), STANDARD.encode(bytes)),
+    }
+}
+fn recovery_read(root: &Path, loc: &CentralPathRef) -> io::Result<crate::files::FileReading> {
+    let mut reading = read_file(root, loc, crate::files::FileEncoding::Base64)?;
+    let bytes = decode_content(&reading.content, &reading.content_encoding)?;
+    (reading.content_encoding, reading.content) = encode_content(&bytes);
+    if reading.content_encoding == "utf-8" {
+        reading.mime_hint = None;
+    }
+    Ok(reading)
+}
 #[derive(Debug, Serialize, Deserialize)]
 struct Snapshot {
     revision: String,
     content: String,
+    #[serde(default = "utf8_encoding", skip_serializing_if = "is_utf8")]
+    content_encoding: String,
 }
 fn snapshot(area: &Path, content: &str) -> io::Result<String> {
-    let revision = content_revision_bytes(content.as_bytes());
+    snapshot_bytes(area, content.as_bytes())
+}
+fn snapshot_bytes(area: &Path, bytes: &[u8]) -> io::Result<String> {
+    if bytes.len() > MAX {
+        return Err(invalid("History exceeds native byte limit"));
+    }
+    let revision = content_revision_bytes(bytes);
     let path = area.join(format!("{}.json", key(revision.as_bytes())));
+    let (content_encoding, content) = encode_content(bytes);
     let value = Snapshot {
         revision: revision.clone(),
-        content: content.into(),
+        content,
+        content_encoding,
     };
     let data = serde_json::to_vec(&value)?;
     if path.exists() {
         let existing: Snapshot =
             serde_json::from_reader(open(&path, false)?.take((MAX * 6 + 1024) as u64))?;
-        if existing.revision != revision || existing.content != content {
+        if existing.revision != revision
+            || decode_content(&existing.content, &existing.content_encoding)? != bytes
+        {
             return Err(invalid("History revision collision"));
         }
     } else {
@@ -277,7 +330,7 @@ fn snapshot(area: &Path, content: &str) -> io::Result<String> {
     }
     Ok(revision)
 }
-fn historical(area: &Path, revision: &str) -> io::Result<String> {
+fn historical(area: &Path, revision: &str) -> io::Result<Vec<u8>> {
     let value: Snapshot = serde_json::from_reader(
         open(
             &area.join(format!("{}.json", key(revision.as_bytes()))),
@@ -285,10 +338,11 @@ fn historical(area: &Path, revision: &str) -> io::Result<String> {
         )?
         .take((MAX * 6 + 1024) as u64),
     )?;
-    if value.revision != revision || content_revision_bytes(value.content.as_bytes()) != revision {
+    let bytes = decode_content(&value.content, &value.content_encoding)?;
+    if value.revision != revision || content_revision_bytes(&bytes) != revision {
         return Err(invalid("History revision is corrupt"));
     }
-    Ok(value.content)
+    Ok(bytes)
 }
 #[derive(Debug, Serialize, Deserialize)]
 struct Change {
@@ -385,7 +439,7 @@ fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
             .exists()
     {
         return Ok(
-            json!({"schema":"central.file-history/v1","location":loc,"current_revision":read_file(&root,&loc,crate::files::FileEncoding::Utf8)?.revision,"entries":[],"next_before":null,"more":false,"automatic_agent_or_model_invocation":false}),
+            json!({"schema":"central.file-history/v1","location":loc,"current_revision":recovery_read(&root,&loc)?.revision,"entries":[],"next_before":null,"more":false,"automatic_agent_or_model_invocation":false}),
         );
     }
     if op == "recovery_preview"
@@ -407,7 +461,12 @@ fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
     // Revalidate after the cross-process owner lock: another writer may have
     // changed the source or introduced authored participation while waiting.
     ordinary(&root, &loc)?;
-    let current = read_file(&root, &loc, crate::files::FileEncoding::Utf8)?;
+    let current = if op == "write" {
+        read_file(&root, &loc, crate::files::FileEncoding::Utf8)?
+    } else {
+        recovery_read(&root, &loc)?
+    };
+    let current_bytes = decode_content(&current.content, &current.content_encoding)?;
     let pending = area.join("pending.json");
     if pending.exists() {
         let event: Change = serde_json::from_reader(open(&pending, false)?.take(65536))?;
@@ -464,19 +523,17 @@ fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
     };
     let content = match restored {
         Some(revision) => historical(&area, revision)?,
-        None => text(input, "content")?.into(),
+        None => decode_content(text(input, "content")?, "utf-8")?,
     };
-    if content.len() > MAX || content.contains('\0') {
-        return Err(invalid("Content must be bounded UTF-8 text without NUL"));
-    }
-    let revision = content_revision_bytes(content.as_bytes());
+    let revision = content_revision_bytes(&content);
     if op == "recovery_preview" {
+        let (content_encoding, preview_content) = encode_content(&content);
         return Ok(
-            json!({"schema":"central.file-recovery-preview/v1","outcome":"preview","location":loc,"expected_revision":basis,"revision":revision,"content":content,"current_content":current.content,"changed":content!=current.content,"automatic_agent_or_model_invocation":false}),
+            json!({"schema":"central.file-recovery-preview/v1","outcome":"preview","location":loc,"expected_revision":basis,"revision":revision,"content":preview_content,"content_encoding":content_encoding,"current_content":current.content,"current_content_encoding":current.content_encoding,"changed":content!=current_bytes,"automatic_agent_or_model_invocation":false}),
         );
     }
     let (actor, actor_kind, agent_session_ref) = attribution(input)?;
-    if content == current.content {
+    if content == current_bytes {
         return Ok(
             json!({"schema":"central.file-mutation/v1","outcome":"unchanged","location":loc,"previous_revision":basis,"revision":revision,"changed":false}),
         );
@@ -491,11 +548,11 @@ fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
             "Files with multiple hard links require an explicit native operation",
         ));
     }
-    if bytes(&mut original)? != current.content.as_bytes() {
+    if bytes(&mut original)? != current_bytes {
         return Err(conflict("File changed before commit"));
     }
-    snapshot(&area, &current.content)?;
-    snapshot(&area, &content)?;
+    snapshot_bytes(&area, &current_bytes)?;
+    snapshot_bytes(&area, &content)?;
     let relative_parent = Path::new(&loc.path)
         .parent()
         .ok_or_else(|| invalid("Missing parent"))?;
@@ -551,13 +608,13 @@ fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
             }
         }
         staged.set_permissions(meta.permissions())?;
-        staged.write_all(content.as_bytes())?;
+        staged.write_all(&content)?;
         staged.sync_all()?;
         ordinary(&root, &loc)?;
         let now = open_native_file(&root, &loc.path)?.metadata()?;
         if now.dev() != meta.dev()
             || now.ino() != meta.ino()
-            || read_file(&root, &loc, crate::files::FileEncoding::Utf8)?.revision != basis
+            || recovery_read(&root, &loc)?.revision != basis
         {
             return Err(conflict("File changed during commit"));
         }
@@ -572,7 +629,7 @@ fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
         let final_meta = open_native_file(&root, &loc.path)?.metadata()?;
         if final_meta.dev() != meta.dev()
             || final_meta.ino() != meta.ino()
-            || read_file(&root, &loc, crate::files::FileEncoding::Utf8)?.revision != basis
+            || recovery_read(&root, &loc)?.revision != basis
         {
             fs::remove_file(&pending)?;
             return Err(conflict("File changed while preparing durable receipt"));

@@ -27,6 +27,7 @@ pub use connector::{
 };
 pub use git_state::{
     GitBranchObservation, GitCensusRequest, GitRepoCensus, GitState, GitWorktreeObservation,
+    GitDiffRequest, GitDiffReading, GitDiffFile,
     GIT_STATE_OPERATIONS, GIT_STATE_PORT,
 };
 pub use machine_capability::{
