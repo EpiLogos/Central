@@ -758,6 +758,13 @@ fn create_action(
     .unwrap_or_else(|error| io_failure(action, error))
 }
 
+/// One registered World-source Action: its owner-facing descriptor and the
+/// handler that serves it.
+type WorldSourceAction = (
+    ActionDescriptor,
+    fn(&ActionRegistry, &Value, &ActionExecutionContext<'_>) -> ActionResult,
+);
+
 fn text_input(name: &str, required: bool) -> ActionInputDefinition {
     ActionInputDefinition {
         name: name.to_owned(),
@@ -797,10 +804,7 @@ fn descriptor(
 }
 pub fn register_world_source_actions(registry: &mut ActionRegistry) {
     crate::source_return::register(registry);
-    let mut actions: Vec<(
-        ActionDescriptor,
-        fn(&ActionRegistry, &Value, &ActionExecutionContext<'_>) -> ActionResult,
-    )> = vec![
+    let mut actions: Vec<WorldSourceAction> = vec![
         (
             descriptor(
                 "projectcentral.source.read",
