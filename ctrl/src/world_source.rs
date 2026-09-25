@@ -16,10 +16,14 @@ use crate::projectcentral::read_project_manifest;
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
 use crate::source_horizon::{
-    read_project_change_horizon, reconcile_control_source_writes, reconcile_control_sources,
-    reconcile_project_source_writes, SourceBinding, SourceRevision, SourceWriteAttribution,
+    project_source_bindings, read_project_change_horizon, reconcile_control_source_writes,
+    reconcile_control_sources, reconcile_project_source_writes, retrieval_allowed,
+    source_ref as horizon_source_ref, SourceBinding, SourceRevision, SourceWriteAttribution,
 };
-use crate::source_safety::{relative_member, safe_source_member_path, validate_actor_kind};
+use crate::source_safety::{
+    content_revision_bytes, reject_symlink_components, relative_member, safe_source_member_path,
+    validate_actor_kind,
+};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -484,6 +488,283 @@ fn write_action(
         .map(|value| ActionResult::success(action,json!({"receipt":serde_json::to_value(value).expect("World source write receipt serialises"),"automatic_agent_or_model_invocation":false})))
         .unwrap_or_else(|error| io_failure(action, error))
 }
+/// Create one absent document in a Project's own human ground — the door
+/// behind the desktop's "Write it" for a project vision page or mockup.
+///
+/// The aperture treatment is the only standing this door grants: the created
+/// file joins the World source horizon as unresolved
+/// project-human-source-aperture material, every later revision goes through
+/// `projectcentral.source.write` compare-and-swap, and a declared non-human
+/// caller is refused exactly as any aperture write is. Atomic no-overwrite
+/// admission mirrors `central.files.create`; the recorded change lands in the
+/// source horizon (Added, carrying the declared attribution), never in an
+/// ordinary file history. The root register has no door here: Control ground
+/// creates through `central.files.create` under `Control/user/flows`.
+#[allow(clippy::too_many_arguments)]
+fn create_scoped_source(
+    project_root: &Path,
+    path: &str,
+    content: &str,
+    actor: &str,
+    actor_kind: &str,
+    agent_session_ref: Option<String>,
+) -> io::Result<WorldSourceWriteReceipt> {
+    use std::ffi::CString;
+    use std::fs;
+    use std::io::Write as _;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::io::AsRawFd;
+
+    let manifest = read_project_manifest(project_root)?;
+    let validation = manifest.validate();
+    if !validation.valid {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "project manifest is invalid: {}",
+                validation.errors.join("; ")
+            ),
+        ));
+    }
+    validate_actor_kind(actor_kind)?;
+    validate_attribution(actor_kind, agent_session_ref.as_deref())?;
+    if content.len() > crate::source_safety::MAX_SOURCE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Source exceeds bounded text constraints",
+        ));
+    }
+    if content.contains('\0') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Source content must be UTF-8 text without NUL",
+        ));
+    }
+    let relative = relative_member(path)?;
+    reject_symlink_components(project_root, &relative)?;
+    let within = relative
+        .strip_prefix(Path::new(&manifest.human_source))
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "this door creates documents only inside the Project human ground ({})",
+                    manifest.human_source
+                ),
+            )
+        })?;
+    if within.as_os_str().is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a document path below the human ground is required",
+        ));
+    }
+    if within.components().count() > 2 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a created human-ground document sits at most one directory deep; its parent must already exist",
+        ));
+    }
+    let relative_str = relative
+        .to_str()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "path must be UTF-8"))?;
+    if !retrieval_allowed(project_root, &project_root.join(&relative)) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "this location is excluded by .no-agent-retrieval and is therefore neither read, written nor created through this Action",
+        ));
+    }
+    let world_ref = format!("project:{}", manifest.project_id);
+    let reference = horizon_source_ref(&world_ref, relative_str);
+    // Authority is decided on the aperture standing this door grants —
+    // before anything exists.
+    let aperture = SourceBinding {
+        source_ref: reference.clone(),
+        path: relative_str.to_owned(),
+        roles: vec!["project-human-source-aperture".to_owned()],
+        provenance: "unresolved".to_owned(),
+        standing: "unspecified".to_owned(),
+        treatment: "projectcentral-user".to_owned(),
+        agent_retrieval_allowed: true,
+    };
+    enforce_write_authority(&aperture, actor_kind, agent_session_ref.as_deref())?;
+
+    let _lock = crate::source_safety::lock(project_root, "source-mutation.lock")?;
+    // Under the owner lock: the parent must already be a native directory,
+    // the destination must still be absent, and both must hold at link time.
+    let parent_relative = relative
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing parent"))?
+        .to_path_buf();
+    let parent = crate::file_mutation::directory(project_root, &parent_relative)?;
+    if parent.metadata()?.permissions().readonly() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the human ground directory is read-only",
+        ));
+    }
+    match fs::symlink_metadata(project_root.join(&relative)) {
+        Ok(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "the document already exists; creation never overwrites — open it instead",
+            ))
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    let revision = content_revision_bytes(content.as_bytes());
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(io::Error::other)?
+        .as_nanos();
+    let staging = format!(".central-source-create-{}-{nonce}", std::process::id());
+    let file_name = relative
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing file name"))?
+        .to_os_string();
+    let mut staged = crate::file_mutation::create_in(&parent, &staging, 0o600)?;
+    let c_staging = CString::new(staging.as_str()).map_err(io::Error::other)?;
+    let c_name = CString::new(file_name.as_bytes()).map_err(io::Error::other)?;
+    let mut committed = false;
+    let result = (|| -> io::Result<WorldSourceWriteReceipt> {
+        staged.write_all(content.as_bytes())?;
+        staged.sync_all()?;
+        // Unlike rename, linkat atomically REFUSES an existing destination.
+        if unsafe {
+            libc::linkat(
+                parent.as_raw_fd(),
+                c_staging.as_ptr(),
+                parent.as_raw_fd(),
+                c_name.as_ptr(),
+                0,
+            )
+        } != 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        committed = true;
+        if unsafe { libc::unlinkat(parent.as_raw_fd(), c_staging.as_ptr(), 0) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        parent.sync_all()?;
+        // Independent readback before any record claims the creation.
+        let written = crate::source_safety::read(project_root, relative_str)?;
+        if written != content {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "the newly created document changed before independent readback",
+            ));
+        }
+        // The horizon is the creation's record: the new aperture source
+        // arrives as an Added change carrying the declared attribution.
+        let mut attributions = BTreeMap::new();
+        attributions.insert(
+            reference.clone(),
+            SourceWriteAttribution {
+                actor: actor.to_owned(),
+                actor_kind: actor_kind.to_owned(),
+                agent_session_ref: agent_session_ref.clone(),
+            },
+        );
+        let report = reconcile_project_source_writes(project_root, &attributions)?;
+        let change_ref = report
+            .new_changes
+            .iter()
+            .find(|change| change.source_ref == reference)
+            .map(|change| change.change_ref.clone());
+        let binding = project_source_bindings(project_root)?
+            .into_iter()
+            .find(|binding| binding.source_ref == reference)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "the created document did not join the World source horizon",
+                )
+            })?;
+        Ok(WorldSourceWriteReceipt {
+            schema: WORLD_SOURCE_WRITE_RECEIPT_SCHEMA.to_owned(),
+            world_ref,
+            source: binding,
+            previous_revision: String::new(),
+            revision: SourceRevision {
+                revision,
+                byte_len: content.len() as u64,
+            },
+            changed: true,
+            change_ref,
+            actor: actor.to_owned(),
+            actor_kind: actor_kind.to_owned(),
+            agent_session_ref,
+            automatic_agent_or_model_invocation: false,
+        })
+    })();
+    if !committed {
+        unsafe {
+            libc::unlinkat(parent.as_raw_fd(), c_staging.as_ptr(), 0);
+        }
+    }
+    result
+}
+
+fn create_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    let action = "projectcentral.source.create";
+    let (project_root, root_register) = match source_scope(action, input, context) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    if root_register {
+        return ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            "the root register has no human-ground creation door here; Control ground creates through central.files.create under Control/user/flows",
+            None,
+        );
+    }
+    let path = match required(input, "path", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let actor = match required(input, "actor", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let actor_kind = match required(input, "actor_kind", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let content = input.get("content").and_then(Value::as_str).unwrap_or("");
+    create_scoped_source(
+        &project_root,
+        &path,
+        content,
+        &actor,
+        &actor_kind,
+        optional(input, "agent_session_ref"),
+    )
+    .map(|value| {
+        ActionResult::success(
+            action,
+            json!({
+                "receipt": serde_json::to_value(value).expect("World source create receipt serialises"),
+                "automatic_agent_or_model_invocation": false
+            }),
+        )
+    })
+    .unwrap_or_else(|error| io_failure(action, error))
+}
+
+/// One registered World-source Action: its owner-facing descriptor and the
+/// handler that serves it.
+type WorldSourceAction = (
+    ActionDescriptor,
+    fn(&ActionRegistry, &Value, &ActionExecutionContext<'_>) -> ActionResult,
+);
+
 fn text_input(name: &str, required: bool) -> ActionInputDefinition {
     ActionInputDefinition {
         name: name.to_owned(),
@@ -523,7 +804,7 @@ fn descriptor(
 }
 pub fn register_world_source_actions(registry: &mut ActionRegistry) {
     crate::source_return::register(registry);
-    let actions = [
+    let mut actions: Vec<WorldSourceAction> = vec![
         (
             descriptor(
                 "projectcentral.source.read",
@@ -547,6 +828,17 @@ pub fn register_world_source_actions(registry: &mut ActionRegistry) {
             write_action,
         ),
     ];
+    actions.push((
+        descriptor(
+            "projectcentral.source.create",
+            "Create a Project human-ground document",
+            "Create one absent document in a Project's own human ground (ProjectCentral/user) — the door behind a project vision page or mockup. Atomic no-overwrite admission: the parent must already exist, the destination must be absent, and the created file joins the World source horizon as project-human-source-aperture material whose later revisions go through projectcentral.source.write. A declared non-human caller is refused, as for every aperture write. The root register has no door here (Control ground creates through central.files.create). Never invokes an Agent or model.",
+            MutationClass::LocallyMutating,
+            "projectcentral-world-source-write-receipt",
+            &[("project", true), ("path", true), ("content", true), ("actor", true), ("actor_kind", true), ("agent_session_ref", false)],
+        ),
+        create_action as fn(&ActionRegistry, &Value, &ActionExecutionContext<'_>) -> ActionResult,
+    ));
     for (descriptor, handler) in actions {
         registry
             .register(descriptor, handler)

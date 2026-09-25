@@ -42,7 +42,7 @@ pub fn print_frontdoor(args: &mut Vec<String>) -> Option<i32> {
         return Some(0);
     }
 
-    if let Some(index) = top_level_command_index(&args) {
+    if let Some(index) = top_level_command_index(args) {
         match args[index].as_str() {
             "help" | "--help" | "-h" => {
                 println!("{HELP}");
