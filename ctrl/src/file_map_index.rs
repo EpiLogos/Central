@@ -149,9 +149,16 @@ pub(crate) fn refresh(scope: &Scope, embeddings: bool) -> io::Result<Value> {
                 }
                 backend.run(&args)?;
                 added_without_embed += 1;
-                records = backend.records()?;
+                // The new row's identity comes from a bounded title search,
+                // not a full listing: re-listing every row after every add
+                // made pooled refreshes quadratic. The title is the source's
+                // path; the exact-URL match confirms identity, and the full
+                // listing stays as the fallback when full-text misbehaves.
+                let listing = backend
+                    .search(entry.title.as_str(), &[], false, 8)
+                    .or_else(|_| backend.records())?;
                 record_id = native::id(
-                    records
+                    listing
                         .iter()
                         .find(|r| native::record(r)["url"] == url)
                         .ok_or_else(|| io::Error::other("bkmr add produced no URI record"))?,
