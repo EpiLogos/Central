@@ -19,7 +19,7 @@ pub(crate) fn embedding_model() -> String {
     std::env::var("CENTRAL_BKMR_EMBEDDING_MODEL")
         .ok()
         .filter(|model| !model.trim().is_empty())
-        .unwrap_or_else(|_| "NomicEmbedTextV15".into())
+        .unwrap_or_else(|| "NomicEmbedTextV15".into())
 }
 
 pub(crate) struct Backend {
