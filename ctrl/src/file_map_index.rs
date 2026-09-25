@@ -219,6 +219,18 @@ pub(crate) fn refresh(scope: &Scope, embeddings: bool) -> io::Result<Value> {
         // Checkpoint every record; another process can resume without rebuilding.
         scope.save_index(&index)?;
     }
+    // Vectors produced by a different embedder are wrong-shaped for hybrid
+    // search. When the configured model changed, clear every stored vector
+    // and regenerate the whole set under the configured model before the
+    // index may claim embeddings again.
+    let model = native::embedding_model();
+    if embeddings && index.embedding_model.as_deref() != Some(model.as_str()) {
+        backend.run(&["clear-embeddings".into()])?;
+        backend.run(&["backfill".into(), "--force".into()])?;
+    }
+    if embeddings {
+        index.embedding_model = Some(model);
+    }
     index.embeddings = embeddings;
     scope.save_index(&index)?;
     Ok(

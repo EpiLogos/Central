@@ -14,12 +14,14 @@ const OUTPUT_LIMIT: usize = 32 * 1024 * 1024;
 
 /// The embedder every scope's bkmr runs with. One name, written into each
 /// scope's config and surfaced by `central.file-map.inspect` — never ambient
-/// and never silently defaulted twice.
+/// and never silently defaulted twice. BGESmallENV15 is the efficiency pick
+/// in fastembed's catalogue: a fraction of Nomic's size and latency for this
+/// corpus's retrieval quality.
 pub(crate) fn embedding_model() -> String {
     std::env::var("CENTRAL_BKMR_EMBEDDING_MODEL")
         .ok()
         .filter(|model| !model.trim().is_empty())
-        .unwrap_or_else(|| "NomicEmbedTextV15".into())
+        .unwrap_or_else(|| "BGESmallENV15".into())
 }
 
 pub(crate) struct Backend {
@@ -263,7 +265,7 @@ fn invoke(args: &[String], cwd: Option<&Path>, home: Option<&Path>) -> io::Resul
         }
     }
     command.env_remove("BKMR_DB_URL").env("NO_COLOR", "1");
-    let deleting = args.first().is_some_and(|arg| arg == "delete")
+    let deleting = args.first().is_some_and(|arg| arg == "delete" || arg == "clear-embeddings")
         || args.get(5).is_some_and(|arg| arg == "delete");
     if deleting {
         command.stdin(Stdio::piped());

@@ -29,6 +29,17 @@ pub(crate) struct MapGround {
     pub links: BTreeMap<String, Link>,
     #[serde(default)]
     pub scopes: BTreeMap<String, String>,
+    #[serde(default)]
+    pub content_pool: ContentPool,
+}
+/// A scope that pools its readable content: everything under the root that
+/// passes the retrieval membrane becomes a source, git or not. The project
+/// wiki sits inside the walk, so every constellation in it is pooled with the
+/// same content-hash freshness as any other file.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub(crate) struct ContentPool {
+    #[serde(default)]
+    pub enabled: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Resource {
@@ -61,6 +72,11 @@ pub(crate) struct Index {
     pub entries: BTreeMap<String, Indexed>,
     #[serde(default)]
     pub embeddings: bool,
+    /// The embedder that produced the stored vectors. A configured model
+    /// other than this one means the vectors are wrong-shaped and must be
+    /// regenerated before hybrid search can be trusted.
+    #[serde(default)]
+    pub embedding_model: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Indexed {
@@ -295,6 +311,35 @@ pub(crate) fn selected<'a>(scopes: &'a [Scope], input: &Value) -> io::Result<&'a
         None => scopes.first().ok_or_else(|| invalid("No scope")),
     }
 }
+/// Turn a scope's content pool on or off. An enabled pool means the scope's
+/// readable content — the whole tree, wiki and constellations included — is
+/// source, without per-file declarations.
+pub(crate) fn pool(all: &[Scope], input: &Value) -> io::Result<Value> {
+    let scope = selected(all, input)?;
+    let enable = input["enable"]
+        .as_bool()
+        .ok_or_else(|| invalid("pool requires enable: true|false"))?;
+    let mut ground = scope.ground()?;
+    ground.content_pool.enabled = enable;
+    let doc = scope.document()?;
+    scope.save(&ground, doc)?;
+    let mut pooled = 0usize;
+    if enable {
+        let mut sources: BTreeMap<String, SourceBinding> = BTreeMap::new();
+        source_horizon::insert_tree_bindings(
+            &scope.root,
+            &scope.root,
+            &scope.world,
+            &["content-pool"],
+            "pooled",
+            "scope-content",
+            "pooled-content",
+            &mut sources,
+        )?;
+        pooled = sources.len();
+    }
+    Ok(json!({"world_ref": scope.world, "content_pool": {"enabled": enable}, "pooled_sources": pooled}))
+}
 pub(crate) fn entries(scope: &Scope) -> io::Result<Vec<Entry>> {
     let ground = scope.ground()?;
     let native = if scope.world == "control:root" {
@@ -316,6 +361,20 @@ pub(crate) fn entries(scope: &Scope) -> io::Result<Vec<Entry>> {
             treatment: "retain-native-in-place".into(),
             agent_retrieval_allowed: true,
         });
+    }
+    if ground.content_pool.enabled {
+        // Declared sources keep their identity; the pool fills the rest of
+        // the scope's readable content under one pooled provenance.
+        source_horizon::insert_tree_bindings(
+            &scope.root,
+            &scope.root,
+            &scope.world,
+            &["content-pool"],
+            "pooled",
+            "scope-content",
+            "pooled-content",
+            &mut sources,
+        )?;
     }
     if sources.len() > MAX_ENTRIES {
         return Err(invalid("File map exceeds 10000-source bound"));

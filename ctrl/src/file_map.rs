@@ -324,7 +324,10 @@ fn inspect(all: &[Scope], input: &Value) -> io::Result<Value> {
     };
     Ok(
         json!({"native_record":native_record,"world_ref":scope.world,"revision":scope.basis()?,
-        "scopes":all.iter().map(|s|json!({"world_ref":s.world,"project":s.project,"path":s.root})).collect::<Vec<_>>(),
+        "scopes":all.iter().map(|s| {
+            let pooled = s.ground().map(|g| g.content_pool.enabled).unwrap_or(false);
+            json!({"world_ref":s.world,"project":s.project,"path":s.root,"content_pool":pooled})
+        }).collect::<Vec<_>>(),
         "resources":resources,"links":scope.ground()?.links,"database":backend.db(),
         "provider":{"available":available,"version":version.as_ref().ok().map(|v|v.trim()),
         "tested_version":native::VERSION,"fulltext":available,"hybrid":hybrid,"semantic":hybrid,
@@ -500,6 +503,7 @@ pub fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
         "adopt-db" => super::file_map_adoption::adopt(scope, input)?,
         "record-adopt" => super::file_map_adoption::record_adopt(scope, input)?,
         "scope-register" => super::file_map_adoption::scope_register(&all, input)?,
+        "pool" => super::file_map_catalog::pool(&all, input)?,
         "locate" => locate(&all, input)?,
         "inspect" => inspect(&all, input)?,
         "search" => search(&all, input)?,
@@ -545,6 +549,7 @@ pub fn register(registry: &mut ActionRegistry) {
         "adopt-db",
         "record-adopt",
         "scope-register",
+        "pool",
         "inspect",
         "register",
         "refresh",
@@ -563,6 +568,7 @@ pub fn register(registry: &mut ActionRegistry) {
             "adopt-db" => |_, i, c| action("adopt-db", i, c),
             "record-adopt" => |_, i, c| action("record-adopt", i, c),
             "scope-register" => |_, i, c| action("scope-register", i, c),
+            "pool" => |_, i, c| action("pool", i, c),
             "locate" => |_, i, c| action("locate", i, c),
             "move-plan" => |_, i, c| action("move-plan", i, c),
             "move-apply" => |_, i, c| action("move-apply", i, c),
