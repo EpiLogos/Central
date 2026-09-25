@@ -614,3 +614,163 @@ fn ground_inspection_discloses_the_ref_source_read_accepts() {
     assert_eq!(reopened.revision.revision, receipt.revision.revision);
     drop(temp);
 }
+
+#[test]
+fn world_source_create_admits_an_absent_human_ground_document_into_the_horizon() {
+    let (_temp, central, project) = project_fixture("create", "create-project");
+    let relative = "ProjectCentral/user/create-project.html";
+    let content = "<!doctype html><html><body>vision</body></html>\n";
+
+    let created = run_action(
+        "projectcentral.source.create",
+        json!({
+            "project": "create-project",
+            "path": relative,
+            "content": content,
+            "actor": "oi-desktop-user",
+            "actor_kind": "human"
+        }),
+        &central,
+    );
+    assert_eq!(created.status, ResultStatus::Success, "{:?}", created.error);
+    let receipt = created.data.unwrap()["receipt"].clone();
+    assert_eq!(receipt["schema"], WORLD_SOURCE_WRITE_RECEIPT_SCHEMA);
+    assert_eq!(receipt["previous_revision"], "");
+    assert_eq!(receipt["changed"], true);
+    assert_eq!(receipt["source"]["path"], relative);
+    assert_eq!(receipt["source"]["treatment"], "projectcentral-user");
+    assert_eq!(receipt["source"]["roles"][0], "project-human-source-aperture");
+    assert_eq!(receipt["actor_kind"], "human");
+    assert_eq!(receipt["automatic_agent_or_model_invocation"], false);
+    assert_eq!(fs::read_to_string(project.join(relative)).unwrap(), content);
+
+    // The horizon records the creation as an Added aperture source, and the
+    // ordinary CAS write chain continues from its revision.
+    let horizon = read_project_change_horizon(&project, None).unwrap();
+    let source_ref = source_ref_of(&horizon, "create-project.html");
+    assert_eq!(receipt["source"]["ref"], source_ref);
+
+    let revised = run_action(
+        "projectcentral.source.write",
+        json!({
+            "project": "create-project",
+            "source_ref": source_ref,
+            "expected_revision": receipt["revision"]["revision"],
+            "content": "authored\n",
+            "actor": "oi-desktop-user",
+            "actor_kind": "human"
+        }),
+        &central,
+    );
+    assert_eq!(revised.status, ResultStatus::Success, "{:?}", revised.error);
+    assert_eq!(
+        fs::read_to_string(project.join(relative)).unwrap(),
+        "authored\n"
+    );
+
+    // A stale expected revision over the created source refuses exactly as
+    // any World source write refuses.
+    let stale = run_action(
+        "projectcentral.source.write",
+        json!({
+            "project": "create-project",
+            "source_ref": source_ref,
+            "expected_revision": receipt["revision"]["revision"],
+            "content": "overwritten\n",
+            "actor": "oi-desktop-user",
+            "actor_kind": "human"
+        }),
+        &central,
+    );
+    assert_eq!(stale.status, ResultStatus::InvalidInput);
+    assert_eq!(
+        fs::read_to_string(project.join(relative)).unwrap(),
+        "authored\n"
+    );
+}
+
+#[test]
+fn world_source_create_refuses_existing_documents_outside_ground_and_non_human_callers() {
+    let (_temp, central, project) = project_fixture("create-refuse", "create-refuse-project");
+    let input = |path: &str, actor_kind: &str| {
+        json!({
+            "project": "create-refuse-project",
+            "path": path,
+            "content": "x\n",
+            "actor": "someone",
+            "actor_kind": actor_kind
+        })
+    };
+
+    let first = run_action(
+        "projectcentral.source.create",
+        input("ProjectCentral/user/page.html", "human"),
+        &central,
+    );
+    assert_eq!(first.status, ResultStatus::Success, "{:?}", first.error);
+
+    let again = run_action(
+        "projectcentral.source.create",
+        input("ProjectCentral/user/page.html", "human"),
+        &central,
+    );
+    assert_eq!(again.status, ResultStatus::InvalidInput);
+    assert!(again.error.unwrap().message.contains("never overwrites"));
+
+    let outside = run_action(
+        "projectcentral.source.create",
+        input("ProjectCentral/agents/wiki/page.html", "human"),
+        &central,
+    );
+    assert_eq!(outside.status, ResultStatus::UnavailableCapability);
+
+    let too_deep = run_action(
+        "projectcentral.source.create",
+        input("ProjectCentral/user/a/b/page.html", "human"),
+        &central,
+    );
+    assert_eq!(too_deep.status, ResultStatus::InvalidInput);
+
+    let agent = run_action(
+        "projectcentral.source.create",
+        input("ProjectCentral/user/other.html", "agent"),
+        &central,
+    );
+    assert_eq!(agent.status, ResultStatus::UnavailableCapability);
+
+    let session = run_action(
+        "projectcentral.source.create",
+        json!({
+            "project": "create-refuse-project",
+            "path": "ProjectCentral/user/another.html",
+            "content": "x\n",
+            "actor": "someone",
+            "actor_kind": "human",
+            "agent_session_ref": "aikit:session:1"
+        }),
+        &central,
+    );
+    assert_eq!(session.status, ResultStatus::InvalidInput);
+
+    let masked_dir = project.join("ProjectCentral/user/private");
+    fs::create_dir_all(&masked_dir).unwrap();
+    fs::write(masked_dir.join(".no-agent-retrieval"), "").unwrap();
+    let masked = run_action(
+        "projectcentral.source.create",
+        input("ProjectCentral/user/private/hidden.html", "human"),
+        &central,
+    );
+    assert_eq!(masked.status, ResultStatus::UnavailableCapability);
+
+    let root_register = run_action(
+        "projectcentral.source.create",
+        json!({
+            "path": "ProjectCentral/user/nope.html",
+            "content": "x\n",
+            "actor": "someone",
+            "actor_kind": "human"
+        }),
+        &central,
+    );
+    assert_eq!(root_register.status, ResultStatus::InvalidInput);
+}
