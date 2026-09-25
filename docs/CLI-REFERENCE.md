@@ -33,6 +33,7 @@ The composed registry is deliberately discovered at runtime through `action.list
 | `central.files.create` | explicit first save into an existing owner directory, atomic no-overwrite admission | `action run central.files.create` |
 | `central.files.history` | page native ordinary-file revision history | `action run central.files.history` |
 | `central.files.recovery_preview` | preview exact historical bytes against current basis | `action run central.files.recovery_preview` |
+| `central.files.resolve` | resolve an owner path to the canonical file the action will read or write | `action run central.files.resolve` |
 | `central.files.restore` | restore an ordinary-file revision through the same CAS | `action run central.files.restore` |
 | `action.list` | discover Action descriptors | `capabilities`, `actions`, `action list` |
 | `central.root` | resolve the active Central root | `root` |
