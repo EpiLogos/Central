@@ -300,6 +300,17 @@ pub(crate) fn search(all: &[Scope], input: &Value) -> io::Result<Value> {
             absences.push(format!("{}: embeddings not ready", scope.world));
             continue;
         }
+        // Vectors from another embedder poison hybrid results without any
+        // revision change, so the mismatch itself is the absence the refresh
+        // routine reacts to.
+        if mode == "hybrid" && index.embedding_model.as_deref() != Some(native::embedding_model().as_str())
+        {
+            absences.push(format!(
+                "{}: embeddings stored under another model; refresh required",
+                scope.world
+            ));
+            continue;
+        }
         let current: BTreeMap<_, _> = match entries(scope) {
             Ok(items) => items
                 .into_iter()
