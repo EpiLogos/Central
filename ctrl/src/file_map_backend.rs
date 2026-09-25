@@ -10,7 +10,22 @@ use std::{
 };
 
 pub(crate) const VERSION: &str = "7.6.7";
-const OUTPUT_LIMIT: usize = 32 * 1024 * 1024;
+/// A pooled scope's full row listing scales with its source count (tens of
+/// MB at tens of thousands of rows). Bounded, but bounded for a world of
+/// pooled trees, not for one repo.
+const OUTPUT_LIMIT: usize = 512 * 1024 * 1024;
+
+/// The embedder every scope's bkmr runs with. One name, written into each
+/// scope's config and surfaced by `central.file-map.inspect` — never ambient
+/// and never silently defaulted twice. BGESmallENV15 is the efficiency pick
+/// in fastembed's catalogue: a fraction of Nomic's size and latency for this
+/// corpus's retrieval quality.
+pub(crate) fn embedding_model() -> String {
+    std::env::var("CENTRAL_BKMR_EMBEDDING_MODEL")
+        .ok()
+        .filter(|model| !model.trim().is_empty())
+        .unwrap_or_else(|| "BGESmallENV15".into())
+}
 
 pub(crate) struct Backend {
     pub root: PathBuf,
@@ -30,14 +45,15 @@ impl Backend {
         self.db().is_file()
     }
     pub fn version(&self) -> io::Result<String> {
-        invoke(&["--version".into()], None, None)
+        invoke(&["--version".into()], None, None, DEFAULT_TIMEOUT_SECS)
     }
     pub fn prepare(&self) -> io::Result<()> {
         super::file_map::safe_directory(&self.root, Path::new(".central/bkmr/home/.config/bkmr"))?;
         let config = format!(
-            "db_url = {}\n[base_paths]\nWORLD = {}\n\n[embeddings]\nmodel = \"NomicEmbedTextV15\"\n",
+            "db_url = {}\n[base_paths]\nWORLD = {}\n\n[embeddings]\nmodel = {}\n",
             serde_json::to_string(&self.db().to_string_lossy())?,
-            serde_json::to_string(&self.root.to_string_lossy())?
+            serde_json::to_string(&self.root.to_string_lossy())?,
+            serde_json::to_string(&embedding_model())?
         );
         let path = self.area.join("home/.config/bkmr/config.toml");
         // bkmr 7.6.7's importer reloads default settings instead of the supplied
@@ -52,6 +68,11 @@ impl Backend {
         Ok(())
     }
     pub fn run(&self, args: &[String]) -> io::Result<String> {
+        self.run_allowance(args, DEFAULT_TIMEOUT_SECS)
+    }
+    /// Commands that legitimately re-embed a whole scope — `backfill` after a
+    /// model switch — need minutes, not the default per-call ceiling.
+    pub fn run_allowance(&self, args: &[String], timeout_secs: u64) -> io::Result<String> {
         super::file_map::safe_member(&self.root, ".central/bkmr", true)?;
         for name in [
             "index.db",
@@ -82,7 +103,12 @@ impl Backend {
             "--no-color".into(),
         ];
         argv.extend_from_slice(args);
-        invoke(&argv, Some(&self.root), Some(&self.area.join("home")))
+        invoke(
+            &argv,
+            Some(&self.root),
+            Some(&self.area.join("home")),
+            timeout_secs,
+        )
     }
     pub fn records(&self) -> io::Result<Vec<Value>> {
         if !self.present() {
@@ -224,7 +250,14 @@ fn drain(mut stream: impl Read) -> io::Result<Vec<u8>> {
         Ok(bytes)
     }
 }
-fn invoke(args: &[String], cwd: Option<&Path>, home: Option<&Path>) -> io::Result<String> {
+const DEFAULT_TIMEOUT_SECS: u64 = 120;
+
+fn invoke(
+    args: &[String],
+    cwd: Option<&Path>,
+    home: Option<&Path>,
+    timeout_secs: u64,
+) -> io::Result<String> {
     let binary = std::env::var_os("CENTRAL_BKMR_BIN").unwrap_or_else(|| "bkmr".into());
     let mut command = Command::new(binary);
     command
@@ -238,9 +271,21 @@ fn invoke(args: &[String], cwd: Option<&Path>, home: Option<&Path>) -> io::Resul
     }
     if let Some(home) = home {
         command.env("HOME", home);
+        // The isolated HOME would otherwise give every scope its own fastembed
+        // model download; share the invoking user's cache unless the caller
+        // pinned one.
+        if std::env::var_os("FASTEMBED_CACHE_DIR").is_none() {
+            if let Some(user_home) = std::env::var_os("HOME") {
+                #[cfg(target_os = "macos")]
+                let cache = PathBuf::from(&user_home).join("Library/Caches/bkmr/models");
+                #[cfg(not(target_os = "macos"))]
+                let cache = PathBuf::from(&user_home).join(".cache/bkmr/models");
+                command.env("FASTEMBED_CACHE_DIR", cache);
+            }
+        }
     }
     command.env_remove("BKMR_DB_URL").env("NO_COLOR", "1");
-    let deleting = args.first().is_some_and(|arg| arg == "delete")
+    let deleting = args.first().is_some_and(|arg| arg == "delete" || arg == "clear-embeddings")
         || args.get(5).is_some_and(|arg| arg == "delete");
     if deleting {
         command.stdin(Stdio::piped());
@@ -262,7 +307,7 @@ fn invoke(args: &[String], cwd: Option<&Path>, home: Option<&Path>) -> io::Resul
         if let Some(status) = child.try_wait()? {
             break status;
         }
-        if start.elapsed() > Duration::from_secs(120) {
+        if start.elapsed() > Duration::from_secs(timeout_secs) {
             timeout = true;
             unsafe {
                 libc::kill(-(child.id() as i32), libc::SIGKILL);

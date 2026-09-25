@@ -1,6 +1,7 @@
 //! Incremental native bkmr maintenance and scoped query federation.
 use super::file_map::*;
 use crate::file_map_backend::{self as native, Backend};
+use crate::source_safety::content_revision_bytes;
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -18,6 +19,16 @@ pub(crate) fn refresh(scope: &Scope, embeddings: bool) -> io::Result<Value> {
         .collect();
     let mut changes = Vec::new();
     let mut diagnostics = Vec::new();
+    // A changed embedder poisons every stored vector. Clear before the entry
+    // pass so rows added below embed under the configured model, then fill
+    // everything the clear removed once the pass is done. Backfill can
+    // re-embed thousands of rows, so it runs with its own long allowance.
+    let model = native::embedding_model();
+    let model_changed =
+        embeddings && index.embedding_model.as_deref() != Some(model.as_str());
+    if model_changed {
+        backend.run(&["clear-embeddings".into()])?;
+    }
     // Withdraw only our rows. Unknown/user bookmarks are never deleted.
     for (reference, old) in index.entries.clone() {
         if !allowed.contains(reference.as_str()) {
@@ -38,6 +49,8 @@ pub(crate) fn refresh(scope: &Scope, embeddings: bool) -> io::Result<Value> {
             changes.push(format!("withdrawn:{reference}"));
         }
     }
+    let mut added_without_embed = 0usize;
+    let mut checkpointed = 0usize;
     for entry in entries {
         let entry = with_revision(entry)?;
         let reference = &entry.source.source_ref;
@@ -69,7 +82,14 @@ pub(crate) fn refresh(scope: &Scope, embeddings: bool) -> io::Result<Value> {
             record_id = old.id;
             if old.revision != entry.revision || old.url != url || index.embeddings != embeddings {
                 let current_desc = row["description"].as_str().unwrap();
-                if current_desc != old.generated_description {
+                // Indexes from before the digest era stored the whole text;
+                // migrate them by trusting the marker-verified row once.
+                let stored_hash = if old.description_hash.is_empty() {
+                    content_revision_bytes(current_desc.as_bytes())
+                } else {
+                    old.description_hash.clone()
+                };
+                if content_revision_bytes(current_desc.as_bytes()) != stored_hash {
                     return Err(conflict(
                         "Managed indexed description was edited in bkmr; preserve/reconcile it before refresh",
                     ));
@@ -120,14 +140,15 @@ pub(crate) fn refresh(scope: &Scope, embeddings: bool) -> io::Result<Value> {
                     "--description".into(),
                     generated.clone(),
                     "--no-web".into(),
+                    // Embedding happens once, in bulk, after the pass: the
+                    // per-row path would spawn the embedder for every file.
+                    "--no-embed".into(),
                 ];
-                if !embeddings {
-                    args.push("--no-embed".into());
-                }
                 if !entry.tags.is_empty() {
                     args.push(entry.tags.join(","));
                 }
                 backend.run(&args)?;
+                added_without_embed += 1;
                 records = backend.records()?;
                 record_id = native::id(
                     records
@@ -209,15 +230,29 @@ pub(crate) fn refresh(scope: &Scope, embeddings: bool) -> io::Result<Value> {
                 revision: entry.revision,
                 url,
                 generated_title: entry.title,
-                generated_description: generated,
+                description_hash: content_revision_bytes(generated.as_bytes()),
                 retained_description: existing
                     .as_ref()
                     .and_then(|v| v.retained_description.clone()),
                 import_id,
             },
         );
-        // Checkpoint every record; another process can resume without rebuilding.
-        scope.save_index(&index)?;
+        // Checkpoint in batches: a resumed refresh replays at most this many
+        // bkmr writes, while per-record saves would rewrite a pooled scope's
+        // whole index for every file.
+        checkpointed += 1;
+        if checkpointed >= 256 {
+            scope.save_index(&index)?;
+            checkpointed = 0;
+        }
+    }
+    // Rows the clear removed and rows added this pass all lack vectors;
+    // backfill regenerates them in one bulk pass under the configured model.
+    if embeddings && (model_changed || added_without_embed > 0) {
+        backend.run_allowance(&["backfill".into()], 3600)?;
+    }
+    if embeddings {
+        index.embedding_model = Some(model);
     }
     index.embeddings = embeddings;
     scope.save_index(&index)?;
@@ -282,10 +317,29 @@ pub(crate) fn search(all: &[Scope], input: &Value) -> io::Result<Value> {
             absences.push(format!("{}: embeddings not ready", scope.world));
             continue;
         }
-        let current: BTreeMap<_, _> = entries(scope)?
-            .into_iter()
-            .map(|e| (e.source.source_ref.clone(), e))
-            .collect();
+        // Vectors from another embedder poison hybrid results without any
+        // revision change, so the mismatch itself is the absence the refresh
+        // routine reacts to.
+        if mode == "hybrid" && index.embedding_model.as_deref() != Some(native::embedding_model().as_str())
+        {
+            absences.push(format!(
+                "{}: embeddings stored under another model; refresh required",
+                scope.world
+            ));
+            continue;
+        }
+        let current: BTreeMap<_, _> = match entries(scope) {
+            Ok(items) => items
+                .into_iter()
+                .map(|e| (e.source.source_ref.clone(), e))
+                .collect(),
+            // One scope's broken enumeration must not take the whole
+            // federated query down: name it in the absences and move on.
+            Err(error) => {
+                absences.push(format!("{}: source enumeration failed: {}", scope.world, error));
+                continue;
+            }
+        };
         // Apply live authority and revisions BEFORE returning any cached snippet.
         for (rank, value) in backend
             .search(query, &tags, mode == "hybrid", MAX_ENTRIES)?

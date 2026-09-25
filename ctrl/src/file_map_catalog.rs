@@ -14,7 +14,7 @@ use std::{
 pub const SCHEMA: &str = "central.file-map/v1";
 const INDEX: &str = ".central/bkmr/bindings.json";
 const TEXT_LIMIT: usize = 32768;
-pub(crate) const MAX_ENTRIES: usize = 10000;
+pub(crate) const MAX_ENTRIES: usize = 1_000_000;
 #[derive(Clone, Debug)]
 pub(crate) struct Scope {
     pub root: PathBuf,
@@ -29,6 +29,21 @@ pub(crate) struct MapGround {
     pub links: BTreeMap<String, Link>,
     #[serde(default)]
     pub scopes: BTreeMap<String, String>,
+    #[serde(default)]
+    pub content_pool: ContentPool,
+}
+/// A scope that pools its readable content: everything under the root that
+/// passes the retrieval membrane becomes a source, git or not. The project
+/// wiki sits inside the walk, so every constellation in it is pooled with the
+/// same content-hash freshness as any other file.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub(crate) struct ContentPool {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Relative-path subtrees kept out of the pool, matched at component
+    /// boundaries ("Seeds" excludes "Seeds/x" but not "Seeds-2/x").
+    #[serde(default)]
+    pub exclude: Vec<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Resource {
@@ -61,6 +76,11 @@ pub(crate) struct Index {
     pub entries: BTreeMap<String, Indexed>,
     #[serde(default)]
     pub embeddings: bool,
+    /// The embedder that produced the stored vectors. A configured model
+    /// other than this one means the vectors are wrong-shaped and must be
+    /// regenerated before hybrid search can be trusted.
+    #[serde(default)]
+    pub embedding_model: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Indexed {
@@ -70,7 +90,11 @@ pub(crate) struct Indexed {
     #[serde(default)]
     pub source_path: String,
     pub generated_title: String,
-    pub generated_description: String,
+    /// Digest of the description last written to bkmr (marker + content).
+    /// The text itself lives in bkmr; storing the digest keeps the derived
+    /// index compact enough to pool whole trees.
+    #[serde(default)]
+    pub description_hash: String,
     #[serde(default)]
     pub retained_description: Option<String>,
     #[serde(default)]
@@ -141,6 +165,17 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
 pub(crate) fn read_json(path: &Path) -> io::Result<Value> {
     if fs::metadata(path)?.len() > 8 * 1024 * 1024 {
         return Err(invalid("Map JSON exceeds size bound"));
+    }
+    serde_json::from_slice(&fs::read(path)?)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+/// The derived bindings index is not authored ground: pooled scopes carry a
+/// digest per source, so its read bound is sized for a fully pooled world
+/// rather than the authored-document bound above.
+const INDEX_JSON_BOUND: u64 = 512 * 1024 * 1024;
+fn read_index_json(path: &Path) -> io::Result<Value> {
+    if fs::metadata(path)?.len() > INDEX_JSON_BOUND {
+        return Err(invalid("Bindings index exceeds size bound"));
     }
     serde_json::from_slice(&fs::read(path)?)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
@@ -230,7 +265,8 @@ impl Scope {
                 ..Default::default()
             });
         }
-        let index: Index = serde_json::from_value(read_json(&path)?).map_err(io::Error::other)?;
+        let index: Index = serde_json::from_value(read_index_json(&path)?)
+            .map_err(io::Error::other)?;
         if index.schema != SCHEMA || index.world_ref != self.world {
             return Err(invalid("bkmr bindings belong to another World or schema"));
         }
@@ -295,6 +331,48 @@ pub(crate) fn selected<'a>(scopes: &'a [Scope], input: &Value) -> io::Result<&'a
         None => scopes.first().ok_or_else(|| invalid("No scope")),
     }
 }
+/// Turn a scope's content pool on or off. An enabled pool means the scope's
+/// readable content — the whole tree, wiki and constellations included — is
+/// source, without per-file declarations.
+pub(crate) fn pool(all: &[Scope], input: &Value) -> io::Result<Value> {
+    let scope = selected(all, input)?;
+    let enable = input["enable"]
+        .as_bool()
+        .ok_or_else(|| invalid("pool requires enable: true|false"))?;
+    let mut ground = scope.ground()?;
+    if let Some(exclude) = input.get("exclude").and_then(Value::as_array) {
+        ground.content_pool.exclude = exclude
+            .iter()
+            .filter_map(|value| value.as_str().map(str::to_owned))
+            .collect();
+    }
+    let mut pooled = 0usize;
+    if enable {
+        let mut sources: BTreeMap<String, SourceBinding> = BTreeMap::new();
+        pooled = source_horizon::insert_tree_bindings(
+            &scope.root,
+            &scope.root,
+            &scope.world,
+            &["content-pool"],
+            "pooled",
+            "scope-content",
+            "pooled-content",
+            &ground.content_pool.exclude,
+            &mut sources,
+        )?;
+        // Refuse at enable time, with the count and the remedy, rather than
+        // poison every later enumeration with an over-bound pool.
+        if pooled > MAX_ENTRIES {
+            return Err(invalid(format!(
+                "pool would add {pooled} sources, over the {MAX_ENTRIES}-source bound; exclude subtrees and retry"
+            )));
+        }
+    }
+    ground.content_pool.enabled = enable;
+    let doc = scope.document()?;
+    scope.save(&ground, doc)?;
+    Ok(json!({"world_ref": scope.world, "content_pool": {"enabled": enable}, "exclude": ground.content_pool.exclude, "pooled_sources": pooled}))
+}
 pub(crate) fn entries(scope: &Scope) -> io::Result<Vec<Entry>> {
     let ground = scope.ground()?;
     let native = if scope.world == "control:root" {
@@ -317,8 +395,23 @@ pub(crate) fn entries(scope: &Scope) -> io::Result<Vec<Entry>> {
             agent_retrieval_allowed: true,
         });
     }
+    if ground.content_pool.enabled {
+        // Declared sources keep their identity; the pool fills the rest of
+        // the scope's readable content under one pooled provenance.
+        source_horizon::insert_tree_bindings(
+            &scope.root,
+            &scope.root,
+            &scope.world,
+            &["content-pool"],
+            "pooled",
+            "scope-content",
+            "pooled-content",
+            &ground.content_pool.exclude,
+            &mut sources,
+        )?;
+    }
     if sources.len() > MAX_ENTRIES {
-        return Err(invalid("File map exceeds 10000-source bound"));
+        return Err(invalid("File map exceeds the 1000000-source bound"));
     }
     let mut result = Vec::new();
     for (reference, mut source) in sources {
