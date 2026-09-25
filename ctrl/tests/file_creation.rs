@@ -243,3 +243,92 @@ fn concurrent_first_saves_admit_one_without_last_writer_wins() {
     let content = fs::read_to_string(ground.0.join("notes/inquiry.expression.json")).unwrap();
     assert!(content == "another composition" || content.contains("expression:inquiry"));
 }
+
+#[test]
+fn admitted_binary_bytes_keep_native_history_and_restore_by_cas() {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let ground = Ground::new();
+    let bytes = b"\x89PNG\r\n\x1a\n\0\xff\x80";
+    let mut request = create(&ground.0);
+    request["name"] = json!("image.png");
+    request["content_encoding"] = json!("base64");
+    request["content"] = json!(STANDARD.encode(bytes));
+    let created = call(&ground.0, "central.files.create", request.clone());
+    assert_eq!(created.status, ResultStatus::Success, "{created:?}");
+    let created = created.data.unwrap();
+    let location = &created["location"];
+    let revision = &created["revision"];
+    assert_eq!(fs::read(ground.0.join("notes/image.png")).unwrap(), bytes);
+    assert_eq!(created["current"]["content_encoding"], "base64");
+    assert_eq!(created["current"]["content"], request["content"]);
+    let repeat = call(&ground.0, "central.files.create", request);
+    assert_eq!(repeat.data.unwrap()["outcome"], "unchanged");
+    assert_ne!(
+        call(
+            &ground.0,
+            "central.files.read",
+            json!({"location":location})
+        )
+        .status,
+        ResultStatus::Success
+    );
+    let history = call(
+        &ground.0,
+        "central.files.history",
+        json!({"location":location}),
+    );
+    assert_eq!(history.data.unwrap()["entries"][0]["revision"], *revision);
+    // A genuine external edit supplies another current byte basis. Recovery
+    // restores the admitted bytes, without allowing ordinary binary writes.
+    fs::write(ground.0.join("notes/image.png"), b"\0external\xff").unwrap();
+    let current = call(
+        &ground.0,
+        "central.files.read",
+        json!({"location":location,"encoding":"base64"}),
+    )
+    .data
+    .unwrap();
+    let restore = json!({"location":location,"expected_revision":current["revision"],"revision":revision,"actor":"native-test","actor_kind":"human"});
+    let preview = call(&ground.0, "central.files.recovery_preview", restore.clone())
+        .data
+        .unwrap();
+    assert_eq!(preview["content_encoding"], "base64");
+    assert_eq!(preview["content"], created["current"]["content"]);
+    assert_eq!(
+        fs::read(ground.0.join("notes/image.png")).unwrap(),
+        b"\0external\xff"
+    );
+    let restored = call(&ground.0, "central.files.restore", restore.clone());
+    assert_eq!(restored.status, ResultStatus::Success, "{restored:?}");
+    assert_eq!(fs::read(ground.0.join("notes/image.png")).unwrap(), bytes);
+    assert_eq!(
+        call(&ground.0, "central.files.restore", restore)
+            .data
+            .unwrap()["outcome"],
+        "conflict"
+    );
+    let mut malformed = create(&ground.0);
+    malformed["name"] = json!("bad.bin");
+    malformed["content_encoding"] = json!("base64");
+    malformed["content"] = json!("not base64!");
+    assert_ne!(
+        call(&ground.0, "central.files.create", malformed).status,
+        ResultStatus::Success
+    );
+    assert!(!ground.0.join("notes/bad.bin").exists());
+}
+
+#[test]
+fn first_save_checks_retrieval_before_admitting_any_bytes() {
+    let ground = Ground::new();
+    let request = create(&ground.0);
+    fs::write(ground.0.join("notes/.no-agent-retrieval"), b"").unwrap();
+    let refused = call(&ground.0, "central.files.create", request);
+    assert_eq!(
+        refused.status,
+        ResultStatus::UnavailableCapability,
+        "{refused:?}"
+    );
+    assert!(!ground.0.join("notes/inquiry.expression.json").exists());
+    assert!(!ground.0.join(".central/file-history").exists());
+}
