@@ -578,6 +578,9 @@ fn propose_action_with_origin(
     if let Some(value) = optional_text(input, "source_profile_ref") {
         profile.source_profile_ref = Some(value);
     }
+    if let Some(value) = optional_text(input, "expressive_character_ref") {
+        profile.expressive_character_ref = Some(value);
+    }
     let assignments: Result<(), String> = (|| {
         profile.governance_refs = optional_ref_list(input, "governance_refs")?;
         profile.skill_refs = optional_ref_list(input, "skill_refs")?;
@@ -729,6 +732,7 @@ fn express_action(
         "computer_access_intent_refs",
         "placement_intent_refs",
         "provenance_refs",
+        "expressive_character_ref",
     ] {
         if let Some(value) = input.get(field) {
             proposal[field] = value.clone();
@@ -838,6 +842,7 @@ pub fn register_agent_profile_actions(registry: &mut ActionRegistry) {
         ("computer_access_intent_refs", false),
         ("placement_intent_refs", false),
         ("provenance_refs", false),
+        ("expressive_character_ref", false),
     ] {
         propose_inputs.push(input(
             name,
@@ -867,6 +872,7 @@ pub fn register_agent_profile_actions(registry: &mut ActionRegistry) {
         input("computer_access_intent_refs", "array", false),
         input("placement_intent_refs", "array", false),
         input("provenance_refs", "array", false),
+        input("expressive_character_ref", "string", false),
     ];
     registry
         .register(
@@ -1265,6 +1271,88 @@ mod tests {
             read.data.as_ref().unwrap()["profile"]["agent_ref"],
             agent_ref
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn expressive_character_ref_travels_through_save_propose_and_express() {
+        let root = fixture_root();
+        let registry = registry();
+        let mut options = None;
+        let mut connectors = None;
+        let mut connector_context = None;
+        let context = context(&root, &mut options, &mut connectors, &mut connector_context);
+        let character = "central:Control/agents/expressive-material/character/nous.expression.json";
+
+        // save -> read round trip
+        let mut profile = personal_profile("p1");
+        profile["expressive_character_ref"] = json!(character);
+        let saved = registry.execute(
+            AGENT_PROFILE_SAVE_ACTION,
+            &json!({"scope":"personal", "profile": profile}),
+            &context,
+        );
+        assert!(saved.ok, "{saved:?}");
+        let read = registry.execute(
+            AGENT_PROFILE_READ_ACTION,
+            &json!({"scope":"personal", "profile_ref":"agent-profile:guardian"}),
+            &context,
+        );
+        assert!(read.ok, "{read:?}");
+        assert_eq!(
+            read.data.as_ref().unwrap()["profile"]["expressive_character_ref"],
+            character
+        );
+
+        // propose carries it
+        let mut input = propose_input(None);
+        input["profile_ref"] = json!("agent-profile:proposed-character");
+        input["agent_ref"] = json!("agent:proposed-character");
+        input["expressive_character_ref"] = json!(character);
+        let proposed = registry.execute(AGENT_PROFILE_PROPOSE_ACTION, &input, &context);
+        assert!(proposed.ok, "{proposed:?}");
+        assert_eq!(
+            proposed.data.as_ref().unwrap()["profile"]["expressive_character_ref"],
+            character
+        );
+
+        // express carries it through its allowlist
+        let expressed = registry.execute(
+            AGENT_PROFILE_EXPRESS_ACTION,
+            &json!({
+                "scope": "personal",
+                "world_ref": "world:personal",
+                "ratified_world_refs": ["world:personal"],
+                "intent_expression": INTENT,
+                "expressive_character_ref": character,
+            }),
+            &context,
+        );
+        assert!(expressed.ok, "{expressed:?}");
+        let profile_ref = expressed.data.as_ref().unwrap()["allocation"]["profile_ref"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let reread = registry.execute(
+            AGENT_PROFILE_READ_ACTION,
+            &json!({"scope":"personal", "profile_ref": profile_ref}),
+            &context,
+        );
+        assert!(reread.ok, "{reread:?}");
+        assert_eq!(
+            reread.data.as_ref().unwrap()["profile"]["expressive_character_ref"],
+            character
+        );
+
+        // a profile without a character does not serialize the field
+        let mut plain_input = propose_input(None);
+        plain_input["profile_ref"] = json!("agent-profile:plain");
+        plain_input["agent_ref"] = json!("agent:plain");
+        let plain = registry.execute(AGENT_PROFILE_PROPOSE_ACTION, &plain_input, &context);
+        assert!(plain.ok, "{plain:?}");
+        assert!(plain.data.as_ref().unwrap()["profile"]
+            .get("expressive_character_ref")
+            .is_none());
         fs::remove_dir_all(root).unwrap();
     }
 
