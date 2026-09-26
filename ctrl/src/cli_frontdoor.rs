@@ -1,7 +1,51 @@
-const HELP: &str = "Central ctrl\n\nUsage:\n  ctrl --version\n  ctrl help\n  ctrl capabilities [--json]\n  ctrl actions [--json]\n  ctrl action run <ACTION> [JSON] [--json]\n  ctrl root | init | doctor\n  ctrl system [--json]        (Wave 5 owner System disclosure)
-  ctrl config-contribution --json   (Configuration Plane owner contribution)
-  ctrl config <validate|plan|apply|reset> ... [--json]  (owner-native transport)\n  ctrl work <list|search|open|reveal> ...
-  ctrl git <census|tree|graph> [Project]   (open branches and worktrees; read-only)\n  ctrl control <open|search|index> ...\n  ctrl machine <inspect|account|adopt-current|declaration|plan|apply|verify> ...\n  ctrl recovery plan <ROLE>\n  ctrl recover <ROLE>\n  ctrl pick\n\nUse `ctrl capabilities` (or `ctrl actions`) for the complete current native Action field. Product operations remain owned by Central's Action registry; this help is only the stable command doorway.";
+const HELP: &str = "Central ctrl — the owner's register: orient, enter Project work, Return.
+
+Orientation, entry and health (everyday):
+  ctrl root | init | doctor         where this machine stands; `init` is
+                                    contextual setup and never runs by itself
+  ctrl work <list|search|open|reveal> ...
+                                    enter Project material by task, not by path
+  ctrl pick                         choose a Project to stand in (a human
+                                    navigation entry; never launched for --json)
+
+Authored ground (contextual):
+  ctrl control <open|search|index> ...
+                                    read and search the authored Control ground;
+                                    indexing is Operator work, source authority
+                                    stays with the human ground
+
+Developer reading (contextual, read-only):
+  ctrl git <census|tree|graph> [Project]
+                                    open branches, worktrees and history — a
+                                    reading, never a Git mutation
+
+Machine and recovery (Operator):
+  ctrl machine <inspect|account|adopt-current|declaration|plan|apply|verify> ...
+                                    inspect and account freely; declaration
+                                    through verify are explicit Operator steps
+  ctrl recovery plan <ROLE>
+  ctrl recover <ROLE>               recovery keeps the exact existing Role and
+                                    source ownership
+
+Configuration plane:
+  ctrl system [--json]              owner System disclosure
+  ctrl config <validate|plan|apply|reset> ... [--json]
+                                    owner-native settings transport
+  ctrl config-contribution --json   Configuration Plane owner contribution
+
+Action infrastructure (canonical discovery and dispatch):
+  ctrl capabilities [--json]
+  ctrl actions [--json]             the complete current native Action field
+  ctrl action run <ACTION> [JSON] [--json]
+                                    dispatch one owner Action; the effect and
+                                    its authority belong to that Action
+
+  ctrl --version
+  ctrl help
+
+Use `ctrl capabilities` (or `ctrl actions`) for the complete current native
+Action field. Product operations remain owned by Central's Action registry;
+this help is only the stable command doorway.";
 
 fn top_level_command_index(args: &[String]) -> Option<usize> {
     let mut positional = Vec::new();
