@@ -85,6 +85,22 @@ pub struct WikiRelation {
     pub to_ref: String,
 }
 
+/// One typed WikiEdge as the wiki carries it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct WikiEdgeReading {
+    #[serde(rename = "ref")]
+    pub edge_ref: String,
+    pub from_ref: String,
+    pub relation: String,
+    pub to_ref: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<u64>,
+}
+
 /// Owner counts derived at read time: node/edge totals plus the raw object
 /// census so a consumer can detect a wiki whose shape it does not know.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -92,6 +108,8 @@ pub struct WikiCounts {
     pub spaces: usize,
     pub nodes: usize,
     pub edges: usize,
+    /// Typed knowledge edges (`object: edge`) carried in `knowledge_edges`.
+    pub knowledge_edges: usize,
     pub objects: usize,
     pub other_objects: usize,
 }
@@ -111,6 +129,11 @@ pub struct WikiReading {
     pub spaces: Vec<WikiSpaceReading>,
     pub nodes: Vec<WikiNodeReading>,
     pub relations: Vec<WikiRelation>,
+    /// The wiki's own typed knowledge edges (`object: edge` — references,
+    /// contemplates, explains, …) with their origin and revision. Structural
+    /// `relations` above stay derived from spaces and nodes; these are read
+    /// verbatim so a consumer can reveal what the wiki actually relates.
+    pub knowledge_edges: Vec<WikiEdgeReading>,
     pub counts: WikiCounts,
     pub automatic_agent_or_model_invocation: bool,
 }
@@ -226,6 +249,26 @@ fn parse_wiki_document(content: &str) -> Result<Vec<WikiReadingObject>, WikiRead
                     ql: map.get("ql").cloned(),
                 }));
             }
+            Some("edge") => {
+                let (Some(edge_ref), Some(from_ref), Some(relation), Some(to_ref)) = (
+                    optional_string(map, "ref"),
+                    optional_string(map, "from_ref"),
+                    optional_string(map, "relation"),
+                    optional_string(map, "to_ref"),
+                ) else {
+                    parsed.push(WikiReadingObject::Other);
+                    continue;
+                };
+                parsed.push(WikiReadingObject::Edge(WikiEdgeReading {
+                    edge_ref,
+                    from_ref,
+                    relation,
+                    to_ref,
+                    origin: optional_string(map, "origin"),
+                    origin_ref: optional_string(map, "origin_ref"),
+                    revision: map.get("revision").and_then(Value::as_u64),
+                }));
+            }
             _ => parsed.push(WikiReadingObject::Other),
         }
     }
@@ -235,6 +278,7 @@ fn parse_wiki_document(content: &str) -> Result<Vec<WikiReadingObject>, WikiRead
 enum WikiReadingObject {
     Space(WikiSpaceReading),
     Node(WikiNodeReading),
+    Edge(WikiEdgeReading),
     Other,
 }
 
@@ -309,11 +353,13 @@ fn read_wiki(
     let parsed = parse_wiki_document(&content)?;
     let mut spaces = Vec::new();
     let mut nodes = Vec::new();
+    let mut knowledge_edges = Vec::new();
     let mut other_objects = 0usize;
     for object in parsed {
         match object {
             WikiReadingObject::Space(space) => spaces.push(space),
             WikiReadingObject::Node(node) => nodes.push(node),
+            WikiReadingObject::Edge(edge) => knowledge_edges.push(edge),
             WikiReadingObject::Other => other_objects += 1,
         }
     }
@@ -322,7 +368,8 @@ fn read_wiki(
         spaces: spaces.len(),
         nodes: nodes.len(),
         edges: relations.len(),
-        objects: spaces.len() + nodes.len() + other_objects,
+        knowledge_edges: knowledge_edges.len(),
+        objects: spaces.len() + nodes.len() + knowledge_edges.len() + other_objects,
         other_objects,
     };
     Ok(WikiReading {
@@ -339,6 +386,7 @@ fn read_wiki(
         spaces,
         nodes,
         relations,
+        knowledge_edges,
         counts,
         automatic_agent_or_model_invocation: false,
     })
@@ -943,6 +991,46 @@ mod tests {
          "title":"Beta","space_refs":["central:wiki:project:example/project"],
          "source_refs":[],"provenance":[]}
     ]}"#;
+
+    #[test]
+    fn typed_knowledge_edges_are_read_verbatim_beside_structural_relations() {
+        let temp = tempfile::tempdir().unwrap();
+        let wiki = r#"{"objects":[
+            {"profile":"okf-wiki/v1","object":"node","ref":"wiki:node:a","revision":1,"title":"A","space_refs":[],"source_refs":[],"provenance":[]},
+            {"profile":"okf-wiki/v1","object":"node","ref":"wiki:node:b","revision":1,"title":"B","space_refs":[],"source_refs":[],"provenance":[]},
+            {"profile":"okf-wiki/v1","object":"edge","ref":"wiki:node:b|re-sites|wiki:node:a","from_ref":"wiki:node:b","relation":"re-sites","to_ref":"wiki:node:a",
+             "origin":"inferred","origin_ref":"contribution:x","revision":1,"provenance":[{"source_ref":"central:source:corpus:b"}]},
+            {"profile":"okf-wiki/v1","object":"edge","ref":"broken","relation":"references"}
+        ]}"#;
+        fs::create_dir_all(temp.path().join("w")).unwrap();
+        fs::write(temp.path().join("w/wiki.json"), wiki).unwrap();
+        let reading = read_wiki(temp.path(), "control:root", "root", None, "w/wiki.json").unwrap();
+        assert_eq!(reading.knowledge_edges.len(), 1);
+        let edge = &reading.knowledge_edges[0];
+        assert_eq!(
+            (
+                edge.from_ref.as_str(),
+                edge.relation.as_str(),
+                edge.to_ref.as_str()
+            ),
+            ("wiki:node:b", "re-sites", "wiki:node:a")
+        );
+        assert_eq!(edge.origin.as_deref(), Some("inferred"));
+        assert_eq!(edge.origin_ref.as_deref(), Some("contribution:x"));
+        assert_eq!(reading.counts.knowledge_edges, 1);
+        assert_eq!(
+            reading.counts.other_objects, 1,
+            "an edge without endpoints stays other"
+        );
+        assert_eq!(reading.counts.objects, 4);
+        assert!(
+            reading
+                .relations
+                .iter()
+                .all(|relation| relation.kind != "re-sites"),
+            "structural relations are unchanged"
+        );
+    }
 
     fn fixture_central(temp: &Path, name: &str) -> PathBuf {
         let central = temp.join(name);
