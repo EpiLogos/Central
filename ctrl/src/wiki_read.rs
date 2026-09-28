@@ -353,6 +353,20 @@ pub fn read_root_wiki(central_root: &Path) -> Result<WikiReading, WikiReadFailur
 /// declared by the Project manifest). The manifest is the identity authority:
 /// its validated `project_id` and canonical `wiki.source` mint the U0.2 refs.
 pub fn read_project_wiki(project_root: &Path) -> Result<WikiReading, WikiReadFailure> {
+    let (project_id, wiki_source) = project_wiki_binding(project_root)?;
+    let world_ref = format!("project:{project_id}");
+    read_wiki(
+        project_root,
+        &world_ref,
+        "project",
+        Some(&project_id),
+        &wiki_source,
+    )
+}
+
+/// The validated Project identity and canonical wiki source path, as declared
+/// by the Project manifest (the identity authority for every minted ref).
+fn project_wiki_binding(project_root: &Path) -> Result<(String, String), WikiReadFailure> {
     let manifest = read_project_manifest(project_root).map_err(|error| {
         WikiReadFailure::invalid(format!(
             "Project manifest is required to read the wiki source: {error}"
@@ -365,14 +379,7 @@ pub fn read_project_wiki(project_root: &Path) -> Result<WikiReading, WikiReadFai
             validation.errors.join("; ")
         )));
     }
-    let world_ref = format!("project:{}", manifest.project_id);
-    read_wiki(
-        project_root,
-        &world_ref,
-        "project",
-        Some(&manifest.project_id),
-        &manifest.wiki.source,
-    )
+    Ok((manifest.project_id, manifest.wiki.source))
 }
 
 fn failure_result(
@@ -521,6 +528,279 @@ fn projectcentral_wiki_read_action(
     }
 }
 
+// --- Wiki source bank -------------------------------------------------------
+//
+// A wiki cites authored corpus sources as `central:source:corpus:<id>` and
+// carries their revisioned bodies in its own source bank: `corpus-NNN.json`
+// shards, each a JSON array of `{binding, body}` records. Neither the wiki
+// document nor the Project manifest names the bank, so it is derived beside
+// the wiki source exactly as its writer (`aikit wiki ingest`) places it: a
+// `<wiki-file-stem>.sources/` directory next to the manifest-declared
+// `wiki.json`. These corpus refs are not participating sources of the World,
+// so `projectcentral.source.read` cannot serve them; this reader is their
+// native door. It is read-only, records no use, and returns `visibility`
+// verbatim without enforcing it.
+
+pub const WIKI_SOURCE_READING_SCHEMA: &str = "central.wiki-source-reading/v1";
+
+/// Only corpus-local refs are served from the bank. A bank copy of a live,
+/// owner-held source (`central:source:control:…`, `central:source:project:…`)
+/// is a stale body that must not bypass its owner reader.
+const CORPUS_SOURCE_PREFIX: &str = "central:source:corpus:";
+const SOURCE_BANK_SHARD_PREFIX: &str = "corpus-";
+const SOURCE_BANK_SHARD_SUFFIX: &str = ".json";
+
+/// One corpus source record read from a wiki's source bank. `revision` is the
+/// record's own revision as the bank carries it; `bank_revision` is the
+/// Central content revision of the shard file the record was read from.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct WikiSourceReading {
+    pub schema: String,
+    pub register: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    pub world_ref: String,
+    pub source_ref: String,
+    pub revision: String,
+    pub title: Value,
+    pub media_type: Value,
+    pub visibility: Value,
+    pub tags: Value,
+    pub owners: Value,
+    pub locator: Value,
+    pub metadata: Value,
+    pub body: String,
+    pub wiki_ref: String,
+    pub bank_ref: String,
+    pub bank_path: String,
+    pub bank_revision: String,
+    pub automatic_agent_or_model_invocation: bool,
+}
+
+/// Why a bank read did not produce a reading: a refused request (the ref is
+/// not a bank source) versus bank ground that is absent or malformed.
+#[derive(Debug)]
+enum WikiSourceReadFailure {
+    Refused(String),
+    Ground(WikiReadFailure, String),
+}
+
+/// `ProjectCentral/agents/wiki/wiki.json` → `ProjectCentral/agents/wiki/wiki.sources`.
+fn source_bank_path(wiki_relative: &str) -> String {
+    let path = Path::new(wiki_relative);
+    let stem = path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "wiki".to_owned());
+    match path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        Some(parent) => format!("{}/{stem}.sources", parent.display()),
+        None => format!("{stem}.sources"),
+    }
+}
+
+fn read_wiki_source(
+    world_root: &Path,
+    world_ref: &str,
+    register: &str,
+    project: Option<&str>,
+    wiki_relative: &str,
+    requested: &str,
+) -> Result<WikiSourceReading, WikiSourceReadFailure> {
+    if !requested.starts_with(CORPUS_SOURCE_PREFIX) {
+        return Err(WikiSourceReadFailure::Refused(format!(
+            "source_ref is not in this wiki's source bank: only {CORPUS_SOURCE_PREFIX}<id> sources are banked; read owner-held sources through their owner Action (projectcentral.source.read)"
+        )));
+    }
+    let bank = source_bank_path(wiki_relative);
+    let ground = |failure: WikiReadFailure| WikiSourceReadFailure::Ground(failure, bank.clone());
+    crate::source_safety::reject_symlink_components(world_root, Path::new(&bank)).map_err(
+        |error| {
+            if error.kind() == io::ErrorKind::NotFound {
+                ground(WikiReadFailure::absent(format!(
+                    "{} has no wiki source bank at {bank}",
+                    world_root.display()
+                )))
+            } else {
+                ground(WikiReadFailure::unreadable(format!(
+                    "wiki source bank at {bank} is unreadable: {error}"
+                )))
+            }
+        },
+    )?;
+    let entries = match std::fs::read_dir(world_root.join(&bank)) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(ground(WikiReadFailure::absent(format!(
+                "{} has no wiki source bank at {bank}",
+                world_root.display()
+            ))))
+        }
+        Err(error) => {
+            return Err(ground(WikiReadFailure::unreadable(format!(
+                "wiki source bank at {bank} is unreadable: {error}"
+            ))))
+        }
+    };
+    let mut shards = entries
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| {
+            name.starts_with(SOURCE_BANK_SHARD_PREFIX) && name.ends_with(SOURCE_BANK_SHARD_SUFFIX)
+        })
+        .collect::<Vec<_>>();
+    shards.sort();
+    for shard in shards {
+        let shard_path = format!("{bank}/{shard}");
+        let content = crate::source_safety::read(world_root, &shard_path).map_err(|error| {
+            ground(WikiReadFailure::unreadable(format!(
+                "wiki source bank shard {shard_path} is unreadable: {error}"
+            )))
+        })?;
+        let records: Vec<Value> = serde_json::from_str(&content).map_err(|error| {
+            ground(WikiReadFailure::invalid(format!(
+                "wiki source bank shard {shard_path} is not a JSON array of source records: {error}"
+            )))
+        })?;
+        let Some(record) = records.into_iter().find(|record| {
+            record.pointer("/binding/source").and_then(Value::as_str) == Some(requested)
+        }) else {
+            continue;
+        };
+        let binding = record.get("binding").cloned().unwrap_or(Value::Null);
+        let field = |key: &str| binding.get(key).cloned().unwrap_or(Value::Null);
+        let revision = binding.get("revision").and_then(Value::as_str);
+        let body = record.get("body").and_then(Value::as_str);
+        let (Some(revision), Some(body)) = (revision, body) else {
+            return Err(ground(WikiReadFailure::invalid(format!(
+                "wiki source bank record {requested} in {shard_path} lacks a string revision or body"
+            ))));
+        };
+        return Ok(WikiSourceReading {
+            schema: WIKI_SOURCE_READING_SCHEMA.to_owned(),
+            register: register.to_owned(),
+            project: project.map(str::to_owned),
+            world_ref: world_ref.to_owned(),
+            source_ref: requested.to_owned(),
+            revision: revision.to_owned(),
+            title: field("title"),
+            media_type: field("media_type"),
+            visibility: field("visibility"),
+            tags: field("tags"),
+            owners: field("owners"),
+            locator: field("locator"),
+            metadata: field("metadata"),
+            body: body.to_owned(),
+            wiki_ref: source_ref(world_ref, wiki_relative),
+            bank_ref: source_ref(world_ref, &shard_path),
+            bank_path: shard_path,
+            bank_revision: crate::source_safety::content_revision_bytes(content.as_bytes()),
+            automatic_agent_or_model_invocation: false,
+        });
+    }
+    Err(WikiSourceReadFailure::Refused(
+        "source_ref is not in this wiki's source bank".to_owned(),
+    ))
+}
+
+fn wiki_source_result(
+    action: &str,
+    world_ref: &str,
+    requested: &str,
+    outcome: Result<WikiSourceReading, WikiSourceReadFailure>,
+) -> ActionResult {
+    match outcome {
+        Ok(reading) => ActionResult::success(
+            action,
+            serde_json::to_value(reading).expect("wiki source reading serializes"),
+        ),
+        Err(WikiSourceReadFailure::Refused(message)) => ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            message,
+            Some(json!({"source_ref": requested})),
+        ),
+        Err(WikiSourceReadFailure::Ground(failure, bank)) => {
+            let bank_ref = source_ref(world_ref, &bank);
+            failure_result(action, &bank_ref, &bank, failure)
+        }
+    }
+}
+
+fn central_wiki_source_read_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    let action = "central.wiki.source.read";
+    let requested = match required(input, "source_ref", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let root = match resolve_central_root(context.root_options) {
+        Ok(root) => root,
+        Err(message) => {
+            return ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None);
+        }
+    };
+    if let Err(error) =
+        crate::source_safety::reject_symlink_components(&root.path, Path::new("Control"))
+    {
+        return ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            error.to_string(),
+            None,
+        );
+    }
+    let world_ref = "control:root";
+    let outcome = read_wiki_source(
+        &root.path,
+        world_ref,
+        "root",
+        None,
+        ROOT_WIKI_SOURCE,
+        &requested,
+    );
+    wiki_source_result(action, world_ref, &requested, outcome)
+}
+
+fn projectcentral_wiki_source_read_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    let action = "projectcentral.wiki.source.read";
+    let project_root = match project_wiki_context(action, input, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
+    let requested = match required(input, "source_ref", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let (project_id, wiki_source) = match project_wiki_binding(&project_root) {
+        Ok(binding) => binding,
+        Err(failure) => {
+            let relative = crate::projectcentral::WIKI_SOURCE;
+            let pointer = source_ref("project:unknown", relative);
+            return failure_result(action, &pointer, relative, failure);
+        }
+    };
+    let world_ref = format!("project:{project_id}");
+    let outcome = read_wiki_source(
+        &project_root,
+        &world_ref,
+        "project",
+        Some(&project_id),
+        &wiki_source,
+        &requested,
+    );
+    wiki_source_result(action, &world_ref, &requested, outcome)
+}
+
 fn text_input(name: &str) -> ActionInputDefinition {
     ActionInputDefinition {
         name: name.to_owned(),
@@ -537,13 +817,23 @@ fn wiki_descriptor(
     description: &str,
     inputs: Vec<ActionInputDefinition>,
 ) -> ActionDescriptor {
+    wiki_descriptor_with_output(id, title, description, inputs, "central-wiki-reading")
+}
+
+fn wiki_descriptor_with_output(
+    id: &str,
+    title: &str,
+    description: &str,
+    inputs: Vec<ActionInputDefinition>,
+    output_type: &str,
+) -> ActionDescriptor {
     ActionDescriptor {
         id: id.to_owned(),
         title: title.to_owned(),
         description: description.to_owned(),
         inputs,
         output: ActionOutputDefinition {
-            output_type: "central-wiki-reading".to_owned(),
+            output_type: output_type.to_owned(),
         },
         mutation_class: MutationClass::ReadOnly,
         preview_supported: false,
@@ -555,8 +845,13 @@ fn wiki_descriptor(
     }
 }
 
-/// Register the root-register wiki read Action (`central.wiki.read`) on a core
-/// registry, alongside the other `central.*` owner Actions.
+const ROOT_SOURCE_READ_DESCRIPTION: &str = "Read one corpus source (central:source:corpus:<id>) cited by the root register Agent Wiki from its source bank (the wiki.sources/ corpus-NNN.json shards beside Control/agents/wiki/wiki.json) as central.wiki-source-reading/v1: the record's own revision, title, media type, visibility, tags, verbatim metadata and exact body, with the wiki ref, the bank shard ref and the shard's Central content revision. Visibility is returned verbatim and not enforced here; consumers such as publication decide audience. Read-only and records no use. A source_ref absent from the bank is refused as invalid input; a missing or malformed bank is an explicit absent/unreadable/invalid state.";
+
+const PROJECT_SOURCE_READ_DESCRIPTION: &str = "Read one corpus source (central:source:corpus:<id>) cited by a Project's Agent Wiki from its source bank (the wiki.sources/ corpus-NNN.json shards beside the manifest-declared ProjectCentral/agents/wiki/wiki.json) as central.wiki-source-reading/v1: the record's own revision, title, media type, visibility, tags, verbatim metadata and exact body, with the wiki ref, the bank shard ref and the shard's Central content revision. Corpus sources are not participating World sources, so projectcentral.source.read cannot serve them; this is their native reader. Visibility is returned verbatim and not enforced here; consumers such as publication decide audience. Read-only and records no use. A source_ref absent from the bank is refused as invalid input; a missing or malformed bank is an explicit absent/unreadable/invalid state.";
+
+/// Register the root-register wiki read Actions (`central.wiki.read` and
+/// `central.wiki.source.read`) on a core registry, alongside the other
+/// `central.*` owner Actions.
 pub fn register_central_wiki_read_action(registry: &mut ActionRegistry) {
     registry
         .register(
@@ -569,9 +864,22 @@ pub fn register_central_wiki_read_action(registry: &mut ActionRegistry) {
             central_wiki_read_action,
         )
         .expect("core Action ids are valid");
+    registry
+        .register(
+            wiki_descriptor_with_output(
+                "central.wiki.source.read",
+                "Read Central root wiki source bank",
+                ROOT_SOURCE_READ_DESCRIPTION,
+                vec![text_input("source_ref")],
+                "central-wiki-source-reading",
+            ),
+            central_wiki_source_read_action,
+        )
+        .expect("core Action ids are valid");
 }
 
-/// Register the project-register wiki read Action (`projectcentral.wiki.read`).
+/// Register the project-register wiki read Actions (`projectcentral.wiki.read`
+/// and `projectcentral.wiki.source.read`).
 pub fn register_projectcentral_wiki_read_action(registry: &mut ActionRegistry) {
     registry
         .register(
@@ -582,6 +890,18 @@ pub fn register_projectcentral_wiki_read_action(registry: &mut ActionRegistry) {
                 vec![text_input("project")],
             ),
             projectcentral_wiki_read_action,
+        )
+        .expect("core Action ids are valid");
+    registry
+        .register(
+            wiki_descriptor_with_output(
+                "projectcentral.wiki.source.read",
+                "Read Project wiki source bank",
+                PROJECT_SOURCE_READ_DESCRIPTION,
+                vec![text_input("project"), text_input("source_ref")],
+                "central-wiki-source-reading",
+            ),
+            projectcentral_wiki_source_read_action,
         )
         .expect("core Action ids are valid");
 }
@@ -866,6 +1186,215 @@ mod tests {
         );
     }
 
+    const BANK_SHARD: &str = r#"[
+      {"binding":{"source":"central:source:corpus:A03","revision":"1111111111111111",
+        "title":"A03","tags":[],"visibility":"team","owners":[],"media_type":"text/markdown",
+        "locator":{"kind":"path","value":"A03.md"},"metadata":{}},
+       "body":"A03 body"},
+      {"binding":{"source":"central:source:control:root:live","revision":"stale",
+        "title":"Copied live source","tags":[],"visibility":"team","owners":[],
+        "media_type":"text/markdown","locator":{"kind":"path","value":"live.md"},"metadata":{}},
+       "body":"A stale copy must not bypass its owner."}
+    ]"#;
+
+    const BANK_SHARD_WITH_A04: &str = r#"[
+      {"binding":{"source":"central:source:corpus:A04","revision":"4d3e93cce1d87aa1",
+        "title":"A04 — Diaphaneity / Contextual Transparency",
+        "tags":["source-bank/record","source-bank/gebser"],"visibility":"team","owners":[],
+        "media_type":"text/markdown",
+        "locator":{"kind":"path","value":"section-rooms/arguments/A04.md"},
+        "metadata":{"claim_status":"Argued","corpus_kind":"record","record_type":"argument"}},
+       "body":"---\ntitle: A04\n---\n\n# Diaphaneity\n\nThe exact text.\n"}
+    ]"#;
+
+    fn project_with_bank(label: &str) -> (crate::TempDir, PathBuf, PathBuf) {
+        let temp = tempdir().unwrap();
+        let central = temp.path().join(label);
+        let project = central.join("Work/example");
+        fs::create_dir_all(&project).unwrap();
+        initialize_projectcentral(&central, &project, "example/project").unwrap();
+        let bank = project.join("ProjectCentral/agents/wiki/wiki.sources");
+        fs::create_dir_all(&bank).unwrap();
+        fs::write(bank.join("corpus-000.json"), BANK_SHARD).unwrap();
+        fs::write(bank.join("corpus-001.json"), BANK_SHARD_WITH_A04).unwrap();
+        fs::write(bank.join("notes.json"), "not a shard").unwrap();
+        (temp, central, project)
+    }
+
+    #[test]
+    fn project_wiki_source_read_returns_the_exact_banked_record() {
+        let (_temp, central, _project) = project_with_bank("bank-read");
+        let (options, connectors, connector_context) = context_for(&central);
+        let context = ActionExecutionContext {
+            root_options: &options,
+            connectors: &connectors,
+            connector_context: &connector_context,
+        };
+        let registry = registry_with_projectcentral_actions();
+        let result = registry.execute(
+            "projectcentral.wiki.source.read",
+            &json!({"project": "example", "source_ref": "central:source:corpus:A04"}),
+            &context,
+        );
+        assert!(result.ok, "{result:?}");
+        let data = result.data.unwrap();
+        assert_eq!(data["schema"], WIKI_SOURCE_READING_SCHEMA);
+        assert_eq!(data["register"], "project");
+        assert_eq!(data["project"], "example/project");
+        assert_eq!(data["source_ref"], "central:source:corpus:A04");
+        assert_eq!(data["revision"], "4d3e93cce1d87aa1");
+        assert_eq!(data["title"], "A04 — Diaphaneity / Contextual Transparency");
+        assert_eq!(data["media_type"], "text/markdown");
+        assert_eq!(data["visibility"], "team");
+        assert_eq!(
+            data["tags"],
+            json!(["source-bank/record", "source-bank/gebser"])
+        );
+        assert_eq!(
+            data["metadata"],
+            json!({"claim_status": "Argued", "corpus_kind": "record", "record_type": "argument"})
+        );
+        assert_eq!(
+            data["body"],
+            "---\ntitle: A04\n---\n\n# Diaphaneity\n\nThe exact text.\n"
+        );
+        assert_eq!(
+            data["wiki_ref"],
+            "central:source:project:example/project:ProjectCentral/agents/wiki/wiki.json"
+        );
+        assert_eq!(
+            data["bank_ref"],
+            "central:source:project:example/project:ProjectCentral/agents/wiki/wiki.sources/corpus-001.json"
+        );
+        assert_eq!(
+            data["bank_revision"],
+            crate::source_safety::content_revision_bytes(BANK_SHARD_WITH_A04.as_bytes())
+        );
+        assert!(!data["automatic_agent_or_model_invocation"]
+            .as_bool()
+            .unwrap());
+    }
+
+    #[test]
+    fn unknown_or_owner_held_refs_are_refused_as_not_in_the_bank() {
+        let (_temp, central, _project) = project_with_bank("bank-refuse");
+        let (options, connectors, connector_context) = context_for(&central);
+        let context = ActionExecutionContext {
+            root_options: &options,
+            connectors: &connectors,
+            connector_context: &connector_context,
+        };
+        let registry = registry_with_projectcentral_actions();
+        for source_ref in [
+            "central:source:corpus:A99",
+            "central:source:control:root:live",
+        ] {
+            let result = registry.execute(
+                "projectcentral.wiki.source.read",
+                &json!({"project": "example", "source_ref": source_ref}),
+                &context,
+            );
+            assert!(!result.ok);
+            assert_eq!(result.status, ResultStatus::InvalidInput);
+            let error = result.error.unwrap();
+            assert!(
+                error
+                    .message
+                    .starts_with("source_ref is not in this wiki's source bank"),
+                "{}",
+                error.message
+            );
+            assert_eq!(error.details.unwrap()["source_ref"], source_ref);
+        }
+        let missing = registry.execute(
+            "projectcentral.wiki.source.read",
+            &json!({"project": "example"}),
+            &context,
+        );
+        assert_eq!(missing.status, ResultStatus::InvalidInput);
+    }
+
+    #[test]
+    fn missing_source_bank_is_an_explicit_absent_state() {
+        let temp = tempdir().unwrap();
+        let central = temp.path().join("bank-absent");
+        let project = central.join("Work/example");
+        fs::create_dir_all(&project).unwrap();
+        initialize_projectcentral(&central, &project, "example/project").unwrap();
+        fs::create_dir_all(central.join("Control/agents/wiki")).unwrap();
+        let (options, connectors, connector_context) = context_for(&central);
+        let context = ActionExecutionContext {
+            root_options: &options,
+            connectors: &connectors,
+            connector_context: &connector_context,
+        };
+        let registry = registry_with_projectcentral_actions();
+        let result = registry.execute(
+            "projectcentral.wiki.source.read",
+            &json!({"project": "example", "source_ref": "central:source:corpus:A04"}),
+            &context,
+        );
+        assert!(!result.ok);
+        assert_eq!(result.status, ResultStatus::InvalidCentralStructure);
+        let details = result.error.unwrap().details.unwrap();
+        assert_eq!(details["state"], "absent");
+        assert_eq!(details["path"], "ProjectCentral/agents/wiki/wiki.sources");
+        assert_eq!(
+            details["source_ref"],
+            "central:source:project:example/project:ProjectCentral/agents/wiki/wiki.sources"
+        );
+
+        let root = registry.execute(
+            "central.wiki.source.read",
+            &json!({"source_ref": "central:source:corpus:A04"}),
+            &context,
+        );
+        assert_eq!(root.status, ResultStatus::InvalidCentralStructure);
+        assert_eq!(
+            root.error.unwrap().details.unwrap()["path"],
+            "Control/agents/wiki/wiki.sources"
+        );
+    }
+
+    #[test]
+    fn root_wiki_source_read_shares_the_bank_reader() {
+        let temp = tempdir().unwrap();
+        let central = fixture_central(temp.path(), "root-bank");
+        let bank = central.join("Control/agents/wiki/wiki.sources");
+        fs::create_dir_all(&bank).unwrap();
+        fs::write(bank.join("corpus-000.json"), BANK_SHARD_WITH_A04).unwrap();
+        let (options, connectors, connector_context) = context_for(&central);
+        let context = ActionExecutionContext {
+            root_options: &options,
+            connectors: &connectors,
+            connector_context: &connector_context,
+        };
+        let registry = registry_with_projectcentral_actions();
+        let result = registry.execute(
+            "central.wiki.source.read",
+            &json!({"source_ref": "central:source:corpus:A04"}),
+            &context,
+        );
+        assert!(result.ok, "{result:?}");
+        let data = result.data.unwrap();
+        assert_eq!(data["register"], "root");
+        assert_eq!(data["world_ref"], "control:root");
+        assert_eq!(data["revision"], "4d3e93cce1d87aa1");
+        assert_eq!(
+            data["bank_ref"],
+            "central:source:control:root:Control/agents/wiki/wiki.sources/corpus-000.json"
+        );
+    }
+
+    #[test]
+    fn source_bank_is_derived_beside_the_declared_wiki_source() {
+        assert_eq!(
+            source_bank_path("ProjectCentral/agents/wiki/wiki.json"),
+            "ProjectCentral/agents/wiki/wiki.sources"
+        );
+        assert_eq!(source_bank_path("wiki.json"), "wiki.sources");
+    }
+
     #[test]
     fn both_actions_are_disclosed_through_the_registry() {
         let registry = registry_with_projectcentral_actions();
@@ -881,5 +1410,26 @@ mod tests {
         assert_eq!(project.inputs.len(), 1);
         assert_eq!(project.inputs[0].name, "project");
         assert!(project.availability.available);
+        for (id, inputs) in [
+            ("central.wiki.source.read", vec!["source_ref"]),
+            (
+                "projectcentral.wiki.source.read",
+                vec!["project", "source_ref"],
+            ),
+        ] {
+            let descriptor = registry
+                .get(id)
+                .unwrap_or_else(|| panic!("{id} is registered"));
+            assert_eq!(descriptor.mutation_class, MutationClass::ReadOnly);
+            assert_eq!(
+                descriptor
+                    .inputs
+                    .iter()
+                    .map(|input| input.name.as_str())
+                    .collect::<Vec<_>>(),
+                inputs
+            );
+            assert!(descriptor.description.contains("not enforced"));
+        }
     }
 }
