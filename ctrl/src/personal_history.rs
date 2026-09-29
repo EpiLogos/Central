@@ -1292,11 +1292,32 @@ pub fn apply_plan(
         }
         // A resumed run replays idempotently: bytes for steps the journal
         // marks applied are already durable, so only registration and record
-        // state are recomputed.
-        let already_applied = journal
+        // state are recomputed. A journal step whose bytes did not survive is
+        // replayed, never trusted.
+        let mut already_applied = journal
             .steps
             .iter()
             .any(|step| step.entry_id == entry.entry_id && step.status == "applied");
+        if already_applied {
+            let check = entry
+                .destination
+                .as_ref()
+                .map(|destination| scope.root.join(destination.trim_start_matches('/')))
+                .or_else(|| entry.origin.as_ref().map(PathBuf::from));
+            let holds_planned_bytes = check
+                .map(|path| {
+                    content_revision(&path)
+                        .map(|revision| revision.revision == entry.content_revision)
+                        .unwrap_or(false)
+                })
+                .unwrap_or(true);
+            if !holds_planned_bytes {
+                journal
+                    .steps
+                    .retain(|step| !(step.entry_id == entry.entry_id && step.status == "applied"));
+                already_applied = false;
+            }
+        }
         if !already_applied {
             // Recheck the origin basis before every write: an external edit
             // during processing is a change of identity, not an overwrite
@@ -1991,6 +2012,29 @@ pub fn rollback_import(
         removed_registrations.push(entry.source_ref.clone());
     }
 
+    // Members this import did not own but which no longer match the record
+    // are drifted later edits: untouched, disclosed for reconciliation.
+    for entry in record.entries.iter() {
+        if entry.first_import == import_sequence || updated_here.contains(&entry.entry_id) {
+            continue;
+        }
+        let check = if entry.path.starts_with('/') {
+            PathBuf::from(&entry.path)
+        } else {
+            root.join(entry.path.trim_start_matches('/'))
+        };
+        if let Ok(current) = content_revision(&check) {
+            if current.revision != entry.content_revision {
+                preserved.push(entry.entry_id.clone());
+                notes.push(format!(
+                    "{}: edited after import (not owned by this rollback); \
+                     knowledge made from it may need reconciliation",
+                    entry.entry_id
+                ));
+            }
+        }
+    }
+
     // Restore members this import updated, from their restore points.
     let restore_area = alternatives_area(root, collection_id, import_sequence);
     for entry_id in &updated_here {
@@ -2421,9 +2465,8 @@ fn apply_action(
         None => return invalid_input(action, "personal apply requires acceptance."),
     };
     match apply_plan(&root, &plan, acceptance) {
-        Ok(outcome) => ActionResult::success(
-            action,
-            json!({
+        Ok(outcome) => {
+            let data = json!({
                 "schema": "central.personal-collection-apply/v1",
                 "collection_id": outcome.record.collection_id,
                 "receipt": outcome.receipt,
@@ -2436,8 +2479,20 @@ fn apply_action(
                 ),
                 "entries": outcome.record.entries.len(),
                 "refused": outcome.steps_refused,
-            }),
-        ),
+            });
+            if outcome.steps_refused.is_empty() {
+                ActionResult::success(action, data)
+            } else {
+                // Some members landed; the refusals are the honest remainder.
+                ActionResult {
+                    ok: true,
+                    action: Some(action.to_owned()),
+                    status: ResultStatus::PartialCompletion,
+                    data: Some(data),
+                    error: None,
+                }
+            }
+        }
         Err(message) => invalid_input(action, message),
     }
 }
