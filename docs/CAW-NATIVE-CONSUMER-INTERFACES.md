@@ -111,6 +111,26 @@ Clearings may carry a material horizon (O-I `docs/contracts/WORLD-INHABITATION-V
 
 Mutations requiring authenticated authorship use a recognized root `native-action-authority` source with exact scope/action grants and SHA-256 bearer credential digests. The host passes `CENTRAL_NATIVE_TOKEN` through its protected process channel, **not document JSON**. An `H` label, `actor_kind:human`, or a claimed acceptance string is not a credential. A bearer authenticates its declared principal, not physical human presence; same-UID malicious processes require credential isolation at the host/material boundary. No personal authority source is installed by these handlers or this PR.
 
+## Document continuation: exact source, not imported authority
+
+`central.document.read` returns `source.ref`, `document_id`, `revision.revision`, `last_native_revision` and `unreviewed_external_revision`. `central.document.mutate` takes those identity/basis values plus a caller-unique `request_id` and an `operation` (`project` only at Project scope). Replaying the identical request returns its original applied revision; reusing its identity with changed input is a conflict. `occurred_at_unix_seconds` and `received_at_unix_seconds`, when present, must be integers.
+
+After an external edit, ordinary native mutations stay refused. An authenticated human reconciles the exact retained revision:
+
+```json
+{"source_ref":"<source.ref>","document_id":"<document_id>","expected_revision":"<current external revision>",
+ "expected_native_revision":"<last_native_revision>","request_id":"review-external-edit-1","operation":"external.reconcile"}
+```
+
+The reconciling write goes through source history for Day **and** Flow/Dialogue documents, so `central.temporal.source-history` retains the external revision's exact bytes (an ordinary Flow write keeps its operations log as its history; an external edit is the one state that log cannot reconstruct). The operation records the human review, locks externally edited contributions against later Agent overwrite, and repairs the native metadata through the recovery journal. It does not infer who made the external edit. A change to either basis is a conflict; an interrupted reconciliation recovers by repeating the identical request.
+
+- `entry.insert` — new `entry_id` before an existing `before_entry_id`; omit `html` for a blank entry.
+- `note.add` — `note_id`, `timing: During | After`, optional `parent_note_id`, optional sanitised `html`, optional `anchor {kind: contribution|entry|field, target_id, original_text}` (empty text allowed for a whole target). The anchor records the target's current basis; when the target later changes the note keeps its quote and target and is marked `status: needs-review`, never silently retargeted. Adding a note sends nothing to an Agent.
+
+`central.document.export` returns a `snapshot` (`central.document-retained-snapshot/v1`) and inert `html`: human fields, ordered entries including blanks, contribution attribution (`display_role` as recorded), notes with stale-anchor warnings, and the escaped retained JSON. It is an explicit retained copy — not autosave, not original-template fidelity.
+
+`portable.restore` reopens that copy into the **same** native document: fresh identity/revision/request fields and either `html` (the retained copy) or `value` (the snapshot), not both. Human only. Native identity, date, kind, field definitions and lifecycle must match; operations, creation digest, template fidelity and import history come from the owner, never the imported JSON. Changed imported contributions keep their declared attribution as `imported_attribution` and become locked, reviewed material. Arbitrary original HTML, new-World adoption and a standalone browser editor are not implemented.
+
 ## Receiving: contributions and owner requests
 
 `central.receiving.*` is the one ledger through which work reaches the person, per register (root or Project), at `.central/source-returns/contributions/`. A Return is one of two kinds:
@@ -120,7 +140,9 @@ Mutations requiring authenticated authorship use a recognized root `native-actio
 
 Either kind may carry `summary`, `evidence_refs` (≤128), `reply_to` (an opaque message ref, e.g. a Gateway Communique) and `declared_producer {ref, actor_kind: agent|native-service, attribution: verified|claimed}`. The credential stays the authenticated `author`; an Agent credential may not declare a different producer.
 
-Decisions are human-only `central.receiving.review` dispositions: a proposal is `accepted` or `rejected`, a question is `answered` (with `answer`) or `rejected`; any Return may be left `pending` or `acknowledged` (seen, not decided — status unchanged). An optional `note` travels with the decision. A proposal naming an owner (e.g. `factory`) stays open after acceptance until the accepting human records that owner's realisation with `central.receiving.include {realisation_ref, realisation_owner_ref}`; Central never calls the owner, and replaying the same ref is idempotent while a different ref conflicts.
+Either kind may also carry `artifacts` — up to 16 exact source selections `{source_ref, expected_revision, producer_ref?, proposed_target_ref?}` (e.g. README drafts proposed for adoption). Central reads each at its exact revision and retains the bytes, binding, revision, `content_sha256`, the authenticated `submitted_by` and the declared producer (never promoted to identity), with standing `retained-source-evidence-not-human-adoption`; at most 512 KiB of text per Return. Arrival adopts nothing. A Return is disclosed only while its target document and every artifact origin are still readable: revoking retrieval on any of them withholds it from `list` (counted in `withheld_unavailable_sources`) and refuses `read`, review and inclusion. List rows carry `artifact_count`.
+
+Decisions are human-only `central.receiving.review` dispositions: a proposal is `accepted` or `rejected`, a question is `answered` (with `answer`) or `rejected`; any Return may be left `pending` or `acknowledged` (seen, not decided — status unchanged). An optional `note` travels with the decision. A proposal naming an owner (e.g. `factory`) stays open after acceptance until the accepting human records that owner's realisation with `central.receiving.include {realisation_ref, realisation_owner_ref}`; Central never calls the owner, and replaying the same ref is idempotent while a different ref conflicts. Including a contribution keeps its original occurrence and receipt times rather than the review time; a missing occurrence stays missing.
 
 Settled means `included | rejected | answered | cancelled`, or `accepted` for a proposal with no proposed owner. `central.receiving.list` rows carry `kind`, the request subject/owner, `declared_producer`, `summary`, `acknowledged` and `settled`; `open: true` pages only unsettled Returns, and `open_total` is the exact unsettled count for the scope. `central.now.read` composes each Return keyed to the NOW with its `decision` (disposition, answer, note) and `realisation`, so the asking Agent reads the person's decision where it works.
 
@@ -130,6 +152,7 @@ Settled means `included | rejected | answered | cancelled`, or `accepted` for a 
 python3 scripts/prove-continuous-work.py --ctrl /path/to/built/ctrl
 cargo test -p ctrl --test continuous_work_native
 cargo test -p ctrl --test continuous_work_registered_worktree
+cargo test -p ctrl --test continuous_work_continuation
 cargo test -p ctrl continuous_work::tests
 ```
 
