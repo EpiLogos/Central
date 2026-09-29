@@ -37,6 +37,20 @@ def discover(root, config):
             raise ValueError('CLI discovery selector must resolve to an array')
         field = config.get('id_field')
         commands = [item[field] if field else item for item in items]
+    elif config.get('format') == 'command-tree':
+        # The parser-walked reference (`<cli> system commands --json`): every
+        # leaf is a command identity. A compatibility spelling that declares
+        # its canonical path is the same command, not another identity.
+        commands=[]
+        def walk(node, path):
+            children=node.get('subcommands') or []
+            if node.get('canonical'):
+                return
+            if not children and path:
+                commands.append(' '.join(path))
+            for child in children:
+                walk(child, path+[child['name']])
+        walk(json.loads(run(argv, root)), [])
     elif config.get('format') in {'clap-help','help'}:
         commands=[]; pending=[[]]; seen=set()
         while pending:
@@ -59,20 +73,20 @@ def discover(root, config):
 
 def check(root, account, namespace, index, *, base=None, reference_scope='workspace', execute=True):
     errors=check_product_ground.validate(root, account, index, namespace, reference_scope=reference_scope)
-    manifest,header,records=capability_matrix.load(root/'ProjectCentral/user/capability-matrix.json')
+    manifest,header,records=capability_matrix.load(capability_matrix.ground_folder(root)/'capability-matrix.json')
     from reconcile_product_ground import make_plan, record_hash, render_cli_catalog
-    markdown=(root/'ProjectCentral/user/capability-matrix.md').read_text()
+    markdown=(capability_matrix.ground_folder(root)/'capability-matrix.md').read_text()
     if render_cli_catalog(markdown,records)!=markdown:errors.append('Readable CLI catalogue is stale; reconcile it from the capability records')
     plan=make_plan(root,account,namespace,'html-to-csv')
     if plan['seed_changes']:
         errors.append('Seed/CSV drift requires directional reconciliation and expanded-section review: '+','.join(c['row'] for c in plan['seed_changes']))
     if plan['changed_records']:
         errors.append('Matrix changes need account reconciliation: '+','.join(plan['changed_records']))
-    parsed=check_product_ground.read_account(root/'ProjectCentral/user'/account)
+    parsed=check_product_ground.read_account(capability_matrix.ground_folder(root)/account)
     provenance=json.loads(parsed.scripts['account-provenance'])
     basis=provenance.get('matrix_basis',{})
     for field,name in [('csv_sha256','capability-matrix.csv'),('manifest_sha256','capability-matrix.json')]:
-        if basis.get(field)!=digest(root/'ProjectCentral/user'/name):errors.append('Account matrix basis is stale: '+name)
+        if basis.get(field)!=digest(capability_matrix.ground_folder(root)/name):errors.append('Account matrix basis is stale: '+name)
     maintenance=manifest.get('maintenance',{})
     if not isinstance(maintenance,dict) or not maintenance.get('cli'):
         return errors+['Manifest requires maintenance.cli discovery contract'], {}
@@ -129,7 +143,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--root',type=Path,default=Path.cwd());p.add_argument('--account',required=True);p.add_argument('--namespace',required=True);p.add_argument('--product-index',type=int,required=True,choices=range(6));p.add_argument('--base');p.add_argument('--reference-scope',choices=['workspace','repository'],default='workspace');p.add_argument('--discover-only',action='store_true');args=p.parse_args();root=args.root.resolve()
     try:
         if args.discover_only:
-            manifest,_,_=capability_matrix.load(root/'ProjectCentral/user/capability-matrix.json');print(json.dumps(discover(root,manifest['maintenance']['cli']),indent=2));return 0
+            manifest,_,_=capability_matrix.load(capability_matrix.ground_folder(root)/'capability-matrix.json');print(json.dumps(discover(root,manifest['maintenance']['cli']),indent=2));return 0
         errors,report=check(root,args.account,args.namespace,args.product_index,base=args.base,reference_scope=args.reference_scope)
     except (OSError,ValueError,KeyError,csv.Error) as exc:errors=[str(exc)];report={}
     print(json.dumps({'errors':errors,**report},indent=2));return int(bool(errors))

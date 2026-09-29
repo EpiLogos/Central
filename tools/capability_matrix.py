@@ -22,6 +22,19 @@ DOCUMENTATION_RELATIONS = {
 }
 
 
+def ground_folder(root: Path) -> Path:
+    """The folder carrying a product's account and capability matrix.
+
+    A project that placed its capability spec under the telos register
+    (`ProjectCentral/user/telos/`, per the day/now/telos field placement)
+    is read there first; otherwise the carrier is `ProjectCentral/user/`.
+    """
+    telos = root / "ProjectCentral/user/telos"
+    if (telos / "capability-matrix.json").is_file():
+        return telos
+    return root / "ProjectCentral/user"
+
+
 def validate_documentation_extension(key, documentation):
     """Validate the optional extensions.documentation object of one record."""
     if not isinstance(documentation, dict):
