@@ -285,7 +285,9 @@ fn invoke(
         }
     }
     command.env_remove("BKMR_DB_URL").env("NO_COLOR", "1");
-    let deleting = args.first().is_some_and(|arg| arg == "delete" || arg == "clear-embeddings")
+    let deleting = args
+        .first()
+        .is_some_and(|arg| arg == "delete" || arg == "clear-embeddings")
         || args.get(5).is_some_and(|arg| arg == "delete");
     if deleting {
         command.stdin(Stdio::piped());

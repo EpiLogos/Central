@@ -265,8 +265,8 @@ impl Scope {
                 ..Default::default()
             });
         }
-        let index: Index = serde_json::from_value(read_index_json(&path)?)
-            .map_err(io::Error::other)?;
+        let index: Index =
+            serde_json::from_value(read_index_json(&path)?).map_err(io::Error::other)?;
         if index.schema != SCHEMA || index.world_ref != self.world {
             return Err(invalid("bkmr bindings belong to another World or schema"));
         }
@@ -371,7 +371,9 @@ pub(crate) fn pool(all: &[Scope], input: &Value) -> io::Result<Value> {
     ground.content_pool.enabled = enable;
     let doc = scope.document()?;
     scope.save(&ground, doc)?;
-    Ok(json!({"world_ref": scope.world, "content_pool": {"enabled": enable}, "exclude": ground.content_pool.exclude, "pooled_sources": pooled}))
+    Ok(
+        json!({"world_ref": scope.world, "content_pool": {"enabled": enable}, "exclude": ground.content_pool.exclude, "pooled_sources": pooled}),
+    )
 }
 pub(crate) fn entries(scope: &Scope) -> io::Result<Vec<Entry>> {
     let ground = scope.ground()?;

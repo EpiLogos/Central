@@ -152,17 +152,23 @@ fn suggest_returns_an_undeclared_bindable_port_in_the_requested_range() {
     init(&root);
 
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    let candidate = listener.local_addr().unwrap().port();
+    let start = listener.local_addr().unwrap().port();
     drop(listener);
+    // A single freed ephemeral port can be taken by a parallel test between
+    // the drop and the probe (Central #189); a small range keeps the claim —
+    // an undeclared, bindable port inside the requested range — without
+    // depending on that one port staying free.
+    let end = start.saturating_add(63);
 
     let suggested = run(
         &root,
         "central.local-endpoints.suggest",
-        json!({ "start": candidate, "end": candidate }),
+        json!({ "start": start, "end": end }),
     );
     assert_eq!(suggested.exit_code, 0, "{}", suggested.output);
     let value: Value = serde_json::from_str(&suggested.output).unwrap();
-    assert_eq!(value["data"]["port"], candidate);
+    let port = value["data"]["port"].as_u64().expect("suggested port") as u16;
+    assert!((start..=end).contains(&port), "{port} outside {start}..={end}");
     assert_eq!(value["data"]["scope"], "localhost");
     assert_eq!(value["data"]["protocol"], "tcp");
 

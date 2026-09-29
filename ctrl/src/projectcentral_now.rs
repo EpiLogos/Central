@@ -30,6 +30,10 @@ pub const ROOT_NOW_AGENT_DIR: &str = "Control/agents/now/agents";
 
 const POLICY_SCHEMA: &str = "central.project-now.policy/v1";
 const HANDOFF_SCHEMA: &str = "central.project-now.handoff/v1";
+/// v2 is the additive shared-effort extension: a return may name the
+/// workcell seat it works from and the agents implicated in the same
+/// clearing. v1 records (no shared fields) remain valid forever.
+const HANDOFF_SCHEMA_V2: &str = "central.project-now.handoff/v2";
 const PROMOTIONS_SCHEMA: &str = "central.project-now.promotions/v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,6 +57,15 @@ impl Default for NowPolicy {
             day_boundary: "caller-supplied-local-civil-date".into(),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NowHandoffWorkcell {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seat_product: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +106,16 @@ pub struct NowHandoff {
     /// git census for lane attribution and by day-close reconciliation.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub work_refs: Vec<crate::continuous_work::placement::WorkRef>,
+    /// The shared-track seat this return works from (workcell register
+    /// name, the product seat, and the claimed branch). v2 shared-effort
+    /// extension; present only when declared by the caller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workcell: Option<NowHandoffWorkcell>,
+    /// Actor refs implicated in the same collective effort — other agents'
+    /// returns reference the same clearing id, making one clearing the
+    /// shared meeting room. v2 shared-effort extension.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub implicated: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -554,10 +577,10 @@ fn read_policy(path: &Path) -> io::Result<NowPolicy> {
 fn read_handoff(path: &Path) -> io::Result<NowHandoff> {
     let handoff: NowHandoff = serde_json::from_slice(&fs::read(path)?)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    if handoff.schema != HANDOFF_SCHEMA {
+    if handoff.schema != HANDOFF_SCHEMA && handoff.schema != HANDOFF_SCHEMA_V2 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("NOW handoff schema must be {HANDOFF_SCHEMA}"),
+            format!("NOW handoff schema must be {HANDOFF_SCHEMA} or {HANDOFF_SCHEMA_V2}"),
         ));
     }
     validate_kind(&handoff.kind)?;
@@ -858,8 +881,54 @@ fn create_handoff(
         ));
     }
 
+    // Shared-effort extension (central.project-now.handoff/v2): the
+    // workcell seat this return works from and the agents implicated in
+    // the same clearing. Additive and validated; a plain return stays v1.
+    let workcell = match input.get("workcell") {
+        None | Some(Value::Null) => None,
+        Some(value) => {
+            let parsed = match serde_json::from_value::<NowHandoffWorkcell>(value.clone()) {
+                Ok(parsed) => parsed,
+                Err(_) => {
+                    return Err(ActionResult::failure(
+                        Some(action),
+                        ResultStatus::InvalidInput,
+                        "workcell requires a name string and optional seat_product and branch strings",
+                        None,
+                    ));
+                }
+            };
+            if parsed.name.trim().is_empty()
+                || parsed.seat_product.as_deref().map(str::trim) == Some("")
+                || parsed.branch.as_deref().map(str::trim) == Some("")
+            {
+                return Err(ActionResult::failure(
+                    Some(action),
+                    ResultStatus::InvalidInput,
+                    "workcell name must be non-empty; seat_product and branch must not be empty when present",
+                    None,
+                ));
+            }
+            Some(parsed)
+        }
+    };
+    let implicated = string_array(input, "implicated", action)?;
+    if implicated.len() > 64 || implicated.iter().any(|actor| actor.trim().is_empty()) {
+        return Err(ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            "implicated carries at most 64 non-empty actor refs",
+            None,
+        ));
+    }
+    let schema = if workcell.is_some() || !implicated.is_empty() {
+        HANDOFF_SCHEMA_V2
+    } else {
+        HANDOFF_SCHEMA
+    };
+
     Ok(NowHandoff {
-        schema: HANDOFF_SCHEMA.into(),
+        schema: schema.into(),
         id,
         provenance: "agent-authored-bounded-return".into(),
         actor,
@@ -878,6 +947,8 @@ fn create_handoff(
         carried_from_days: vec![],
         promoted_to: vec![],
         work_refs,
+        workcell,
+        implicated,
     })
 }
 
@@ -1838,7 +1909,7 @@ pub fn register_projectcentral_now_actions(registry: &mut ActionRegistry) {
             descriptor(
                 "projectcentral.now.return",
                 "Write bounded Agent return",
-                "Write one attributed Agent handoff/question/note/learning into NOW. With `project`, the return lands in that project's ProjectCentral/now; with `project` absent, root scope, it lands in the Central root register's NOW agents area with the same record form. External Run/Session/Focus/source identities remain refs rather than being duplicated.",
+                "Write one attributed Agent handoff/question/note/learning into NOW. With `project`, the return lands in that project's ProjectCentral/now; with `project` absent, root scope, it lands in the Central root register's NOW agents area with the same record form. External Run/Session/Focus/source identities remain refs rather than being duplicated. Shared efforts: optional `workcell` (register name + seat product + branch) and `implicated` actor refs stamp the return as v2 and make one clearing the collective's meeting room.",
                 MutationClass::LocallyMutating,
                 "projectcentral-now-handoff",
                 &[
@@ -1857,6 +1928,8 @@ pub fn register_projectcentral_now_actions(registry: &mut ActionRegistry) {
                     ("evidence_refs", false),
                     ("preserve_refs", false),
                     ("work_refs", false),
+                    ("workcell", false),
+                    ("implicated", false),
                 ],
             ),
             return_action,
@@ -1940,6 +2013,8 @@ mod tests {
             carried_from_days: vec![],
             promoted_to: vec![],
             work_refs: vec![],
+            workcell: None,
+            implicated: vec![],
         }
     }
 
@@ -2209,6 +2284,122 @@ mod attribution_tests {
             handoff["work_refs"][0]["worktree_path"],
             "/bounded/worktree"
         );
+    }
+
+    /// Shared-effort extension (central.project-now.handoff/v2): a return
+    /// may name the workcell seat it works from and the agents implicated
+    /// in the same clearing. The record stamps as v2 and reads back through
+    /// the same reader; a plain return stays v1.
+    #[test]
+    fn shared_effort_fields_stamp_v2_and_persist() {
+        let temp = tempdir().unwrap();
+        let central = temp.path().join("Central");
+        let project = central.join("Work/example");
+        fs::create_dir_all(&project).unwrap();
+        initialize_projectcentral(&central, &project, "example/project").unwrap();
+        initialize_now(&project).unwrap();
+
+        let mut registry = create_core_action_registry();
+        register_projectcentral_now_actions(&mut registry);
+        let descriptor = registry
+            .get("projectcentral.now.return")
+            .expect("NOW return descriptor");
+        assert!(
+            descriptor
+                .inputs
+                .iter()
+                .any(|input| input.name == "workcell")
+                && descriptor
+                    .inputs
+                    .iter()
+                    .any(|input| input.name == "implicated"),
+            "shared-effort fields must be visible at the public Action boundary"
+        );
+
+        let recorded = drive_return(
+            &central,
+            json!({
+                "actor":"workcell-lead",
+                "kind":"note",
+                "subject":"collective effort claim",
+                "result":"One clearing; several implicated agents reference it.",
+                "status":"active",
+                "focus_ref":"central:now:control:root:collective-clearing",
+                "workcell":{
+                    "name":"env-2",
+                    "seat_product":"o-i",
+                    "branch":"agent/o-i-20260927-2206"
+                },
+                "implicated":["agent:partner-one","agent:partner-two"]
+            }),
+        );
+        assert!(recorded.ok, "{recorded:?}");
+        let handoff = &recorded.data.as_ref().unwrap()["handoff"];
+        assert_eq!(handoff["schema"], "central.project-now.handoff/v2");
+        assert_eq!(handoff["workcell"]["name"], "env-2");
+        assert_eq!(handoff["workcell"]["seat_product"], "o-i");
+        assert_eq!(handoff["workcell"]["branch"], "agent/o-i-20260927-2206");
+        assert_eq!(
+            handoff["implicated"],
+            json!(["agent:partner-one", "agent:partner-two"])
+        );
+
+        let id = handoff["id"].as_str().unwrap().to_owned();
+        let stored = read_handoff(&project.join(NOW_AGENT_DIR).join(format!("{id}.json"))).unwrap();
+        assert_eq!(stored.schema, HANDOFF_SCHEMA_V2);
+        let workcell = stored.workcell.expect("workcell field persists");
+        assert_eq!(workcell.name, "env-2");
+        assert_eq!(workcell.seat_product.as_deref(), Some("o-i"));
+        assert_eq!(
+            stored.implicated,
+            vec![
+                "agent:partner-one".to_string(),
+                "agent:partner-two".to_string()
+            ]
+        );
+    }
+
+    /// The shared-effort fields are validated before anything is written:
+    /// an empty implicated ref or an empty workcell name is refused.
+    #[test]
+    fn shared_effort_fields_are_validated_before_anything_is_written() {
+        let temp = tempdir().unwrap();
+        let central = temp.path().join("Central");
+        let project = central.join("Work/example");
+        fs::create_dir_all(&project).unwrap();
+        initialize_projectcentral(&central, &project, "example/project").unwrap();
+        initialize_now(&project).unwrap();
+
+        let agents_dir = project.join(NOW_AGENT_DIR);
+        let before = fs::read_dir(&agents_dir).unwrap().count();
+
+        let refused_implicated = drive_return(
+            &central,
+            json!({
+                "actor":"workcell-lead",
+                "kind":"note",
+                "subject":"empty implicated ref is refused",
+                "result":"Validation refuses blank actor refs.",
+                "status":"active",
+                "implicated":["agent:partner-one","   "]
+            }),
+        );
+        assert!(!refused_implicated.ok, "{refused_implicated:?}");
+
+        let refused_workcell = drive_return(
+            &central,
+            json!({
+                "actor":"workcell-lead",
+                "kind":"note",
+                "subject":"empty workcell name is refused",
+                "result":"Validation refuses a blank workcell name.",
+                "status":"active",
+                "workcell":{"name":"  ","seat_product":"o-i"}
+            }),
+        );
+        assert!(!refused_workcell.ok, "{refused_workcell:?}");
+
+        assert_eq!(fs::read_dir(&agents_dir).unwrap().count(), before);
     }
 
     /// W10 V2 extension: a now.return can attribute itself to its bounded

@@ -24,8 +24,7 @@ pub(crate) fn refresh(scope: &Scope, embeddings: bool) -> io::Result<Value> {
     // everything the clear removed once the pass is done. Backfill can
     // re-embed thousands of rows, so it runs with its own long allowance.
     let model = native::embedding_model();
-    let model_changed =
-        embeddings && index.embedding_model.as_deref() != Some(model.as_str());
+    let model_changed = embeddings && index.embedding_model.as_deref() != Some(model.as_str());
     if model_changed {
         backend.run(&["clear-embeddings".into()])?;
     }
@@ -149,9 +148,16 @@ pub(crate) fn refresh(scope: &Scope, embeddings: bool) -> io::Result<Value> {
                 }
                 backend.run(&args)?;
                 added_without_embed += 1;
-                records = backend.records()?;
+                // The new row's identity comes from a bounded title search,
+                // not a full listing: re-listing every row after every add
+                // made pooled refreshes quadratic. The title is the source's
+                // path; the exact-URL match confirms identity, and the full
+                // listing stays as the fallback when full-text misbehaves.
+                let listing = backend
+                    .search(entry.title.as_str(), &[], false, 8)
+                    .or_else(|_| backend.records())?;
                 record_id = native::id(
-                    records
+                    listing
                         .iter()
                         .find(|r| native::record(r)["url"] == url)
                         .ok_or_else(|| io::Error::other("bkmr add produced no URI record"))?,
@@ -284,7 +290,7 @@ pub(crate) fn search(all: &[Scope], input: &Value) -> io::Result<Value> {
         }
     }
     let selected_world = scope.world.clone();
-    let query = input["query"].as_str().unwrap_or("");
+    let raw_query = input["query"].as_str().unwrap_or("");
     let mode = input["mode"].as_str().unwrap_or("fulltext");
     if !matches!(mode, "fulltext" | "hybrid") {
         return Err(invalid(
@@ -300,90 +306,112 @@ pub(crate) fn search(all: &[Scope], input: &Value) -> io::Result<Value> {
         .transpose()
         .map_err(io::Error::other)?;
     let excluded = context_exclusions(all, selected(all, input)?)?;
+    if limit == 0 {
+        return Ok(json!({"hits":Vec::<Value>::new(),"absences":Vec::<Value>::new()}));
+    }
+    // Full-text matching requires every token to hit; a long phrase that
+    // misses everywhere relaxes by dropping trailing tokens (to a floor of
+    // one) instead of answering nothing. The relaxed query is disclosed.
+    let tokens: Vec<&str> = raw_query.split_whitespace().collect();
+    let attempts = tokens.len().clamp(1, 4);
     let mut hits = Vec::new();
     let mut absences = Vec::new();
     let mut seen = BTreeSet::new();
-    if limit == 0 {
-        return Ok(json!({"hits":hits,"absences":absences}));
-    }
-    for scope in chosen {
-        let index = scope.index()?;
-        let backend = Backend::new(&scope.root);
-        if !backend.present() {
-            absences.push(format!("{}: map not initialized", scope.world));
-            continue;
-        }
-        if mode == "hybrid" && !index.embeddings {
-            absences.push(format!("{}: embeddings not ready", scope.world));
-            continue;
-        }
-        // Vectors from another embedder poison hybrid results without any
-        // revision change, so the mismatch itself is the absence the refresh
-        // routine reacts to.
-        if mode == "hybrid" && index.embedding_model.as_deref() != Some(native::embedding_model().as_str())
-        {
-            absences.push(format!(
-                "{}: embeddings stored under another model; refresh required",
-                scope.world
-            ));
-            continue;
-        }
-        let current: BTreeMap<_, _> = match entries(scope) {
-            Ok(items) => items
+    let mut effective = raw_query.to_owned();
+    let mut relaxed = false;
+    for attempt in 0..attempts {
+        effective = tokens[..tokens.len() - attempt].join(" ");
+        relaxed = attempt > 0;
+        hits.clear();
+        seen.clear();
+        absences.clear();
+        let query = effective.as_str();
+        for scope in chosen.iter().copied() {
+            let index = scope.index()?;
+            let backend = Backend::new(&scope.root);
+            if !backend.present() {
+                absences.push(format!("{}: map not initialized", scope.world));
+                continue;
+            }
+            if mode == "hybrid" && !index.embeddings {
+                absences.push(format!("{}: embeddings not ready", scope.world));
+                continue;
+            }
+            // Vectors from another embedder poison hybrid results without any
+            // revision change, so the mismatch itself is the absence the refresh
+            // routine reacts to.
+            if mode == "hybrid"
+                && index.embedding_model.as_deref() != Some(native::embedding_model().as_str())
+            {
+                absences.push(format!(
+                    "{}: embeddings stored under another model; refresh required",
+                    scope.world
+                ));
+                continue;
+            }
+            let current: BTreeMap<_, _> = match entries(scope) {
+                Ok(items) => items
+                    .into_iter()
+                    .map(|e| (e.source.source_ref.clone(), e))
+                    .collect(),
+                // One scope's broken enumeration must not take the whole
+                // federated query down: name it in the absences and move on.
+                Err(error) => {
+                    absences.push(format!(
+                        "{}: source enumeration failed: {}",
+                        scope.world, error
+                    ));
+                    continue;
+                }
+            };
+            // Apply live authority and revisions BEFORE returning any cached snippet.
+            for (rank, value) in backend
+                .search(query, &tags, mode == "hybrid", MAX_ENTRIES)?
                 .into_iter()
-                .map(|e| (e.source.source_ref.clone(), e))
-                .collect(),
-            // One scope's broken enumeration must not take the whole
-            // federated query down: name it in the absences and move on.
-            Err(error) => {
-                absences.push(format!("{}: source enumeration failed: {}", scope.world, error));
-                continue;
-            }
-        };
-        // Apply live authority and revisions BEFORE returning any cached snippet.
-        for (rank, value) in backend
-            .search(query, &tags, mode == "hybrid", MAX_ENTRIES)?
-            .into_iter()
-            .enumerate()
-        {
-            let id = native::id(&value)?;
-            let Some((reference, binding)) = index
-                .entries
-                .iter()
-                .find(|(_, b)| b.id == id || b.import_id == Some(id))
-            else {
-                continue;
-            };
-            if input["federated"] != true
-                && scope.world != selected_world
-                && !linked_refs.contains(reference)
+                .enumerate()
             {
-                continue;
+                let id = native::id(&value)?;
+                let Some((reference, binding)) = index
+                    .entries
+                    .iter()
+                    .find(|(_, b)| b.id == id || b.import_id == Some(id))
+                else {
+                    continue;
+                };
+                if input["federated"] != true
+                    && scope.world != selected_world
+                    && !linked_refs.contains(reference)
+                {
+                    continue;
+                }
+                if !policy_allows(&excluded, reference) {
+                    continue;
+                }
+                if allow.as_ref().is_some_and(|a| !a.contains(reference)) {
+                    continue;
+                }
+                let Some(entry) = current.get(reference) else {
+                    continue;
+                };
+                let entry = with_revision(entry.clone())?;
+                if entry.revision != binding.revision {
+                    absences.push(format!("{reference}: stale index; refresh required"));
+                    continue;
+                }
+                if !native::record(&value)["description"]
+                    .as_str()
+                    .is_some_and(|d| d.starts_with(&marker(reference)))
+                {
+                    return Err(conflict("Search row's source binding drifted"));
+                }
+                if !seen.insert(reference.clone()) {
+                    continue;
+                }
+                hits.push(json!({"source":entry.source,"world_ref":scope.world,"project":scope.project,"path":entry.path,"kind":entry.kind,"revision":entry.revision,"title":native::record(&value)["title"],"tags":native::tags(&value)?,"snippet":content(&entry).unwrap_or_default().chars().take(1000).collect::<String>(),"provider_binding":id.to_string(),"score":value["rrf_score"].as_f64().unwrap_or(1.0/(rank+1) as f64),"mode":mode}));
             }
-            if !policy_allows(&excluded, reference) {
-                continue;
-            }
-            if allow.as_ref().is_some_and(|a| !a.contains(reference)) {
-                continue;
-            }
-            let Some(entry) = current.get(reference) else {
-                continue;
-            };
-            let entry = with_revision(entry.clone())?;
-            if entry.revision != binding.revision {
-                absences.push(format!("{reference}: stale index; refresh required"));
-                continue;
-            }
-            if !native::record(&value)["description"]
-                .as_str()
-                .is_some_and(|d| d.starts_with(&marker(reference)))
-            {
-                return Err(conflict("Search row's source binding drifted"));
-            }
-            if !seen.insert(reference.clone()) {
-                continue;
-            }
-            hits.push(json!({"source":entry.source,"world_ref":scope.world,"project":scope.project,"path":entry.path,"kind":entry.kind,"revision":entry.revision,"title":native::record(&value)["title"],"tags":native::tags(&value)?,"snippet":content(&entry).unwrap_or_default().chars().take(1000).collect::<String>(),"provider_binding":id.to_string(),"score":value["rrf_score"].as_f64().unwrap_or(1.0/(rank+1) as f64),"mode":mode}));
+        }
+        if !hits.is_empty() {
+            break;
         }
     }
     let current_exclusions = context_exclusions(all, selected(all, input)?)?;
@@ -404,5 +432,5 @@ pub(crate) fn search(all: &[Scope], input: &Value) -> io::Result<Value> {
             })
     });
     hits.truncate(limit);
-    Ok(json!({"hits":hits,"absences":absences}))
+    Ok(json!({"hits":hits,"absences":absences,"query":effective,"query_relaxed":relaxed}))
 }

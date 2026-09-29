@@ -299,16 +299,21 @@ fn inspect(all: &[Scope], input: &Value) -> io::Result<Value> {
             .all(|s| s.index().is_ok_and(|i| i.embeddings));
     let excluded = context_exclusions(all, scope)?;
     let mut resources = Vec::new();
-    for chosen in &choices {
-        for entry in entries(chosen)? {
-            if input["federated"] != true
-                && chosen.world != scope.world
-                && !linked_refs.contains(&entry.source.source_ref)
-            {
-                continue;
-            }
-            if policy_allows(&excluded, &entry.source.source_ref) {
-                resources.push(entry);
+    // `{"resources": false}` turns inspect into a cheap capability and scope
+    // probe: attachments that only need provider state skip the full walk.
+    let want_resources = input["resources"] != false;
+    if want_resources {
+        for chosen in &choices {
+            for entry in entries(chosen)? {
+                if input["federated"] != true
+                    && chosen.world != scope.world
+                    && !linked_refs.contains(&entry.source.source_ref)
+                {
+                    continue;
+                }
+                if policy_allows(&excluded, &entry.source.source_ref) {
+                    resources.push(entry);
+                }
             }
         }
     }
