@@ -468,6 +468,15 @@ fn parse_args(args: &[String]) -> Result<ParsedCommand, (bool, String)> {
         [domain, verb] if domain == "action" && verb == "run" => {
             return Err((structured, "action run requires an Action id.".to_owned()));
         }
+        [domain, verb, action] if domain == "action" && verb == "describe" => {
+            ("action.describe", json!({ "action": action }))
+        }
+        [domain, verb] if domain == "action" && verb == "describe" => {
+            return Err((
+                structured,
+                "action describe requires an Action id.".to_owned(),
+            ));
+        }
         [domain, verb, ..] if domain == "action" && verb == "run" => {
             return Err((
                 structured,
@@ -1028,6 +1037,52 @@ fn human_output(result: &ActionResult) -> String {
                 .map(|original| format!(" (original receipt {original})"))
                 .unwrap_or_default();
             format!("receipt {receipt_id}: {outcome}{original}")
+        }
+        Some("action.describe") => {
+            let mut lines = Vec::new();
+            let id = data.get("id").and_then(Value::as_str).unwrap_or_default();
+            let title = data
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let description = data
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            lines.push(format!("{id}: {title}"));
+            lines.push(description.to_owned());
+            if let Some(class) = data.get("mutation_class").and_then(Value::as_str) {
+                lines.push(format!("mutation class: {class}"));
+            }
+            if let Some(inputs) = data.get("inputs").and_then(Value::as_array) {
+                if !inputs.is_empty() {
+                    lines.push("inputs:".to_owned());
+                    for field in inputs {
+                        let name = field
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        let input_type = field
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        let required = field
+                            .get("required")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false);
+                        let marker = if required { "required" } else { "optional" };
+                        lines.push(format!("  {name} ({input_type}, {marker})"));
+                    }
+                }
+            }
+            if let Some(output_type) = data
+                .get("output")
+                .and_then(|output| output.get("type"))
+                .and_then(Value::as_str)
+            {
+                lines.push(format!("result: {output_type}"));
+            }
+            lines.join("\n")
         }
         _ => data.to_string(),
     }

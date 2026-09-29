@@ -39,6 +39,9 @@ Action infrastructure (canonical discovery and dispatch):
   ctrl action run <ACTION> [JSON] [--json]
                                     dispatch one owner Action; the effect and
                                     its authority belong to that Action
+  ctrl action describe <ACTION> [--json]
+                                    one Action's inputs, which are required,
+                                    and its mutation class
 
   ctrl --version
   ctrl help

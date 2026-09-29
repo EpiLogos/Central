@@ -103,6 +103,10 @@ struct Received {
     summary: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     evidence_refs: Vec<String>,
+    /// Exact draft bytes retained from scoped sources at submit. Evidence for
+    /// the owner's review, never adopted ground and never Day prose.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    artifacts: Vec<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     declared_producer: Option<DeclaredProducer>,
     /// The message this Return answers or continues (e.g. a Gateway
@@ -183,6 +187,18 @@ fn write(scope: &Scope, record: &Received) -> io::Result<String> {
     )?;
     Ok(source::revision(&raw))
 }
+/// A Return is disclosed only while every source it carries is still readable
+/// here: its target document and each retained artifact's origin. Revoking
+/// retrieval on any of them withholds the Return rather than leaking its copy.
+fn require_disclosure(scope: &Scope, record: &Received) -> io::Result<()> {
+    if let Some(source) = &record.source_ref {
+        scope.read(source)?;
+    }
+    for artifact in &record.artifacts {
+        scope.read(text(&artifact["source"], "ref")?)?;
+    }
+    Ok(())
+}
 fn response(record: &Received, revision: &str) -> Value {
     json!({"schema":"central.receiving-reading/v1","return_ref":record.return_ref,"revision":revision,"record":record,
         "source_changed_by_arrival_or_review":false,"included":record.status=="included","automatic_agent_or_model_invocation":false})
@@ -243,6 +259,7 @@ fn submit(scope: &Scope, input: &Value, principal: &Principal, now: u64) -> io::
                     "Return producer key already has different content or attribution",
                 ));
             }
+            require_disclosure(scope, &existing)?;
             return Ok(response(&existing, &revision));
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -268,6 +285,7 @@ fn submit(scope: &Scope, input: &Value, principal: &Principal, now: u64) -> io::
         return Err(invalid("evidence refs exceed bounded receiving limits"));
     }
     let declared_producer = declared_producer(input, principal)?;
+    let artifacts = retain_artifacts(scope, input, principal)?;
     if input
         .get("occurred_at_unix_seconds")
         .is_some_and(|v| !v.is_null() && v.as_u64().is_none())
@@ -288,6 +306,7 @@ fn submit(scope: &Scope, input: &Value, principal: &Principal, now: u64) -> io::
         request: None,
         summary,
         evidence_refs,
+        artifacts,
         declared_producer,
         reply_to: optional(input, "reply_to")?,
         author: principal.into(),
@@ -320,6 +339,41 @@ fn submit(scope: &Scope, input: &Value, principal: &Principal, now: u64) -> io::
     record.sequence = next_sequence(scope)?;
     let revision = write(scope, &record)?;
     Ok(response(&record, &revision))
+}
+/// Evidence is retained from the actual scoped SourceRef at the supplied
+/// revision. It does not become included Day prose or adopted human ground.
+fn retain_artifacts(scope: &Scope, input: &Value, principal: &Principal) -> io::Result<Vec<Value>> {
+    let items = match input.get("artifacts") {
+        None | Some(Value::Null) => return Ok(vec![]),
+        Some(value) => value
+            .as_array()
+            .ok_or_else(|| invalid("artifacts must be an array"))?,
+    };
+    if items.len() > 16 {
+        return Err(invalid("at most 16 explicit source artifacts per Return"));
+    }
+    let mut retained = Vec::new();
+    let mut total = 0;
+    for item in items {
+        let reading = scope.read(text(item, "source_ref")?)?;
+        if reading.revision.revision != text(item, "expected_revision")? {
+            return Err(conflict("draft artifact changed before receiving"));
+        }
+        total += reading.content.len();
+        if total > 512 * 1024 {
+            return Err(invalid(
+                "retained draft evidence exceeds bounded receiving size",
+            ));
+        }
+        retained.push(
+            json!({"source":reading.source,"revision":reading.revision,"content":reading.content,
+            "content_sha256":source::key(&reading.content),"submitted_by":principal.principal_ref,
+            "declared_original_producer_ref":optional(item,"producer_ref")?,
+            "proposed_target_ref":optional(item,"proposed_target_ref")?,
+            "standing":"retained-source-evidence-not-human-adoption"}),
+        );
+    }
+    Ok(retained)
 }
 fn bounded_text(input: &Value, key: &str, limit: usize) -> io::Result<Option<String>> {
     match input.get(key) {
@@ -492,6 +546,7 @@ fn checked(scope: &Scope, input: &Value) -> io::Result<Received> {
     if revision != text(input, "expected_return_revision")? {
         return Err(conflict("receiving record changed since review/selection"));
     }
+    require_disclosure(scope, &record)?;
     Ok(record)
 }
 fn review(scope: &Scope, input: &Value, principal: &Principal, now: u64) -> io::Result<Value> {
@@ -637,6 +692,10 @@ fn include(
             0 => format!("include:{}", record.return_ref),
             n => format!("include:{}:attempt-{}", record.return_ref, n + 1),
         });
+        // Inclusion retains the original occurrence and receipt, not the later
+        // review clock. An absent occurrence stays absent, never fabricated.
+        request["occurred_at_unix_seconds"] = json!(record.occurred_at_unix_seconds);
+        request["received_at_unix_seconds"] = json!(record.received_at_unix_seconds);
         request
     };
     record.inclusion_request = Some(request.clone());
@@ -789,11 +848,7 @@ fn list(scope: &Scope, input: &Value) -> io::Result<Value> {
         {
             return Err(invalid("unexpected record in receiving owner store"));
         }
-        if record
-            .source_ref
-            .as_deref()
-            .is_some_and(|source| scope.read(source).is_err())
-        {
+        if require_disclosure(scope, &record).is_err() {
             withheld += 1;
             continue;
         }
@@ -801,7 +856,7 @@ fn list(scope: &Scope, input: &Value) -> io::Result<Value> {
             "kind":record.kind,"source_ref":record.source_ref,"document_id":record.document_id,"author":record.author,
             "declared_producer":record.declared_producer,"summary":record.summary,
             "request":record.request.as_ref().map(|r| json!({"kind":r.kind,"subject":r.subject,"proposed_owner_ref":r.proposed_owner_ref,"proposal_ref":r.proposal_ref})),
-            "acknowledged":record.acknowledgement.is_some(),
+            "acknowledged":record.acknowledgement.is_some(),"artifact_count":record.artifacts.len(),
             "occurred_at_unix_seconds":record.occurred_at_unix_seconds,"received_at_unix_seconds":record.received_at_unix_seconds,
             "now_ref":record.now_ref,"day_ref":record.day_ref,"task_ref":record.task_ref,"run_ref":record.run_ref,"session_ref":record.session_ref});
         let settled = settled(&row);
@@ -842,9 +897,7 @@ pub(crate) fn dispatch(
         "receiving_list" => return list(scope, input),
         "receiving_read" => {
             let (record, revision) = read_record(scope, text(input, "return_ref")?)?;
-            if let Some(source) = &record.source_ref {
-                scope.read(source)?;
-            }
+            require_disclosure(scope, &record)?;
             return Ok(response(&record, &revision));
         }
         _ => {}
