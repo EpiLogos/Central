@@ -650,7 +650,10 @@ fn wiki_check(project_root: &Path) -> io::Result<Value> {
             Ok(value) => {
                 parsed["ok"] = json!(true);
                 let empty = Vec::new();
-                let objects = value.get("objects").and_then(Value::as_array).unwrap_or(&empty);
+                let objects = value
+                    .get("objects")
+                    .and_then(Value::as_array)
+                    .unwrap_or(&empty);
                 parsed["objects"] = json!(objects.len());
                 checks.push(parsed);
                 checks.push(json!({
@@ -1006,17 +1009,21 @@ fn wiki_check_action(
         Ok(value) => value,
         Err(result) => return result,
     };
-    wiki_check(&project_root).map(|value| {
-        ActionResult::success(action, json!({"automatic_agent_or_model_invocation": false, "result": value}))
-    })
-    .unwrap_or_else(|error| {
-        ActionResult::failure(
-            Some(action),
-            ResultStatus::InvalidInput,
-            error.to_string(),
-            Some(json!({"project": input.get("project")})),
-        )
-    })
+    wiki_check(&project_root)
+        .map(|value| {
+            ActionResult::success(
+                action,
+                json!({"automatic_agent_or_model_invocation": false, "result": value}),
+            )
+        })
+        .unwrap_or_else(|error| {
+            ActionResult::failure(
+                Some(action),
+                ResultStatus::InvalidInput,
+                error.to_string(),
+                Some(json!({"project": input.get("project")})),
+            )
+        })
 }
 
 fn inspect_action(
@@ -1083,9 +1090,8 @@ fn init_action(
             let mut envelope = serde_json::to_value(value).expect("mutation serializes");
             // Post-update check: the wiki the init just wrote must parse and
             // carry the declared profile before the action reports success.
-            envelope["post_update_check"] = wiki_check(&project_root).unwrap_or_else(|error| {
-                json!({"ok": false, "error": error.to_string()})
-            });
+            envelope["post_update_check"] = wiki_check(&project_root)
+                .unwrap_or_else(|error| json!({"ok": false, "error": error.to_string()}));
             ActionResult::success(action, envelope)
         })
         .unwrap_or_else(|error| io_failure(action, error))

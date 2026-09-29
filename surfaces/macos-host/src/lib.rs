@@ -1,8 +1,7 @@
 use central_connector_sdk::{ConnectorContext, ConnectorRegistry};
 use central_ctrl::{
-    register_automation_actions, run_cli_with_runtime,
-    ActionExecutionContext, ActionRegistry, ActionResult, CliEnvironment, CliExecution,
-    ResultStatus, RootOptions, TerminalSurface,
+    register_automation_actions, run_cli_with_runtime, ActionExecutionContext, ActionRegistry,
+    ActionResult, CliEnvironment, CliExecution, ResultStatus, RootOptions, TerminalSurface,
 };
 use central_git_sync_connector::GitSynchronizerConnector;
 use central_macos_connectors::MacOsNativeConnector;
