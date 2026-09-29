@@ -111,6 +111,19 @@ Clearings may carry a material horizon (O-I `docs/contracts/WORLD-INHABITATION-V
 
 Mutations requiring authenticated authorship use a recognized root `native-action-authority` source with exact scope/action grants and SHA-256 bearer credential digests. The host passes `CENTRAL_NATIVE_TOKEN` through its protected process channel, **not document JSON**. An `H` label, `actor_kind:human`, or a claimed acceptance string is not a credential. A bearer authenticates its declared principal, not physical human presence; same-UID malicious processes require credential isolation at the host/material boundary. No personal authority source is installed by these handlers or this PR.
 
+## Receiving: contributions and owner requests
+
+`central.receiving.*` is the one ledger through which work reaches the person, per register (root or Project), at `.central/source-returns/contributions/`. A Return is one of two kinds:
+
+- **contribution** — proposes one operation on a native Day/Flow/Dialogue document (`source_ref`, `document_id`, `expected_source_revision`, `proposal`). Submit refuses an operation the document owner cannot apply, and refuses human-only operations (`field.set`, `title.set`, `summary.set`, `lifecycle.set`) from a non-human credential. Review accepts at the exact current source basis; include applies it with the contributor's attribution.
+- **request** — asks the person to decide and targets no document: `request {kind: proposal|question, subject, body?, proposed_owner_ref?, proposal_ref?, options?}` (a proposal carries no options; a question has no proposed owner). A request from a non-human credential must name the NOW it belongs to (`now_ref`); that NOW cannot archive while the request is unsettled.
+
+Either kind may carry `summary`, `evidence_refs` (≤128), `reply_to` (an opaque message ref, e.g. a Gateway Communique) and `declared_producer {ref, actor_kind: agent|native-service, attribution: verified|claimed}`. The credential stays the authenticated `author`; an Agent credential may not declare a different producer.
+
+Decisions are human-only `central.receiving.review` dispositions: a proposal is `accepted` or `rejected`, a question is `answered` (with `answer`) or `rejected`; any Return may be left `pending` or `acknowledged` (seen, not decided — status unchanged). An optional `note` travels with the decision. A proposal naming an owner (e.g. `factory`) stays open after acceptance until the accepting human records that owner's realisation with `central.receiving.include {realisation_ref, realisation_owner_ref}`; Central never calls the owner, and replaying the same ref is idempotent while a different ref conflicts.
+
+Settled means `included | rejected | answered | cancelled`, or `accepted` for a proposal with no proposed owner. `central.receiving.list` rows carry `kind`, the request subject/owner, `declared_producer`, `summary`, `acknowledged` and `settled`; `open: true` pages only unsettled Returns, and `open_total` is the exact unsettled count for the scope. `central.now.read` composes each Return keyed to the NOW with its `decision` (disposition, answer, note) and `realisation`, so the asking Agent reads the person's decision where it works.
+
 ## Reproduce without a personal installation
 
 ```sh

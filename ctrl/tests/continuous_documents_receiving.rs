@@ -523,3 +523,293 @@ fn receiving_rejects_fake_human_review_and_stale_return_revision_without_source_
     );
     assert_eq!(read(world.path(), &doc, None)["revision"], doc["revision"]);
 }
+
+fn allocate_now(root: &Path) -> Value {
+    let policy = execute_at(root, "policy", &json!({}), 100).unwrap();
+    execute_at(root,"allocate",&json!({"task_ref":"task:asks-the-owner","purpose":"work that needs the owner's decision","expected_policy_revision":policy["revision"]}),100).unwrap()
+}
+fn now_transition(root: &Path, now: &Value, lifecycle: &str) -> io::Result<Value> {
+    let policy = execute_at(root, "policy", &json!({}), 100).unwrap();
+    let current = execute_at(root, "now_read", &json!({"now_ref":now["now_ref"]}), 100).unwrap();
+    call(
+        root,
+        "now_lifecycle",
+        &json!({"now_ref":now["now_ref"],"expected_revision":current["revision"]["revision"],"expected_policy_revision":policy["revision"],"lifecycle":lifecycle}),
+        AGENT,
+    )
+}
+fn proposal_request(now: &Value) -> Value {
+    json!({"producer_key":"inquiry:verify-shader-receipt","now_ref":now["now_ref"],
+        "summary":"The producer's green receipt cannot verify the crash it claims to cover.",
+        "evidence_refs":["central:path:/world:T/native-mac-shader-failure.json","central:path:/world:T/metal/receipt.json"],
+        "request":{"kind":"proposal","subject":"Commission independent verification of the Mac shader uniform limit",
+            "body":"The receipt has no timestamp, no per-check results and no hash of the crashed bundle.",
+            "proposed_owner_ref":"factory","proposal_ref":"factory:commission:independent-verification-native-mac-shader-uniform-limit"}})
+}
+fn open_page(root: &Path) -> Value {
+    execute_at(root, "receiving_list", &json!({"open":true}), 100).unwrap()
+}
+
+#[test]
+fn agent_request_reaches_the_owner_and_the_decision_returns_to_its_now() {
+    let world = world();
+    let root = world.path();
+    let now = allocate_now(root);
+
+    // An Agent request is answerable from a NOW; without one it is refused.
+    let mut orphan = proposal_request(&now);
+    orphan.as_object_mut().unwrap().remove("now_ref");
+    let error = call(root, "receiving_submit", &orphan, AGENT).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+
+    let received = call(root, "receiving_submit", &proposal_request(&now), AGENT).unwrap();
+    let record = &received["record"];
+    assert_eq!(record["kind"], "request");
+    assert_eq!(record["status"], "pending");
+    assert!(
+        record.get("source_ref").is_none(),
+        "a request targets no document"
+    );
+    assert_eq!(record["author"]["principal_ref"], "agent:test");
+    assert_eq!(record["evidence_refs"].as_array().unwrap().len(), 2);
+    // Exact replay is the same Return, not a second one.
+    let replay = call(root, "receiving_submit", &proposal_request(&now), AGENT).unwrap();
+    assert_eq!(replay["return_ref"], received["return_ref"]);
+
+    let page = open_page(root);
+    assert_eq!(page["open_total"], 1);
+    assert_eq!(
+        page["returns"][0]["request"]["subject"],
+        "Commission independent verification of the Mac shader uniform limit"
+    );
+    assert_eq!(
+        page["returns"][0]["request"]["proposed_owner_ref"],
+        "factory"
+    );
+    assert_eq!(page["returns"][0]["settled"], false);
+
+    // Only the owner decides.
+    let decide = json!({"return_ref":received["return_ref"],"expected_return_revision":received["revision"],"disposition":"accepted","note":"Yes — verification only, no patch."});
+    let error = call(root, "receiving_review", &decide, AGENT).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    let accepted = call(root, "receiving_review", &decide, HUMAN).unwrap();
+    assert_eq!(accepted["record"]["status"], "accepted");
+    assert_eq!(
+        accepted["record"]["review"]["note"],
+        "Yes — verification only, no patch."
+    );
+
+    // Accepted with a named owner still waits for that owner: the Inbox keeps
+    // it and the asking NOW cannot archive.
+    assert_eq!(open_page(root)["open_total"], 1);
+    now_transition(root, &now, "closed").unwrap();
+    let error = now_transition(root, &now, "archived").unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+
+    // The accepting human records the proposed owner's realisation.
+    let mut realise = json!({"return_ref":received["return_ref"],"expected_return_revision":accepted["revision"],
+        "realisation_ref":"run:01M3JJG94Q2RW4J32PYEM27QR7","realisation_owner_ref":"actuation"});
+    let error = call(root, "receiving_include", &realise, HUMAN).unwrap_err();
+    assert_eq!(
+        error.kind(),
+        io::ErrorKind::PermissionDenied,
+        "only the proposed owner realises it"
+    );
+    realise["realisation_owner_ref"] = json!("factory");
+    let error = call(root, "receiving_recover", &realise, HUMAN).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    let realised = call(root, "receiving_include", &realise, HUMAN).unwrap();
+    assert_eq!(realised["record"]["status"], "included");
+    assert_eq!(
+        realised["record"]["realisation"]["ref"],
+        "run:01M3JJG94Q2RW4J32PYEM27QR7"
+    );
+    assert_eq!(
+        realised["record"]["realisation"]["recorded_by"],
+        "human:test"
+    );
+    let mut again = realise.clone();
+    again["expected_return_revision"] = realised["revision"].clone();
+    assert_eq!(
+        call(root, "receiving_include", &again, HUMAN).unwrap()["revision"],
+        realised["revision"]
+    );
+    again["realisation_ref"] = json!("run:someone-else");
+    assert_eq!(
+        call(root, "receiving_include", &again, HUMAN)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::AlreadyExists
+    );
+
+    // The Agent reads the owner's decision where it works: its NOW.
+    let reading = execute_at(root, "now_read", &json!({"now_ref":now["now_ref"]}), 100).unwrap();
+    let returned = reading["returns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["return_ref"] == received["return_ref"])
+        .unwrap();
+    assert_eq!(returned["kind"], "request");
+    assert_eq!(returned["settled"], true);
+    assert_eq!(returned["decision"]["disposition"], "accepted");
+    assert_eq!(
+        returned["decision"]["note"],
+        "Yes — verification only, no patch."
+    );
+    assert_eq!(
+        returned["realisation"]["ref"],
+        "run:01M3JJG94Q2RW4J32PYEM27QR7"
+    );
+
+    assert_eq!(open_page(root)["open_total"], 0);
+    assert!(open_page(root)["returns"].as_array().unwrap().is_empty());
+    now_transition(root, &now, "archived").unwrap();
+}
+
+#[test]
+fn questions_are_answered_and_ownerless_proposals_settle_on_acceptance() {
+    let world = world();
+    let root = world.path();
+    let now = allocate_now(root);
+    let question = call(root,"receiving_submit",&json!({"producer_key":"ask:placement","now_ref":now["now_ref"],
+        "request":{"kind":"question","subject":"Should the verifier run on Omarchy or wait for the Mac?","options":["Omarchy now","Wait for the Mac"]}}),AGENT).unwrap();
+    let base = json!({"return_ref":question["return_ref"],"expected_return_revision":question["revision"]});
+
+    // Seen is not decided, and later is an explicit state.
+    let mut seen = base.clone();
+    seen["disposition"] = json!("acknowledged");
+    let seen = call(root, "receiving_review", &seen, HUMAN).unwrap();
+    assert_eq!(seen["record"]["status"], "pending");
+    assert_eq!(
+        seen["record"]["acknowledgement"]["principal_ref"],
+        "human:test"
+    );
+    let mut answer = json!({"return_ref":question["return_ref"],"expected_return_revision":seen["revision"],"disposition":"accepted"});
+    assert_eq!(
+        call(root, "receiving_review", &answer, HUMAN)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::InvalidInput
+    );
+    answer["disposition"] = json!("answered");
+    assert_eq!(
+        call(root, "receiving_review", &answer, HUMAN)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::InvalidInput
+    );
+    answer["answer"] = json!("Omarchy now; state the hardware limit.");
+    let answered = call(root, "receiving_review", &answer, HUMAN).unwrap();
+    assert_eq!(answered["record"]["status"], "answered");
+    assert_eq!(
+        answered["record"]["review"]["answer"],
+        "Omarchy now; state the hardware limit."
+    );
+    let reading = execute_at(root, "now_read", &json!({"now_ref":now["now_ref"]}), 100).unwrap();
+    assert_eq!(
+        reading["returns"][0]["decision"]["answer"],
+        "Omarchy now; state the hardware limit."
+    );
+    assert_eq!(reading["returns"][0]["settled"], true);
+
+    let proposal = call(root,"receiving_submit",&json!({"producer_key":"propose:rename","now_ref":now["now_ref"],
+        "request":{"kind":"proposal","subject":"Rename the reception module to match the M-tree canon"}}),AGENT).unwrap();
+    let accepted = call(root,"receiving_review",&json!({"return_ref":proposal["return_ref"],"expected_return_revision":proposal["revision"],"disposition":"accepted"}),HUMAN).unwrap();
+    assert_eq!(accepted["record"]["status"], "accepted");
+    assert_eq!(
+        open_page(root)["open_total"],
+        0,
+        "an ownerless accepted proposal is settled"
+    );
+    let error = call(root,"receiving_include",&json!({"return_ref":proposal["return_ref"],"expected_return_revision":accepted["revision"],"realisation_ref":"run:x","realisation_owner_ref":"factory"}),HUMAN).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    // Leaving it pending again reopens it.
+    let reopened = call(root,"receiving_review",&json!({"return_ref":proposal["return_ref"],"expected_return_revision":accepted["revision"],"disposition":"pending"}),HUMAN).unwrap();
+    assert_eq!(reopened["record"]["status"], "pending");
+    assert!(reopened["record"]["review"].is_null());
+    assert_eq!(open_page(root)["open_total"], 1);
+}
+
+#[test]
+fn request_and_contribution_shapes_stay_distinct_and_attribution_is_not_borrowed() {
+    let world = world();
+    let root = world.path();
+    let now = allocate_now(root);
+    let doc = document(root, None, "flow", "doc:shapes");
+
+    let mut mixed = proposal_request(&now);
+    mixed["source_ref"] = doc["source"]["ref"].clone();
+    assert_eq!(
+        call(root, "receiving_submit", &mixed, AGENT)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::InvalidInput
+    );
+    let mut unknown = proposal_request(&now);
+    unknown["request"]["priority"] = json!("urgent");
+    assert_eq!(
+        call(root, "receiving_submit", &unknown, AGENT)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::InvalidInput
+    );
+    let mut options = proposal_request(&now);
+    options["request"]["options"] = json!(["a"]);
+    assert_eq!(
+        call(root, "receiving_submit", &options, AGENT)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::InvalidInput
+    );
+
+    // An operation the document owner cannot apply is refused at arrival,
+    // not retained to fail at inclusion.
+    let mut unincludable = proposal(&doc, None, "shape:unsupported", "entry:x");
+    unincludable["proposal"]["operation"] = json!("append-to-field");
+    assert_eq!(
+        call(root, "receiving_submit", &unincludable, AGENT)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::InvalidInput
+    );
+    let mut human_only = proposal(&doc, None, "shape:title", "entry:y");
+    human_only["proposal"] = json!({"operation":"title.set","value":"Agent title"});
+    assert_eq!(
+        call(root, "receiving_submit", &human_only, AGENT)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::PermissionDenied
+    );
+
+    // An Agent credential speaks only for itself; a carrier may declare whose
+    // work it delivers, and both stay on the record.
+    let mut borrowed = proposal_request(&now);
+    borrowed["declared_producer"] =
+        json!({"ref":"agent:someone-else","actor_kind":"agent","attribution":"verified"});
+    assert_eq!(
+        call(root, "receiving_submit", &borrowed, AGENT)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::PermissionDenied
+    );
+    let mut carried = proposal_request(&now);
+    carried["producer_key"] = json!("carried:epii");
+    carried["declared_producer"] =
+        json!({"ref":"agent-session/nara-epii","actor_kind":"agent","attribution":"claimed"});
+    let carried = call(root, "receiving_submit", &carried, HUMAN).unwrap();
+    assert_eq!(carried["record"]["author"]["principal_ref"], "human:test");
+    assert_eq!(
+        carried["record"]["declared_producer"]["ref"],
+        "agent-session/nara-epii"
+    );
+    assert_eq!(
+        carried["record"]["declared_producer"]["attribution"],
+        "claimed"
+    );
+    let page = open_page(root);
+    assert_eq!(
+        page["returns"][0]["declared_producer"]["ref"],
+        "agent-session/nara-epii"
+    );
+}
