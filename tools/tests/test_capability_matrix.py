@@ -255,5 +255,23 @@ class QlSourceCarrierTests(unittest.TestCase):
         self.assertIn((12, 12), sizes)
 
 
+class GroundFolderTests(unittest.TestCase):
+    """A product that placed its spec under the telos register is read there."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        (self.root / "ProjectCentral/user/telos").mkdir(parents=True)
+
+    def test_user_folder_is_the_default_carrier(self):
+        self.assertEqual(self.root / "ProjectCentral/user", matrix.ground_folder(self.root))
+
+    def test_telos_carrier_is_read_first(self):
+        (self.root / "ProjectCentral/user/telos/capability-matrix.json").write_text("{}")
+        (self.root / "ProjectCentral/user/capability-matrix.json").write_text("{}")
+        self.assertEqual(self.root / "ProjectCentral/user/telos", matrix.ground_folder(self.root))
+
+
 if __name__ == "__main__":
     unittest.main()

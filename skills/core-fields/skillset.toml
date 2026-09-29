@@ -1,0 +1,18 @@
+# Central core-fields SkillSet. The repo's canonical SkillSet registry is
+# skillsets/index.toml (with per-directory members files); no per-family
+# skillset.toml convention existed, so this file follows the AIKit registry
+# shape (Work/ai-kit registry/skillsets/index.toml) adapted to list its
+# members inline. Membership is repertoire only: it grants no trust, loading,
+# sequencing or precedence.
+schema = 1
+
+[[skillset]]
+semantic_ref = "central:core-fields"
+directory = "core-fields"
+description = "The four core-field Methodologies — collaboration, engineering, authorship and world-keeping — distilling authored governance statements into loadable praxis. Each Skill orients its field and cites the durable Control sources it distils; those sources remain the law."
+members = [
+  "skill/central/collaboration-methodology",
+  "skill/central/engineering-methodology",
+  "skill/central/authorship-methodology",
+  "skill/central/world-keeping-methodology",
+]
