@@ -737,10 +737,8 @@ fn scan_returns(
 // Legacy source-return acceptance already committed its source effect. New
 // receiving acceptance explicitly has NOT included it.
 fn return_is_settled(item: &Value) -> bool {
-    matches!(
-        item["status"].as_str(),
-        Some("included" | "rejected" | "cancelled")
-    ) || (item["schema"] == "central.source-return/v1" && item["status"] == "accepted")
+    super::receiving::settled(item)
+        || (item["schema"] == "central.source-return/v1" && item["status"] == "accepted")
 }
 
 fn outstanding_returns(scope: &Scope, now_ref: &str, source_ref: &str) -> io::Result<Vec<String>> {
@@ -783,6 +781,17 @@ pub(crate) fn composed_returns(
                 "day_ref": item.get("day_ref").cloned().unwrap_or(Value::Null),
                 "task_ref": item.get("task_ref").cloned().unwrap_or(Value::Null),
                 "source_ref": item.get("source_ref").cloned().unwrap_or(Value::Null),
+                // A request carries the owner's decision back to the NOW that
+                // asked: the disposition, answer or note, and any realisation.
+                "kind": item.get("kind").cloned().unwrap_or(json!("contribution")),
+                "request": item.get("request").cloned().unwrap_or(Value::Null),
+                "decision": item.get("review").filter(|r| !r.is_null()).map(|r| json!({
+                    "disposition": r["disposition"],
+                    "answer": r.get("answer").cloned().unwrap_or(Value::Null),
+                    "note": r.get("note").cloned().unwrap_or(Value::Null),
+                    "reviewed_at_unix_seconds": r["reviewed_at_unix_seconds"],
+                })).unwrap_or(Value::Null),
+                "realisation": item.get("realisation").cloned().unwrap_or(Value::Null),
             })
         })
         .collect();
