@@ -491,6 +491,196 @@ fn interrupted_inclusion_acknowledgement_recovers_without_duplicate_source_effec
     );
 }
 #[test]
+fn uncommitted_inclusion_whose_basis_moved_returns_to_review_then_includes_at_new_basis() {
+    use std::os::unix::fs::PermissionsExt;
+    let world = world();
+    let doc = document(world.path(), None, "day", "doc:moved-basis");
+    let received = call(
+        world.path(),
+        "receiving_submit",
+        &proposal(&doc, None, "producer:moved", "entry:moved"),
+        AGENT,
+    )
+    .unwrap();
+    let accepted = review(world.path(), &received, &doc, None);
+    // The owner writes the intent, then the source write itself fails.
+    let target = world.path().join(doc["source"]["path"].as_str().unwrap());
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o444)).unwrap();
+    let failed = call(
+        world.path(),
+        "receiving_include",
+        &inclusion(&accepted, &doc, None),
+        HUMAN,
+    )
+    .unwrap_err();
+    assert!(failed.to_string().contains("inclusion not confirmed"));
+    let uncertain = execute_at(
+        world.path(),
+        "receiving_read",
+        &json!({"return_ref":received["return_ref"]}),
+        100,
+    )
+    .unwrap();
+    assert_eq!(uncertain["record"]["status"], "uncertain");
+    // The document advances past the recorded intent's basis.
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+    let mut add = mutation(&doc, None, "human:advance", "entry.add");
+    add["entry_id"] = json!("entry:human");
+    add["contribution_id"] = json!("entry:human:contribution");
+    add["html"] = json!("<p>Human moved on</p>");
+    let advanced = call(world.path(), "document_mutate", &add, HUMAN).unwrap();
+    assert_ne!(advanced["revision"], doc["revision"]);
+    // Recovery establishes the intent never committed: back to review, error kept.
+    let recovered = call(
+        world.path(),
+        "receiving_recover",
+        &json!({"return_ref":uncertain["return_ref"],"expected_return_revision":uncertain["revision"]}),
+        HUMAN,
+    )
+    .unwrap();
+    assert_eq!(recovered["included"], false);
+    assert_eq!(recovered["record"]["status"], "needs-review");
+    assert_eq!(recovered["recovery"]["intent_committed"], false);
+    assert!(recovered["record"]["last_error"]
+        .as_str()
+        .unwrap()
+        .contains("later/unrelated revision"));
+    assert!(recovered["record"]["inclusion_request"].is_null());
+    assert_eq!(
+        recovered["record"]["abandoned_inclusion_requests"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let unchanged = read(world.path(), &doc, None);
+    assert_eq!(unchanged["revision"], advanced["revision"]);
+    let contributions = |reading: &Value| -> Vec<String> {
+        reading["document"]["contributions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["html"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(contributions(&unchanged), ["<p>Human moved on</p>"]);
+    // The abandoned intent is never finished, even by a repeated recover.
+    assert_eq!(
+        call(
+            world.path(),
+            "receiving_recover",
+            &json!({"return_ref":recovered["return_ref"],"expected_return_revision":recovered["revision"]}),
+            HUMAN,
+        )
+        .unwrap_err()
+        .kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    // Explicit re-review at the new basis, then inclusion.
+    let rereview = review(world.path(), &recovered, &unchanged, None);
+    let included = call(
+        world.path(),
+        "receiving_include",
+        &inclusion(&rereview, &unchanged, None),
+        HUMAN,
+    )
+    .unwrap();
+    assert_eq!(included["included"], true);
+    assert!(included["record"]["last_error"].is_null());
+    let after = read(world.path(), &doc, None);
+    assert_eq!(
+        included["record"]["applied_source_revision"],
+        after["revision"]["revision"]
+    );
+    let mut expected = contributions(&after);
+    expected.sort();
+    assert_eq!(
+        expected,
+        ["<p>Human moved on</p>", "<p>Reviewed contribution</p>"]
+    );
+}
+#[test]
+fn committed_inclusion_superseded_by_a_later_revision_still_recovers_to_included() {
+    let world = world();
+    let doc = document(world.path(), None, "day", "doc:committed-moved");
+    let received = call(
+        world.path(),
+        "receiving_submit",
+        &proposal(&doc, None, "producer:committed", "entry:committed"),
+        AGENT,
+    )
+    .unwrap();
+    let accepted = review(world.path(), &received, &doc, None);
+    let included = call(
+        world.path(),
+        "receiving_include",
+        &inclusion(&accepted, &doc, None),
+        HUMAN,
+    )
+    .unwrap();
+    // Interrupt after the source commit but before either acknowledgement.
+    let rewind = |area: &str, matches: &dyn Fn(&Value) -> bool, edit: &dyn Fn(&mut Value)| {
+        let mut found = 0;
+        for entry in fs::read_dir(world.path().join(area)).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            let mut actual: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            if matches(&actual) {
+                edit(&mut actual);
+                fs::write(path, serde_json::to_vec_pretty(&actual).unwrap()).unwrap();
+                found += 1;
+            }
+        }
+        assert_eq!(found, 1);
+    };
+    rewind(
+        ".central/source-returns/contributions",
+        &|v| v["return_ref"] == included["return_ref"],
+        &|v| {
+            v["status"] = json!("including");
+            v["applied_source_revision"] = Value::Null;
+        },
+    );
+    rewind(
+        ".central/source-returns/document-mutations",
+        &|v| v["next_revision"] == included["record"]["applied_source_revision"],
+        &|v| v["status"] = json!("prepared"),
+    );
+    let committed = read(world.path(), &doc, None);
+    let mut add = mutation(&committed, None, "human:after", "entry.add");
+    add["entry_id"] = json!("entry:after");
+    add["contribution_id"] = json!("entry:after:contribution");
+    add["html"] = json!("<p>Later human entry</p>");
+    let advanced = call(world.path(), "document_mutate", &add, HUMAN).unwrap();
+    let pending = execute_at(
+        world.path(),
+        "receiving_read",
+        &json!({"return_ref":included["return_ref"]}),
+        100,
+    )
+    .unwrap();
+    let recovered = call(
+        world.path(),
+        "receiving_recover",
+        &json!({"return_ref":pending["return_ref"],"expected_return_revision":pending["revision"]}),
+        HUMAN,
+    )
+    .unwrap();
+    assert_eq!(recovered["included"], true);
+    assert_eq!(
+        recovered["record"]["applied_source_revision"],
+        included["record"]["applied_source_revision"]
+    );
+    let after = read(world.path(), &doc, None);
+    assert_eq!(after["revision"], advanced["revision"]);
+    assert_eq!(
+        after["document"]["contributions"].as_array().unwrap().len(),
+        2
+    );
+}
+#[test]
 fn receiving_rejects_fake_human_review_and_stale_return_revision_without_source_effects() {
     let world = world();
     let doc = document(world.path(), None, "day", "doc:auth");
