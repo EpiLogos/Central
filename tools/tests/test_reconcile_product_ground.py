@@ -39,7 +39,7 @@ class ReconcileProductGroundTests(unittest.TestCase):
         telos.mkdir()
         for name in (self.account, "capability-matrix.csv", "capability-matrix.json", "capability-matrix.md"):
             shutil.move(self.folder / name, telos / name)
-        self.assertEqual(telos, self.paths()["capability-matrix.csv"].parent)
+        self.assertEqual(telos.resolve(), self.paths()["capability-matrix.csv"].parent)
         self.assertEqual([], self.plan("html-to-csv")["changed_records"])
 
     def paths(self):
