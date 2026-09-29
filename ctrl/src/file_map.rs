@@ -303,19 +303,19 @@ fn inspect(all: &[Scope], input: &Value) -> io::Result<Value> {
     // probe: attachments that only need provider state skip the full walk.
     let want_resources = input["resources"] != false;
     if want_resources {
-    for chosen in &choices {
-        for entry in entries(chosen)? {
-            if input["federated"] != true
-                && chosen.world != scope.world
-                && !linked_refs.contains(&entry.source.source_ref)
-            {
-                continue;
-            }
-            if policy_allows(&excluded, &entry.source.source_ref) {
-                resources.push(entry);
+        for chosen in &choices {
+            for entry in entries(chosen)? {
+                if input["federated"] != true
+                    && chosen.world != scope.world
+                    && !linked_refs.contains(&entry.source.source_ref)
+                {
+                    continue;
+                }
+                if policy_allows(&excluded, &entry.source.source_ref) {
+                    resources.push(entry);
+                }
             }
         }
-    }
     }
     let native_record = if let Some(id) = input["record_id"].as_i64() {
         let row = backend

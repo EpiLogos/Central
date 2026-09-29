@@ -639,7 +639,10 @@ fn world_source_create_admits_an_absent_human_ground_document_into_the_horizon()
     assert_eq!(receipt["changed"], true);
     assert_eq!(receipt["source"]["path"], relative);
     assert_eq!(receipt["source"]["treatment"], "projectcentral-user");
-    assert_eq!(receipt["source"]["roles"][0], "project-human-source-aperture");
+    assert_eq!(
+        receipt["source"]["roles"][0],
+        "project-human-source-aperture"
+    );
     assert_eq!(receipt["actor_kind"], "human");
     assert_eq!(receipt["automatic_agent_or_model_invocation"], false);
     assert_eq!(fs::read_to_string(project.join(relative)).unwrap(), content);

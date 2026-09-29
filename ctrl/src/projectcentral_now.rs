@@ -2345,19 +2345,17 @@ mod attribution_tests {
         );
 
         let id = handoff["id"].as_str().unwrap().to_owned();
-        let stored = read_handoff(
-            &project
-                .join(NOW_AGENT_DIR)
-                .join(format!("{id}.json")),
-        )
-        .unwrap();
+        let stored = read_handoff(&project.join(NOW_AGENT_DIR).join(format!("{id}.json"))).unwrap();
         assert_eq!(stored.schema, HANDOFF_SCHEMA_V2);
         let workcell = stored.workcell.expect("workcell field persists");
         assert_eq!(workcell.name, "env-2");
         assert_eq!(workcell.seat_product.as_deref(), Some("o-i"));
         assert_eq!(
             stored.implicated,
-            vec!["agent:partner-one".to_string(), "agent:partner-two".to_string()]
+            vec![
+                "agent:partner-one".to_string(),
+                "agent:partner-two".to_string()
+            ]
         );
     }
 

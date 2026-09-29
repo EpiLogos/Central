@@ -26,9 +26,8 @@ pub use connector::{
     CONNECTOR_API_VERSION, PUBLISHED_PORTS,
 };
 pub use git_state::{
-    GitBranchObservation, GitCensusRequest, GitRepoCensus, GitState, GitWorktreeObservation,
-    GitDiffRequest, GitDiffReading, GitDiffFile,
-    GIT_STATE_OPERATIONS, GIT_STATE_PORT,
+    GitBranchObservation, GitCensusRequest, GitDiffFile, GitDiffReading, GitDiffRequest,
+    GitRepoCensus, GitState, GitWorktreeObservation, GIT_STATE_OPERATIONS, GIT_STATE_PORT,
 };
 pub use machine_capability::{
     capability_name, with_source, ACTUATION_DETECT_DISCLOSURE_NAME, CAPABILITY_SOURCE_SEPARATOR,

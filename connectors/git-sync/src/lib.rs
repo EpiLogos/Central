@@ -1,5 +1,5 @@
-mod git_state;
 mod git_diff;
+mod git_state;
 mod source_history;
 
 use central_connector_sdk::{

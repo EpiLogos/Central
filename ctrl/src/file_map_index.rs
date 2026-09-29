@@ -24,8 +24,7 @@ pub(crate) fn refresh(scope: &Scope, embeddings: bool) -> io::Result<Value> {
     // everything the clear removed once the pass is done. Backfill can
     // re-embed thousands of rows, so it runs with its own long allowance.
     let model = native::embedding_model();
-    let model_changed =
-        embeddings && index.embedding_model.as_deref() != Some(model.as_str());
+    let model_changed = embeddings && index.embedding_model.as_deref() != Some(model.as_str());
     if model_changed {
         backend.run(&["clear-embeddings".into()])?;
     }
@@ -328,85 +327,89 @@ pub(crate) fn search(all: &[Scope], input: &Value) -> io::Result<Value> {
         absences.clear();
         let query = effective.as_str();
         for scope in chosen.iter().copied() {
-        let index = scope.index()?;
-        let backend = Backend::new(&scope.root);
-        if !backend.present() {
-            absences.push(format!("{}: map not initialized", scope.world));
-            continue;
-        }
-        if mode == "hybrid" && !index.embeddings {
-            absences.push(format!("{}: embeddings not ready", scope.world));
-            continue;
-        }
-        // Vectors from another embedder poison hybrid results without any
-        // revision change, so the mismatch itself is the absence the refresh
-        // routine reacts to.
-        if mode == "hybrid" && index.embedding_model.as_deref() != Some(native::embedding_model().as_str())
-        {
-            absences.push(format!(
-                "{}: embeddings stored under another model; refresh required",
-                scope.world
-            ));
-            continue;
-        }
-        let current: BTreeMap<_, _> = match entries(scope) {
-            Ok(items) => items
+            let index = scope.index()?;
+            let backend = Backend::new(&scope.root);
+            if !backend.present() {
+                absences.push(format!("{}: map not initialized", scope.world));
+                continue;
+            }
+            if mode == "hybrid" && !index.embeddings {
+                absences.push(format!("{}: embeddings not ready", scope.world));
+                continue;
+            }
+            // Vectors from another embedder poison hybrid results without any
+            // revision change, so the mismatch itself is the absence the refresh
+            // routine reacts to.
+            if mode == "hybrid"
+                && index.embedding_model.as_deref() != Some(native::embedding_model().as_str())
+            {
+                absences.push(format!(
+                    "{}: embeddings stored under another model; refresh required",
+                    scope.world
+                ));
+                continue;
+            }
+            let current: BTreeMap<_, _> = match entries(scope) {
+                Ok(items) => items
+                    .into_iter()
+                    .map(|e| (e.source.source_ref.clone(), e))
+                    .collect(),
+                // One scope's broken enumeration must not take the whole
+                // federated query down: name it in the absences and move on.
+                Err(error) => {
+                    absences.push(format!(
+                        "{}: source enumeration failed: {}",
+                        scope.world, error
+                    ));
+                    continue;
+                }
+            };
+            // Apply live authority and revisions BEFORE returning any cached snippet.
+            for (rank, value) in backend
+                .search(query, &tags, mode == "hybrid", MAX_ENTRIES)?
                 .into_iter()
-                .map(|e| (e.source.source_ref.clone(), e))
-                .collect(),
-            // One scope's broken enumeration must not take the whole
-            // federated query down: name it in the absences and move on.
-            Err(error) => {
-                absences.push(format!("{}: source enumeration failed: {}", scope.world, error));
-                continue;
-            }
-        };
-        // Apply live authority and revisions BEFORE returning any cached snippet.
-        for (rank, value) in backend
-            .search(query, &tags, mode == "hybrid", MAX_ENTRIES)?
-            .into_iter()
-            .enumerate()
-        {
-            let id = native::id(&value)?;
-            let Some((reference, binding)) = index
-                .entries
-                .iter()
-                .find(|(_, b)| b.id == id || b.import_id == Some(id))
-            else {
-                continue;
-            };
-            if input["federated"] != true
-                && scope.world != selected_world
-                && !linked_refs.contains(reference)
+                .enumerate()
             {
-                continue;
+                let id = native::id(&value)?;
+                let Some((reference, binding)) = index
+                    .entries
+                    .iter()
+                    .find(|(_, b)| b.id == id || b.import_id == Some(id))
+                else {
+                    continue;
+                };
+                if input["federated"] != true
+                    && scope.world != selected_world
+                    && !linked_refs.contains(reference)
+                {
+                    continue;
+                }
+                if !policy_allows(&excluded, reference) {
+                    continue;
+                }
+                if allow.as_ref().is_some_and(|a| !a.contains(reference)) {
+                    continue;
+                }
+                let Some(entry) = current.get(reference) else {
+                    continue;
+                };
+                let entry = with_revision(entry.clone())?;
+                if entry.revision != binding.revision {
+                    absences.push(format!("{reference}: stale index; refresh required"));
+                    continue;
+                }
+                if !native::record(&value)["description"]
+                    .as_str()
+                    .is_some_and(|d| d.starts_with(&marker(reference)))
+                {
+                    return Err(conflict("Search row's source binding drifted"));
+                }
+                if !seen.insert(reference.clone()) {
+                    continue;
+                }
+                hits.push(json!({"source":entry.source,"world_ref":scope.world,"project":scope.project,"path":entry.path,"kind":entry.kind,"revision":entry.revision,"title":native::record(&value)["title"],"tags":native::tags(&value)?,"snippet":content(&entry).unwrap_or_default().chars().take(1000).collect::<String>(),"provider_binding":id.to_string(),"score":value["rrf_score"].as_f64().unwrap_or(1.0/(rank+1) as f64),"mode":mode}));
             }
-            if !policy_allows(&excluded, reference) {
-                continue;
-            }
-            if allow.as_ref().is_some_and(|a| !a.contains(reference)) {
-                continue;
-            }
-            let Some(entry) = current.get(reference) else {
-                continue;
-            };
-            let entry = with_revision(entry.clone())?;
-            if entry.revision != binding.revision {
-                absences.push(format!("{reference}: stale index; refresh required"));
-                continue;
-            }
-            if !native::record(&value)["description"]
-                .as_str()
-                .is_some_and(|d| d.starts_with(&marker(reference)))
-            {
-                return Err(conflict("Search row's source binding drifted"));
-            }
-            if !seen.insert(reference.clone()) {
-                continue;
-            }
-            hits.push(json!({"source":entry.source,"world_ref":scope.world,"project":scope.project,"path":entry.path,"kind":entry.kind,"revision":entry.revision,"title":native::record(&value)["title"],"tags":native::tags(&value)?,"snippet":content(&entry).unwrap_or_default().chars().take(1000).collect::<String>(),"provider_binding":id.to_string(),"score":value["rrf_score"].as_f64().unwrap_or(1.0/(rank+1) as f64),"mode":mode}));
         }
-    }
         if !hits.is_empty() {
             break;
         }
