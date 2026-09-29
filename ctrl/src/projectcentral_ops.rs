@@ -625,6 +625,56 @@ fn collect_json(current: &Path, depth: usize, output: &mut Vec<PathBuf>) -> io::
     Ok(())
 }
 
+/// Post-update check for a project's wiki: the manifest is valid, the wiki
+/// exists at the manifest-declared source, parses, carries the declared
+/// profile on at least its space object, and presents an objects array.
+/// Read-only; every failed check names the file it examined.
+fn wiki_check(project_root: &Path) -> io::Result<Value> {
+    let manifest = crate::projectcentral::read_project_manifest(project_root)?;
+    let validation = manifest.validate();
+    let mut checks = vec![json!({"check": "manifest-valid", "ok": validation.valid})];
+    if !validation.valid {
+        checks[0]["errors"] = json!(validation.errors);
+    }
+    let wiki_path = project_root.join(&manifest.wiki.source);
+    let present = wiki_path.is_file();
+    checks.push(json!({
+        "check": "wiki-present",
+        "ok": present,
+        "path": manifest.wiki.source,
+    }));
+    let mut parsed = json!({"check": "wiki-parses", "ok": false, "path": manifest.wiki.source});
+    let mut profile_ok = false;
+    if present {
+        match serde_json::from_slice::<Value>(&fs::read(&wiki_path)?) {
+            Ok(value) => {
+                parsed["ok"] = json!(true);
+                let empty = Vec::new();
+                let objects = value.get("objects").and_then(Value::as_array).unwrap_or(&empty);
+                parsed["objects"] = json!(objects.len());
+                checks.push(parsed);
+                checks.push(json!({
+                    "check": "wiki-profile",
+                    "ok": value.get("objects").is_some(),
+                    "profile": manifest.wiki.profile,
+                }));
+                profile_ok = value.get("objects").is_some();
+            }
+            Err(error) => {
+                parsed["error"] = json!(error.to_string());
+                checks.push(parsed);
+            }
+        }
+    }
+    let ok = validation.valid && present && profile_ok;
+    Ok(json!({
+        "ok": ok,
+        "project_root": project_root.display().to_string(),
+        "wiki_source": manifest.wiki.source,
+        "checks": checks,
+    }))
+}
+
 fn compatible_wiki(path: &Path) -> io::Result<Option<String>> {
     if !path.is_file() || fs::metadata(path)?.len() > MAX_WIKI_BYTES {
         return Ok(None);
@@ -946,6 +996,29 @@ fn io_failure(action: &str, error: io::Error) -> ActionResult {
     ActionResult::failure(Some(action), status, error.to_string(), None)
 }
 
+fn wiki_check_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    let action = "projectcentral.wiki.check";
+    let (_, project_root) = match project_context(action, input, context) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    wiki_check(&project_root).map(|value| {
+        ActionResult::success(action, json!({"automatic_agent_or_model_invocation": false, "result": value}))
+    })
+    .unwrap_or_else(|error| {
+        ActionResult::failure(
+            Some(action),
+            ResultStatus::InvalidInput,
+            error.to_string(),
+            Some(json!({"project": input.get("project")})),
+        )
+    })
+}
+
 fn inspect_action(
     _: &ActionRegistry,
     input: &Value,
@@ -1007,10 +1080,13 @@ fn init_action(
     };
     initialize_projectcentral(&root, &project_root, &project_id)
         .map(|value| {
-            ActionResult::success(
-                action,
-                serde_json::to_value(value).expect("mutation serializes"),
-            )
+            let mut envelope = serde_json::to_value(value).expect("mutation serializes");
+            // Post-update check: the wiki the init just wrote must parse and
+            // carry the declared profile before the action reports success.
+            envelope["post_update_check"] = wiki_check(&project_root).unwrap_or_else(|error| {
+                json!({"ok": false, "error": error.to_string()})
+            });
+            ActionResult::success(action, envelope)
         })
         .unwrap_or_else(|error| io_failure(action, error))
 }
@@ -1126,6 +1202,7 @@ pub fn register_projectcentral_actions(registry: &mut ActionRegistry) {
             inspect_action as fn(&ActionRegistry, &Value, &ActionExecutionContext<'_>) -> ActionResult,
         ),
         (descriptor("projectcentral.doctor", "Verify ProjectCentral", "Verify ProjectCentral identity, human source root, Agent governance/Wiki roots, Wiki source, adopted sources, and root federation.", MutationClass::ReadOnly, "projectcentral-doctor", &["project"], false), doctor_action),
+        (descriptor("projectcentral.wiki.check", "Check project wiki", "Post-update check: the manifest is valid, the wiki exists at the manifest-declared source, parses, and carries the declared profile. Read-only.", MutationClass::ReadOnly, "projectcentral-wiki-check", &["project"], false), wiki_check_action),
         (descriptor("projectcentral.init", "Initialize ProjectCentral", "Create the recursive user/agents ProjectCentral relation around an existing native Work project without moving native files.", MutationClass::LocallyMutating, "projectcentral-mutation", &["project", "project_id"], true), init_action),
         (descriptor("projectcentral.adopt.preview", "Preview Wiki adoption", "Preview retaining one selected compatible Wiki in place as a participating source of the canonical Project Agent Wiki.", MutationClass::ReadOnly, "projectcentral-mutation-plan", &["project", "source"], false), adopt_preview_action),
         (descriptor("projectcentral.adopt", "Adopt Wiki in place", "Keep one selected compatible Wiki in place, record it as a participating source, create the canonical Project Agent Wiki, and federate the Project WikiSpace.", MutationClass::LocallyMutating, "projectcentral-mutation", &["project", "project_id", "source"], true), adopt_action),
