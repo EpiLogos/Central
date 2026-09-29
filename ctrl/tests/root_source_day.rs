@@ -7,10 +7,13 @@ use std::{
     fs, io,
     path::{Path, PathBuf},
     process::Command,
+    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 const HUMAN: &str = "w2-root-day-test-token-not-a-live-credential";
+// macOS clocks tick in microseconds: parallel tests need more than the time.
+static NEXT: AtomicU64 = AtomicU64::new(0);
 struct World(PathBuf);
 impl Drop for World {
     fn drop(&mut self) {
@@ -19,12 +22,13 @@ impl Drop for World {
 }
 fn world() -> World {
     let path = std::env::temp_dir().join(format!(
-        "central-root-day-{}-{}",
+        "central-root-day-{}-{}-{}",
         std::process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     central_ctrl::initialize_central(&path).unwrap();
     // An ordinary directory is not a participating child Project.
