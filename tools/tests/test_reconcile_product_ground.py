@@ -34,6 +34,14 @@ class ReconcileProductGroundTests(unittest.TestCase):
         baseline = self.plan("html-to-csv")
         reconcile.apply_plan(baseline, baseline["required_review"], "session:test-baseline")
 
+    def test_carriers_under_telos_are_resolved_before_the_user_folder(self):
+        telos = self.folder / "telos"
+        telos.mkdir()
+        for name in (self.account, "capability-matrix.csv", "capability-matrix.json", "capability-matrix.md"):
+            shutil.move(self.folder / name, telos / name)
+        self.assertEqual(telos, self.paths()["capability-matrix.csv"].parent)
+        self.assertEqual([], self.plan("html-to-csv")["changed_records"])
+
     def paths(self):
         return reconcile.files(self.root, self.account)
 

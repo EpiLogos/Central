@@ -5,14 +5,14 @@ import argparse,csv,datetime,hashlib,html,io,json,os,re,uuid
 from pathlib import Path
 from urllib.parse import urlsplit
 import capability_matrix as matrix
-from check_product_ground import read_account
+from check_product_ground import read_account, user_folder
 
 def sha(data):return hashlib.sha256(data).hexdigest()
 def normal(text):return ' '.join(text.split())
 def record_hash(record):return sha(json.dumps(record,sort_keys=True,ensure_ascii=False).encode())
 def files(root,account):
     if Path(account).name!=account or not account.endswith('.html'):raise ValueError('Account must be an HTML basename')
-    root=root.resolve();folder=root/'ProjectCentral/user'
+    root=root.resolve();folder=user_folder(root)
     paths={name:folder/name for name in [account,'capability-matrix.csv','capability-matrix.json','capability-matrix.md']}
     if not folder.resolve().is_relative_to(root) or any(not p.resolve().is_relative_to(folder.resolve()) for p in paths.values()):raise ValueError('Source companions must remain inside the selected project ground')
     return paths

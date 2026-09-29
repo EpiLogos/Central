@@ -145,6 +145,16 @@ def fragment_exists(path: Path, fragment: str, account: Account | None = None):
     return False
 
 
+def user_folder(root: Path) -> Path:
+    """The folder holding a product's capability-matrix carriers.
+
+    Products moved the carriers to ProjectCentral/user/telos; products that have
+    not moved keep them directly under ProjectCentral/user.
+    """
+    telos = Path(root) / "ProjectCentral/user/telos"
+    return telos if (telos / "capability-matrix.json").is_file() else Path(root) / "ProjectCentral/user"
+
+
 def validate(root: Path, account_name: str = "central.html", product_index: int = 0, namespace: str = "central", reference_scope: str = "workspace") -> list[str]:
     errors = []
     root = root.resolve()
@@ -152,7 +162,7 @@ def validate(root: Path, account_name: str = "central.html", product_index: int 
         return ["Unknown reference scope"]
     def local_check(path):
         return reference_scope == "workspace" or path.resolve().is_relative_to(root)
-    html = root / "ProjectCentral/user" / account_name
+    html = user_folder(root) / account_name
     try:
         raw = html.read_text(encoding="utf-8")
         account = read_account(html)
