@@ -56,7 +56,7 @@ mod unix_tests {
     #[test]
     fn macos_action_registry_extends_current_runtime_without_mutating_owner_identity() {
         let core = create_core_action_registry();
-        assert_eq!(core.list().len(), 38);
+        assert_eq!(core.list().len(), 39);
         assert!(core.get("central.files.resolve").is_some());
         assert!(core.get("automation.run").is_none());
         assert!(

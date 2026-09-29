@@ -36,6 +36,7 @@ The composed registry is deliberately discovered at runtime through `action.list
 | `central.files.resolve` | resolve an owner path to the canonical file the action will read or write | `action run central.files.resolve` |
 | `central.files.restore` | restore an ordinary-file revision through the same CAS | `action run central.files.restore` |
 | `action.list` | discover Action descriptors | `capabilities`, `actions`, `action list` |
+| `action.describe` | read one Action's descriptor: its inputs, which are required, and its mutation class | `action describe <action-id>` |
 | `central.root` | resolve the active Central root | `root` |
 | `central.init` | initialise the required Central root shape | `init` |
 | `central.doctor` | inspect Central structural health and diagnose a root that is also the product source checkout | `doctor` |
