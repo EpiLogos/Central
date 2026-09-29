@@ -253,6 +253,7 @@ fn registry_has_stable_ids_and_complete_descriptors() {
     assert_eq!(
         ids,
         vec![
+            "action.describe",
             "action.list",
             "central.doctor",
             "central.files.create",
