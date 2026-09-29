@@ -1222,6 +1222,7 @@ pub fn create_runtime_action_registry() -> crate::action::ActionRegistry {
     register_agent_profile_actions(&mut registry);
     crate::agent_set_actions::register_agent_set_actions(&mut registry);
     crate::remember_actions::register_remember_actions(&mut registry);
+    crate::personal_history::register_personal_history_actions(&mut registry);
     crate::system_disclosure::register_system_disclosure_action(&mut registry);
     crate::git_census::register_git_actions(&mut registry);
     crate::configuration::register_configuration_actions(&mut registry);
