@@ -1,0 +1,9 @@
+%% source_id: [product]-context
+%% visual_question: Who and what surrounds this system, and what crosses its boundary?
+%% companion_doc: [architecture.md#ownership-and-boundaries]
+%% revision: [YYYY-MM-DD or sha256 of the companion unit]
+%% provenance: [author / Agent · standing agent-inference until recognised]
+flowchart LR
+  person_user["[Person]"] -->|"[uses]"| system_core["[System]"]
+  system_core -->|"[reads / writes]"| store_external["[External store]"]
+  agent_worker["[Agent]"] -->|"[acts through]"| system_core

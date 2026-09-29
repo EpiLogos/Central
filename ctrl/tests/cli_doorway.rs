@@ -25,7 +25,10 @@ fn bare_ctrl_prints_usage_and_exits_like_invalid_input() {
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(2));
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("Usage:"));
+    // The task-oriented doorway (#527): it names where to start and the
+    // canonical discovery seam, not a clap-style "Usage:" block.
+    assert!(stdout.contains("Central ctrl"));
+    assert!(stdout.contains("ctrl action run <ACTION>"));
     assert!(stdout.contains("ctrl capabilities"));
     assert!(
         output.stderr.is_empty(),

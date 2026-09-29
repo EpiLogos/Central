@@ -3,18 +3,28 @@ use std::path::PathBuf;
 
 use crate::{PortContract, PortError, PortOperationContract};
 
-pub const GIT_STATE_OPERATIONS: [PortOperationContract; 1] = [PortOperationContract {
-    name: "census",
-    input_type: "GitCensusRequest",
-    output_type: "GitRepoCensus",
-    mutation_class: "read-only",
-    preview_required: false,
-    idempotent: true,
-}];
+pub const GIT_STATE_OPERATIONS: [PortOperationContract; 2] = [
+    PortOperationContract {
+        name: "census",
+        input_type: "GitCensusRequest",
+        output_type: "GitRepoCensus",
+        mutation_class: "read-only",
+        preview_required: false,
+        idempotent: true,
+    },
+    PortOperationContract {
+        name: "diff",
+        input_type: "GitDiffRequest",
+        output_type: "GitDiffReading",
+        mutation_class: "read-only",
+        preview_required: false,
+        idempotent: true,
+    },
+];
 
 pub const GIT_STATE_PORT: PortContract = PortContract {
     id: "GitState",
-    version: "1.0.0",
+    version: "1.1.0",
     purpose: "Read the observed branch and worktree state of one Git repository without fetching, pruning or otherwise changing any Git state.",
     operations: &GIT_STATE_OPERATIONS,
 };
@@ -97,6 +107,8 @@ pub struct GitRepoCensus {
     #[serde(default)]
     pub head_branch: Option<String>,
     #[serde(default)]
+    pub head_sha: Option<String>,
+    #[serde(default)]
     pub remote: Option<String>,
     #[serde(default)]
     pub default_branch: Option<String>,
@@ -112,4 +124,55 @@ pub struct GitRepoCensus {
 
 pub trait GitState: Send + Sync {
     fn census(&self, input: &GitCensusRequest) -> Result<GitRepoCensus, PortError>;
+    fn diff(&self, _input: &GitDiffRequest) -> Result<GitDiffReading, PortError> {
+        Err(PortError::new(
+            crate::PortErrorCode::CapabilityUnavailable,
+            "This GitState provider does not expose repository diffs",
+        ))
+    }
+}
+
+/// Bounded read of exact commit-to-commit or commit-to-working-tree changes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitDiffRequest {
+    pub repo_root: PathBuf,
+    pub from: String,
+    pub to: String,
+    #[serde(default)]
+    pub ignore_whitespace: bool,
+    #[serde(default = "patch_limit")]
+    pub max_bytes: usize,
+    #[serde(default = "file_limit")]
+    pub max_files: usize,
+}
+fn patch_limit() -> usize {
+    65536
+}
+fn file_limit() -> usize {
+    200
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitDiffFile {
+    pub status: String,
+    pub old_path: Option<String>,
+    pub new_path: String,
+    pub adds: Option<u64>,
+    pub dels: Option<u64>,
+    pub binary: bool,
+    pub patch: String,
+    pub truncated: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitDiffReading {
+    pub schema: String,
+    pub repo_root: PathBuf,
+    pub head_sha: Option<String>,
+    pub from: String,
+    pub to: String,
+    pub ignore_whitespace: bool,
+    pub files: Vec<GitDiffFile>,
+    pub omitted_files: usize,
+    pub truncated: bool,
+    pub observation: String,
 }

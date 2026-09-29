@@ -453,6 +453,9 @@ mod tests {
     }
 
     #[test]
+    // Central, World and AgentSet are the domain's proper nouns; the test name
+    // states the invariant as a sentence in that vocabulary.
+    #[allow(non_snake_case)]
     fn AgentSet_can_request_isolated_workspace_without_forking_Central_or_AgentSet_identity() {
         let (graph, root, project_a, project_b) = fixture();
         let set_ref = AgentSetRef::new("agent-set:development").unwrap();
@@ -494,6 +497,9 @@ mod tests {
     }
 
     #[test]
+    // Central and World are the domain's proper nouns; the test name states the
+    // invariant as a sentence in that vocabulary.
+    #[allow(non_snake_case)]
     fn machine_provider_rebinding_does_not_change_Central_World_or_projection_identity() {
         let (graph, root, project_a, project_b) = fixture();
         let computer = CentralComputerProjection::new(

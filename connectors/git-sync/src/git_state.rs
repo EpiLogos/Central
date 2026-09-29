@@ -329,6 +329,7 @@ pub(crate) fn census(git: &Path, input: &GitCensusRequest) -> Result<GitRepoCens
         unborn,
         bare,
         head_branch,
+        head_sha: git_optional(git, repo, &["rev-parse", "--verify", "HEAD"]),
         remote,
         default_branch,
         worktrees,
@@ -339,6 +340,12 @@ pub(crate) fn census(git: &Path, input: &GitCensusRequest) -> Result<GitRepoCens
 }
 
 impl GitState for super::GitSynchronizerConnector {
+    fn diff(
+        &self,
+        input: &central_connector_sdk::GitDiffRequest,
+    ) -> Result<central_connector_sdk::GitDiffReading, PortError> {
+        super::git_diff::read(self.git_path(), input)
+    }
     fn census(&self, input: &GitCensusRequest) -> Result<GitRepoCensus, PortError> {
         census(self.git_path(), input)
     }
@@ -473,7 +480,7 @@ mod tests {
 
         assert!(result.unmerged_tips.contains(&"lane/one".to_owned()));
         assert_eq!(
-            result.dirty_paths.as_ref().map(|paths| paths.as_slice()),
+            result.dirty_paths.as_deref(),
             Some(&["dirty.txt".to_owned()][..])
         );
         let _ = fs::remove_dir_all(root);

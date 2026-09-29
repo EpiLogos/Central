@@ -53,6 +53,7 @@ pub fn execute_with_token_at(
     // enter its dispatcher while holding the source-mutation lock already.
     match operation {
         "allocate" => return placement::allocate(&scope, input, now),
+        "workcell_root" => return placement::workcell_root(&scope, input, now),
         "validate" => return placement::validate(&scope, input, now),
         operation if operation.starts_with("receiving_") => {
             return receiving::dispatch(&scope, operation, input, token, now)
@@ -97,6 +98,7 @@ pub fn execute_with_token_at(
                 _ => Err(invalid("with_placement must be a boolean")),
             }
         }
+        "now_children" => placement::children(&scope, input),
         "now_list" => Ok(json!({
             "schema": "central.now-listing/v1",
             "records": placement::list_now(&scope, input)?,
@@ -108,6 +110,7 @@ pub fn execute_with_token_at(
         "learnings_read" => thoughts::learnings_read(&scope, input),
         "learnings_distill" => thoughts::learnings_distill(&scope, input, now),
         "time_policy" => Ok(serde_json::to_value(temporal::time_policy(&scope, now)?)?),
+        "time_occurrences" => temporal::time_occurrences(&scope, input),
         "day_read" => temporal::day_read(&scope, input),
         "source_history" => history::read(&scope, input),
         "day_ensure" | "day_lifecycle" | "now_lifecycle" | "now_obligations" => {
@@ -210,7 +213,18 @@ handler!(allocate_action, "central.now.allocate", "allocate");
 handler!(validate_action, "central.work.validate", "validate");
 handler!(now_read_action, "central.now.read", "now_read");
 handler!(now_list_action, "central.now.list", "now_list");
+handler!(
+    workcell_root_action,
+    "central.now.workcell-root",
+    "workcell_root"
+);
+handler!(now_children_action, "central.now.children", "now_children");
 handler!(time_action, "central.time.policy", "time_policy");
+handler!(
+    time_occurrences_action,
+    "central.time.occurrences",
+    "time_occurrences"
+);
 handler!(day_read_action, "central.day.read", "day_read");
 handler!(day_ensure_action, "central.day.ensure", "day_ensure");
 handler!(
@@ -312,11 +326,14 @@ pub(crate) fn register_definitions(registry: &mut ActionRegistry, definitions: &
 pub fn register_actions(registry: &mut ActionRegistry) {
     register_definitions(registry, &[
         ("central.work.policy", "Read effective Work placement policy", "Resolve exact recognised root/Project source bases and bounded writable destinations without promoting draft policy.", false, policy_action, &[]),
-        ("central.now.allocate", "Allocate an agent NOW clearing", "Idempotently allocate one source-owned NOW and T destination per task; preserve ordinary authorised repository writes.", true, allocate_action, &[("task_ref","string",true),("purpose","string",true),("expected_policy_revision","string",true),("participant_refs","array",false),("source_refs","array",false),("work_refs","array",false)]),
+        ("central.now.allocate", "Allocate an agent NOW clearing", "Idempotently allocate one source-owned NOW and T destination per task; preserve ordinary authorised repository writes. parent_now_ref hangs the clearing as a child of an allocated NOW in this scope or the root scope; workcell_ref declares the Workcell it is placed on.", true, allocate_action, &[("task_ref","string",true),("purpose","string",true),("expected_policy_revision","string",true),("participant_refs","array",false),("source_refs","array",false),("work_refs","array",false),("parent_now_ref","string",false),("workcell_ref","string",false)]),
+        ("central.now.workcell-root", "Ensure a Workcell's root NOW", "Idempotently ensure the one root NOW of a Workcell in the root register (task central:task:control:root:workcell-root:<workcell_ref>); child NOWs placed on the Workcell hang from it. Root register only; expected_policy_revision is checked when given.", true, workcell_root_action, &[("workcell_ref","string",true),("expected_policy_revision","string",false)]),
+        ("central.now.children", "List a NOW's child NOWs", "List every clearing whose parent_now_ref is this NOW, uncapped: a root NOW's children across the root register and every Project, a Project NOW's children in its Project. Unreadable Projects are named in unscanned. Read-only.", false, now_children_action, &[("now_ref","string",true)]),
         ("central.work.validate", "Validate current task write placement", "Revalidate policy, NOW and destination anchors. Return a usable NOW retry destination; do not claim OS enforcement.", false, validate_action, &[("now_ref","string",true),("expected_now_revision","string",true),("expected_policy_revision","string",true),("destination","string",true),("expected_destination_anchor","object",false)]),
         ("central.now.read", "Read allocated NOW source", "Read exact NOW identity, lifecycle and source revision; optionally include current native placement without allocating or re-entering the task.", false, now_read_action, &[("now_ref","string",true),("with_placement","boolean",false)]),
         ("central.now.list", "List allocated NOWs by participant", "List the World's allocated NOW clearings with identity, lifecycle and source revision, optionally filtered to records carrying any of the given participant refs; read-only.", false, now_list_action, &[("participant_refs","array",false)]),
         ("central.time.policy", "Read native civil-time policy", "Read the recognised root IANA timezone and local Day boundary, never the harness timezone.", false, time_action, &[]),
+        ("central.time.occurrences", "Resolve schedule occurrences in civil time", "Resolve a daily/cron/every/once schedule into deterministic occurrence instants over the recognised civil-time policy: policy timezone, spring-forward nonexistent local times resolved forward by the gap and named, autumn-fold ambiguous times as two distinct occurrences. Resolves instants only — never advances today and never touches the Day lifecycle. Read-only.", false, time_occurrences_action, &[("schedule","object",true),("window_from_unix_ms","integer",true),("window_to_unix_ms","integer",true)]),
         ("central.day.read", "Read human Day source", "Read a stable DayRef or the current today pointer without replacing the open editor.", false, day_read_action, &[("day_ref","string",false)]),
         ("central.day.ensure", "Ensure the current blank Day", "Create a blank native Day and advance today only under the current authenticated human time policy; never close old writing or clear NOW.", true, day_ensure_action, &[("expected_time_policy_revision","string",true),("expected_authority_revision","string",false)]),
         ("central.day.lifecycle", "Change human Day lifecycle", "Human-authenticated close or reopen with exact content and relation revisions; retain every authored byte.", true, day_lifecycle_action, &[("day_ref","string",true),("expected_revision","string",true),("expected_relations_revision","string",true),("lifecycle","string",true),("expected_authority_revision","string",false)]),

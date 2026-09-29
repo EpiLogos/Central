@@ -89,6 +89,11 @@ impl Principal {
             ))
         }
     }
+    // Part of the Principal authority surface: reports whether a specific
+    // action falls inside the grant. The `permitted_actions` it reads are
+    // populated from the accepted grant, but no caller enforces them yet — an
+    // unwired seam retained here rather than deleted (see PR notes).
+    #[allow(dead_code)]
     pub(crate) fn permits(&self, action: &str) -> bool {
         self.permitted_actions.iter().any(|a| a == action)
     }

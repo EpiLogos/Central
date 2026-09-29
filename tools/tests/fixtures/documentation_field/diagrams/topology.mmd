@@ -1,0 +1,8 @@
+%% source_id: ledger-topology
+%% visual_question: Which components write and read the ledger?
+%% companion_doc: ../architecture.md#state-ownership
+%% revision: 2026-09-24
+%% provenance: fixture · architecture-contract
+flowchart LR
+  comp_cli["CLI"] -->|"records through"| comp_store[("Ledger store")]
+  comp_reader["Reader"] -->|"reads"| comp_store

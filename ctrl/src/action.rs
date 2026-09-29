@@ -142,6 +142,21 @@ impl ActionRegistry {
                 None,
             );
         };
+        // The descriptor is the contract: one pre-dispatch check refuses an
+        // invocation whose input omits required fields, naming every missing
+        // field so a caller discovers the whole contract in one round trip.
+        // Present-but-invalid values (null, empty, wrong type) remain the
+        // handler's business: some transports pass explicit nulls that
+        // handlers resolve (configuration scope/value, for instance).
+        let missing = missing_required_fields(&action.descriptor, input);
+        if !missing.is_empty() {
+            return ActionResult::failure(
+                Some(id),
+                ResultStatus::InvalidInput,
+                format!("{id} requires {}.", missing.join(", ")),
+                None,
+            );
+        }
         match catch_unwind(AssertUnwindSafe(|| (action.handler)(self, input, context))) {
             Ok(result) => result,
             Err(_) => ActionResult::failure(
@@ -230,6 +245,42 @@ fn required_text(input: &Value, field: &str, action: &str) -> Result<String, Act
         ));
     };
     Ok(value.to_owned())
+}
+
+/// The required descriptor inputs whose key is absent from the invocation
+/// input. A field counts as missing only when the key itself is absent:
+/// present values — including explicit nulls some transports pass for
+/// handler-resolved arguments — are the handler's to judge.
+fn missing_required_fields(descriptor: &ActionDescriptor, input: &Value) -> Vec<String> {
+    descriptor
+        .inputs
+        .iter()
+        .filter(|field| field.required && input.get(&field.name).is_none())
+        .map(|field| field.name.clone())
+        .collect()
+}
+
+fn describe_action(
+    registry: &ActionRegistry,
+    input: &Value,
+    _context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    let id = match required_text(input, "action", "action.describe") {
+        Ok(id) => id,
+        Err(result) => return result,
+    };
+    let Some(descriptor) = registry.get(&id) else {
+        return ActionResult::failure(
+            Some("action.describe"),
+            ResultStatus::InvalidInput,
+            format!("Unknown Action: {id}"),
+            None,
+        );
+    };
+    ActionResult::success(
+        "action.describe",
+        to_value(descriptor).expect("Action descriptor serializes"),
+    )
 }
 
 fn root_action(
@@ -831,6 +882,18 @@ pub fn create_core_action_registry() -> ActionRegistry {
             ),
             list_actions,
         )
+        .expect("core Action ids are valid");
+
+    let mut action_describe = descriptor(
+        "action.describe",
+        "Describe an Action",
+        "Disclose one canonical Action contract: id, description, mutation class, every input field with its type and required-ness, and the expected result — the same descriptor `action list` prints.",
+        MutationClass::ReadOnly,
+        "action-descriptor",
+    );
+    action_describe.inputs = vec![string_input("action")];
+    registry
+        .register(action_describe, describe_action)
         .expect("core Action ids are valid");
 
     let mut control_open = descriptor(

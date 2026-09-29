@@ -8,6 +8,7 @@ fn create_ordinary(root: &Path, input: &Value) -> io::Result<Value> {
         "parent",
         "name",
         "content",
+        "content_encoding",
         "expected_absent",
         "operation_ref",
         "actor",
@@ -50,16 +51,27 @@ fn create_ordinary(root: &Path, input: &Value) -> io::Result<Value> {
     };
     let loc = CentralPathRef::new(&root, relative)?;
     ordinary_policy(&root, &loc)?;
+    if !crate::source_horizon::retrieval_allowed(&root, &root.join(&loc.path)) {
+        return Err(denied("This location is excluded by .no-agent-retrieval"));
+    }
     let operation = text(input, "operation_ref")?;
     if operation.trim().is_empty() || operation.len() > 4096 {
         return Err(invalid("Creation requires a bounded operation identity"));
     }
     let content = text(input, "content")?;
-    if content.len() > MAX || content.contains('\0') {
-        return Err(invalid("Content must be bounded UTF-8 without NUL"));
-    }
+    let encoding = match input.get("content_encoding") {
+        None => "utf-8",
+        Some(Value::String(value)) => value.as_str(),
+        _ => return Err(invalid("content_encoding must be utf-8 or base64")),
+    };
+    let content_bytes = decode_content(content, encoding)?;
+    let read_encoding = if encoding == "base64" {
+        crate::files::FileEncoding::Base64
+    } else {
+        crate::files::FileEncoding::Utf8
+    };
     let (actor, actor_kind, agent_session_ref) = attribution(input)?;
-    let revision = content_revision_bytes(content.as_bytes());
+    let revision = content_revision_bytes(&content_bytes);
     let request = json!({"operation_ref":operation,"location":loc,"revision":revision,"actor":actor,"actor_kind":actor_kind,"agent_session_ref":agent_session_ref});
     let (dir, _lock) = state(&root)?;
     let area = area(&dir, &loc)?;
@@ -70,6 +82,9 @@ fn create_ordinary(root: &Path, input: &Value) -> io::Result<Value> {
     // is converted into an ordinary file by a check made before the lock.
     parent_loc.resolve(&root)?;
     ordinary_policy(&root, &loc)?;
+    if !crate::source_horizon::retrieval_allowed(&root, &root.join(&loc.path)) {
+        return Err(denied("This location is excluded by .no-agent-retrieval"));
+    }
     let parent = directory(&root, Path::new(&parent_loc.path))?;
     if parent.metadata()?.permissions().readonly() {
         return Err(denied("The native directory is read-only"));
@@ -81,7 +96,7 @@ fn create_ordinary(root: &Path, input: &Value) -> io::Result<Value> {
                 "This filename has another creation history; open it or choose a new name",
             ));
         }
-        if let Ok(reading) = read_file(&root, &loc, crate::files::FileEncoding::Utf8) {
+        if let Ok(reading) = read_file(&root, &loc, read_encoding) {
             if reading.revision != revision || reading.content != content {
                 return Err(conflict(
                     "The created file has since changed; do not replay first save over it",
@@ -125,7 +140,7 @@ fn create_ordinary(root: &Path, input: &Value) -> io::Result<Value> {
     let c_name = std::ffi::CString::new(name).map_err(io::Error::other)?;
     let mut committed = false;
     let result = (|| {
-        file.write_all(content.as_bytes())?;
+        file.write_all(&content_bytes)?;
         file.sync_all()?;
         let cursor = events(&area, 1, None)?
             .first()
@@ -142,7 +157,7 @@ fn create_ordinary(root: &Path, input: &Value) -> io::Result<Value> {
             agent_session_ref,
             restored_from: None,
         };
-        snapshot(&area, content)?;
+        snapshot_bytes(&area, &content_bytes)?;
         atomic_record(&record, &serde_json::to_vec(&request)?)?;
         atomic_record(&pending, &serde_json::to_vec(&event)?)?;
         File::open(&area)?.sync_all()?;
@@ -152,6 +167,10 @@ fn create_ordinary(root: &Path, input: &Value) -> io::Result<Value> {
             return Err(conflict(
                 "The selected directory moved while preparing the native file",
             ));
+        }
+        ordinary_policy(&root, &loc)?;
+        if !crate::source_horizon::retrieval_allowed(&root, &root.join(&loc.path)) {
+            return Err(denied("This location is excluded by .no-agent-retrieval"));
         }
         // Unlike rename, linkat atomically REFUSES an existing destination on
         // Linux and macOS. The staged inode already contains fsynced bytes.
@@ -174,7 +193,7 @@ fn create_ordinary(root: &Path, input: &Value) -> io::Result<Value> {
         parent.sync_all()?;
         fs::rename(&pending, area.join(format!("event-{}.json", event.cursor)))?;
         File::open(&area)?.sync_all()?;
-        let reading = read_file(&root, &loc, crate::files::FileEncoding::Utf8)?;
+        let reading = read_file(&root, &loc, read_encoding)?;
         if reading.revision != revision || reading.content != content {
             return Err(conflict(
                 "The newly created file changed before independent readback",
@@ -199,6 +218,7 @@ fn register_create(registry: &mut ActionRegistry) {
         ("parent", "object", true),
         ("name", "string", true),
         ("content", "string", true),
+        ("content_encoding", "string", false),
         ("expected_absent", "boolean", true),
         ("operation_ref", "string", true),
         ("actor", "string", true),
@@ -207,7 +227,7 @@ fn register_create(registry: &mut ActionRegistry) {
     ];
     registry.register(ActionDescriptor {
         id:"central.files.create".into(), title:"Create an ordinary file".into(),
-        description:"Explicit first save into an existing Central directory, with atomic no-overwrite admission, native source/protected-ground guards, declared attribution, idempotent operation identity and owner history. Reading and creation do not publish or adopt source ownership.".into(),
+        description:"Explicit first save of UTF-8 (default) or base64-encoded bytes (maximum 4 MiB decoded) into an existing Central directory, with atomic no-overwrite admission, native source/protected-ground guards, declared attribution, idempotent operation identity and owner history. Reading and creation do not publish or adopt source ownership.".into(),
         inputs:fields.into_iter().map(|(name,kind,required)|ActionInputDefinition{name:name.into(),input_type:kind.into(),required,choices:None,selection:None}).collect(),
         output:ActionOutputDefinition{output_type:"central-file-mutation".into()},mutation_class:MutationClass::LocallyMutating,
         preview_supported:false,required_ports:vec![],availability:ActionAvailability{available:true,reason:None},

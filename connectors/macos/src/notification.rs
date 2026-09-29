@@ -66,10 +66,10 @@ impl UserNotification for MacOsNativeConnector {
                     .with_provider_detail(error.to_string())
             })?;
         if !status.success() {
-            return Err(
-                PortError::provider("macOS Notification Center rejected the AppleScript request.")
-                    .with_provider_detail(format!("exit status: {status}")),
-            );
+            return Err(PortError::provider(
+                "macOS Notification Center rejected the AppleScript request.",
+            )
+            .with_provider_detail(format!("exit status: {status}")));
         }
 
         let mut unsupported_requested_features = Vec::new();

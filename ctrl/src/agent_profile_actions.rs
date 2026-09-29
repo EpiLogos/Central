@@ -538,10 +538,7 @@ fn propose_action_with_origin(
         },
         Err(result) => return result,
     };
-    let scope = match store.scope() {
-        AgentProfileScope::Personal => AgentProfileScope::Personal,
-        AgentProfileScope::Project => AgentProfileScope::Project,
-    };
+    let scope = store.scope();
     let mut profile = match AgentProfile::propose_from_intent(
         profile_ref.clone(),
         revision,
@@ -953,13 +950,13 @@ mod tests {
     }
 
     fn context<'a>(
-        root: &'a PathBuf,
+        root: &'a Path,
         options: &'a mut Option<RootOptions>,
         connectors: &'a mut Option<ConnectorRegistry>,
         connector_context: &'a mut Option<ConnectorContext>,
     ) -> ActionExecutionContext<'a> {
         *options = Some(RootOptions {
-            explicit_root: Some(root.clone()),
+            explicit_root: Some(root.to_path_buf()),
             configured_root: None,
             home: None,
         });

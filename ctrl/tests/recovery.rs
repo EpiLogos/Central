@@ -8,9 +8,9 @@ use central_ctrl::{
     SynchronizerConformanceFixture, CONNECTOR_API_VERSION, MACHINE_INSPECTOR_PORT,
     PACKAGE_MANAGER_PORT, SYNCHRONIZER_PORT,
 };
-use serde_json::{json, Value};
+use serde_json::json;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -27,7 +27,7 @@ fn temporary_directory(label: &str) -> PathBuf {
     path
 }
 
-fn write_machine(root: &PathBuf, role: &str, capabilities: &[&str], package_present: bool) {
+fn write_machine(root: &Path, role: &str, capabilities: &[&str], package_present: bool) {
     let declaration = json!({
         "schema": "central.machine",
         "version": 1,
@@ -47,7 +47,7 @@ fn write_machine(root: &PathBuf, role: &str, capabilities: &[&str], package_pres
     assert!(!package_present || declaration["requirements"]["packages"][0]["state"] == "present");
 }
 
-fn write_recovery(root: &PathBuf, role: &str) {
+fn write_recovery(root: &Path, role: &str) {
     let declaration = json!({
         "schema": "central.recovery",
         "version": 1,
@@ -264,7 +264,7 @@ impl Connector for LyingPackageConnector {
 }
 
 fn execute(
-    root: &PathBuf,
+    root: &Path,
     connectors: &ConnectorRegistry,
     platform: &str,
     action: &str,
@@ -274,7 +274,7 @@ fn execute(
         platform: platform.to_owned(),
     };
     let root_options = RootOptions {
-        explicit_root: Some(root.clone()),
+        explicit_root: Some(root.to_path_buf()),
         ..RootOptions::default()
     };
     let context = ActionExecutionContext {

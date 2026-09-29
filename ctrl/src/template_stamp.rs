@@ -292,12 +292,10 @@ fn stamp_preview_action(
         Ok(value) => value,
         Err(result) => return result,
     };
-    let outcome = || -> io::Result<TemplateStampPlan> {
-        match scope {
-            StampScope::Root => stamp_plan_for_root(&target_root),
-            StampScope::Project => stamp_plan_for_project(&target_root),
-        }
-    }();
+    let outcome = match scope {
+        StampScope::Root => stamp_plan_for_root(&target_root),
+        StampScope::Project => stamp_plan_for_project(&target_root),
+    };
     outcome
         .map(|value| {
             ActionResult::success(
@@ -318,12 +316,10 @@ fn stamp_action(
         Ok(value) => value,
         Err(result) => return result,
     };
-    let outcome = || -> io::Result<TemplateStampResult> {
-        match scope {
-            StampScope::Root => stamp_root(&target_root),
-            StampScope::Project => stamp_project(&target_root),
-        }
-    }();
+    let outcome = match scope {
+        StampScope::Root => stamp_root(&target_root),
+        StampScope::Project => stamp_project(&target_root),
+    };
     outcome
         .map(|value| {
             ActionResult::success(

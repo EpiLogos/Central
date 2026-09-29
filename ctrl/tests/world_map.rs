@@ -808,15 +808,13 @@ fn reproject_leaves_human_files_untouched_and_reports_provenance_honestly() {
         scratch.treatment.as_deref(),
         Some("projectcentral-agent-wiki")
     );
-    assert_eq!(
-        plan.left_alone
-            .iter()
-            .find(|entry| entry.path == "ProjectCentral/relations/source-relations.json")
-            .expect("relations file is classified")
-            .note
-            .contains("never stamped"),
-        true
-    );
+    assert!(plan
+        .left_alone
+        .iter()
+        .find(|entry| entry.path == "ProjectCentral/relations/source-relations.json")
+        .expect("relations file is classified")
+        .note
+        .contains("never stamped"));
     assert_eq!(plan.declared_relations, 1);
     assert!(plan
         .would_stamp
@@ -892,13 +890,10 @@ fn reproject_with_an_unreadable_manifest_stamps_directories_only_and_never_rewri
         .iter()
         .all(|step| step.kind == central_ctrl::ScaffoldKind::Directory));
     assert!(!receipt.noop);
-    assert_eq!(
-        receipt
-            .blocked
-            .expect("blocked is reported")
-            .contains("cannot be read"),
-        true
-    );
+    assert!(receipt
+        .blocked
+        .expect("blocked is reported")
+        .contains("cannot be read"));
     assert!(!broken.join("ProjectCentral/agents/wiki/wiki.json").exists());
 }
 

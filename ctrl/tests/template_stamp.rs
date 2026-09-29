@@ -189,10 +189,7 @@ fn project_scope_creates_starters_after_projectcentral_init() {
         .unwrap()
         .map(|entry| entry.unwrap().file_name())
         .collect();
-    assert_eq!(
-        stamped,
-        vec![std::ffi::OsString::from("telos")]
-    );
+    assert_eq!(stamped, vec![std::ffi::OsString::from("telos")]);
 
     let second = stamp_project(&project).unwrap();
     assert!(second.created.is_empty());
@@ -251,7 +248,10 @@ fn project_scope_never_overwrites_owner_telos_ground() {
     fs::write(&live, "the owner's own open intents\n").unwrap();
 
     let result = stamp_project(&project).unwrap();
-    assert_eq!(result.skipped_existing, vec![PROJECT_TELOS_STARTER.to_owned()]);
+    assert_eq!(
+        result.skipped_existing,
+        vec![PROJECT_TELOS_STARTER.to_owned()]
+    );
     assert_eq!(
         fs::read_to_string(&live).unwrap(),
         "the owner's own open intents\n"

@@ -516,13 +516,13 @@ fn inspect_scope(
         }
     }
     for binding in bindings.values() {
-        if binding.path == self_prefix || binding.path.starts_with(&format!("{self_prefix}/")) {
-            if linked_paths.insert(binding.path.clone()) {
-                if let Some(source) =
-                    resolve_source(world_root, self_prefix, &bindings, &binding.source_ref)?
-                {
-                    linked_sources.push(source);
-                }
+        if (binding.path == self_prefix || binding.path.starts_with(&format!("{self_prefix}/")))
+            && linked_paths.insert(binding.path.clone())
+        {
+            if let Some(source) =
+                resolve_source(world_root, self_prefix, &bindings, &binding.source_ref)?
+            {
+                linked_sources.push(source);
             }
         }
     }
@@ -1012,37 +1012,6 @@ fn optional(input: &Value, field: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
-}
-
-fn string_array(input: &Value, field: &str, action: &str) -> Result<Vec<String>, ActionResult> {
-    let Some(raw) = input.get(field) else {
-        return Ok(Vec::new());
-    };
-    let Some(values) = raw.as_array() else {
-        return Err(ActionResult::failure(
-            Some(action),
-            ResultStatus::InvalidInput,
-            format!("{action} {field} must be an array of refs."),
-            None,
-        ));
-    };
-    let mut refs = Vec::new();
-    for value in values {
-        let Some(value) = value
-            .as_str()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            return Err(ActionResult::failure(
-                Some(action),
-                ResultStatus::InvalidInput,
-                format!("{action} {field} must contain only non-empty strings."),
-                None,
-            ));
-        };
-        refs.push(value.to_owned());
-    }
-    Ok(normalise_refs(refs))
 }
 
 fn tier_input(input: &Value, action: &str) -> Result<u8, ActionResult> {
@@ -1992,7 +1961,7 @@ pub fn register_development_field_actions(registry: &mut ActionRegistry) {
         (descriptor("projectcentral.self.ensure", "Ensure Project self-description aperture", "Add ProjectCentral/self when absent without moving native documentation, matrices, Skills, Methods, Wiki, governance or NOW.", MutationClass::LocallyMutating, "self-aperture-ensure-receipt", vec![project()]), project_ensure_action),
         ({ let mut inputs=vec![project()]; inputs.extend(source_create_inputs()); descriptor("projectcentral.self.source.create", "Create Project self-description source", "Create one bounded source under ProjectCentral/self and record its explicit provenance/standing relation; location alone never confers human authorship.", MutationClass::LocallyMutating, "development-field-reading", inputs) }, project_source_create_action),
         ({ let mut inputs=vec![project()]; inputs.extend(tier_inputs()); descriptor("projectcentral.self.tier.relate", "Relate Project source to document tier", "Bind a participating Project SourceRef to stable tier 0..5 with optional canonical label/path supplied by authored source.", MutationClass::LocallyMutating, "development-field-reading", inputs) }, project_tier_action),
-        ({ let mut inputs=vec![project(), text_input("source", true), ActionInputDefinition { name:"tier".to_owned(), input_type:"integer".to_owned(), required:true, choices:None, selection:None }, text_input("provenance", true), text_input("standing", true), text_input("canonical_label", false), text_input("canonical_path", false), text_input("acceptance", true)]; descriptor("projectcentral.self.retain-tier", "Relate retained native source into Project tier", "Record an accepted Project ground relation for an existing native source, retain its bytes/path in place, and bind its canonical SourceRef into stable tier 0..5.", MutationClass::LocallyMutating, "development-field-reading", inputs) }, project_retain_tier_action),
+        ({ let inputs=vec![project(), text_input("source", true), ActionInputDefinition { name:"tier".to_owned(), input_type:"integer".to_owned(), required:true, choices:None, selection:None }, text_input("provenance", true), text_input("standing", true), text_input("canonical_label", false), text_input("canonical_path", false), text_input("acceptance", true)]; descriptor("projectcentral.self.retain-tier", "Relate retained native source into Project tier", "Record an accepted Project ground relation for an existing native source, retain its bytes/path in place, and bind its canonical SourceRef into stable tier 0..5.", MutationClass::LocallyMutating, "development-field-reading", inputs) }, project_retain_tier_action),
         ({ let mut inputs=vec![project()]; inputs.extend(ux_inputs()); descriptor("projectcentral.self.ux.relate", "Relate Project UX source", "Bind a human-authored/adopted intended-experience source to ux_ref and tier 1 while preserving source standing/revision.", MutationClass::LocallyMutating, "development-field-reading", inputs) }, project_ux_action),
         ({ let mut inputs=vec![project()]; inputs.extend(ex_inputs()); descriptor("projectcentral.self.ex.relate", "Relate Project EX source", "Bind a human-authored/adopted observed-evidence report to ex_ref, linked ux_refs and artifact/evidence refs. Agent-only calls are refused.", MutationClass::LocallyMutating, "development-field-reading", inputs) }, project_ex_action),
         (descriptor("projectcentral.self.resolve", "Resolve Project Development Field ref", "Resolve one Project ux_ref, ex_ref or linked SourceRef through live Central source/provenance/revision relations.", MutationClass::ReadOnly, "development-field-reference", vec![project(), text_input("ref", true)]), project_resolve_action),

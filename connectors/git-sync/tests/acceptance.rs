@@ -1,7 +1,6 @@
 use central_connector_sdk::{
-    run_synchronizer_conformance, Connector, ConnectorContext, PortErrorCode,
-    ReconciliationSourceReference, SynchronizationRequest, Synchronizer,
-    SynchronizerConformanceFixture,
+    run_synchronizer_conformance, ConnectorContext, PortErrorCode, ReconciliationSourceReference,
+    SynchronizationRequest, Synchronizer, SynchronizerConformanceFixture,
 };
 use central_ctrl::{
     create_core_action_registry, initialize_central, ActionExecutionContext, ConnectorRegistry,
@@ -57,7 +56,6 @@ fn git_at(repository: &Path, args: &[&str]) -> Output {
 struct GitFixture {
     root: PathBuf,
     remote: PathBuf,
-    seed: PathBuf,
     target: PathBuf,
 }
 
@@ -103,7 +101,6 @@ impl GitFixture {
         Self {
             root,
             remote,
-            seed,
             target,
         }
     }

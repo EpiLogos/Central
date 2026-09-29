@@ -52,8 +52,12 @@ pub struct ActionResult {
     pub action: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
+    // Boxed so the `Err`-carrying `Result<_, ActionResult>` used throughout the
+    // crate stays small: the failure payload lives behind a pointer, off the hot
+    // success path. Transparent to serde, `PartialEq`, `Clone` and `Debug`, so
+    // the serialized shape and every `.error` access are unchanged.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<ActionError>,
+    pub error: Option<Box<ActionError>>,
 }
 
 impl ActionResult {
@@ -82,12 +86,12 @@ impl ActionResult {
             status,
             action: action.map(str::to_owned),
             data: None,
-            error: Some(ActionError {
+            error: Some(Box::new(ActionError {
                 code: status.as_str().to_owned(),
                 message: message.into(),
                 details,
                 repair_hint: None,
-            }),
+            })),
         }
     }
 
@@ -124,12 +128,12 @@ impl ActionResult {
             status,
             action: action.map(str::to_owned),
             data: None,
-            error: Some(ActionError {
+            error: Some(Box::new(ActionError {
                 code: code.to_owned(),
                 message: message.into(),
                 details,
                 repair_hint,
-            }),
+            })),
         }
     }
 }

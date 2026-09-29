@@ -15,7 +15,7 @@ mod unix_tests {
     use serde_json::json;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -39,7 +39,7 @@ mod unix_tests {
         fs::set_permissions(path, permissions).unwrap();
     }
 
-    fn fake_brew(directory: &PathBuf) -> PathBuf {
+    fn fake_brew(directory: &Path) -> PathBuf {
         let executable = directory.join("brew");
         make_executable(
             &executable,
@@ -60,7 +60,7 @@ exit 64
         executable
     }
 
-    fn fake_chezmoi(directory: &PathBuf) -> PathBuf {
+    fn fake_chezmoi(directory: &Path) -> PathBuf {
         let executable = directory.join("chezmoi");
         make_executable(
             &executable,
@@ -187,7 +187,11 @@ exit 64
         let source = fixture.join("source");
         fs::create_dir_all(&home).unwrap();
         fs::create_dir_all(&source).unwrap();
-        fs::write(source.join("fixture.txt"), "authored recovery configuration\n").unwrap();
+        fs::write(
+            source.join("fixture.txt"),
+            "authored recovery configuration\n",
+        )
+        .unwrap();
         initialize_central(&root).unwrap();
 
         let machine = json!({
@@ -252,7 +256,7 @@ exit 64
             platform: "macos".to_owned(),
         };
         let root_options = RootOptions {
-            explicit_root: Some(root.clone()),
+            explicit_root: Some(root.to_path_buf()),
             ..RootOptions::default()
         };
         let context = ActionExecutionContext {
@@ -274,7 +278,13 @@ exit 64
         let first = first.data.unwrap();
         assert_eq!(first["outcome"], "complete");
         assert_eq!(first["synchronization"]["changed"], true);
-        assert_eq!(first["machine_apply"]["operations"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            first["machine_apply"]["operations"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
         assert_eq!(first["verification"]["satisfied"], true);
         assert_eq!(
             fs::read_to_string(home.join("fixture.txt")).unwrap(),
@@ -286,7 +296,13 @@ exit 64
         assert_eq!(second.status, ResultStatus::Success);
         let second = second.data.unwrap();
         assert!(second["synchronization"].is_null());
-        assert_eq!(second["machine_apply"]["operations"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            second["machine_apply"]["operations"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
         assert_eq!(second["verification"]["satisfied"], true);
         assert_eq!(*sync_state.applies.lock().unwrap(), 1);
     }

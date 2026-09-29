@@ -28,7 +28,9 @@ mod primary_workstation_acceptance {
     }
 
     fn required_env(name: &str) -> String {
-        std::env::var(name).unwrap_or_else(|_| panic!("{name} must be set for ignored primary-workstation acceptance"))
+        std::env::var(name).unwrap_or_else(|_| {
+            panic!("{name} must be set for ignored primary-workstation acceptance")
+        })
     }
 
     #[test]
@@ -160,7 +162,10 @@ mod primary_workstation_acceptance {
         let repeated = actions.execute("machine.apply", &input, &context);
         assert_eq!(repeated.status, ResultStatus::Success);
         assert_eq!(
-            repeated.data.unwrap()["operations"].as_array().unwrap().len(),
+            repeated.data.unwrap()["operations"]
+                .as_array()
+                .unwrap()
+                .len(),
             0
         );
 

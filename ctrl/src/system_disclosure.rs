@@ -6,14 +6,14 @@
 //! state stay distinguishable:
 //!
 //! - `declared`   — what the human authored (Control/user, governance, machine
-//!                  declarations, skill manifests, accepted source relations).
+//!   declarations, skill manifests, accepted source relations).
 //! - `effective`  — what Central actually resolved (the active root, recognised
-//!                  source standing, resolved skills).
+//!   source standing, resolved skills).
 //! - `active`     — what is observed/materialised right now (doctor output, NOW
-//!                  field state, wiki presence, disk proposal counts). These are
-//!                  observations; they never become `declared`.
+//!   field state, wiki presence, disk proposal counts). These are
+//!   observations; they never become `declared`.
 //! - `staged`     — proposals awaiting a human decision (source returns, generated
-//!                  proposals). Never authored.
+//!   proposals). Never authored.
 //! - `expected_effect` — what applying a stage would do, disclosed before invoke.
 //!
 //! Central is deliberately *not* turned into a preferences schema here: no
@@ -22,8 +22,8 @@
 //! array carries only the engagement seam (authority/exposure/explain/history).
 
 use crate::action::{
-    ActionAvailability, ActionDescriptor, ActionExecutionContext, ActionInputDefinition,
-    ActionOutputDefinition, ActionRegistry, MutationClass,
+    ActionAvailability, ActionDescriptor, ActionExecutionContext, ActionOutputDefinition,
+    ActionRegistry, MutationClass,
 };
 use crate::control::AGENT_RETRIEVAL_DENY_MARKER;
 use crate::control_skills::inspect_control_skills;
@@ -32,9 +32,8 @@ use crate::projectcentral_ground::inspect_project_ground;
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::{inspect_central, resolve_central_root, CentralHealth, RootOptions};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const SYSTEM_DISCLOSURE_SCHEMA: &str = "oi.product-settings-disclosure/v2";
@@ -85,7 +84,7 @@ fn sha256(data: &[u8]) -> [u8; 32] {
     msg.extend_from_slice(&bit_len.to_be_bytes());
 
     let mut w = [0u32; 64];
-    for chunk in msg.chunks_exact(64) {
+    for chunk in msg.as_chunks::<64>().0 {
         for i in 0..16 {
             w[i] = u32::from_be_bytes([
                 chunk[i * 4],
@@ -532,11 +531,11 @@ fn settings_axes_for_accepted_mutation(root: &Path, projects: &[String], observe
         let project_root = root.join("Work").join(project);
         if let Ok(inspection) = inspect_project_ground(&project_root) {
             for record in &inspection.recognised_sources {
-                let provenance = serde_json::to_value(&record.provenance)
+                let provenance = serde_json::to_value(record.provenance)
                     .ok()
                     .and_then(|v| v.as_str().map(str::to_owned))
                     .unwrap_or_else(|| "unresolved".to_owned());
-                let standing = serde_json::to_value(&record.standing)
+                let standing = serde_json::to_value(record.standing)
                     .ok()
                     .and_then(|v| v.as_str().map(str::to_owned))
                     .unwrap_or_else(|| "unspecified".to_owned());
@@ -648,7 +647,7 @@ fn build_descriptor(
     root_options: &RootOptions,
 ) -> Result<Value, String> {
     let observed = now_ms();
-    let resolved = resolve_central_root(root_options).map_err(|e| e)?;
+    let resolved = resolve_central_root(root_options)?;
     let health = inspect_central(&resolved.path).map_err(|e| e.to_string())?;
     let resolved_source = match resolved.source {
         crate::root::RootSource::Explicit => "explicit",
@@ -839,7 +838,7 @@ fn build_descriptor(
     Ok(descriptor)
 }
 
-fn disclosed_actions(observed: u64) -> Value {
+fn disclosed_actions(_observed: u64) -> Value {
     let args = |fields: &[(&str, &str)]| -> Value {
         fields
             .iter()
@@ -1000,6 +999,7 @@ pub fn register_system_disclosure_action(registry: &mut ActionRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn sha256_matches_fips_180_4_vectors() {

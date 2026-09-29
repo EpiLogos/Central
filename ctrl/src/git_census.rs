@@ -696,6 +696,7 @@ fn text_input(name: &str, required: bool) -> ActionInputDefinition {
 }
 
 pub fn register_git_actions(registry: &mut ActionRegistry) {
+    crate::git_diff::register(registry);
     registry
         .register(
             ActionDescriptor {
@@ -758,6 +759,7 @@ mod tests {
             repo_root: root.clone(),
             unborn: false,
             bare: false,
+            head_sha: None,
             head_branch: Some("main".into()),
             remote: Some("git@example:O-I.git".into()),
             default_branch: Some("main".into()),

@@ -1,9 +1,13 @@
+use central_connector_sdk::{Connector, ConnectorContext, CONFIGURATION_MANAGER_PORT};
+// The shared conformance fixtures are exercised only by the Linux-gated walks
+// below; on other platforms they are neither imported nor used.
+#[cfg(target_os = "linux")]
 use central_connector_sdk::{
     run_configuration_manager_conformance, run_machine_inspector_conformance,
     run_package_manager_conformance, ConfigurationManagerConformanceFixture,
-    ConfigurationStateRequest, Connector, ConnectorContext, MachineInspectionInput,
-    MachineInspector, MachineInspectorConformanceFixture, PackageManagerConformanceFixture,
-    PackageStateRequest, ReconciliationSourceReference, CONFIGURATION_MANAGER_PORT,
+    ConfigurationStateRequest, MachineInspectionInput, MachineInspector,
+    MachineInspectorConformanceFixture, PackageManagerConformanceFixture, PackageStateRequest,
+    ReconciliationSourceReference,
 };
 use central_ubuntu_connectors::UbuntuServerConnector;
 use std::fs;
@@ -14,10 +18,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 // lists). On Linux hosts without it — e.g. non-Ubuntu distributions — the
 // walks cannot execute by design: declare the skip instead of failing on a
 // machine that is not the platform under test.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn ubuntu_tooling_available() -> bool {
     which_ubuntu_tooling()
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn which_ubuntu_tooling() -> bool {
     std::env::var("PATH")
         .map(|paths| {
@@ -29,6 +35,7 @@ fn which_ubuntu_tooling() -> bool {
         .unwrap_or(false)
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn skip_without_ubuntu_tooling() -> bool {
     if !ubuntu_tooling_available() {
         eprintln!(
@@ -40,8 +47,12 @@ fn skip_without_ubuntu_tooling() -> bool {
     false
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn temporary_directory(label: &str) -> PathBuf {
-    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let path = std::env::temp_dir().join(format!(
         "central-ubuntu-{label}-{}-{nonce}",
         std::process::id()
@@ -55,7 +66,9 @@ fn off_platform_probe_is_explicitly_unavailable() {
     let connector = UbuntuServerConnector::new();
     let probe = connector.probe(
         &CONFIGURATION_MANAGER_PORT,
-        &ConnectorContext { platform: "macos".to_owned() },
+        &ConnectorContext {
+            platform: "macos".to_owned(),
+        },
     );
     assert!(!probe.available);
     assert!(probe.reason.unwrap().contains("does not support platform"));
@@ -130,7 +143,10 @@ fn ubuntu_configuration_manager_passes_shared_conformance_with_a_real_file_fixtu
     .expect("Ubuntu ConfigurationManager should satisfy the public contract");
 
     assert_eq!(report.connector.id, "personal.ubuntu-server");
-    assert_eq!(fs::read_to_string(&target).unwrap(), "central_ubuntu_fixture=1\n");
+    assert_eq!(
+        fs::read_to_string(&target).unwrap(),
+        "central_ubuntu_fixture=1\n"
+    );
     fs::remove_dir_all(root).unwrap();
 }
 

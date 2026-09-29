@@ -152,7 +152,7 @@ def validate(root: Path, account_name: str = "central.html", product_index: int 
         return ["Unknown reference scope"]
     def local_check(path):
         return reference_scope == "workspace" or path.resolve().is_relative_to(root)
-    html = root / "ProjectCentral/user" / account_name
+    html = capability_matrix.ground_folder(root) / account_name
     try:
         raw = html.read_text(encoding="utf-8")
         account = read_account(html)

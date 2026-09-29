@@ -37,6 +37,17 @@ Every capability retains its need, operation, outcome, actual standing, status, 
 
 The product profile appends a readable `question` column. Its six seed-carrying S records hold the editable question text alongside the answer in `relation`; the other records leave this field empty. Reconciliation maintains the manifest’s row labels from these questions.
 
+## Documentation relations
+
+A record may carry an optional `extensions.documentation` object linking the capability to the documents that develop, describe or verify it. Capabilities stay capability-centred: this is an extension of the same record, not a second protocol or a separate documentation graph.
+
+| Key | Value |
+| --- | --- |
+| `vision_refs`, `design_refs`, `mockup_refs`, `architecture_refs`, `diagram_refs`, `praxis_refs` | Unique list of nonempty references (`file#unit-id` for documents, capsule ids for praxis). |
+| `relations` | List of `{"relation": …, "target": …}` with a nonempty target and one of `develops`, `expresses`, `projects`, `requires`, `implements`, `described-by`, `visualises`, `supports`, `verified-by`, `pressures`, `returns-to`, `supersedes`, `packages-as`, `exports-to`, `participates-in`, `presented-by`. |
+
+Unknown keys inside `extensions.documentation` are rejected; other extension namespaces are retained as before. `tools/capability_matrix.py` validates the shape. It does not check that a reference resolves or that the relation is true — `tools/documentation_inventory.py` lists the documents and unit ids a reference can be checked against. The refs let an Agent traverse upward from a capability to its Architecture, Design and Vision; see the [docs-methodology](../skills/docs-methodology/SKILL.md) Skill.
+
 ## Native product view
 
 For each S0–S5 product, `product-field` is the default view:

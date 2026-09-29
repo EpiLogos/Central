@@ -66,7 +66,10 @@ impl MacOsNativeConnector {
                 platforms: vec!["macos".to_owned()],
                 entrypoint: "rust:central-macos-connectors::MacOsNativeConnector".to_owned(),
                 runtime_requirements: vec!["macOS".to_owned()],
-                dependency_probes: vec!["/usr/bin/open".to_owned(), "/usr/bin/osascript".to_owned()],
+                dependency_probes: vec![
+                    "/usr/bin/open".to_owned(),
+                    "/usr/bin/osascript".to_owned(),
+                ],
                 configuration_requirements: vec![
                     "macOS Notification settings govern notification presentation".to_owned(),
                 ],
@@ -88,7 +91,7 @@ impl MacOsNativeConnector {
     }
 
     fn using_production_open(&self) -> bool {
-        self.open_executable == PathBuf::from("/usr/bin/open")
+        self.open_executable == Path::new("/usr/bin/open")
     }
 
     fn ensure_target(target: &Path, operation: &str) -> Result<(), PortError> {
@@ -107,7 +110,12 @@ impl MacOsNativeConnector {
         Ok(())
     }
 
-    fn run_open(&self, arguments: &[&str], target: &Path, operation: &str) -> Result<(), PortError> {
+    fn run_open(
+        &self,
+        arguments: &[&str],
+        target: &Path,
+        operation: &str,
+    ) -> Result<(), PortError> {
         Self::ensure_target(target, operation)?;
         if self.using_production_open() && native_surface_suppressed() {
             return Err(PortError::provider(format!(
@@ -196,14 +204,18 @@ impl Default for MacOsNativeConnector {
 impl NativeOpen for MacOsNativeConnector {
     fn open(&self, input: &NativeOpenInput) -> Result<NativeOpenOutput, PortError> {
         self.run_open(&[], &input.target, "open")?;
-        Ok(NativeOpenOutput { target: input.target.clone() })
+        Ok(NativeOpenOutput {
+            target: input.target.clone(),
+        })
     }
 }
 
 impl NativeReveal for MacOsNativeConnector {
     fn reveal(&self, input: &NativeRevealInput) -> Result<NativeRevealOutput, PortError> {
         self.run_open(&["-R"], &input.target, "reveal")?;
-        Ok(NativeRevealOutput { target: input.target.clone() })
+        Ok(NativeRevealOutput {
+            target: input.target.clone(),
+        })
     }
 }
 
@@ -218,7 +230,8 @@ impl TagStore for MacOsNativeConnector {
             };
             PortError::new(code, "Could not read Finder tag metadata.")
                 .with_provider_detail(error.to_string())
-        })? else {
+        })?
+        else {
             return Ok(TagReadOutput { tags: Vec::new() });
         };
 
@@ -263,7 +276,10 @@ impl TagStore for MacOsNativeConnector {
 }
 
 impl MachineInspector for MacOsNativeConnector {
-    fn inspect(&self, input: &MachineInspectionInput) -> Result<MachineInspectionOutput, PortError> {
+    fn inspect(
+        &self,
+        input: &MachineInspectionInput,
+    ) -> Result<MachineInspectionOutput, PortError> {
         let mut packages = input
             .package_ids
             .iter()
@@ -324,11 +340,14 @@ impl Connector for MacOsNativeConnector {
                 port.id, port.version
             ));
         }
-        if matches!(port.id, "NativeOpen" | "NativeReveal") && !Path::new("/usr/bin/open").is_file() {
+        if matches!(port.id, "NativeOpen" | "NativeReveal") && !Path::new("/usr/bin/open").is_file()
+        {
             return CapabilityProbe::unavailable("Required dependency is missing: /usr/bin/open");
         }
         if port.id == USER_NOTIFICATION_PORT.id && !Path::new("/usr/bin/osascript").is_file() {
-            return CapabilityProbe::unavailable("Required dependency is missing: /usr/bin/osascript");
+            return CapabilityProbe::unavailable(
+                "Required dependency is missing: /usr/bin/osascript",
+            );
         }
         CapabilityProbe::available()
     }
@@ -367,9 +386,14 @@ mod native_surface_suppression_tests {
         let target = std::env::temp_dir().join("central-open-guard-probe.txt");
         std::fs::write(&target, "central").unwrap();
         let error = connector
-            .open(&NativeOpenInput { target: target.clone() })
+            .open(&NativeOpenInput {
+                target: target.clone(),
+            })
             .expect_err("suppressed production open must fail");
-        assert!(error.to_string().contains("suppressed"), "unexpected error: {error:?}");
+        assert!(
+            error.to_string().contains("suppressed"),
+            "unexpected error: {error:?}"
+        );
 
         // An empty value is a deliberate lift of the suppression, and an
         // injected executable is a test double, never the real GUI.

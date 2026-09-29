@@ -1,0 +1,33 @@
+{
+  "protocol": "ql-capability-matrix/1",
+  "matrix_id": "ledger",
+  "anchor_ref": "vision.html#whole",
+  "default_view": "field",
+  "views": [
+    {
+      "id": "field",
+      "title": "Field",
+      "semantics": "Fixture view; empty means unassessed.",
+      "row_axis": {
+        "id": "rows",
+        "label": "Rows",
+        "members": [
+          {
+            "id": "r",
+            "label": "R"
+          }
+        ]
+      },
+      "column_axis": {
+        "id": "cols",
+        "label": "Cols",
+        "members": [
+          {
+            "id": "c",
+            "label": "C"
+          }
+        ]
+      }
+    }
+  ]
+}

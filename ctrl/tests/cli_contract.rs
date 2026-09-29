@@ -1,6 +1,6 @@
 use central_ctrl::{initialize_central, run_cli, CliEnvironment, ResultStatus};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temporary_directory(label: &str) -> PathBuf {
@@ -16,9 +16,9 @@ fn temporary_directory(label: &str) -> PathBuf {
     path
 }
 
-fn environment(root: &PathBuf) -> CliEnvironment {
+fn environment(root: &Path) -> CliEnvironment {
     CliEnvironment {
-        configured_root: Some(root.clone()),
+        configured_root: Some(root.to_path_buf()),
         home: None,
     }
 }
@@ -231,4 +231,132 @@ fn git_census_reports_worktrees_branches_and_attention_for_a_fixture_repo() {
 
     let bad = run_cli(&["git".to_owned(), "shove".to_owned()], &environment(&root));
     assert_eq!(bad.result.status, ResultStatus::InvalidInput);
+}
+
+#[test]
+fn action_describe_discloses_a_known_action_contract() {
+    let root = temporary_directory("describe-known").join("Central");
+    initialize_central(&root).unwrap();
+
+    let result = run_cli(
+        &[
+            "--json".to_owned(),
+            "action".to_owned(),
+            "describe".to_owned(),
+            "projectcentral.now.return".to_owned(),
+        ],
+        &environment(&root),
+    );
+    assert_eq!(result.result.status, ResultStatus::Success);
+    assert_eq!(result.result.action.as_deref(), Some("action.describe"));
+    assert!(result.result.ok);
+
+    let data = result.result.data.as_ref().unwrap();
+    assert_eq!(data["id"], "projectcentral.now.return");
+    assert_eq!(data["mutation_class"], "locally-mutating");
+    assert_eq!(data["output"]["type"], "projectcentral-now-handoff");
+
+    // Every disclosed input field carries name, type and required-ness, and
+    // the required set is exactly the contract the handler enforces.
+    let inputs = data["inputs"].as_array().unwrap();
+    assert!(
+        inputs.iter().all(|field| field.get("name").is_some()
+            && field.get("type").is_some()
+            && field.get("required").is_some()),
+        "every input field discloses name, type and required: {inputs:?}"
+    );
+    let required: Vec<&str> = inputs
+        .iter()
+        .filter(|field| field["required"].as_bool() == Some(true))
+        .filter_map(|field| field["name"].as_str())
+        .collect();
+    assert_eq!(
+        required,
+        vec!["actor", "kind", "subject", "result", "status"]
+    );
+    let all_names: Vec<&str> = inputs
+        .iter()
+        .filter_map(|field| field["name"].as_str())
+        .collect();
+    assert!(all_names.contains(&"project") && all_names.contains(&"id"));
+}
+
+#[test]
+fn action_describe_refuses_an_unknown_action_precisely() {
+    let root = temporary_directory("describe-unknown").join("Central");
+    initialize_central(&root).unwrap();
+
+    let result = run_cli(
+        &[
+            "--json".to_owned(),
+            "action".to_owned(),
+            "describe".to_owned(),
+            "no.such.action".to_owned(),
+        ],
+        &environment(&root),
+    );
+    assert_eq!(result.result.status, ResultStatus::InvalidInput);
+    assert!(!result.result.ok);
+    assert_eq!(
+        result
+            .result
+            .error
+            .as_ref()
+            .expect("failure carries an error")
+            .message,
+        "Unknown Action: no.such.action"
+    );
+}
+
+#[test]
+fn action_run_with_every_required_field_missing_names_all_of_them() {
+    let root = temporary_directory("missing-all").join("Central");
+    initialize_central(&root).unwrap();
+
+    let result = run_cli(
+        &[
+            "--json".to_owned(),
+            "action".to_owned(),
+            "run".to_owned(),
+            "projectcentral.now.return".to_owned(),
+            "{}".to_owned(),
+        ],
+        &environment(&root),
+    );
+    assert_eq!(result.result.status, ResultStatus::InvalidInput);
+    assert_eq!(
+        result.result.action.as_deref(),
+        Some("projectcentral.now.return")
+    );
+    assert_eq!(
+        result
+            .result
+            .error
+            .as_ref()
+            .expect("failure carries an error")
+            .message,
+        "projectcentral.now.return requires actor, kind, subject, result, status."
+    );
+
+    // A partial input names only what is still missing, in one refusal.
+    let partial = run_cli(
+        &[
+            "--json".to_owned(),
+            "action".to_owned(),
+            "run".to_owned(),
+            "projectcentral.now.return".to_owned(),
+            r#"{"actor":"agent:test","kind":"handoff"}"#.to_owned(),
+        ],
+        &environment(&root),
+    );
+    assert_eq!(partial.result.status, ResultStatus::InvalidInput);
+    assert_eq!(
+        partial
+            .result
+            .error
+            .as_ref()
+            .expect("failure carries an error")
+            .message,
+        "projectcentral.now.return requires subject, result, status."
+    );
 }

@@ -1702,10 +1702,10 @@ fn compare_machine(
         });
         let matches_running = requirement
             .running
-            .map_or(true, |desired| desired == item.running);
+            .is_none_or(|desired| desired == item.running);
         let matches_enabled = requirement
             .enabled
-            .map_or(true, |desired| desired == item.enabled);
+            .is_none_or(|desired| desired == item.enabled);
         if matches_running && matches_enabled {
             entries.push(satisfied_entry("service", &requirement.id, desired, actual));
         } else {

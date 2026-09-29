@@ -48,7 +48,7 @@ pub fn register_agent_set_actions(registry: &mut ActionRegistry) {
         vec![scope, input("project", "string", false)]
     };
 
-    registry.register(ActionDescriptor {
+    let _ = registry.register(ActionDescriptor {
         id: AGENT_SET_SAVE_ACTION.into(),
         title: "Save agent-set".into(),
         description: "Persist an authored central.agent-set/v1 record under compare-and-swap revision discipline (create or update).".into(),
@@ -65,7 +65,7 @@ pub fn register_agent_set_actions(registry: &mut ActionRegistry) {
         availability: always_available(),
     }, agent_set_save);
 
-    registry.register(ActionDescriptor {
+    let _ = registry.register(ActionDescriptor {
         id: AGENT_SET_PROPOSE_ACTION.into(),
         title: "Propose agent-set".into(),
         description: "Propose a central.agent-set/v1 composition as generated source: typed members and orchestrator, create-only, stamped generated-proposal/unrecognised. Recognition stays with the human owner.".into(),
@@ -85,7 +85,7 @@ pub fn register_agent_set_actions(registry: &mut ActionRegistry) {
         availability: always_available(),
     }, agent_set_propose);
 
-    registry.register(
+    let _ = registry.register(
         ActionDescriptor {
             id: AGENT_SET_LIST_ACTION.into(),
             title: "List agent-sets".into(),
@@ -103,7 +103,7 @@ pub fn register_agent_set_actions(registry: &mut ActionRegistry) {
         agent_set_list,
     );
 
-    registry.register(
+    let _ = registry.register(
         ActionDescriptor {
             id: AGENT_SET_READ_ACTION.into(),
             title: "Read agent-set".into(),
@@ -124,7 +124,7 @@ pub fn register_agent_set_actions(registry: &mut ActionRegistry) {
         agent_set_read,
     );
 
-    registry.register(
+    let _ = registry.register(
         ActionDescriptor {
             id: AGENT_SET_REMOVE_ACTION.into(),
             title: "Remove agent-set".into(),
@@ -147,7 +147,7 @@ pub fn register_agent_set_actions(registry: &mut ActionRegistry) {
         agent_set_remove,
     );
 
-    registry.register(ActionDescriptor {
+    let _ = registry.register(ActionDescriptor {
         id: AGENT_SET_RESOLVE_ACTION.into(),
         title: "Resolve agent-set".into(),
         description: "Resolve an authored agent-set: authored membership partitioned against declared availability, nested sets expanded, membership cycles rejected.".into(),
@@ -164,7 +164,7 @@ pub fn register_agent_set_actions(registry: &mut ActionRegistry) {
         availability: always_available(),
     }, agent_set_resolve);
 
-    registry.register(ActionDescriptor {
+    let _ = registry.register(ActionDescriptor {
         id: WORLD_RELATIONS_SAVE_ACTION.into(),
         title: "Save world relations".into(),
         description: "Persist an authored central.world-relations/v1 record under compare-and-swap revision discipline (create or update).".into(),
@@ -181,19 +181,27 @@ pub fn register_agent_set_actions(registry: &mut ActionRegistry) {
         availability: always_available(),
     }, world_relations_save);
 
-    registry.register(ActionDescriptor {
-        id: WORLD_RELATIONS_LIST_ACTION.into(),
-        title: "List world relations".into(),
-        description: "List authored central.world-relations/v1 records at the requested register.".into(),
-        inputs: store_inputs("world-relations"),
-        output: ActionOutputDefinition { output_type: format!("list<{REF_OUTPUT}>") },
-        mutation_class: MutationClass::ReadOnly,
-        preview_supported: false,
-        required_ports: Vec::new(),
-        availability: always_available(),
-    }, world_relations_list);
+    let _ =
+        registry.register(
+            ActionDescriptor {
+                id: WORLD_RELATIONS_LIST_ACTION.into(),
+                title: "List world relations".into(),
+                description:
+                    "List authored central.world-relations/v1 records at the requested register."
+                        .into(),
+                inputs: store_inputs("world-relations"),
+                output: ActionOutputDefinition {
+                    output_type: format!("list<{REF_OUTPUT}>"),
+                },
+                mutation_class: MutationClass::ReadOnly,
+                preview_supported: false,
+                required_ports: Vec::new(),
+                availability: always_available(),
+            },
+            world_relations_list,
+        );
 
-    registry.register(
+    let _ = registry.register(
         ActionDescriptor {
             id: WORLD_RELATIONS_READ_ACTION.into(),
             title: "Read world relations".into(),
@@ -214,24 +222,32 @@ pub fn register_agent_set_actions(registry: &mut ActionRegistry) {
         world_relations_read,
     );
 
-    registry.register(ActionDescriptor {
-        id: WORLD_RELATIONS_REMOVE_ACTION.into(),
-        title: "Remove world relations".into(),
-        description: "Remove one authored central.world-relations/v1 record at an exact revision.".into(),
-        inputs: {
-            let mut inputs = store_inputs("world-relations");
-            inputs.push(input("ref", "string", true));
-            inputs.push(input("expected_revision", "string", true));
-            inputs
-        },
-        output: ActionOutputDefinition { output_type: REF_OUTPUT.into() },
-        mutation_class: MutationClass::LocallyMutating,
-        preview_supported: true,
-        required_ports: Vec::new(),
-        availability: always_available(),
-    }, world_relations_remove);
+    let _ =
+        registry.register(
+            ActionDescriptor {
+                id: WORLD_RELATIONS_REMOVE_ACTION.into(),
+                title: "Remove world relations".into(),
+                description:
+                    "Remove one authored central.world-relations/v1 record at an exact revision."
+                        .into(),
+                inputs: {
+                    let mut inputs = store_inputs("world-relations");
+                    inputs.push(input("ref", "string", true));
+                    inputs.push(input("expected_revision", "string", true));
+                    inputs
+                },
+                output: ActionOutputDefinition {
+                    output_type: REF_OUTPUT.into(),
+                },
+                mutation_class: MutationClass::LocallyMutating,
+                preview_supported: true,
+                required_ports: Vec::new(),
+                availability: always_available(),
+            },
+            world_relations_remove,
+        );
 
-    registry.register(ActionDescriptor {
+    let _ = registry.register(ActionDescriptor {
         id: WORLD_EFFECTIVE_SOURCES_ACTION.into(),
         title: "Effective world sources".into(),
         description: "Resolve the effective source relations of a world: ancestry propagation with per-hop provenance, overrides and declared exclusions.".into(),
@@ -821,8 +837,8 @@ mod tests {
     use central_connector_sdk::{ConnectorContext, ConnectorRegistry};
     use serde_json::json;
     use std::fs;
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::Ordering;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn fixture_root() -> PathBuf {
@@ -848,13 +864,13 @@ mod tests {
     }
 
     fn context<'a>(
-        root: &'a PathBuf,
+        root: &'a Path,
         options: &'a mut Option<RootOptions>,
         connectors: &'a mut Option<ConnectorRegistry>,
         connector_context: &'a mut Option<ConnectorContext>,
     ) -> ActionExecutionContext<'a> {
         *options = Some(RootOptions {
-            explicit_root: Some(root.clone()),
+            explicit_root: Some(root.to_path_buf()),
             configured_root: None,
             home: None,
         });

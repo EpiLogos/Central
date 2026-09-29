@@ -54,14 +54,14 @@ fn temporary_directory(label: &str) -> PathBuf {
     path
 }
 
-fn execute(root: &PathBuf, action: &str, input: serde_json::Value) -> central_ctrl::ActionResult {
+fn execute(root: &Path, action: &str, input: serde_json::Value) -> central_ctrl::ActionResult {
     let registry = create_core_action_registry();
     let connectors = ConnectorRegistry::default();
     let connector_context = ConnectorContext {
         platform: "test".to_owned(),
     };
     let root_options = RootOptions {
-        explicit_root: Some(root.clone()),
+        explicit_root: Some(root.to_path_buf()),
         ..RootOptions::default()
     };
     let context = ActionExecutionContext {

@@ -1,3 +1,4 @@
+mod git_diff;
 mod git_state;
 mod source_history;
 

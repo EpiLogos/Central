@@ -1,7 +1,7 @@
 use central_connector_sdk::{
     CapabilityProbe, ConfigurationManager, ConfigurationStateRequest, Connector, ConnectorContext,
     ConnectorManifest, ConnectorPortDeclaration, PortContract, PortError, PortErrorCode,
-    StateChangePreview, StateChangeResult, CONNECTOR_API_VERSION, CONFIGURATION_MANAGER_PORT,
+    StateChangePreview, StateChangeResult, CONFIGURATION_MANAGER_PORT, CONNECTOR_API_VERSION,
 };
 use std::ffi::OsStr;
 use std::fs;
@@ -77,8 +77,11 @@ impl ChezmoiConnector {
             let relative = id_path
                 .strip_prefix(&self.destination)
                 .map_err(|error| {
-                    PortError::new(PortErrorCode::InvalidInput, "Invalid chezmoi destination target.")
-                        .with_provider_detail(error.to_string())
+                    PortError::new(
+                        PortErrorCode::InvalidInput,
+                        "Invalid chezmoi destination target.",
+                    )
+                    .with_provider_detail(error.to_string())
                 })?
                 .to_path_buf();
             if relative.as_os_str().is_empty() {
@@ -138,15 +141,18 @@ impl ChezmoiConnector {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        Command::new(&self.executable).args(args).output().map_err(|error| {
-            let code = match error.kind() {
-                std::io::ErrorKind::NotFound => PortErrorCode::MissingDependency,
-                std::io::ErrorKind::PermissionDenied => PortErrorCode::PermissionFailure,
-                _ => PortErrorCode::ProviderOperationFailed,
-            };
-            PortError::new(code, "chezmoi command could not be started.")
-                .with_provider_detail(error.to_string())
-        })
+        Command::new(&self.executable)
+            .args(args)
+            .output()
+            .map_err(|error| {
+                let code = match error.kind() {
+                    std::io::ErrorKind::NotFound => PortErrorCode::MissingDependency,
+                    std::io::ErrorKind::PermissionDenied => PortErrorCode::PermissionFailure,
+                    _ => PortErrorCode::ProviderOperationFailed,
+                };
+                PortError::new(code, "chezmoi command could not be started.")
+                    .with_provider_detail(error.to_string())
+            })
     }
 
     fn present_diff(&self, source: &Path, target: &Path) -> Result<StateChangePreview, PortError> {
@@ -161,13 +167,15 @@ impl ChezmoiConnector {
         ])?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-            return Err(PortError::provider("chezmoi diff failed.").with_provider_detail(
-                if stderr.is_empty() {
-                    format!("exit status: {}", output.status)
-                } else {
-                    stderr
-                },
-            ));
+            return Err(
+                PortError::provider("chezmoi diff failed.").with_provider_detail(
+                    if stderr.is_empty() {
+                        format!("exit status: {}", output.status)
+                    } else {
+                        stderr
+                    },
+                ),
+            );
         }
         let changed = !output.stdout.is_empty();
         Ok(StateChangePreview {
@@ -175,7 +183,10 @@ impl ChezmoiConnector {
             summary: if changed {
                 format!("chezmoi would update '{}'.", target.display())
             } else {
-                format!("chezmoi target '{}' already matches authored source.", target.display())
+                format!(
+                    "chezmoi target '{}' already matches authored source.",
+                    target.display()
+                )
             },
         })
     }
@@ -195,13 +206,15 @@ impl ChezmoiConnector {
             return Ok(());
         }
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        Err(PortError::provider("chezmoi apply failed.").with_provider_detail(
-            if stderr.is_empty() {
-                format!("exit status: {}", output.status)
-            } else {
-                stderr
-            },
-        ))
+        Err(
+            PortError::provider("chezmoi apply failed.").with_provider_detail(
+                if stderr.is_empty() {
+                    format!("exit status: {}", output.status)
+                } else {
+                    stderr
+                },
+            ),
+        )
     }
 
     fn remove_target(target: &Path) -> Result<(), PortError> {
@@ -209,8 +222,10 @@ impl ChezmoiConnector {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(error) => {
-                return Err(PortError::provider("Could not inspect configuration target before removal.")
-                    .with_provider_detail(error.to_string()))
+                return Err(PortError::provider(
+                    "Could not inspect configuration target before removal.",
+                )
+                .with_provider_detail(error.to_string()))
             }
         };
         if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() {
@@ -256,9 +271,15 @@ impl ConfigurationManager for ChezmoiConnector {
             return Ok(StateChangePreview {
                 changed,
                 summary: if changed {
-                    format!("Configuration target '{}' would be removed.", target.display())
+                    format!(
+                        "Configuration target '{}' would be removed.",
+                        target.display()
+                    )
                 } else {
-                    format!("Configuration target '{}' is already absent.", target.display())
+                    format!(
+                        "Configuration target '{}' is already absent.",
+                        target.display()
+                    )
                 },
             });
         }
@@ -298,7 +319,10 @@ impl ConfigurationManager for ChezmoiConnector {
             summary: if input.present {
                 format!("chezmoi applied and verified '{}'.", target.display())
             } else {
-                format!("Configuration target '{}' removed and verified.", target.display())
+                format!(
+                    "Configuration target '{}' removed and verified.",
+                    target.display()
+                )
             },
         })
     }

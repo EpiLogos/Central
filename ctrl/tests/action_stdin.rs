@@ -5,6 +5,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 struct Ground(PathBuf);
@@ -33,16 +34,19 @@ fn run(root: &Path, action: &str, input: &[u8]) -> (bool, Value) {
     (output.status.success(), value)
 }
 fn ground() -> Ground {
-    let root = Ground(
-        std::env::temp_dir().join(format!(
-            "central-stdin-{}-{}",
+    // Unique within this process even when two tests start inside the
+    // same clock tick — a collided temp root poisons both tests.
+    static NEXT_GROUND: AtomicU64 = AtomicU64::new(0);
+    let unique = NEXT_GROUND.fetch_add(1, Ordering::Relaxed);
+    let root = Ground(std::env::temp_dir().join(format!(
+            "central-stdin-{}-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
-        )),
-    );
+                .as_nanos(),
+            unique
+    )));
     central_ctrl::initialize_central(&root.0).unwrap();
     root
 }

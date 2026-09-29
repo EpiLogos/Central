@@ -151,7 +151,7 @@ pub(crate) fn record_adopt(scope: &Scope, input: &Value) -> io::Result<Value> {
             url,
             source_path: entry.source.path,
             generated_title: entry.title,
-            generated_description: generated,
+            description_hash: content_revision_bytes(generated.as_bytes()),
             retained_description: Some(retained),
             import_id: None,
         },

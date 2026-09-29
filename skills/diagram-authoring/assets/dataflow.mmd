@@ -1,0 +1,9 @@
+%% source_id: [product]-dataflow
+%% visual_question: How does data move from input to durable state to output?
+%% companion_doc: [architecture.md#data-movement]
+%% revision: [YYYY-MM-DD or sha256 of the companion unit]
+%% provenance: [author / Agent · standing agent-inference until recognised]
+flowchart LR
+  data_input[/"[Input]"/] -->|"[validated by]"| proc_validate["[Validate]"]
+  proc_validate -->|"[normalised record]"| store_ledger[("[Durable store]")]
+  store_ledger -->|"[projected as]"| data_output[/"[Output]"/]

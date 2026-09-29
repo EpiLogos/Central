@@ -37,9 +37,9 @@
 
 use central_connector_sdk::{
     machine_capability::{
-        with_source, ACTUATION_DETECT_DISCLOSURE_NAME, SOURCE_ABSENT,
-        SOURCE_ACTUATION_CAPABILITY, SOURCE_ACTUATION_DETECTION, SOURCE_UNAVAILABLE,
-        SOURCE_WORKCELL_INSTANCE, WORKCELL_REGISTRY_DISCLOSURE_NAME,
+        with_source, ACTUATION_DETECT_DISCLOSURE_NAME, SOURCE_ABSENT, SOURCE_ACTUATION_CAPABILITY,
+        SOURCE_ACTUATION_DETECTION, SOURCE_UNAVAILABLE, SOURCE_WORKCELL_INSTANCE,
+        WORKCELL_REGISTRY_DISCLOSURE_NAME,
     },
     CapabilityProbe, Connector, ConnectorContext, ConnectorManifest, ConnectorPortDeclaration,
     MachineInspectionInput, MachineInspectionOutput, MachineInspector, PortContract, PortError,
@@ -63,6 +63,16 @@ const WORKCELL_LIVE: &str = "live";
 /// document is bounded (filesystem probes for the bundled catalog), and the
 /// capability catalog is a pure read-model projection.
 const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// `ETXTBSY` ("text file busy") is errno 26 on Linux and Darwin. `std::io`
+/// has no `ErrorKind` for it, so we match the raw OS error.
+const ETXTBSY: i32 = 26;
+
+/// Total spawn attempts before a persistent `ETXTBSY` is surfaced. A single
+/// clone+execve window closes within a scheduler turn (see
+/// [`spawn_tolerating_text_file_busy`]), so one or two attempts converge in
+/// practice; the ceiling only guards against pathology and is never a wait.
+const SPAWN_ATTEMPTS_ON_TEXT_FILE_BUSY: u32 = 128;
 
 pub struct HarnessCapabilityConnector {
     manifest: ConnectorManifest,
@@ -125,8 +135,7 @@ impl HarnessCapabilityConnector {
         let Some(executable) = &self.actuation_executable else {
             return vec![with_source(ACTUATION_DETECT_DISCLOSURE_NAME, SOURCE_ABSENT)];
         };
-        let Some(detection) =
-            self.run_read_model(executable, &["harness", "detect", "--json"])
+        let Some(detection) = self.run_read_model(executable, &["harness", "detect", "--json"])
         else {
             return vec![with_source(
                 ACTUATION_DETECT_DISCLOSURE_NAME,
@@ -167,7 +176,10 @@ impl HarnessCapabilityConnector {
 
     fn workcell_capabilities(&self) -> Vec<String> {
         if !self.workcell_registry.is_file() {
-            return vec![with_source(WORKCELL_REGISTRY_DISCLOSURE_NAME, SOURCE_ABSENT)];
+            return vec![with_source(
+                WORKCELL_REGISTRY_DISCLOSURE_NAME,
+                SOURCE_ABSENT,
+            )];
         }
         let parsed = std::fs::read_to_string(&self.workcell_registry)
             .ok()
@@ -193,7 +205,7 @@ impl HarnessCapabilityConnector {
                     .filter(|record| {
                         record.get("liveness").and_then(Value::as_str) == Some(WORKCELL_LIVE)
                     })
-                    .filter_map(|record| harness_name(record))
+                    .filter_map(harness_name)
                     .map(|name| with_source(&name, SOURCE_WORKCELL_INSTANCE))
                     .collect()
             })
@@ -204,13 +216,15 @@ impl HarnessCapabilityConnector {
     }
 
     fn run_read_model(&self, executable: &Path, args: &[&str]) -> Option<String> {
-        let mut child = Command::new(executable)
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .ok()?;
+        let mut child = spawn_tolerating_text_file_busy(|| {
+            Command::new(executable)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+        })
+        .ok()?;
         let deadline = Instant::now() + self.command_timeout;
         let status = loop {
             match child.try_wait() {
@@ -239,6 +253,41 @@ impl HarnessCapabilityConnector {
 impl Default for HarnessCapabilityConnector {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Spawn a child, tolerating a transient `ETXTBSY`.
+///
+/// On Linux `posix_spawn` is a userspace clone+execve. While one thread still
+/// holds a freshly written executable open for writing, another thread's spawn
+/// can `fork` and inherit that writer descriptor; the target inode then stays
+/// open-for-write across the child's `execve`, which fails with `ETXTBSY`
+/// ("text file busy"). The inheriting child drops the descriptor at its own
+/// `execve` — every descriptor Rust opens is `O_CLOEXEC` — so the condition
+/// clears within a scheduler turn. Darwin's `posix_spawn` is a single atomic
+/// syscall with no such window, which is why this only surfaces under parallel
+/// load on Linux; a freshly installed or updated Actuation binary can trip the
+/// same condition in production.
+///
+/// We retry a bounded number of times, yielding the CPU (never sleeping) so the
+/// inheriting child can reach its `execve` and release the descriptor. Any
+/// other error is surfaced on the first attempt, unretried.
+fn spawn_tolerating_text_file_busy<T>(
+    mut attempt: impl FnMut() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    let mut remaining = SPAWN_ATTEMPTS_ON_TEXT_FILE_BUSY;
+    loop {
+        match attempt() {
+            Ok(value) => return Ok(value),
+            Err(error) => {
+                remaining -= 1;
+                if remaining > 0 && error.raw_os_error() == Some(ETXTBSY) {
+                    std::thread::yield_now();
+                    continue;
+                }
+                return Err(error);
+            }
+        }
     }
 }
 
@@ -379,5 +428,57 @@ impl Connector for HarnessCapabilityConnector {
 
     fn machine_inspector(&self) -> Option<&dyn MachineInspector> {
         Some(self)
+    }
+}
+
+#[cfg(test)]
+mod spawn_retry {
+    use super::{spawn_tolerating_text_file_busy, ETXTBSY, SPAWN_ATTEMPTS_ON_TEXT_FILE_BUSY};
+    use std::cell::Cell;
+    use std::io;
+
+    // ENOENT: a spawn error that is not a transient text-file-busy race.
+    const ENOENT: i32 = 2;
+
+    #[test]
+    fn transient_text_file_busy_is_retried_until_the_spawn_succeeds() {
+        let attempts = Cell::new(0u32);
+        let result = spawn_tolerating_text_file_busy(|| {
+            let seen = attempts.get();
+            attempts.set(seen + 1);
+            if seen < 3 {
+                Err(io::Error::from_raw_os_error(ETXTBSY))
+            } else {
+                Ok("spawned")
+            }
+        });
+        assert_eq!(result.unwrap(), "spawned");
+        assert_eq!(attempts.get(), 4, "three ETXTBSY failures, then success");
+    }
+
+    #[test]
+    fn other_spawn_errors_are_surfaced_without_retrying() {
+        let attempts = Cell::new(0u32);
+        let result: io::Result<()> = spawn_tolerating_text_file_busy(|| {
+            attempts.set(attempts.get() + 1);
+            Err(io::Error::from_raw_os_error(ENOENT))
+        });
+        assert_eq!(result.unwrap_err().raw_os_error(), Some(ENOENT));
+        assert_eq!(attempts.get(), 1, "a non-ETXTBSY error is not retried");
+    }
+
+    #[test]
+    fn a_persistent_text_file_busy_is_bounded_and_then_surfaced() {
+        let attempts = Cell::new(0u32);
+        let result: io::Result<()> = spawn_tolerating_text_file_busy(|| {
+            attempts.set(attempts.get() + 1);
+            Err(io::Error::from_raw_os_error(ETXTBSY))
+        });
+        assert_eq!(result.unwrap_err().raw_os_error(), Some(ETXTBSY));
+        assert_eq!(
+            attempts.get(),
+            SPAWN_ATTEMPTS_ON_TEXT_FILE_BUSY,
+            "retries are bounded rather than unbounded"
+        );
     }
 }

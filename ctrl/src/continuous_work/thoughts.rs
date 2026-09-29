@@ -288,6 +288,9 @@ fn row_value(row: &StreamRow, include_content: bool) -> Value {
     value
 }
 
+// Test fixture writer: each parameter is one field of the record under test,
+// spelled out at the call site for legibility rather than bundled into a struct.
+#[allow(clippy::too_many_arguments)]
 fn write_fixture(
     scope: &Scope,
     record: &placement::NowRecord,

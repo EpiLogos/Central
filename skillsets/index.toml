@@ -1,0 +1,33 @@
+# Central's portable registry SkillSets. AIKit loads this index as the sibling
+# of Central's `skills/` directory source; members are capsule ids, one per
+# line, in `<directory>/members`. Membership is repertoire only: it grants no
+# trust, loading, sequencing or precedence.
+schema = 1
+
+[[skillset]]
+semantic_ref = "central:documentation"
+directory = "documentation"
+description = "Documentation Field repertoire: the docs-methodology Methodology, the Vision/Design/Mockup/Architecture/diagram form Skills, seven documentation Methods, standing and capability-matrix Skills, plus AIKit navigation, projection and verification."
+# The account-authoring trio (product-understanding, structured-account-authoring,
+# html-account) is carried by reference, never duplicated as flat members.
+child_refs = ["aikit:account-authoring"]
+
+[skillset.package]
+name = "epi-logos-documentation"
+version = "0.1.0"
+display_name = "Epi-Logos Documentation Field"
+short_description = "Author and reconcile Vision, Design, Mockup, Architecture and diagrams against a capability matrix, with explicit claim standing."
+license = "UNLICENSED"
+
+[skillset.package.author]
+name = "Epi-Logos"
+url = "https://github.com/EpiLogos"
+
+# Developmental repertoire. Provenance: upstream mattpocock/skills@2ab958093e83e0ec752e6c1c5932da465bf23e0c.
+# wayfinder, grilling and prototype are locally adopted in Control/user/skills with
+# praxis classification (wayfinder METHODOLOGY:, grilling and prototype METHOD:);
+# research, domain-modeling and writing-great-skills remain upstream bodies.
+[[skillset]]
+semantic_ref = "central:core-development"
+directory = "core-development"
+description = "Developmental repertoire: Wayfinder, grilling and prototyping, with upstream research, domain-modelling and skill-writing Skills."

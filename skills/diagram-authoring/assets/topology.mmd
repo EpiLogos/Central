@@ -1,0 +1,11 @@
+%% source_id: [product]-topology
+%% visual_question: Which components exist and how are they connected?
+%% companion_doc: [architecture.md#components]
+%% revision: [YYYY-MM-DD or sha256 of the companion unit]
+%% provenance: [author / Agent · standing agent-inference until recognised]
+flowchart TB
+  subgraph boundary_product["[Product]"]
+    comp_cli["[CLI]"] -->|"[calls]"| comp_core["[Core library]"]
+    comp_core -->|"[persists to]"| comp_store["[Store]"]
+  end
+  comp_core -->|"[publishes]"| ext_consumer["[Consumer]"]

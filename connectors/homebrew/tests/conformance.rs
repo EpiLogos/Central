@@ -79,8 +79,14 @@ exit 64
         .unwrap();
         assert_eq!(report.port_id, PACKAGE_MANAGER_PORT.id);
         assert_eq!(report.connector.id, "personal.homebrew");
-        assert!(report.checks.iter().any(|check| check == "post-apply-preview"));
-        assert!(report.checks.iter().any(|check| check == "idempotent-apply"));
+        assert!(report
+            .checks
+            .iter()
+            .any(|check| check == "post-apply-preview"));
+        assert!(report
+            .checks
+            .iter()
+            .any(|check| check == "idempotent-apply"));
     }
 
     #[test]
@@ -93,7 +99,10 @@ exit 64
             },
         );
         assert!(!off_platform.available);
-        assert!(off_platform.reason.unwrap().contains("does not support platform"));
+        assert!(off_platform
+            .reason
+            .unwrap()
+            .contains("does not support platform"));
 
         let missing = HomebrewConnector::with_executable(PathBuf::from("/definitely/missing/brew"));
         let missing_probe = missing.probe(

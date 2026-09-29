@@ -1,3 +1,8 @@
+//! Ubuntu platform integration tests. The whole file drives the real
+//! Ubuntu toolchain, so it compiles and runs only on Linux; elsewhere it is
+//! empty rather than a pile of dead helpers.
+#![cfg(target_os = "linux")]
+
 use central_ctrl::{
     create_default_connector_registry, initialize_central, run_cli_with_runtime, CliEnvironment,
     ConnectorContext, ConnectorRegistry, NullTerminalSurface, ResultStatus,
@@ -9,7 +14,10 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temporary_directory(label: &str) -> PathBuf {
-    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let path = std::env::temp_dir().join(format!(
         "central-ubuntu-acceptance-{label}-{}-{nonce}",
         std::process::id()
@@ -34,7 +42,9 @@ fn run(
     command: &[&str],
 ) -> central_ctrl::CliExecution {
     let mut surface = NullTerminalSurface;
-    let connector_context = ConnectorContext { platform: "linux".to_owned() };
+    let connector_context = ConnectorContext {
+        platform: "linux".to_owned(),
+    };
     run_cli_with_runtime(
         &arguments(root, command),
         &CliEnvironment::default(),
@@ -117,7 +127,10 @@ fn headless_ubuntu_can_root_control_plan_reconcile_verify_and_repeat() {
 
     let root_result = run(&root, &connectors, &["root"]);
     assert_eq!(root_result.result.status, ResultStatus::Success);
-    assert_eq!(root_result.result.data.as_ref().unwrap()["path"], root.to_string_lossy().as_ref());
+    assert_eq!(
+        root_result.result.data.as_ref().unwrap()["path"],
+        root.to_string_lossy().as_ref()
+    );
 
     let control = run(&root, &connectors, &["control", "open", "machines"]);
     assert_eq!(control.result.status, ResultStatus::Success);
@@ -149,10 +162,7 @@ fn headless_ubuntu_can_root_control_plan_reconcile_verify_and_repeat() {
         .unwrap();
     assert_eq!(config_entry["status"], "changeable");
     assert_eq!(config_entry["port"], "ConfigurationManager");
-    assert_eq!(
-        config_entry["connector"]["id"],
-        "personal.ubuntu-server"
-    );
+    assert_eq!(config_entry["connector"]["id"], "personal.ubuntu-server");
 
     let apply = run(&root, &connectors, &["machine", "apply", "home-server"]);
     assert_eq!(apply.result.status, ResultStatus::Success);

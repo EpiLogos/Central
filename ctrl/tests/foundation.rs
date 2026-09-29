@@ -253,6 +253,7 @@ fn registry_has_stable_ids_and_complete_descriptors() {
     assert_eq!(
         ids,
         vec![
+            "action.describe",
             "action.list",
             "central.doctor",
             "central.files.create",
@@ -260,6 +261,7 @@ fn registry_has_stable_ids_and_complete_descriptors() {
             "central.files.list",
             "central.files.read",
             "central.files.recovery_preview",
+            "central.files.resolve",
             "central.files.restore",
             "central.files.write",
             "central.init",
@@ -268,6 +270,7 @@ fn registry_has_stable_ids_and_complete_descriptors() {
             "central.recovery.plan",
             "central.root",
             "central.wiki.read",
+            "central.wiki.source.read",
             "central.world",
             "central.world.project",
             "central.world.reproject.apply",
@@ -590,6 +593,8 @@ fn action_list_has_human_and_structured_cli_renderings() {
         "control.engineering-ground.render",
         "central.remember",
         "projectcentral.remember",
+        "central.wiki.source.read",
+        "projectcentral.wiki.source.read",
     ] {
         assert!(ids.contains(&id), "missing Action {id}");
     }

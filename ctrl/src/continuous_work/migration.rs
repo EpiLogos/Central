@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use std::{
     collections::BTreeSet,
     ffi::CString,
-    fs::{self, File},
+    fs::File,
     io,
     os::unix::{fs::MetadataExt, io::AsRawFd},
     path::Path,
@@ -247,7 +247,7 @@ pub fn plan(scope: &Scope, input: &Value, principal: &Principal, now: u64) -> io
             inode: metadata.ino(),
         });
     }
-    let mut changes = vec![MetadataChange {
+    let changes = vec![MetadataChange {
         path: scope.relations_path.clone(),
         before: relations_before,
         after: encoded(&relations)?,
@@ -507,6 +507,7 @@ pub fn transition(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     fn principal(scope: &Scope) -> Principal {
         let path = "Control/user/test-authority.json";
         let token = "migration-human-test-credential-only-0001";

@@ -1,13 +1,12 @@
 use central_connector_sdk::{ConnectorContext, ConnectorRegistry};
+use central_ctrl::{
+    register_automation_actions, run_cli_with_runtime, ActionExecutionContext, ActionRegistry,
+    ActionResult, CliEnvironment, CliExecution, ResultStatus, RootOptions, TerminalSurface,
+};
 use central_git_sync_connector::GitSynchronizerConnector;
 use central_macos_connectors::MacOsNativeConnector;
 use central_reference_connectors::create_default_connector_registry;
 use central_shortcuts_connector::ShortcutsAutomationConnector;
-use central_ctrl::{
-    create_core_action_registry, register_automation_actions, run_cli_with_runtime,
-    ActionExecutionContext, ActionRegistry, ActionResult, CliEnvironment, CliExecution,
-    ResultStatus, RootOptions, TerminalSurface,
-};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
@@ -29,8 +28,7 @@ pub fn create_macos_connector_registry() -> ConnectorRegistry {
 }
 
 pub fn create_macos_action_registry() -> ActionRegistry {
-    let mut registry = create_core_action_registry();
-    central_ctrl::projectcentral_ops::register_projectcentral_actions(&mut registry);
+    let mut registry = central_ctrl::cli::create_runtime_action_registry();
     register_automation_actions(&mut registry);
     registry
 }
@@ -91,18 +89,7 @@ fn parse_host_command(args: &[String]) -> Result<HostCommand, (bool, String)> {
             })
         }
         [domain, verb, action, input] if domain == "action" && verb == "run" => {
-            let value = serde_json::from_str::<Value>(input).map_err(|error| {
-                (
-                    structured,
-                    format!("action run input must be valid JSON: {error}"),
-                )
-            })?;
-            if !value.is_object() {
-                return Err((
-                    structured,
-                    "action run input must be a JSON object.".to_owned(),
-                ));
-            }
+            let value = central_ctrl::cli::parse_action_input(structured, action, input)?;
             Some(SpecialCommand::ActionRun {
                 action: action.clone(),
                 input: value,
@@ -235,11 +222,5 @@ pub fn run_macos_cli(
 ) -> CliExecution {
     let connectors = create_macos_connector_registry();
     let connector_context = ConnectorContext::current();
-    run_macos_cli_with_runtime(
-        args,
-        environment,
-        surface,
-        &connectors,
-        &connector_context,
-    )
+    run_macos_cli_with_runtime(args, environment, surface, &connectors, &connector_context)
 }

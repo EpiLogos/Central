@@ -15,7 +15,7 @@ mod unix_tests {
     use serde_json::json;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temporary_directory(label: &str) -> PathBuf {
@@ -38,7 +38,7 @@ mod unix_tests {
         fs::set_permissions(path, permissions).unwrap();
     }
 
-    fn fake_brew(directory: &PathBuf) -> PathBuf {
+    fn fake_brew(directory: &Path) -> PathBuf {
         let executable = directory.join("brew");
         make_executable(
             &executable,
@@ -59,7 +59,7 @@ exit 64
         executable
     }
 
-    fn fake_chezmoi(directory: &PathBuf) -> PathBuf {
+    fn fake_chezmoi(directory: &Path) -> PathBuf {
         let executable = directory.join("chezmoi");
         make_executable(
             &executable,
@@ -92,7 +92,7 @@ exit 64
         executable
     }
 
-    fn write_role(root: &PathBuf, source: &PathBuf) {
+    fn write_role(root: &Path, source: &Path) {
         let declaration = json!({
             "schema": "central.machine",
             "version": 1,
@@ -143,7 +143,7 @@ exit 64
     }
 
     fn execute(
-        root: &PathBuf,
+        root: &Path,
         connectors: &ConnectorRegistry,
         action: &str,
     ) -> central_ctrl::ActionResult {
@@ -151,7 +151,7 @@ exit 64
             platform: "macos".to_owned(),
         };
         let root_options = RootOptions {
-            explicit_root: Some(root.clone()),
+            explicit_root: Some(root.to_path_buf()),
             ..RootOptions::default()
         };
         let context = ActionExecutionContext {

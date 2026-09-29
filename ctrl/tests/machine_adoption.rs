@@ -7,7 +7,7 @@ use central_ctrl::{
 };
 use serde_json::{json, Value};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temporary_directory(label: &str) -> PathBuf {
@@ -46,7 +46,7 @@ fn connectors() -> ConnectorRegistry {
 }
 
 fn execute(
-    root: &PathBuf,
+    root: &Path,
     registry_connectors: &ConnectorRegistry,
     action: &str,
     input: &Value,
@@ -55,7 +55,7 @@ fn execute(
         platform: "test".to_owned(),
     };
     let root_options = RootOptions {
-        explicit_root: Some(root.clone()),
+        explicit_root: Some(root.to_path_buf()),
         ..RootOptions::default()
     };
     let context = ActionExecutionContext {
@@ -66,15 +66,11 @@ fn execute(
     create_core_action_registry().execute(action, input, &context)
 }
 
-fn adopt(
-    root: &PathBuf,
-    connectors: &ConnectorRegistry,
-    input: &Value,
-) -> central_ctrl::ActionResult {
+fn adopt(root: &Path, connectors: &ConnectorRegistry, input: &Value) -> central_ctrl::ActionResult {
     execute(root, connectors, "machine.adopt-current", input)
 }
 
-fn read_declaration(root: &PathBuf) -> Value {
+fn read_declaration(root: &Path) -> Value {
     let result = execute(
         root,
         &connectors(),
@@ -85,7 +81,7 @@ fn read_declaration(root: &PathBuf) -> Value {
     result.data.unwrap()
 }
 
-fn declaration_bytes(root: &PathBuf) -> String {
+fn declaration_bytes(root: &Path) -> String {
     fs::read_to_string(root.join("Control/machines/current.json")).unwrap()
 }
 
