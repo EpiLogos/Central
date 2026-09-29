@@ -123,6 +123,10 @@ struct Received {
     stale_at_arrival: bool,
     review: Option<Review>,
     inclusion_request: Option<Value>,
+    /// Inclusion intents the document owner established were never committed;
+    /// kept visible after the Return goes back to review.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    abandoned_inclusion_requests: Vec<Value>,
     applied_source_revision: Option<String>,
     last_error: Option<String>,
     /// Seen, not decided. Independent of review, inclusion and Recognition.
@@ -302,6 +306,7 @@ fn submit(scope: &Scope, input: &Value, principal: &Principal, now: u64) -> io::
         stale_at_arrival: false,
         review: None,
         inclusion_request: None,
+        abandoned_inclusion_requests: Vec::new(),
         applied_source_revision: None,
         last_error: None,
         acknowledgement: None,
@@ -627,7 +632,11 @@ fn include(
         request["source_ref"] = json!(source_ref);
         request["document_id"] = json!(record.document_id);
         request["expected_revision"] = json!(reviewed);
-        request["request_id"] = json!(format!("include:{}", record.return_ref));
+        // An abandoned intent keeps its key: a later attempt needs its own.
+        request["request_id"] = json!(match record.abandoned_inclusion_requests.len() {
+            0 => format!("include:{}", record.return_ref),
+            n => format!("include:{}:attempt-{}", record.return_ref, n + 1),
+        });
         request
     };
     record.inclusion_request = Some(request.clone());
@@ -652,6 +661,24 @@ fn include(
             Ok(response)
         }
         Err(error) => {
+            // Recovery that cannot complete asks the document owner whether the
+            // intent committed. Uncommitted: back to review at the current basis,
+            // with the failure kept visible, never retargeted silently.
+            if recover
+                && matches!(
+                    documents::settle_interrupted(scope, &request, &record.author, principal),
+                    Ok(documents::Interrupted::NotCommitted)
+                )
+            {
+                record.status = "needs-review".into();
+                record.abandoned_inclusion_requests.push(request);
+                record.inclusion_request = None;
+                record.last_error = Some(error.to_string());
+                let revision = write(scope, &record)?;
+                let mut response = response(&record, &revision);
+                response["recovery"] = json!({"intent_committed":false,"returned_to_review":true});
+                return Ok(response);
+            }
             record.status = "uncertain".into();
             record.last_error = Some(error.to_string());
             write(scope, &record)?;

@@ -621,6 +621,18 @@ fn finish(scope: &Scope, intent: &mut Intent) -> io::Result<Value> {
             )?;
         }
     } else if current.revision.revision != intent.next_revision {
+        if committed_in(&parse(&current)?, &intent.request_key, &intent.digest) {
+            // Committed, then superseded by a later native revision: the
+            // document's own operations log is the evidence; nothing is rewritten.
+            intent.status = "committed".into();
+            save_intent(scope, intent)?;
+            let mut response = read(
+                scope,
+                &json!({"source_ref":intent.source_ref,"document_id":intent.document_id}),
+            )?;
+            response["operation_receipt"] = json!({"request_key":intent.request_key,"status":intent.status,"actor":intent.actor,"reviewed_by":intent.reviewer_ref,"previous_revision":intent.previous_revision,"revision":intent.next_revision,"superseded_by_later_revision":true});
+            return Ok(response);
+        }
         return Err(conflict(
             "document has a later/unrelated revision; interrupted mutation does not overwrite it",
         ));
@@ -645,6 +657,77 @@ fn finish(scope: &Scope, intent: &mut Intent) -> io::Result<Value> {
     )?;
     response["operation_receipt"] = json!({"request_key":intent.request_key,"status":intent.status,"actor":intent.actor,"reviewed_by":intent.reviewer_ref,"previous_revision":intent.previous_revision,"revision":intent.next_revision});
     Ok(response)
+}
+fn committed_in(document: &Value, request_key: &str, digest: &str) -> bool {
+    document["operations"].as_array().is_some_and(|operations| {
+        operations
+            .iter()
+            .any(|op| op["request_key"] == request_key && op["digest"] == digest)
+    })
+}
+fn identity(
+    scope: &Scope,
+    input: &Value,
+    author: &ContributionAuthor,
+) -> io::Result<(String, String)> {
+    let request_key = format!(
+        "{}:{}:{}:{}",
+        scope.world_ref,
+        text(input, "source_ref")?,
+        author.principal_ref,
+        text(input, "request_id")?
+    );
+    Ok((request_key, source::key(&serde_json::to_string(input)?)))
+}
+/// What the owner's intent store and the document establish about a reviewed
+/// mutation whose replay failed.
+pub(crate) enum Interrupted {
+    Committed,
+    NotCommitted,
+}
+/// Caller holds the source-mutation locks. An uncommitted intent is marked
+/// `abandoned` so it can never be finished later, even if the document's
+/// bytes return to its basis; a committed one is left for replay to complete.
+pub(crate) fn settle_interrupted(
+    scope: &Scope,
+    input: &Value,
+    author: &ContributionAuthor,
+    reviewer: &Principal,
+) -> io::Result<Interrupted> {
+    let (request_key, digest) = identity(scope, input, author)?;
+    let mut intent: Intent =
+        match crate::source_safety::read(&scope.root, &intent_path(&request_key)) {
+            Ok(raw) => serde_json::from_str(&raw)?,
+            // The intent is recorded before any source write: none, no effect.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(Interrupted::NotCommitted)
+            }
+            Err(error) => return Err(error),
+        };
+    if intent.schema != "central.document-mutation/v1"
+        || intent.scope_ref != scope.world_ref
+        || intent.request_key != request_key
+        || intent.digest != digest
+        || intent.reviewer_ref.as_deref() != Some(reviewer.principal_ref.as_str())
+    {
+        return Err(conflict(
+            "document operation identity has different input or reviewed authority",
+        ));
+    }
+    match intent.status.as_str() {
+        "committed" => return Ok(Interrupted::Committed),
+        "abandoned" => return Ok(Interrupted::NotCommitted),
+        _ => {}
+    }
+    let current = scope.read(&intent.source_ref)?;
+    if current.revision.revision == intent.next_revision
+        || committed_in(&parse(&current)?, &request_key, &digest)
+    {
+        return Ok(Interrupted::Committed);
+    }
+    intent.status = "abandoned".into();
+    save_intent(scope, &intent)?;
+    Ok(Interrupted::NotCommitted)
 }
 pub fn mutate(scope: &Scope, input: &Value, principal: &Principal, now: u64) -> io::Result<Value> {
     mutate_as(
@@ -674,14 +757,7 @@ fn mutate_as(
 ) -> io::Result<Value> {
     let reference = text(input, "source_ref")?;
     let id = text(input, "document_id")?;
-    let request_key = format!(
-        "{}:{}:{}:{}",
-        scope.world_ref,
-        reference,
-        author.principal_ref,
-        text(input, "request_id")?
-    );
-    let digest = source::key(&serde_json::to_string(input)?);
+    let (request_key, digest) = identity(scope, input, author)?;
     match crate::source_safety::read(&scope.root, &intent_path(&request_key)) {
         Ok(raw) => {
             let mut intent: Intent = serde_json::from_str(&raw)?;
@@ -696,6 +772,11 @@ fn mutate_as(
             {
                 return Err(conflict(
                     "document operation identity has different input or reviewed authority",
+                ));
+            }
+            if intent.status == "abandoned" {
+                return Err(conflict(
+                    "document operation was abandoned uncommitted; it is never replayed",
                 ));
             }
             if intent.status == "committed" {
