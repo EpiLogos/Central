@@ -545,7 +545,7 @@ fn flow_append_execute(
         if matches!(outcome, FlowAppend::Recovered) {
             return Ok(Ok(json!({
                 "schema": "central.flow-append/v1", "outcome": "recovered", "location": loc_value,
-                "revision": revision["revision"], "entry": entry, "changed": false,
+                "revision": revision["revision"], "document_revision": doc.pointer("/meta/revision"), "entry": entry, "changed": false,
                 "attribution": entry.get("attribution"), "automatic_agent_or_model_invocation": false,
             })));
         }
@@ -562,7 +562,7 @@ fn flow_append_execute(
             Some("written") => {
                 return Ok(Ok(json!({
                     "schema": "central.flow-append/v1", "outcome": "appended", "location": loc_value,
-                    "previous_revision": current.revision, "revision": written["revision"],
+                    "previous_revision": current.revision, "revision": written["revision"], "document_revision": next.pointer("/meta/revision"),
                     "entry": entry, "changed": true, "attribution": entry.get("attribution"),
                     "change": written.get("change"), "automatic_agent_or_model_invocation": false,
                 })));
