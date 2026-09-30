@@ -641,6 +641,189 @@ fn flow_append_action(input: &Value, context: &ActionExecutionContext<'_>) -> Ac
     }
 }
 
+/// Plain text of an entry body: tags dropped, block breaks kept as newlines,
+/// the common entities decoded. Bodies are authored HTML; a reader that feeds a
+/// model wants words, not markup, and never scripts.
+fn flow_plain_text(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut chars = html.char_indices().peekable();
+    let lower = html.to_ascii_lowercase();
+    while let Some((i, c)) = chars.next() {
+        if c == '<' {
+            let rest = &lower[i..];
+            let end = rest.find('>').map(|e| i + e + 1).unwrap_or(html.len());
+            let tag = &lower[i..end];
+            if tag.starts_with("<script") || tag.starts_with("<style") {
+                let close = if tag.starts_with("<script") { "</script" } else { "</style" };
+                let skip_to = lower[end..].find(close).map(|e| end + e).unwrap_or(html.len());
+                let after = lower[skip_to..].find('>').map(|e| skip_to + e + 1).unwrap_or(html.len());
+                while chars.peek().is_some_and(|(j, _)| *j < after) {
+                    chars.next();
+                }
+                continue;
+            }
+            if tag.starts_with("<br") || tag.starts_with("</p") || tag.starts_with("</div") || tag.starts_with("</li") {
+                out.push('\n');
+            }
+            while chars.peek().is_some_and(|(j, _)| *j < end) {
+                chars.next();
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out.replace("&nbsp;", " ")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&")
+        .trim()
+        .to_string()
+}
+
+/// A participant-scoped reading of a Flow: only what this participant may read
+/// (from their history horizon, excluding entries whose audience leaves them
+/// out), as plain attributed text, bounded. Private collections — notes,
+/// journal, packet, media, embedded metadata — are never part of a reading.
+fn flow_reading(doc: &Value, reader_key: Option<&str>, limit: usize) -> Value {
+    let participants: Vec<Value> = doc
+        .pointer("/meta/participants")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let entries: Vec<Value> = doc.get("entries").and_then(Value::as_array).cloned().unwrap_or_default();
+    let by_key = |key: &str| participants.iter().find(|p| str_of(p, "key") == Some(key));
+    let reader = reader_key.and_then(by_key);
+    let horizon = reader
+        .and_then(|p| str_of(p, "historyFrom"))
+        .and_then(|id| entries.iter().position(|e| str_of(e, "id") == Some(id)))
+        .unwrap_or(0);
+    let (mut before_horizon, mut private_to_others) = (0usize, 0usize);
+    let mut visible = Vec::new();
+    for (index, entry) in entries.iter().enumerate() {
+        if index < horizon {
+            before_horizon += 1;
+            continue;
+        }
+        let audience_ok = match (reader_key, entry.get("audience")) {
+            (Some(key), Some(audience)) if audience.is_object() => {
+                str_of(entry, "authorKey") == Some(key)
+                    || audience
+                        .get("keys")
+                        .and_then(Value::as_array)
+                        .is_some_and(|keys| keys.iter().any(|k| k.as_str() == Some(key)))
+            }
+            _ => true,
+        };
+        if !audience_ok {
+            private_to_others += 1;
+            continue;
+        }
+        let author = str_of(entry, "authorKey").and_then(by_key);
+        visible.push((index, entry, author));
+    }
+    let over_limit = visible.len().saturating_sub(limit);
+    let tail = visible.split_off(over_limit);
+    let rendered: Vec<Value> = tail
+        .into_iter()
+        .map(|(index, entry, author)| {
+            json!({
+                "id": entry.get("id"), "index": index + 1,
+                "author_key": entry.get("authorKey"),
+                "author_name": author.and_then(|a| str_of(a, "name")).or_else(|| str_of(entry, "author")),
+                "author_kind": author.and_then(|a| str_of(a, "kind")),
+                "attribution_basis": entry.pointer("/attribution/basis"),
+                "at": entry.get("at"),
+                "text": flow_plain_text(str_of(entry, "html").unwrap_or("")),
+                "relations": relations_of(entry),
+                "addressees": entry.get("addressees").cloned().unwrap_or_else(|| json!([])),
+                "intent": entry.get("intent"),
+                "request_ref": entry.pointer("/request/ref"),
+                "basis_revision": entry.get("basisRevision"),
+            })
+        })
+        .collect();
+    json!({
+        "schema": "central.flow-reading/v1",
+        "document_id": doc.pointer("/meta/documentId"),
+        "document_revision": doc.pointer("/meta/revision"),
+        "format_version": flow_format_version(doc),
+        "reader_key": reader_key,
+        "participants": participants.iter().map(|p| json!({
+            "key": p.get("key"), "name": p.get("name"), "initial": p.get("initial"), "kind": p.get("kind"),
+            "role": p.get("role").cloned().unwrap_or_else(|| json!("contributor")),
+            "left": p.get("left").is_some_and(|v| !v.is_null()),
+            "binding_basis": p.pointer("/binding/basis"),
+        })).collect::<Vec<_>>(),
+        "entries": rendered,
+        "omitted": {"before_horizon": before_horizon, "private_to_others": private_to_others, "over_limit": over_limit},
+        "private_collections_included": false,
+    })
+}
+
+fn flow_read_action(input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
+    let id = "central.flow.read";
+    let result = resolve_central_root(context.root_options)
+        .map_err(io::Error::other)
+        .and_then(|root| {
+            let root = root.path.canonicalize()?;
+            let loc: CentralPathRef =
+                serde_json::from_value(input.get("location").cloned().unwrap_or(Value::Null))?;
+            if !loc.path.starts_with("Control/user/flows/") {
+                return Err(denied("Flow readings are served only for flow instances under Control/user/flows/"));
+            }
+            let current = read_file(&root, &loc, crate::files::FileEncoding::Utf8)?;
+            let html = decode_content(&current.content, &current.content_encoding)?;
+            let html = String::from_utf8(html).map_err(|_| invalid("Flow document is not UTF-8"))?;
+            let doc = flow_parse(&html)?;
+            let limit = input.get("max_entries").and_then(Value::as_u64).unwrap_or(40).clamp(1, 200) as usize;
+            let mut reading = flow_reading(&doc, input.get("participant_key").and_then(Value::as_str), limit);
+            reading["location"] = serde_json::to_value(&loc).map_err(io::Error::other)?;
+            reading["revision"] = json!(current.revision);
+            Ok(reading)
+        });
+    match result {
+        Ok(data) => ActionResult::success(id, data),
+        Err(e) => ActionResult::failure(
+            Some(id),
+            match e.kind() {
+                io::ErrorKind::PermissionDenied => ResultStatus::UnavailableCapability,
+                io::ErrorKind::InvalidInput | io::ErrorKind::NotFound => ResultStatus::InvalidInput,
+                _ => ResultStatus::InternalFailure,
+            },
+            e.to_string(),
+            None,
+        ),
+    }
+}
+
+pub fn register_flow_read(registry: &mut ActionRegistry) {
+    let input = |name: &str, kind: &str, required: bool| ActionInputDefinition {
+        name: name.into(),
+        input_type: kind.into(),
+        required,
+        choices: None,
+        selection: None,
+    };
+    registry
+        .register(
+            ActionDescriptor {
+                id: "central.flow.read".into(),
+                title: "Read a Flow for one participant".into(),
+                description: "Read a v0.4 Flow instance as one participant may read it: from their history horizon, without entries whose audience excludes them, as bounded plain attributed text with typed relations. Notes, journal pages, the packet, media and embedded metadata are never included; omissions are counted, not shown.".into(),
+                inputs: vec![input("location", "object", true), input("participant_key", "string", false), input("max_entries", "integer", false)],
+                output: ActionOutputDefinition { output_type: "central-flow-reading".into() },
+                mutation_class: MutationClass::ReadOnly,
+                preview_supported: false,
+                required_ports: vec![],
+                availability: ActionAvailability { available: true, reason: None },
+            },
+            (|_, i, c| flow_read_action(i, c)) as fn(&ActionRegistry, &Value, &ActionExecutionContext<'_>) -> ActionResult,
+        )
+        .expect("unique flow read action");
+}
+
 pub fn register_flow_append(registry: &mut ActionRegistry) {
     let input = |name: &str, kind: &str, required: bool| ActionInputDefinition {
         name: name.into(),

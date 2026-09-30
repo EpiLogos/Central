@@ -87,10 +87,12 @@ fn location(root: &Path, name: &str) -> Value {
 const SHELL_OPEN: &str = "<!doctype html><html><head><title>Flow</title></head><body><main id=\"app\"></main>\n<script type=\"application/json\" id=\"ql-doc\">";
 const SHELL_CLOSE: &str = "</script>\n<script>/* page */</script></body></html>";
 fn flow_html(doc: &Value) -> String {
-    format!(
-        "{SHELL_OPEN}{}{SHELL_CLOSE}",
-        serde_json::to_string(doc).unwrap()
-    )
+    // The island never carries a raw `</script`: embedding escapes it, and so
+    // must a document written by a test, exactly as a real writer would.
+    let json = serde_json::to_string(doc)
+        .unwrap()
+        .replace("</script", "<\\/script");
+    format!("{SHELL_OPEN}{json}{SHELL_CLOSE}")
 }
 fn island(html: &str) -> Value {
     let start = html.find(SHELL_OPEN).expect("island") + SHELL_OPEN.len();
@@ -549,6 +551,148 @@ fn the_registered_action_is_unauthenticated_by_default_and_never_verifies() {
 }
 
 #[test]
+fn an_admitted_agent_session_appends_verified_with_its_full_identity() {
+    // The admitting owner (an authenticated native service) states the caller:
+    // agent session ref, agent ref, generation and workcell. That statement —
+    // never anything in the request body — becomes the verified attribution.
+    let w = world();
+    let loc = place(&w.0, "flow-admitted.html", &doc_of(&base_case()));
+    let admitted = json!({
+        "kind": "agent", "ref": "agent-session/ada-1", "session": "agent-session/ada-1",
+        "agent": "agent/ada", "generation": "g1", "workcell": "workcell:mac",
+        "authenticated": true
+    });
+    let (input, token) = input_for(&loc, &admitted, &req("op-admit", "p-ada", "<p>answer</p>"));
+    let done = run(&w.0, &input, token).unwrap();
+    assert_eq!(done["outcome"], "appended");
+    assert_eq!(
+        done["entry"]["attribution"],
+        json!({
+            "basis": "verified", "agency": "agent/ada",
+            "session": "agent-session/ada-1", "generation": "g1",
+            "workcell": "workcell:mac"
+        }),
+        "the owner's caller statement is recorded whole"
+    );
+    let after = read_doc(&w.0, &loc);
+    let ada_participant = after["meta"]["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["key"] == "p-ada")
+        .unwrap();
+    assert_eq!(
+        ada_participant["binding"],
+        json!({"owner": "actuation", "ref": "agent-session/ada-1", "basis": "verified"}),
+        "the first verified write binds the participant to the session"
+    );
+    // Without the session ref the owner supplies, there is no agent identity
+    // to verify: the append is refused, nothing is written.
+    let anonymous = json!({"kind": "agent", "ref": "agent-session/ada-1", "agent": "agent/ada", "authenticated": true});
+    let (input, token) = input_for(
+        &loc,
+        &anonymous,
+        &req("op-no-session", "p-ash", "<p>answer</p>"),
+    );
+    assert_eq!(
+        run(&w.0, &input, token).unwrap_err().0,
+        "author-not-caller",
+        "verified needs the session ref the admitting owner carries"
+    );
+    assert_eq!(
+        read_doc(&w.0, &loc)["entries"].as_array().unwrap().len(),
+        2,
+        "the refusal added no entry"
+    );
+}
+
+#[test]
+fn a_body_claimed_attribution_never_selects_a_verified_identity() {
+    let w = world();
+    let loc = place(&w.0, "flow-claimed.html", &doc_of(&base_case()));
+    let claimed = json!({"attribution": {"basis": "verified", "agency": "agent/ada", "session": "agent-session/ada-1"}});
+    // An unauthenticated caller claiming verified in the body is downgraded to
+    // the declared contract, and binds no one.
+    let mut request = req("op-claim", "p-ada", "<p>self-verified</p>");
+    request["attribution"] = claimed["attribution"].clone();
+    let mut unverified = ada();
+    unverified["authenticated"] = json!(false);
+    let (input, token) = input_for(&loc, &unverified, &request);
+    let done = run(&w.0, &input, token).unwrap();
+    assert_eq!(done["outcome"], "appended");
+    assert_eq!(
+        done["entry"]["attribution"]["basis"], "declared",
+        "a body-claimed basis is not authority"
+    );
+    let after = read_doc(&w.0, &loc);
+    let ada_participant = after["meta"]["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["key"] == "p-ada")
+        .unwrap();
+    assert_ne!(ada_participant["binding"]["basis"], "verified");
+    // An authenticated agent claiming verified over a person is impersonation;
+    // the claim changes nothing about the refusal.
+    let mut as_person = req("op-claim-person", "p-ann", "<p>as ann</p>");
+    as_person["attribution"] = claimed["attribution"].clone();
+    let (input, token) = input_for(&loc, &ada(), &as_person);
+    assert_eq!(run(&w.0, &input, token).unwrap_err().0, "impersonation");
+    assert_eq!(read_doc(&w.0, &loc), after, "the refusal did not write");
+    // A system caller claiming verified is refused outright.
+    let mut as_system = req("op-claim-system", "p-ada", "<p>as agent</p>");
+    as_system["attribution"] = claimed["attribution"].clone();
+    let (input, token) = input_for(&loc, &json!({"kind": "system"}), &as_system);
+    assert_eq!(
+        run(&w.0, &input, token).unwrap_err().0,
+        "attribution-overclaim",
+        "a system caller cannot verify an author"
+    );
+}
+
+#[test]
+fn a_replay_from_a_new_session_recovers_the_original_attribution() {
+    // The same operation replays from the agent's fresh session with new
+    // generation and workcell fields: recovery returns the recorded entry with
+    // its original attribution, adds nothing, and moves no revision.
+    let w = world();
+    let loc = place(&w.0, "flow-replay-identity.html", &doc_of(&base_case()));
+    let first_caller = json!({
+        "kind": "agent", "ref": "agent-session/ada-1", "session": "agent-session/ada-1",
+        "agent": "agent/ada", "generation": "g1", "workcell": "workcell:mac",
+        "authenticated": true
+    });
+    let (input, token) = input_for(
+        &loc,
+        &first_caller,
+        &req("op-identity", "p-ada", "<p>once</p>"),
+    );
+    let first = run(&w.0, &input, token).unwrap();
+    assert_eq!(first["outcome"], "appended");
+    let renewed = json!({
+        "kind": "agent", "ref": "agent-session/ada-2", "session": "agent-session/ada-2",
+        "agent": "agent/ada", "generation": "g2", "workcell": "workcell:env-3",
+        "authenticated": true
+    });
+    let (input, token) = input_for(&loc, &renewed, &req("op-identity", "p-ada", "<p>once</p>"));
+    let again = run(&w.0, &input, token).unwrap();
+    assert_eq!(again["outcome"], "recovered");
+    assert_eq!(again["entry"]["id"], first["entry"]["id"]);
+    assert_eq!(
+        again["entry"]["attribution"], first["entry"]["attribution"],
+        "recovery reports the recorded attribution, not the replay's"
+    );
+    assert_eq!(
+        again["entry"]["attribution"]["session"],
+        "agent-session/ada-1"
+    );
+    assert_eq!(again["entry"]["attribution"]["generation"], "g1");
+    let after = read_doc(&w.0, &loc);
+    assert_eq!(after["entries"].as_array().unwrap().len(), 2);
+    assert_eq!(after["meta"]["revision"], 1);
+}
+
+#[test]
 fn append_is_bounded_to_flow_instances_and_keeps_the_page_shell() {
     let w = world();
     let loc = place(&w.0, "flow-shell.html", &doc_of(&base_case()));
@@ -595,4 +739,103 @@ fn append_is_bounded_to_flow_instances_and_keeps_the_page_shell() {
         ),
         "a file outside Control/user/flows is refused"
     );
+}
+
+fn read_for(root: &Path, loc: &Value, key: Option<&str>, max: Option<u64>) -> Value {
+    let mut input = json!({"location": loc});
+    if let Some(key) = key {
+        input["participant_key"] = json!(key);
+    }
+    if let Some(max) = max {
+        input["max_entries"] = json!(max);
+    }
+    let result = call(root, "central.flow.read", input);
+    assert_eq!(result.status, ResultStatus::Success, "{result:?}");
+    result.data.unwrap()
+}
+
+#[test]
+fn a_participant_reads_only_what_the_shared_read_cases_allow() {
+    let mut ran = 0;
+    for case in cases() {
+        if case["op"] != "read" {
+            continue;
+        }
+        ran += 1;
+        let w = world();
+        let loc = place(&w.0, "flow-read.html", &doc_of(&case));
+        let reading = read_for(&w.0, &loc, case["reader"].as_str(), None);
+        let ids: Vec<&str> = reading["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["id"].as_str().unwrap())
+            .collect();
+        let expected: Vec<&str> = case["expect"]["readable"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(ids, expected, "{}", case["name"]);
+        assert_eq!(
+            reading["omitted"]["before_horizon"], 2,
+            "the horizon hides two earlier entries and counts them"
+        );
+        assert_eq!(
+            reading["omitted"]["private_to_others"], 1,
+            "a private entry is counted, never shown"
+        );
+    }
+    assert!(ran >= 1);
+}
+
+#[test]
+fn a_reading_is_plain_bounded_text_and_never_carries_private_collections() {
+    let w = world();
+    let mut doc = doc_of(&base_case());
+    doc["entries"][0]["html"] = json!(
+        "<p>What does the <b>passage</b> claim?</p><script>steal()</script><p>Fish &amp; chips</p>"
+    );
+    doc["notes"] = json!([{"id": "n1", "entryId": "e-q", "text": "<p>PRIVATE NOTE</p>"}]);
+    doc["journal"] = json!([{"id": "j1", "at": "2026-09-30", "html": "<p>PRIVATE JOURNAL</p>"}]);
+    doc["packet"] = json!([{"id": "k1", "text": "PRIVATE PACKET"}]);
+    doc["media"] = json!([{"id": "m1", "entry": "e-q", "name": "PRIVATE-FILE.png", "data": "data:image/png;base64,AAAA"}]);
+    doc["x-unknown-compatible"] = json!({"secret": "PRIVATE METADATA"});
+    for i in 0..5 {
+        doc["entries"].as_array_mut().unwrap().push(json!({"id": format!("e{i}"), "author": "A", "authorKey": "p-ada", "at": "2026-09-30T09:00:00.000Z", "html": format!("<p>answer {i}</p>"), "replyTo": null, "touched": false}));
+    }
+    let loc = place(&w.0, "flow-privacy.html", &doc);
+    let reading = read_for(&w.0, &loc, Some("p-ash"), Some(3));
+    let raw = serde_json::to_string(&reading).unwrap();
+    for secret in [
+        "PRIVATE NOTE",
+        "PRIVATE JOURNAL",
+        "PRIVATE PACKET",
+        "PRIVATE-FILE",
+        "PRIVATE METADATA",
+        "steal()",
+        "<b>",
+    ] {
+        assert!(!raw.contains(secret), "a reading must not carry {secret}");
+    }
+    assert_eq!(reading["private_collections_included"], false);
+    assert_eq!(reading["entries"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        reading["omitted"]["over_limit"], 3,
+        "the bound is disclosed, the newest entries are kept"
+    );
+    assert_eq!(reading["entries"][2]["text"], "answer 4");
+    let full = read_for(&w.0, &loc, Some("p-ash"), None);
+    assert_eq!(
+        full["entries"][0]["text"],
+        "What does the passage claim?\nFish & chips"
+    );
+    assert_eq!(full["entries"][0]["author_name"], "Ann");
+    assert_eq!(full["entries"][1]["author_key"], "p-ada");
+    assert!(full["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|p| p["key"] == "p-ann" && p["kind"] == "person"));
 }
