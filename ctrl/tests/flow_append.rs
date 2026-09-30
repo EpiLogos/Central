@@ -25,6 +25,7 @@ use std::{
 const SERVICE: &str = "flow-service-test-credential-not-a-real-secret";
 const ANN: &str = "flow-ann-test-credential-not-a-real-secret";
 const MALLORY: &str = "flow-mallory-test-credential-not-a-real-secret";
+const BEA: &str = "flow-bea-test-credential-not-a-real-secret";
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 struct World(PathBuf);
@@ -55,7 +56,7 @@ fn world() -> World {
     let authority = json!({
         "schema": "central.native-action-authority/v1", "scope_ref": "control:root",
         "grants": [grant(SERVICE, "native-service:aikit-encounter", "native-service"),
-                   grant(ANN, "human:ann", "human"), grant(MALLORY, "human:mallory", "human")],
+                   grant(ANN, "human:ann", "human"), grant(MALLORY, "human:mallory", "human"), grant(BEA, "human:bea", "human")],
     });
     let scope = Scope::resolve(&path, None).unwrap();
     let source = "Control/user/authority.json";
@@ -183,10 +184,10 @@ fn input_for(loc: &Value, caller: &Value, request: &Value) -> (Value, Option<&'s
             input["actor"] = json!(reference);
             input["actor_kind"] = json!("human");
             if authenticated {
-                Some(if reference == "human:ann" {
-                    ANN
-                } else {
-                    MALLORY
+                Some(match reference {
+                    "human:ann" => ANN,
+                    "human:bea" => BEA,
+                    _ => MALLORY,
                 })
             } else {
                 None

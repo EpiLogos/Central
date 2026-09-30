@@ -3421,6 +3421,235 @@
      "op-f2": "e-q"
     }
    }
+  },
+  {
+   "name": "an-authenticated-person-cannot-write-as-another-seat-while-holding-their-own",
+   "op": "append",
+   "doc": {
+    "meta": {
+     "documentId": "doc-worlds",
+     "created": "2026-09-30T08:00:00.000Z",
+     "title": "",
+     "revision": 0,
+     "view": "dialogue",
+     "current": null,
+     "journalCurrent": null,
+     "exported": null,
+     "template": "ql-dialogue-flow v0.4",
+     "format": {
+      "version": 4,
+      "minReader": 4
+     },
+     "participants": [
+      {
+       "key": "p-ann",
+       "initial": "A",
+       "kind": "person",
+       "name": "Ann",
+       "role": "contributor",
+       "binding": {
+        "owner": "document",
+        "basis": "unknown"
+       }
+      },
+      {
+       "key": "p-bea",
+       "initial": "B",
+       "kind": "person",
+       "name": "Bea",
+       "role": "contributor",
+       "binding": {
+        "owner": "world-b",
+        "ref": "human:bea",
+        "basis": "declared"
+       }
+      }
+     ]
+    },
+    "entries": [
+     {
+      "id": "e-q",
+      "author": "A",
+      "authorKey": "p-ann",
+      "at": "2026-09-30T08:00:00.000Z",
+      "html": "<p>q</p>",
+      "replyTo": null,
+      "touched": false
+     }
+    ],
+    "notes": [],
+    "packet": [],
+    "media": [],
+    "journal": []
+   },
+   "caller": {
+    "kind": "human",
+    "ref": "human:bea",
+    "authenticated": true
+   },
+   "request": {
+    "operationRef": "op-40",
+    "authorKey": "p-ann",
+    "html": "<p>x</p>",
+    "at": "2026-09-30T09:00:00.000Z"
+   },
+   "expect": {
+    "refusal": "impersonation"
+   }
+  },
+  {
+   "name": "an-authenticated-person-writes-verified-as-the-seat-declared-for-them",
+   "op": "append",
+   "doc": {
+    "meta": {
+     "documentId": "doc-worlds",
+     "created": "2026-09-30T08:00:00.000Z",
+     "title": "",
+     "revision": 0,
+     "view": "dialogue",
+     "current": null,
+     "journalCurrent": null,
+     "exported": null,
+     "template": "ql-dialogue-flow v0.4",
+     "format": {
+      "version": 4,
+      "minReader": 4
+     },
+     "participants": [
+      {
+       "key": "p-ann",
+       "initial": "A",
+       "kind": "person",
+       "name": "Ann",
+       "role": "contributor",
+       "binding": {
+        "owner": "document",
+        "basis": "unknown"
+       }
+      },
+      {
+       "key": "p-bea",
+       "initial": "B",
+       "kind": "person",
+       "name": "Bea",
+       "role": "contributor",
+       "binding": {
+        "owner": "world-b",
+        "ref": "human:bea",
+        "basis": "declared"
+       }
+      }
+     ]
+    },
+    "entries": [
+     {
+      "id": "e-q",
+      "author": "A",
+      "authorKey": "p-ann",
+      "at": "2026-09-30T08:00:00.000Z",
+      "html": "<p>q</p>",
+      "replyTo": null,
+      "touched": false
+     }
+    ],
+    "notes": [],
+    "packet": [],
+    "media": [],
+    "journal": []
+   },
+   "caller": {
+    "kind": "human",
+    "ref": "human:bea",
+    "authenticated": true
+   },
+   "request": {
+    "operationRef": "op-41",
+    "authorKey": "p-bea",
+    "html": "<p>x</p>",
+    "at": "2026-09-30T09:00:00.000Z"
+   },
+   "expect": {
+    "outcome": "appended",
+    "attribution": "verified",
+    "binds": {
+     "p-bea": "human:bea"
+    }
+   }
+  },
+  {
+   "name": "an-authenticated-person-cannot-write-as-a-seat-declared-for-someone-else",
+   "op": "append",
+   "doc": {
+    "meta": {
+     "documentId": "doc-worlds",
+     "created": "2026-09-30T08:00:00.000Z",
+     "title": "",
+     "revision": 0,
+     "view": "dialogue",
+     "current": null,
+     "journalCurrent": null,
+     "exported": null,
+     "template": "ql-dialogue-flow v0.4",
+     "format": {
+      "version": 4,
+      "minReader": 4
+     },
+     "participants": [
+      {
+       "key": "p-ann",
+       "initial": "A",
+       "kind": "person",
+       "name": "Ann",
+       "role": "contributor",
+       "binding": {
+        "owner": "document",
+        "basis": "unknown"
+       }
+      },
+      {
+       "key": "p-bea",
+       "initial": "B",
+       "kind": "person",
+       "name": "Bea",
+       "role": "contributor",
+       "binding": {
+        "owner": "world-b",
+        "ref": "human:bea",
+        "basis": "declared"
+       }
+      }
+     ]
+    },
+    "entries": [
+     {
+      "id": "e-q",
+      "author": "A",
+      "authorKey": "p-ann",
+      "at": "2026-09-30T08:00:00.000Z",
+      "html": "<p>q</p>",
+      "replyTo": null,
+      "touched": false
+     }
+    ],
+    "notes": [],
+    "packet": [],
+    "media": [],
+    "journal": []
+   },
+   "caller": {
+    "kind": "human",
+    "ref": "human:mallory",
+    "authenticated": true
+   },
+   "request": {
+    "operationRef": "op-42",
+    "authorKey": "p-bea",
+    "html": "<p>x</p>",
+    "at": "2026-09-30T09:00:00.000Z"
+   },
+   "expect": {
+    "refusal": "impersonation"
+   }
   }
  ]
 }
