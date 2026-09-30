@@ -779,14 +779,18 @@ fn a_participant_reads_only_what_the_shared_read_cases_allow() {
             .map(|v| v.as_str().unwrap())
             .collect();
         assert_eq!(ids, expected, "{}", case["name"]);
-        assert_eq!(
-            reading["omitted"]["before_horizon"], 2,
-            "the horizon hides two earlier entries and counts them"
-        );
-        assert_eq!(
-            reading["omitted"]["private_to_others"], 1,
-            "a private entry is counted, never shown"
-        );
+        if let Some(omitted) = case["expect"].get("omitted") {
+            assert_eq!(
+                reading["omitted"]["before_horizon"], omitted["before_horizon"],
+                "{}: the horizon hides earlier entries and counts them",
+                case["name"]
+            );
+            assert_eq!(
+                reading["omitted"]["private_to_others"], omitted["private_to_others"],
+                "{}: a private entry is counted, never shown",
+                case["name"]
+            );
+        }
     }
     assert!(ran >= 1);
 }
