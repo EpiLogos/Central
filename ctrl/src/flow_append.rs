@@ -411,8 +411,14 @@ fn flow_append(
     next["meta"]["revision"] = json!(revision + 1);
     // A caller this owner authenticated binds its participant on first write.
     if str_of(&attribution, "basis") == Some("verified") {
+        // An agent is bound as the enduring agent, not as the session it first
+        // used: a fresh body for the same agent must still be that participant.
         let identity = if caller.kind == "agent" {
-            caller.session.as_deref().or(caller.reference.as_deref())
+            caller
+                .agent
+                .as_deref()
+                .or(caller.session.as_deref())
+                .or(caller.reference.as_deref())
         } else {
             caller.reference.as_deref()
         };

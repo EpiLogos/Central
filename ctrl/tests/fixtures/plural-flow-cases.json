@@ -113,7 +113,7 @@
     "author": "p-ada",
     "attribution": "verified",
     "binds": {
-     "p-ada": "agent-session/ada-1"
+     "p-ada": "agent/ada"
     }
    }
   },
@@ -3286,6 +3286,140 @@
    },
    "expect": {
     "refusal": "authentication-required"
+   }
+  },
+  {
+   "name": "a-fresh-body-for-the-bound-agent-is-the-same-participant",
+   "op": "sequence",
+   "doc": {
+    "meta": {
+     "documentId": "doc-0001",
+     "created": "2026-09-30T08:00:00.000Z",
+     "title": "",
+     "revision": 0,
+     "view": "dialogue",
+     "current": null,
+     "journalCurrent": null,
+     "exported": null,
+     "template": "ql-dialogue-flow v0.4",
+     "format": {
+      "version": 4,
+      "minReader": 4
+     },
+     "participants": [
+      {
+       "key": "p-ann",
+       "initial": "A",
+       "kind": "person",
+       "name": "Ann",
+       "role": "contributor",
+       "binding": {
+        "owner": "central",
+        "ref": "human:ann",
+        "basis": "verified"
+       }
+      },
+      {
+       "key": "p-ada",
+       "initial": "A",
+       "kind": "agent",
+       "name": "Ada",
+       "role": "contributor"
+      },
+      {
+       "key": "p-ash",
+       "initial": "S",
+       "kind": "agent",
+       "name": "Ash",
+       "role": "contributor"
+      },
+      {
+       "key": "p-obs",
+       "initial": "O",
+       "kind": "agent",
+       "name": "Obs",
+       "role": "observer"
+      },
+      {
+       "key": "p-gone",
+       "initial": "G",
+       "kind": "agent",
+       "name": "Gone",
+       "role": "contributor",
+       "left": {
+        "at": "2026-09-30T08:30:00.000Z",
+        "revision": 3
+       }
+      }
+     ]
+    },
+    "entries": [
+     {
+      "id": "e-q",
+      "author": "A",
+      "at": "2026-09-30T08:00:00.000Z",
+      "html": "<p>What does the passage claim?</p>",
+      "replyTo": null,
+      "touched": false,
+      "authorKey": "p-ann"
+     }
+    ],
+    "notes": [],
+    "packet": [],
+    "media": [],
+    "journal": []
+   },
+   "steps": [
+    {
+     "caller": {
+      "kind": "agent",
+      "ref": "agent-session/ada-1",
+      "session": "agent-session/ada-1",
+      "agent": "agent/ada",
+      "authenticated": true
+     },
+     "request": {
+      "operationRef": "op-f1",
+      "authorKey": "p-ada",
+      "html": "<p>first</p>",
+      "at": "2026-09-30T09:00:00.000Z",
+      "relations": [
+       {
+        "type": "reply",
+        "entryId": "e-q"
+       }
+      ]
+     }
+    },
+    {
+     "caller": {
+      "kind": "agent",
+      "ref": "agent-session/ada-2",
+      "session": "agent-session/ada-2",
+      "agent": "agent/ada",
+      "authenticated": true
+     },
+     "request": {
+      "operationRef": "op-f2",
+      "authorKey": "p-ada",
+      "html": "<p>from a fresh body</p>",
+      "at": "2026-09-30T10:00:00.000Z",
+      "relations": [
+       {
+        "type": "reply",
+        "entryId": "e-q"
+       }
+      ]
+     }
+    }
+   ],
+   "expect": {
+    "entries": 3,
+    "revision": 2,
+    "replyParents": {
+     "op-f1": "e-q",
+     "op-f2": "e-q"
+    }
    }
   }
  ]

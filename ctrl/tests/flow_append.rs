@@ -583,8 +583,8 @@ fn an_admitted_agent_session_appends_verified_with_its_full_identity() {
         .unwrap();
     assert_eq!(
         ada_participant["binding"],
-        json!({"owner": "actuation", "ref": "agent-session/ada-1", "basis": "verified"}),
-        "the first verified write binds the participant to the session"
+        json!({"owner": "actuation", "ref": "agent/ada", "basis": "verified"}),
+        "the first verified write binds the participant to the enduring agent, not the session"
     );
     // Without the session ref the owner supplies, there is no agent identity
     // to verify: the append is refused, nothing is written.
