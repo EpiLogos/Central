@@ -4789,6 +4789,260 @@
      "e3"
     ]
    }
+  },
+  {
+   "name": "an-addressee-who-has-left-cannot-be-asked",
+   "op": "append",
+   "doc": {
+    "meta": {
+     "documentId": "doc-repairs",
+     "created": "2026-09-30T08:00:00.000Z",
+     "title": "",
+     "revision": 0,
+     "view": "dialogue",
+     "current": null,
+     "journalCurrent": null,
+     "exported": null,
+     "template": "ql-dialogue-flow v0.4",
+     "format": {
+      "version": 4,
+      "minReader": 4
+     },
+     "participants": [
+      {
+       "key": "p-ada",
+       "initial": "S",
+       "kind": "agent",
+       "name": "Ada",
+       "role": "contributor",
+       "binding": {
+        "owner": "central",
+        "ref": "agent/ada",
+        "basis": "declared"
+       }
+      },
+      {
+       "key": "p-ash",
+       "initial": "S",
+       "kind": "agent",
+       "name": "Ash",
+       "role": "contributor",
+       "binding": {
+        "owner": "central",
+        "ref": "agent/ash",
+        "basis": "declared"
+       },
+       "left": {
+        "at": "2026-09-30T08:30:00.000Z",
+        "revision": 1
+       }
+      }
+     ]
+    },
+    "entries": [
+     {
+      "id": "e-q",
+      "author": "S",
+      "authorKey": "p-ada",
+      "at": "2026-09-30T08:00:00.000Z",
+      "html": "<p>q</p>",
+      "replyTo": null,
+      "touched": false
+     }
+    ],
+    "notes": [],
+    "packet": [],
+    "media": [],
+    "journal": []
+   },
+   "caller": {
+    "kind": "system",
+    "ref": "x"
+   },
+   "request": {
+    "operationRef": "op-r",
+    "authorKey": "p-ada",
+    "html": "<p>x</p>",
+    "at": "2026-09-30T09:00:00.000Z",
+    "addressees": [
+     "p-ash"
+    ]
+   },
+   "expect": {
+    "refusal": "addressee-left"
+   }
+  },
+  {
+   "name": "on-behalf-of-a-participant-who-has-left-is-refused",
+   "op": "append",
+   "doc": {
+    "meta": {
+     "documentId": "doc-repairs",
+     "created": "2026-09-30T08:00:00.000Z",
+     "title": "",
+     "revision": 0,
+     "view": "dialogue",
+     "current": null,
+     "journalCurrent": null,
+     "exported": null,
+     "template": "ql-dialogue-flow v0.4",
+     "format": {
+      "version": 4,
+      "minReader": 4
+     },
+     "participants": [
+      {
+       "key": "p-ada",
+       "initial": "S",
+       "kind": "agent",
+       "name": "Ada",
+       "role": "contributor",
+       "binding": {
+        "owner": "central",
+        "ref": "agent/ada",
+        "basis": "declared"
+       }
+      },
+      {
+       "key": "p-ash",
+       "initial": "S",
+       "kind": "agent",
+       "name": "Ash",
+       "role": "contributor",
+       "binding": {
+        "owner": "central",
+        "ref": "agent/ash",
+        "basis": "declared"
+       },
+       "left": {
+        "at": "2026-09-30T08:30:00.000Z",
+        "revision": 1
+       }
+      }
+     ]
+    },
+    "entries": [
+     {
+      "id": "e-q",
+      "author": "S",
+      "authorKey": "p-ada",
+      "at": "2026-09-30T08:00:00.000Z",
+      "html": "<p>q</p>",
+      "replyTo": null,
+      "touched": false
+     }
+    ],
+    "notes": [],
+    "packet": [],
+    "media": [],
+    "journal": []
+   },
+   "caller": {
+    "kind": "system",
+    "ref": "x"
+   },
+   "request": {
+    "operationRef": "op-r",
+    "authorKey": "p-ada",
+    "html": "<p>x</p>",
+    "at": "2026-09-30T09:00:00.000Z",
+    "attribution": {
+     "onBehalfOf": {
+      "key": "p-ash",
+      "authority": "asked me"
+     }
+    }
+   },
+   "expect": {
+    "refusal": "unknown-behalf-of"
+   }
+  },
+  {
+   "name": "a-valid-on-behalf-of-is-kept-as-a-declared-claim-for-every-caller",
+   "op": "append",
+   "doc": {
+    "meta": {
+     "documentId": "doc-repairs",
+     "created": "2026-09-30T08:00:00.000Z",
+     "title": "",
+     "revision": 0,
+     "view": "dialogue",
+     "current": null,
+     "journalCurrent": null,
+     "exported": null,
+     "template": "ql-dialogue-flow v0.4",
+     "format": {
+      "version": 4,
+      "minReader": 4
+     },
+     "participants": [
+      {
+       "key": "p-ada",
+       "initial": "S",
+       "kind": "agent",
+       "name": "Ada",
+       "role": "contributor",
+       "binding": {
+        "owner": "central",
+        "ref": "agent/ada",
+        "basis": "declared"
+       }
+      },
+      {
+       "key": "p-ash",
+       "initial": "S",
+       "kind": "agent",
+       "name": "Ash",
+       "role": "contributor",
+       "binding": {
+        "owner": "central",
+        "ref": "agent/ash",
+        "basis": "declared"
+       }
+      }
+     ]
+    },
+    "entries": [
+     {
+      "id": "e-q",
+      "author": "S",
+      "authorKey": "p-ada",
+      "at": "2026-09-30T08:00:00.000Z",
+      "html": "<p>q</p>",
+      "replyTo": null,
+      "touched": false
+     }
+    ],
+    "notes": [],
+    "packet": [],
+    "media": [],
+    "journal": []
+   },
+   "caller": {
+    "kind": "system",
+    "ref": "x"
+   },
+   "request": {
+    "operationRef": "op-r",
+    "authorKey": "p-ada",
+    "html": "<p>x</p>",
+    "at": "2026-09-30T09:00:00.000Z",
+    "attribution": {
+     "onBehalfOf": {
+      "key": "p-ash",
+      "authority": "asked me"
+     }
+    }
+   },
+   "expect": {
+    "outcome": "appended",
+    "author": "p-ada",
+    "onBehalfOf": {
+     "key": "p-ash",
+     "authority": "asked me",
+     "basis": "declared"
+    }
+   }
   }
  ]
 }

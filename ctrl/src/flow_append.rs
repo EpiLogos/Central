@@ -419,14 +419,17 @@ fn flow_append(
             let authority = str_of(claim, "authority").unwrap_or("");
             if key == author_key
                 || authority.trim().is_empty()
-                || !participants.iter().any(|p| str_of(p, "key") == Some(key))
+                || !participants.iter().any(|p| {
+                    str_of(p, "key") == Some(key) && p.get("left").is_none_or(Value::is_null)
+                })
             {
                 return refuse(
                     "unknown-behalf-of",
                     "on behalf of names another participant and the authority claimed",
                 );
             }
-            Some(json!({"key": key, "authority": authority}))
+            // The authority is the caller's own statement, never something the owner checked.
+            Some(json!({"key": key, "authority": authority, "basis": "declared"}))
         }
     };
     let claimed = request.pointer("/attribution/basis").and_then(Value::as_str);
@@ -444,6 +447,15 @@ fn flow_append(
     {
         if !keys.contains(&key) {
             return refuse("unknown-addressee", format!("no participant {key}"));
+        }
+        if participants
+            .iter()
+            .any(|p| str_of(p, "key") == Some(key) && p.get("left").is_some_and(|v| !v.is_null()))
+        {
+            return refuse(
+                "addressee-left",
+                format!("{key} has left this flow and cannot be asked"),
+            );
         }
     }
     if let Some(audience) = request.get("audience").filter(|a| a.is_object()) {
