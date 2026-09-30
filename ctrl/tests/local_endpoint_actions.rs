@@ -168,7 +168,10 @@ fn suggest_returns_an_undeclared_bindable_port_in_the_requested_range() {
     assert_eq!(suggested.exit_code, 0, "{}", suggested.output);
     let value: Value = serde_json::from_str(&suggested.output).unwrap();
     let port = value["data"]["port"].as_u64().expect("suggested port") as u16;
-    assert!((start..=end).contains(&port), "{port} outside {start}..={end}");
+    assert!(
+        (start..=end).contains(&port),
+        "{port} outside {start}..={end}"
+    );
     assert_eq!(value["data"]["scope"], "localhost");
     assert_eq!(value["data"]["protocol"], "tcp");
 
