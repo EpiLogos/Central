@@ -276,6 +276,12 @@ fn every_shared_conformance_case_holds_natively() {
                 if let Some(basis) = expect["attribution"].as_str() {
                     assert_eq!(entry["attribution"]["basis"], basis, "{name}");
                 }
+                if expect.get("onBehalfOf").is_some() {
+                    assert_eq!(
+                        entry["attribution"]["onBehalfOf"], expect["onBehalfOf"],
+                        "{name}"
+                    );
+                }
                 if let Some(session) = expect["session"].as_str() {
                     assert_eq!(entry["attribution"]["session"], session, "{name}");
                 }
