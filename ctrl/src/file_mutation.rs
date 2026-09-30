@@ -817,6 +817,7 @@ fn action(op: &str, id: &str, input: &Value, context: &ActionExecutionContext<'_
 }
 pub fn register(registry: &mut ActionRegistry) {
     register_create(registry);
+    register_flow_append(registry);
     type Handler = fn(&ActionRegistry, &Value, &ActionExecutionContext<'_>) -> ActionResult;
     for (op, handler) in [
         (
@@ -878,3 +879,4 @@ pub fn register(registry: &mut ActionRegistry) {
 }
 
 include!("file_creation.rs");
+include!("flow_append.rs");
