@@ -264,6 +264,8 @@ fn registry_has_stable_ids_and_complete_descriptors() {
             "central.files.resolve",
             "central.files.restore",
             "central.files.write",
+            "central.flow.append",
+            "central.flow.read",
             "central.init",
             "central.recognize",
             "central.recover",

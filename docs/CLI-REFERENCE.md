@@ -31,6 +31,8 @@ The composed registry is deliberately discovered at runtime through `action.list
 | `central.files.read` | read a validated owner location as bounded UTF-8 text | `action run central.files.read` |
 | `central.files.write` | atomically replace ordinary text under owner CAS | `action run central.files.write` |
 | `central.files.create` | explicit first save into an existing owner directory, atomic no-overwrite admission | `action run central.files.create` |
+| `central.flow.append` | append one validated, idempotent contribution to a v0.4 Flow instance under `Control/user/flows/` through the same CAS; `operation_ref` is the idempotency identity (replay recovers, a different payload under it is refused); `verified` attribution needs a host-held `CENTRAL_NATIVE_TOKEN` grant, otherwise it is declared; a typed refusal is the error `code` and writes nothing | `action run central.flow.append` |
+| `central.flow.read` | read a v0.4 Flow as one participant may read it: from their history horizon, without entries whose audience excludes them, as bounded plain attributed text with typed relations; notes, journal, packet, media and embedded metadata are never included and omissions are counted, not shown | `action run central.flow.read` |
 | `central.files.history` | page native ordinary-file revision history | `action run central.files.history` |
 | `central.files.recovery_preview` | preview exact historical bytes against current basis | `action run central.files.recovery_preview` |
 | `central.files.resolve` | resolve an owner path to the canonical file the action will read or write | `action run central.files.resolve` |
