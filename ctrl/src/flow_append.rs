@@ -132,6 +132,7 @@ fn flow_check_caller(
     caller: &FlowCaller,
     claimed_basis: Option<&str>,
     on_behalf_of: Option<&Value>,
+    participants: &[Value],
 ) -> Result<Value, FlowRefusal> {
     if author.get("left").is_some_and(|v| !v.is_null()) {
         return refuse("participant-left", format!("{} has left this flow", label(author)));
@@ -217,6 +218,39 @@ fn flow_check_caller(
                         "impersonation",
                         format!("{} is bound to another person", label(author)),
                     );
+                }
+            }
+            if caller.authenticated {
+                if let Some(reference) = caller.reference.as_deref() {
+                    // An authenticated person writes as the seat declared for their
+                    // identity. Holding a seat of their own, they cannot write as
+                    // another: the credential says who they are, and sharing a flow,
+                    // a machine or a label does not make them the next seat's person.
+                    let declared = author.pointer("/binding/ref").and_then(Value::as_str);
+                    if declared.is_some_and(|d| d != reference) {
+                        return refuse(
+                            "impersonation",
+                            format!("{} is declared for another identity", label(author)),
+                        );
+                    }
+                    let own_seat = participants.iter().find(|p| {
+                        str_of(p, "key") != str_of(author, "key")
+                            && str_of(p, "kind") == Some("person")
+                            && p.pointer("/binding/ref").and_then(Value::as_str) == Some(reference)
+                    });
+                    if let Some(seat) = own_seat {
+                        return refuse(
+                            "impersonation",
+                            format!(
+                                "this credential is {}'s; it cannot write as {}",
+                                label(seat),
+                                label(author)
+                            ),
+                        );
+                    }
+                    if declared == Some(reference) {
+                        return Ok(json!({"basis": "verified"}));
+                    }
                 }
             }
             Ok(json!({
@@ -319,7 +353,7 @@ fn flow_append(
     }
     let claimed = request.pointer("/attribution/basis").and_then(Value::as_str);
     let on_behalf = request.pointer("/attribution/onBehalfOf");
-    let attribution = flow_check_caller(author, caller, claimed, on_behalf)?;
+    let attribution = flow_check_caller(author, caller, claimed, on_behalf, &participants)?;
     if entries.iter().any(|e| str_of(e, "id") == Some(entry_id.as_str())) {
         return refuse("duplicate-entry-id", format!("entry {entry_id} already exists"));
     }
