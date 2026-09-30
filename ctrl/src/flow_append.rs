@@ -131,7 +131,6 @@ fn flow_check_caller(
     author: &Value,
     caller: &FlowCaller,
     claimed_basis: Option<&str>,
-    on_behalf_of: Option<&Value>,
     participants: &[Value],
 ) -> Result<Value, FlowRefusal> {
     if author.get("left").is_some_and(|v| !v.is_null()) {
@@ -177,6 +176,43 @@ fn flow_check_caller(
                     );
                 }
             }
+            if caller.authenticated {
+                // The credential says which agent this is. It writes as the seat
+                // declared for that agent, never as another agent's seat (bound or
+                // not), and never as another seat while it holds its own.
+                let mine: Vec<&str> = [
+                    caller.agent.as_deref(),
+                    caller.session.as_deref(),
+                    caller.reference.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+                let declared = author.pointer("/binding/ref").and_then(Value::as_str);
+                if declared.is_some_and(|d| !mine.contains(&d)) {
+                    return refuse(
+                        "impersonation",
+                        format!("{} is declared for another agent", label(author)),
+                    );
+                }
+                let own_seat = participants.iter().find(|p| {
+                    str_of(p, "key") != str_of(author, "key")
+                        && str_of(p, "kind") == Some("agent")
+                        && p.pointer("/binding/ref")
+                            .and_then(Value::as_str)
+                            .is_some_and(|r| mine.contains(&r))
+                });
+                if let Some(seat) = own_seat {
+                    return refuse(
+                        "impersonation",
+                        format!(
+                            "this credential is {}'s; it cannot write as {}",
+                            label(seat),
+                            label(author)
+                        ),
+                    );
+                }
+            }
             let mut attribution = serde_json::Map::new();
             attribution.insert(
                 "basis".into(),
@@ -193,9 +229,6 @@ fn flow_check_caller(
             }
             if let Some(v) = &caller.workcell {
                 attribution.insert("workcell".into(), json!(v));
-            }
-            if let Some(v) = on_behalf_of {
-                attribution.insert("onBehalfOf".into(), v.clone());
             }
             Ok(Value::Object(attribution))
         }
@@ -351,9 +384,53 @@ fn flow_append(
         }
         return Ok((doc.clone(), existing.clone(), FlowAppend::Recovered));
     }
+    let html = str_of(request, "html").unwrap_or("");
+    let has_media = ["<img", "<video", "<audio", "<iframe", "<object", "<embed"]
+        .iter()
+        .any(|tag| html.to_ascii_lowercase().contains(tag));
+    if flow_plain_text(&html.replace("&nbsp;", " ")).trim().is_empty() && !has_media {
+        return refuse("empty-contribution", "a contribution needs content");
+    }
+    let doc_revision = doc.pointer("/meta/revision").and_then(Value::as_i64).unwrap_or(0);
+    if let Some(basis) = request.get("basisRevision").filter(|v| !v.is_null()) {
+        match basis.as_i64() {
+            Some(n) if (0..=doc_revision).contains(&n) => {}
+            _ => {
+                return refuse(
+                    "invalid-basis-revision",
+                    "the basis revision must be a revision this document has reached",
+                )
+            }
+        }
+    }
+    if let Some(audience) = request.get("audience").filter(|v| !v.is_null()) {
+        let listed = audience.get("keys").is_some_and(Value::is_array);
+        if audience.as_str() != Some("group") && !listed {
+            return refuse(
+                "invalid-audience",
+                "an audience is \"group\" or a list of participant keys",
+            );
+        }
+    }
+    let behalf = match request.pointer("/attribution/onBehalfOf").filter(|v| !v.is_null()) {
+        None => None,
+        Some(claim) => {
+            let key = str_of(claim, "key").unwrap_or("");
+            let authority = str_of(claim, "authority").unwrap_or("");
+            if key == author_key
+                || authority.trim().is_empty()
+                || !participants.iter().any(|p| str_of(p, "key") == Some(key))
+            {
+                return refuse(
+                    "unknown-behalf-of",
+                    "on behalf of names another participant and the authority claimed",
+                );
+            }
+            Some(json!({"key": key, "authority": authority}))
+        }
+    };
     let claimed = request.pointer("/attribution/basis").and_then(Value::as_str);
-    let on_behalf = request.pointer("/attribution/onBehalfOf");
-    let attribution = flow_check_caller(author, caller, claimed, on_behalf, &participants)?;
+    let attribution = flow_check_caller(author, caller, claimed, &participants)?;
     if entries.iter().any(|e| str_of(e, "id") == Some(entry_id.as_str())) {
         return refuse("duplicate-entry-id", format!("entry {entry_id} already exists"));
     }
@@ -385,6 +462,12 @@ fn flow_append(
     let revision = doc.pointer("/meta/revision").and_then(Value::as_i64).unwrap_or(0);
     for relation in &relations {
         let kind = str_of(relation, "type").unwrap_or("");
+        if !["reply", "branch", "converge", "correct", "source", "artifact"].contains(&kind) {
+            return refuse(
+                "invalid-relation-type",
+                format!("{kind} is not a relation this form knows"),
+            );
+        }
         if kind == "source" || kind == "artifact" {
             if str_of(relation, "ref").unwrap_or("").is_empty() {
                 return refuse("relation-shape", format!("{kind} relation needs a ref"));
@@ -422,6 +505,10 @@ fn flow_append(
         return refuse("converge-needs-two", "a convergence relates at least two entries");
     }
     let mut entry = probe;
+    let mut attribution = attribution;
+    if let (Some(behalf), Some(map)) = (behalf, attribution.as_object_mut()) {
+        map.insert("onBehalfOf".into(), behalf);
+    }
     entry.insert("attribution".into(), attribution.clone());
     entry.insert("request".into(), json!({"ref": operation_ref, "digest": digest}));
     if let Some(reply) = relations.iter().find(|r| str_of(r, "type") == Some("reply")) {
@@ -684,6 +771,25 @@ fn flow_append_action(input: &Value, context: &ActionExecutionContext<'_>) -> Ac
 /// Plain text of an entry body: tags dropped, block breaks kept as newlines,
 /// the common entities decoded. Bodies are authored HTML; a reader that feeds a
 /// model wants words, not markup, and never scripts.
+/// Seconds since the epoch for an RFC 3339 UTC time, or None when it cannot be read.
+fn flow_time(text: &str) -> Option<i64> {
+    let (date, rest) = text.split_once('T')?;
+    let mut d = date.split('-');
+    let (y, m, day): (i64, i64, i64) = (d.next()?.parse().ok()?, d.next()?.parse().ok()?, d.next()?.parse().ok()?);
+    let clock = rest.trim_end_matches('Z').split(['+', '.']).next()?;
+    let mut c = clock.split(':');
+    let (h, mi, sec): (i64, i64, i64) = (c.next()?.parse().ok()?, c.next()?.parse().ok()?, c.next().unwrap_or("0").parse().ok()?);
+    if !(1..=12).contains(&m) || !(1..=31).contains(&day) {
+        return None;
+    }
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some((era * 146097 + doe - 719468) * 86400 + h * 3600 + mi * 60 + sec)
+}
+
 fn flow_plain_text(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
     let mut chars = html.char_indices().peekable();
@@ -734,27 +840,49 @@ fn flow_reading(doc: &Value, reader_key: Option<&str>, limit: usize) -> Value {
         .unwrap_or_default();
     let entries: Vec<Value> = doc.get("entries").and_then(Value::as_array).cloned().unwrap_or_default();
     let by_key = |key: &str| participants.iter().find(|p| str_of(p, "key") == Some(key));
+    // A reader this flow does not know, or none at all, reads only what is open to
+    // the whole group. Restricted, unrecognised or out-of-belonging is never public.
     let reader = reader_key.and_then(by_key);
-    let horizon = reader
-        .and_then(|p| str_of(p, "historyFrom"))
-        .and_then(|id| entries.iter().position(|e| str_of(e, "id") == Some(id)))
-        .unwrap_or(0);
+    let key = reader.and_then(|p| str_of(p, "key"));
+    let horizon = match reader.and_then(|p| str_of(p, "historyFrom")) {
+        None => Some(0),
+        Some(id) => entries.iter().position(|e| str_of(e, "id") == Some(id)),
+    };
+    // A departed reader's belonging ends where they left; times that cannot be
+    // compared leave nothing after that point theirs.
+    let last = match reader.and_then(|p| p.get("left")).filter(|v| !v.is_null()) {
+        None => entries.len(),
+        Some(left) => match left.get("at").and_then(Value::as_str).and_then(flow_time) {
+            None => 0,
+            Some(gone) => entries
+                .iter()
+                .position(|e| str_of(e, "at").and_then(flow_time).is_none_or(|at| at > gone))
+                .unwrap_or(entries.len()),
+        },
+    };
     let (mut before_horizon, mut private_to_others) = (0usize, 0usize);
     let mut visible = Vec::new();
     for (index, entry) in entries.iter().enumerate() {
-        if index < horizon {
+        if horizon.is_none() || index < horizon.unwrap_or(0) {
             before_horizon += 1;
             continue;
         }
-        let audience_ok = match (reader_key, entry.get("audience")) {
-            (Some(key), Some(audience)) if audience.is_object() => {
-                str_of(entry, "authorKey") == Some(key)
-                    || audience
-                        .get("keys")
-                        .and_then(Value::as_array)
-                        .is_some_and(|keys| keys.iter().any(|k| k.as_str() == Some(key)))
-            }
-            _ => true,
+        if index >= last {
+            private_to_others += 1;
+            continue;
+        }
+        let audience_ok = match entry.get("audience") {
+            None | Some(Value::Null) => true,
+            Some(a) if a.as_str() == Some("group") => true,
+            Some(a) => match (key, a.get("keys").and_then(Value::as_array)) {
+                (Some(key), Some(keys)) => {
+                    str_of(entry, "authorKey") == Some(key)
+                        || keys.iter().any(|k| k.as_str() == Some(key))
+                }
+                // An audience this form does not understand belongs to its author alone.
+                (Some(key), None) => str_of(entry, "authorKey") == Some(key),
+                (None, _) => false,
+            },
         };
         if !audience_ok {
             private_to_others += 1;
