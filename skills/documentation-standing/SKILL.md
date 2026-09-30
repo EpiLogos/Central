@@ -256,3 +256,7 @@ Do not fill absent rows with invented artifacts. `unresolved` means retrieval or
 Central owns durable source identity, provenance, standing relations, scope and source lifecycle. AIKit owns runtime source selection, progressive disclosure and precedence. Factory consumes the resolved developmental condition and returns implementation/evidence. Actuation owns situated Agency/Return semantics. Workcell owns material execution lifecycle. O:I surfaces own explicit presentation/projection relations.
 
 This Skill makes those products mutually legible; it does not move their ownership into Central.
+
+## Verify
+
+Verify a standing change against the product ground before returning it: `python3 tools/check_product_ground.py` reports dead links, relation source refs and drift between the account, the matrix and the served commands. Standing that the checker contradicts is corrected or named, never asserted.

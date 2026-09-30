@@ -117,3 +117,7 @@ All sources are authored governance ground in the personal world root
 
 These files are the law. This Methodology makes them loadable; it does not
 replace them.
+
+## Verify
+
+Verify a claim before repeating it: re-read the source it rests on at its current revision, and report executed evidence (the command and its result) rather than intent. A claim that cannot be verified is stated with its standing, not as fact.

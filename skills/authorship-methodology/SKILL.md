@@ -75,3 +75,7 @@ All sources are authored governance ground in the personal world root
 
 These files are the law. This Methodology makes them loadable; it does not
 replace them.
+
+## Verify
+
+Verify every authored change by re-reading its destination through the owning action at its new revision — the source for a write, the receiving record for a Return or inclusion — and confirm the recorded attribution (author, reviewer, acceptance) is the one intended. A change whose readback differs is reported as it stands, not as done.
