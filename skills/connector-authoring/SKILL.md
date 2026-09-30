@@ -1,6 +1,6 @@
 ---
 name: connector-authoring
-description: Author and prove a Central Connector from a published Port contract using only the public Rust SDK.
+description: Author and prove a Central Connector from a published Port contract using only the public Rust SDK. Use when binding a Central Port to a real technology or changing an existing Connector.
 ---
 
 # Connector authoring
