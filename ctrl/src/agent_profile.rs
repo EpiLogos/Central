@@ -172,6 +172,11 @@ pub struct AgentProfile {
     /// is the human owner's act and is never represented as performed here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intent_provenance: Option<AgentProfileProvenance>,
+    /// Central file ref to the reusable expressive character this Agent appears
+    /// through (an `oi.expression/v1` material document whose `reuse.kind` is
+    /// `character`). Refs only: the material itself is never copied here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expressive_character_ref: Option<String>,
 }
 
 impl AgentProfile {
@@ -204,6 +209,7 @@ impl AgentProfile {
             placement_intent_refs: Vec::new(),
             provenance_refs: Vec::new(),
             intent_provenance: None,
+            expressive_character_ref: None,
         };
         value.validate_shape()?;
         Ok(value)
@@ -381,6 +387,17 @@ impl AgentProfile {
         validate_refs("provenance refs", &self.provenance_refs)?;
         if let Some(source) = &self.source_profile_ref {
             required(source.clone(), "source Agent Profile ref")?;
+        }
+        validate_optional_text(
+            &self.expressive_character_ref,
+            "Agent Profile expressive character ref",
+        )?;
+        if self.expressive_character_ref.as_ref().is_some_and(|value| {
+            value != value.trim() || value.len() > 1024 || value.chars().any(char::is_control)
+        }) {
+            return Err(AgentProfileError::InvalidText(
+                "Agent Profile expressive character ref".into(),
+            ));
         }
         if let Some(provenance) = &self.intent_provenance {
             provenance.validate()?;
@@ -622,6 +639,38 @@ mod tests {
         assert!(!handoff.source_profile_is_agent_identity);
         assert!(!handoff.source_profile_is_effective_profile);
         assert!(!handoff.source_profile_is_material_binding);
+    }
+
+    #[test]
+    fn expressive_character_ref_round_trips_and_is_omitted_when_absent() {
+        let (_, personal, _, _) = fixture();
+        let mut profile = AgentProfile::new(
+            "agent-profile:nous",
+            "n1",
+            "agent:nous",
+            AgentProfileScope::Personal,
+            personal,
+        )
+        .unwrap();
+        let plain = serde_json::to_value(&profile).unwrap();
+        assert!(plain.get("expressive_character_ref").is_none());
+
+        profile.expressive_character_ref = Some(
+            "central:Control/agents/expressive-material/character/nous.expression.json".into(),
+        );
+        profile.validate_shape().unwrap();
+        let encoded = serde_json::to_string(&profile).unwrap();
+        let decoded: AgentProfile = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, profile);
+        assert_eq!(
+            serde_json::to_value(&decoded).unwrap()["expressive_character_ref"],
+            "central:Control/agents/expressive-material/character/nous.expression.json"
+        );
+
+        for invalid in ["", "  ", " central:x", "central:\u{7}x"] {
+            profile.expressive_character_ref = Some(invalid.into());
+            assert!(profile.validate_shape().is_err(), "{invalid:?} accepted");
+        }
     }
 
     #[test]
