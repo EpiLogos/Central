@@ -148,9 +148,121 @@ impl Backend {
         }
         // The end-of-options delimiter keeps a query beginning '-' as data.
         if !query.is_empty() || hybrid {
-            args.extend(["--".into(), query.into()]);
+            let rendered = if hybrid {
+                // The hybrid path re-ranks through its embedding query, which
+                // wants the caller's own words, not FTS5 syntax.
+                query.to_string()
+            } else {
+                // Full-text search hands the query to SQLite FTS5, where a
+                // bare hyphen is column syntax: `aikit-knowledge-work-coverage-spec`
+                // failed the whole map search with "no such column: knowledge".
+                // Quoted terms read as the literals they are.
+                fts5_quote(query)
+            };
+            args.extend(["--".into(), rendered]);
         }
         records(&self.run(&args)?)
+    }
+}
+
+/// FTS5-quote each whitespace-separated term: every term becomes a double-
+/// quoted literal (an embedded `"` is doubled, FTS5's own escape), so query
+/// punctuation is data, never syntax. An empty query renders empty and the
+/// caller skips it.
+pub(crate) fn fts5_quote(query: &str) -> String {
+    query
+        .split_whitespace()
+        .filter(|term| !term.is_empty())
+        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fts5_quote;
+    use crate::file_map_backend::Backend;
+
+    #[test]
+    fn a_hyphenated_query_is_quoted_per_term_not_raw_column_syntax() {
+        assert_eq!(
+            fts5_quote("aikit-knowledge-work-coverage-spec"),
+            "\"aikit-knowledge-work-coverage-spec\""
+        );
+    }
+
+    #[test]
+    fn every_term_is_quoted_and_joined_so_fts5_ands_them() {
+        assert_eq!(
+            fts5_quote("day close rollover"),
+            "\"day\" \"close\" \"rollover\""
+        );
+    }
+
+    #[test]
+    fn an_embedded_quote_is_doubled_the_fts5_escape() {
+        // Terms split on whitespace; a term that itself carries quotes gets
+        // each quote doubled inside the wrapping quotes.
+        assert_eq!(
+            fts5_quote("say \"hello\" world"),
+            "\"say\" \"\"\"hello\"\"\" \"world\""
+        );
+    }
+
+    #[test]
+    fn whitespace_collapses_and_an_empty_query_stays_empty() {
+        assert_eq!(fts5_quote("  spaced \t terms  "), "\"spaced\" \"terms\"");
+        assert_eq!(fts5_quote(""), "");
+        assert_eq!(fts5_quote("   "), "");
+    }
+
+    /// The regression the fix exists for, against the real bkmr: before the
+    /// quoting, a hyphenated query reached FTS5 raw and the whole map search
+    /// failed (`central.file_map_failure — no such column: knowledge`); now
+    /// it finds the record. Gated like the other real-binary lanes
+    /// (`CENTRAL_FILE_MAP_BKMR_CONFORMANCE=real`) because CI runners carry no
+    /// bkmr.
+    #[test]
+    fn a_hyphenated_query_returns_hits_instead_of_an_fts_failure() {
+        if std::env::var("CENTRAL_FILE_MAP_BKMR_CONFORMANCE").as_deref() != Ok("real") {
+            eprintln!("set CENTRAL_FILE_MAP_BKMR_CONFORMANCE=real to run the real-bkmr regression");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "ctrl-file-map-fts-regression-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        // The map refuses world roots through symlinked paths, and the
+        // platform temp dir is one (/var → /private/var): resolve the real
+        // path before handing it to the backend.
+        let dir = std::fs::canonicalize(dir).unwrap();
+        let backend = Backend::new(&dir);
+        backend.prepare().expect("real bkmr prepares an index");
+        backend
+            .run(&[
+                "add".into(),
+                "https://map.local/aikit-knowledge-work-coverage-spec".into(),
+                "--title".into(),
+                "knowledge work coverage spec".into(),
+                "--description".into(),
+                "the knowledge work coverage spec for the Work repositories".into(),
+                "--no-web".into(),
+                "--no-embed".into(),
+            ])
+            .expect("real bkmr adds the record");
+        let hits = backend
+            .search("aikit-knowledge-work-coverage-spec", &[], false, 10)
+            .expect("a hyphenated query must not fail FTS syntax");
+        assert!(
+            !hits.is_empty(),
+            "the hyphenated query finds the record it names"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 pub(crate) fn record(value: &Value) -> &Value {
