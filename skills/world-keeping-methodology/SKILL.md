@@ -59,7 +59,7 @@ root / cross-project   Control/agents/now/                 via central.now.* (ro
 - A wiki is agent-maintained knowledge, never source, and is never edited
   directly at either register. What a session learned that deserves wiki
   standing travels as a return: NOW promotion writes it under
-  `agents/wiki/returns/**` with its lineage already stamped, and the wiki
+  the root wiki's returns folder (Control/agents/wiki/returns/ in the Central ground) with its lineage already stamped, and the wiki
   owner's procedure (`aikit wiki ...`) does the incorporation and cleanup.
   The return is the only door.
 - A project's documents — its README, its docs tree, its AGENTS file — are
@@ -118,3 +118,7 @@ All sources are authored governance ground in the personal world root
 
 These files are the law. This Methodology makes them loadable; it does not
 replace them.
+
+## Verify
+
+Verify the field after acting on it: re-read the NOW record or Day through its owning action (`central.now.read`, `central.day.read`, or `projectcentral.now.inspect` for a Project) and confirm the return, lifecycle change or close landed as recorded, with nothing left loose at the Work root.

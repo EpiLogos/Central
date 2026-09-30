@@ -58,7 +58,7 @@ Run this step at two moments:
    - the product-field view crosses the product's six seed questions with S and the other products;
    - `suite-relations` carries the product↔product readings.
 
-   Select the affected cells and the capability rows they reference, with all fields. Check the same capabilities in O:I's suite matrix (`suite/capability-matrix.json`, the `capability-matrix` Method) for their cross-product standing.
+   Select the affected cells and the capability rows they reference, with all fields. Check the same capabilities in O:I's suite matrix (suite/capability-matrix.json in the O-I repository, read through the `capability-matrix` Method) for their cross-product standing.
 5. **Ask Jev a few questions** over exactly that selection. The state holds the view's question and axis meanings, the selected cells and rows, and the account passages. The questions are two to five precise determinations, for example:
    - which selected cells does this change;
    - is the catalogue sufficient for this need;
@@ -66,3 +66,7 @@ Run this step at two moments:
 
    Write a request file and run `aikit --json jev invoke --request-file <request.json> --limits-file <limits.json> --credential-ref <ref>`. Read the provider outcome in `data.answer` and `data.attempts`, not the envelope's `ok`. Keep the request under the provider's ~32k-token input ceiling; over it the provider refuses with an opaque HTTP 400.
 6. **Read the answers yourself** against what you gathered. Act through this skill's normal path: a reconciled record, a test to run, a wayfinder ticket, or a "catalogue insufficient" note on the relevant cell. Keep the invocation receipt with the change.
+
+## Verify
+
+Validate every changed carrier before returning it: `python3 tools/capability_matrix.py <manifest> --csv <carrier.csv>` loads and checks the manifest and its CSV against the matrix protocol. A carrier that fails validation is not returned as done.
