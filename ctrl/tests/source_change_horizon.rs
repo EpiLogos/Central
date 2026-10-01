@@ -3,7 +3,8 @@ use central_ctrl::{
     create_core_action_registry, create_default_connector_registry, initialize_projectcentral,
     projectcentral_ops::register_projectcentral_actions, read_project_change_horizon,
     reconcile_control_sources, reconcile_project_sources, ActionExecutionContext, ConnectorContext,
-    RootOptions, SourceChangeKind, GROUND_RELATIONS_SOURCE, PROJECT_HORIZON_STATE,
+    RootOptions, SourceChangeKind, CONTROL_HORIZON_STATE, GROUND_RELATIONS_SOURCE,
+    PROJECT_HORIZON_STATE,
 };
 use serde_json::{json, Value};
 use std::fs;
@@ -332,6 +333,109 @@ fn action_surface_reconciles_implicitly_and_contains_no_model_operation() {
     assert_eq!(data["cursor"], 1);
     assert_eq!(data["changes"].as_array().unwrap().len(), 1);
     assert_eq!(data["automatic_agent_or_model_invocation"], false);
+}
+
+#[test]
+fn concurrent_root_horizon_actions_write_independent_atomic_state_files() {
+    let temp = TempRoot::new();
+    let central = temp.path().join("Central");
+    let user_ground = central.join("Control/user");
+    fs::create_dir_all(&user_ground).unwrap();
+    fs::create_dir_all(central.join("Control/agents/governance")).unwrap();
+    fs::create_dir_all(central.join("Control/agents/wiki")).unwrap();
+    fs::create_dir_all(central.join("Work")).unwrap();
+    let source = user_ground.join("intent.md");
+    fs::write(&source, "before\n").unwrap();
+    for index in 0..256 {
+        fs::write(
+            user_ground.join(format!("source-{index:03}.md")),
+            "stable\n",
+        )
+        .unwrap();
+    }
+    reconcile_control_sources(&central).unwrap();
+    fs::write(&source, "after\n").unwrap();
+
+    let workers = 32;
+    let start = std::sync::Arc::new(std::sync::Barrier::new(workers));
+    let handles = (0..workers)
+        .map(|_| {
+            let central = central.clone();
+            let start = start.clone();
+            std::thread::spawn(move || {
+                let root_options = RootOptions {
+                    explicit_root: Some(central),
+                    configured_root: None,
+                    home: None,
+                };
+                let connectors = create_default_connector_registry();
+                let connector_context = ConnectorContext::current();
+                let context = ActionExecutionContext {
+                    root_options: &root_options,
+                    connectors: &connectors,
+                    connector_context: &connector_context,
+                };
+                let mut registry = create_core_action_registry();
+                register_projectcentral_actions(&mut registry);
+                start.wait();
+                registry.execute("projectcentral.change.horizon", &json!({}), &context)
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for handle in handles {
+        let result = handle.join().unwrap();
+        assert!(
+            result.ok,
+            "concurrent root horizon action failed: {result:?}"
+        );
+    }
+
+    let state_path = central.join(CONTROL_HORIZON_STATE);
+    let state: Value = serde_json::from_slice(&fs::read(state_path).unwrap()).unwrap();
+    assert_eq!(state["world_ref"], "control:root");
+    assert_eq!(state["cursor"], 1);
+    assert_eq!(state["changes"].as_array().unwrap().len(), 1);
+    assert!(reconcile_control_sources(&central).is_ok());
+}
+
+#[test]
+fn concurrent_consumer_acknowledgements_retain_every_cursor() {
+    let (_temp, _central, project) = project_fixture("concurrent-ack");
+    let source = project.join("ProjectCentral/user/intent.md");
+    fs::write(&source, "before\n").unwrap();
+    reconcile_project_sources(&project).unwrap();
+    fs::write(&source, "after\n").unwrap();
+    let changed = reconcile_project_sources(&project).unwrap();
+    assert_eq!(changed.horizon.cursor, 1);
+
+    let workers = 64;
+    let start = std::sync::Arc::new(std::sync::Barrier::new(workers));
+    let handles = (0..workers)
+        .map(|index| {
+            let project = project.clone();
+            let start = start.clone();
+            std::thread::spawn(move || {
+                start.wait();
+                acknowledge_project_cursor(&project, &format!("consumer-{index:02}"), 1)
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for handle in handles {
+        handle.join().unwrap().unwrap();
+    }
+
+    let horizon = read_project_change_horizon(&project, None).unwrap();
+    assert_eq!(horizon.consumer_cursors.len(), workers);
+    for index in 0..workers {
+        assert_eq!(
+            horizon
+                .consumer_cursors
+                .get(&format!("consumer-{index:02}")),
+            Some(&1)
+        );
+    }
 }
 
 fn rewrite_horizon_world(project: &Path, world_ref: &str) {

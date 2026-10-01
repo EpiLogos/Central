@@ -12,9 +12,10 @@ use crate::root::resolve_central_root;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
-use std::io;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const SOURCE_HORIZON_SCHEMA: &str = "central.source-change-horizon/v1";
@@ -29,6 +30,8 @@ pub const CONTROL_GROUND_RELATIONS_SCHEMA: &str = "central.control.ground-relati
 pub const CONTROL_WORLD_REF: &str = "control:root";
 
 const MAX_SCAN_DEPTH: usize = 24;
+const SOURCE_HORIZON_LOCK: &str = "source-horizon.lock";
+static NEXT_STATE_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// The Control trees that participate in the root horizon by tree stamp:
 /// `(directory, role, provenance, treatment)`. Declared Control relations
@@ -692,9 +695,38 @@ fn write_state(path: &Path, state: &SourceHorizonState) -> io::Result<()> {
     let mut bytes = serde_json::to_vec_pretty(state)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     bytes.push(b'\n');
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, bytes)?;
-    fs::rename(tmp, path)
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "source horizon state path has no file name",
+        )
+    })?;
+    let (tmp, mut file) = loop {
+        let sequence = NEXT_STATE_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let tmp = parent.join(format!(
+            ".{}.{}.{}.tmp",
+            file_name.to_string_lossy(),
+            std::process::id(),
+            sequence
+        ));
+        match OpenOptions::new().write(true).create_new(true).open(&tmp) {
+            Ok(file) => break (tmp, file),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    };
+    if let Err(error) = file.write_all(&bytes) {
+        drop(file);
+        let _ = fs::remove_file(&tmp);
+        return Err(error);
+    }
+    drop(file);
+    if let Err(error) = fs::rename(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(error);
+    }
+    Ok(())
 }
 
 fn public_horizon(state: &SourceHorizonState, since: Option<u64>) -> SourceHorizon {
@@ -735,6 +767,7 @@ fn reconcile(
     bindings: Vec<SourceBinding>,
     attributions: &BTreeMap<String, SourceWriteAttribution>,
 ) -> io::Result<ReconcileReport> {
+    let _horizon = crate::source_safety::lock(world_root, SOURCE_HORIZON_LOCK)?;
     let current = observe_bindings(world_root, bindings)?;
     let now = unix_seconds();
     let existing = load_state(state_path)?;
@@ -896,6 +929,7 @@ pub fn acknowledge_project_cursor(
         ));
     }
     let path = project_root.join(PROJECT_HORIZON_STATE);
+    let _horizon = crate::source_safety::lock(project_root, SOURCE_HORIZON_LOCK)?;
     let mut state = load_state(&path)?.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
@@ -922,6 +956,7 @@ pub fn acknowledge_project_cursor(
 
 pub fn compact_project_changes(project_root: &Path) -> io::Result<CompactionReport> {
     let path = project_root.join(PROJECT_HORIZON_STATE);
+    let _horizon = crate::source_safety::lock(project_root, SOURCE_HORIZON_LOCK)?;
     let mut state = load_state(&path)?.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
