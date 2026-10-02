@@ -50,6 +50,13 @@ jobs:
           set -euo pipefail
           sha256sum target/debug/ctrl
           python3 ctrl/tests/native/receiving_lookup.py --ctrl "$GITHUB_WORKSPACE/target/debug/ctrl" | tee "$RUNNER_TEMP/caw-receiving-lost-ack-proof.json"
+      - name: Preserve actual native inclusion causes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD
+          sha256sum target/debug/ctrl
+          python3 ctrl/tests/native/receiving_inclusion_errors.py --ctrl "$GITHUB_WORKSPACE/target/debug/ctrl" | tee "$RUNNER_TEMP/caw-receiving-inclusion-errors-proof.json"
       - name: Exercise native exclusion and lifecycle boundaries
         shell: bash
         env:
@@ -75,6 +82,7 @@ jobs:
             ${{ runner.temp }}/caw-native-tests.log
             ${{ runner.temp }}/caw-native-consumer-proof.json
             ${{ runner.temp }}/caw-receiving-lost-ack-proof.json
+            ${{ runner.temp }}/caw-receiving-inclusion-errors-proof.json
             ${{ runner.temp }}/caw-native-boundary-proof.log
             ${{ runner.temp }}/caw-source-sha.txt
             ${{ runner.temp }}/caw-source.tar.gz

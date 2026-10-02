@@ -1428,3 +1428,31 @@ fn receiving_include_retains_actual_custom_preflight_cause_without_fabricating_e
     assert_eq!(fs::metadata(&target).unwrap().permissions().mode(), mode);
     assert_eq!(fs::read(target).unwrap(), source_before);
 }
+
+
+#[test]
+fn receiving_inclusion_error_debug_retains_native_cause_without_proposed_body_or_credential() {
+    use std::os::unix::fs::PermissionsExt;
+    assert_ne!(unsafe { libc::geteuid() }, 0,
+        "requires actual readonly native source failure; unavailable execution must not pass");
+    let world = receipt_lookup_world();
+    let doc = document(world.path(), None, "flow", "doc:private-error-debug");
+    let mut original = proposal(&doc,None,"debug:private-owner-error","entry:private-owner-error");
+    let private_body = "<p>actual body selected for inclusion error privacy regression</p>";
+    original["proposal"]["html"] = json!(private_body);
+    let submitted = call(world.path(),"receiving_submit",&original,AGENT).unwrap();
+    let accepted = review(world.path(),&submitted,&doc,None);
+    let target = world.path().join(doc["source"]["path"].as_str().unwrap());
+    let before = fs::read(&target).unwrap();
+    let restore = RestoreReceivingFixtureMode::retain(&target);
+    fs::set_permissions(&target,fs::Permissions::from_mode(0o444)).unwrap();
+    let error = call(world.path(),"receiving_include",&inclusion(&accepted,&doc,None),HUMAN).unwrap_err();
+    let cause = original_inclusion_io(&error);
+    assert_eq!(cause.kind(),io::ErrorKind::PermissionDenied);
+    assert_eq!(cause.raw_os_error(),None,"actual custom preflight must not acquire a fabricated OS code");
+    let debug = format!("{error:?}");
+    for private in [private_body, HUMAN, AGENT] { assert!(!debug.contains(private)); }
+    assert_actual_uncertain_lookup(world.path(),&doc,&original,&submitted,&error);
+    assert_eq!(fs::read(&target).unwrap(),before);
+    drop(restore);
+}

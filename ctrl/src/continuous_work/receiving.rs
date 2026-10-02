@@ -16,27 +16,209 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{fs, io, path::Path};
 
-/// Context for an actual document-owner failure, after its Receiving intent
-/// has been retained as uncertain. The original IO is preserved as a cause;
-/// retaining the displayed recovery guidance must not erase native evidence.
-#[derive(Debug)]
-struct InclusionNotConfirmed {
+/// Invocation evidence after the acknowledged `including` update. This is not
+/// a new Receiving record or permission to retry. Original and supplemental IO
+/// remain separate; a failed follow-up write may have renamed before failing.
+struct InclusionIncomplete {
     return_ref: String,
+    including_revision: String,
+    attempted_status: Option<&'static str>,
+    acknowledged_update: Option<String>,
+    document_outcome: &'static str,
+    settlement_observation: Option<&'static str>,
+    receipt: ReceiptObservation,
     cause: io::Error,
+    cause_is_document: bool,
+    receiving_write_error: Option<io::Error>,
+    settlement_error: Option<io::Error>,
 }
-impl std::fmt::Display for InclusionNotConfirmed {
+// IO Debug can contain arbitrary lower-owner text. Never dump a document Value,
+// proposal, credential or nested error message through this private payload.
+impl std::fmt::Debug for InclusionIncomplete {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "inclusion not confirmed; inspect/recover {}: {}",
-            self.return_ref, self.cause
-        )
+        formatter.debug_struct("InclusionIncomplete")
+            .field("attempted_status", &self.attempted_status)
+            .field("update_acknowledged", &self.acknowledged_update.is_some())
+            .field("document_outcome", &self.document_outcome)
+            .field("settlement_observation", &self.settlement_observation)
+            .field("cause_kind", &self.cause.kind())
+            .field("cause_raw_os_error", &self.cause.raw_os_error())
+            .field("cause_is_document", &self.cause_is_document)
+            .field("has_receiving_write_error", &self.receiving_write_error.is_some())
+            .field("has_settlement_error", &self.settlement_error.is_some())
+            .finish_non_exhaustive()
     }
 }
-impl std::error::Error for InclusionNotConfirmed {
+impl std::fmt::Display for InclusionIncomplete {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.cause_is_document {
+            // Preserve the existing original-document-failure display exactly.
+            write!(formatter, "inclusion not confirmed; inspect/recover {}: {}",
+                self.return_ref, self.cause)
+        } else {
+            write!(formatter, "document inclusion completed; Receiving update not confirmed; inspect {}: {}",
+                self.return_ref, self.cause)
+        }
+    }
+}
+impl std::error::Error for InclusionIncomplete {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(&self.cause)
     }
+}
+impl InclusionIncomplete {
+    fn into_io(self) -> io::Error {
+        io::Error::new(self.cause.kind(), self)
+    }
+}
+const ERROR_TEXT_PROFILE: usize = 4096;
+const ERROR_DETAILS_PROFILE: usize = 64 * 1024;
+const ERROR_SOURCE_DEPTH: usize = 8;
+
+/// Only typed scalar observations of an actual owner receipt. The source body
+/// is never retained by an error payload, even privately or for Debug.
+#[derive(Default)]
+struct ReceiptObservation {
+    operation: Option<Value>,
+    replay: Option<Value>,
+}
+impl ReceiptObservation {
+    fn from_result(result: &Value) -> Self {
+        Self {
+            operation: receipt_fields(result.get("operation_receipt"), false),
+            replay: receipt_fields(result.get("replayed_operation"), true),
+        }
+    }
+}
+fn omitted_text(value: &str, reason: &str) -> Value {
+    json!({"observation_omitted":reason,"byte_len":value.len()})
+}
+fn diagnostic_text(value: &str) -> Value {
+    if value.len() <= ERROR_TEXT_PROFILE {
+        json!(value)
+    } else {
+        omitted_text(value, "diagnostic_text_profile")
+    }
+}
+fn receipt_fields(value: Option<&Value>, replay: bool) -> Option<Value> {
+    let value = value.filter(|value| !value.is_null())?;
+    let Some(object) = value.as_object() else {
+        return Some(json!({"observation_omitted":"native_receipt_not_object"}));
+    };
+    let text_fields: &[&str] = if replay {
+        &["request_key", "applied_revision"]
+    } else {
+        &["request_key", "status", "previous_revision", "revision"]
+    };
+    let boolean_fields: &[&str] = if replay {
+        &["current_source_not_rewritten"]
+    } else {
+        &["superseded_by_later_revision"]
+    };
+    let mut facts = serde_json::Map::new();
+    for field in text_fields {
+        match object.get(*field).and_then(Value::as_str) {
+            Some(text) => { facts.insert((*field).into(), diagnostic_text(text)); }
+            None => { facts.insert((*field).into(), json!({"observation_omitted":"native_receipt_expected_text"})); }
+        }
+    }
+    for field in boolean_fields {
+        if let Some(value) = object.get(*field) {
+            let observed = match value.as_bool() {
+                Some(boolean) => json!(boolean),
+                None => json!({"observation_omitted":"native_receipt_expected_boolean"}),
+            };
+            facts.insert((*field).into(), observed);
+        }
+    }
+    Some(Value::Object(facts))
+}
+fn io_facts(error: &io::Error) -> Value {
+    let mut sources = Vec::new();
+    let mut current = std::error::Error::source(error);
+    for _ in 0..ERROR_SOURCE_DEPTH {
+        let Some(cause) = current else { break; };
+        sources.push(match cause.downcast_ref::<io::Error>() {
+            Some(cause) => json!({"io":true,"kind":format!("{:?}",cause.kind()),"raw_os_error":cause.raw_os_error()}),
+            None => json!({"io":false}),
+        });
+        current = cause.source();
+    }
+    json!({"kind":format!("{:?}",error.kind()),"raw_os_error":error.raw_os_error(),
+        "sources":sources,"source_chain_truncated":current.is_some()})
+}
+fn details_fit(details: &Value) -> bool {
+    serde_json::to_vec(details).is_ok_and(|bytes| bytes.len() <= ERROR_DETAILS_PROFILE)
+}
+/// Format only the actual Receiving context, before the generic IO-kind mapper.
+/// Current receipt state still comes from central.receiving.read, not these
+/// invocation observations. No other operation's status/code is reclassified.
+pub(crate) fn inclusion_failure_result(action: &str, error: &io::Error) -> Option<crate::result::ActionResult> {
+    let failure = error.get_ref()?.downcast_ref::<InclusionIncomplete>()?;
+    let ledger_error = if failure.cause_is_document {
+        failure.receiving_write_error.as_ref()
+    } else {
+        Some(&failure.cause)
+    };
+    let acknowledged = failure.acknowledged_update.as_ref().map(|revision| json!({
+        "status":failure.attempted_status,"revision":diagnostic_text(revision)}));
+    let mut details = json!({
+        "retry_policy_action":"central.work.policy", "automatic_authority_widening":false,
+        "outside_writes_prevented":false, "automatic_retry":false, "outcome":"unknown",
+        "receiving":{
+            "return_ref":diagnostic_text(&failure.return_ref),
+            "prior_acknowledged":{"status":"including","revision":diagnostic_text(&failure.including_revision)},
+            "attempted_status":failure.attempted_status,"update_acknowledged":acknowledged,
+            "persistence":if failure.attempted_status.is_none() { "not_attempted" }
+                else if failure.acknowledged_update.is_some() { "acknowledged" } else { "unconfirmed" }
+        },
+        "document":{"outcome":failure.document_outcome,"settlement_observation":failure.settlement_observation,
+            "operation_receipt":failure.receipt.operation,"replayed_operation":failure.receipt.replay},
+        "causes":{
+            "document":if failure.cause_is_document { Some(io_facts(&failure.cause)) } else { None },
+            "receiving_write":ledger_error.map(io_facts),
+            "recovery_observation":failure.settlement_error.as_ref().map(io_facts)
+        },
+        "diagnostic_profile":{"max_added_detail_bytes":ERROR_DETAILS_PROFILE,
+            "max_text_bytes":ERROR_TEXT_PROFILE,"max_source_depth":ERROR_SOURCE_DEPTH}
+    });
+    // JSON escaping can expand a bounded scalar. Retain fixed outcome/cause
+    // facts and explicit omission rather than truncating native identities.
+    if !details_fit(&details) {
+        details["document"]["operation_receipt"] = Value::Null;
+        details["document"]["replayed_operation"] = Value::Null;
+        details["document"]["receipt_observation_omitted"] = json!("diagnostic_details_profile");
+    }
+    if !details_fit(&details) {
+        details["receiving"]["return_ref"] = omitted_text(&failure.return_ref, "diagnostic_details_profile");
+        details["receiving"]["prior_acknowledged"]["revision"] = omitted_text(&failure.including_revision, "diagnostic_details_profile");
+        if let Some(revision) = &failure.acknowledged_update {
+            details["receiving"]["update_acknowledged"]["revision"] = omitted_text(revision, "diagnostic_details_profile");
+        }
+    }
+    Some(crate::result::ActionResult::failure_coded(
+        Some(action), crate::result::ResultStatus::PartialCompletion,
+        "central.receiving.inclusion_incomplete", error.to_string(), Some(details)))
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InclusionCheckpoint { BeforeSettlement, BeforeLedgerUpdate }
+#[cfg(test)]
+type InclusionPhysicalCheckpoint = Box<dyn FnOnce(&Path)>;
+#[cfg(test)]
+thread_local! {
+    static INCLUSION_PHYSICAL_CHECKPOINT: std::cell::RefCell<Option<(InclusionCheckpoint, InclusionPhysicalCheckpoint)>> = const { std::cell::RefCell::new(None) };
+}
+#[cfg(test)]
+fn inclusion_physical_checkpoint(phase: InclusionCheckpoint, path: &Path) {
+    let hook = INCLUSION_PHYSICAL_CHECKPOINT.with(|slot| {
+        let mut current = slot.borrow_mut();
+        if current.as_ref().is_some_and(|(expected, _)| *expected == phase) {
+            current.take().map(|(_, hook)| hook)
+        } else { None }
+    });
+    if let Some(hook) = hook { hook(path); }
 }
 
 const AREA: &str = ".central/source-returns/contributions";
@@ -772,53 +954,95 @@ fn include(
     record.inclusion_request = Some(request.clone());
     record.status = "including".into();
     record.last_error = None;
-    write(scope, &record)?;
+    let including_revision = write(scope, &record)?;
     let result = documents::mutate_reviewed(scope, &request, &record.author, principal, now);
     match result {
         Ok(result) => {
+            let receipt = ReceiptObservation::from_result(&result);
             let applied = result["operation_receipt"]["revision"]
                 .as_str()
-                .or_else(|| result["replayed_operation"]["applied_revision"].as_str())
-                .ok_or_else(|| {
-                    invalid("native document did not return an actual applied revision")
-                })?;
+                .or_else(|| result["replayed_operation"]["applied_revision"].as_str());
+            let Some(applied) = applied else {
+                return Err(InclusionIncomplete {
+                    return_ref: record.return_ref, including_revision,
+                    attempted_status: None, acknowledged_update: None,
+                    document_outcome: "unconfirmed", settlement_observation: None,
+                    receipt, cause: invalid("native document did not return an actual applied revision"),
+                    cause_is_document: true, receiving_write_error: None, settlement_error: None,
+                }.into_io());
+            };
             record.status = "included".into();
             record.applied_source_revision = Some(applied.into());
             record.last_error = None;
-            let revision = write(scope, &record)?;
+            #[cfg(test)]
+            inclusion_physical_checkpoint(InclusionCheckpoint::BeforeLedgerUpdate, &scope.root.join(AREA));
+            let revision = match write(scope, &record) {
+                Ok(revision) => revision,
+                Err(error) => return Err(InclusionIncomplete {
+                    return_ref: record.return_ref, including_revision,
+                    attempted_status: Some("included"), acknowledged_update: None,
+                    document_outcome: "committed", settlement_observation: None,
+                    receipt, cause: error, cause_is_document: false,
+                    receiving_write_error: None, settlement_error: None,
+                }.into_io()),
+            };
             let mut response = response(&record, &revision);
             response["document_result"] = result;
             Ok(response)
         }
         Err(error) => {
-            // Recovery that cannot complete asks the document owner whether the
-            // intent committed. Uncommitted: back to review at the current basis,
-            // with the failure kept visible, never retargeted silently.
-            if recover
-                && matches!(
-                    documents::settle_interrupted(scope, &request, &record.author, principal),
-                    Ok(documents::Interrupted::NotCommitted)
-                )
-            {
-                record.status = "needs-review".into();
-                record.abandoned_inclusion_requests.push(request);
-                record.inclusion_request = None;
-                record.last_error = Some(error.to_string());
-                let revision = write(scope, &record)?;
-                let mut response = response(&record, &revision);
-                response["recovery"] = json!({"intent_committed":false,"returned_to_review":true});
-                return Ok(response);
+            // Settlement is an actual document-owner observation. Failure to
+            // obtain it is not an observation that the intent did not commit.
+            let mut settlement_observation = None;
+            let mut settlement_error = None;
+            if recover {
+                #[cfg(test)]
+                inclusion_physical_checkpoint(InclusionCheckpoint::BeforeSettlement,
+                    &scope.root.join(".central/source-returns/document-mutations"));
+                match documents::settle_interrupted(scope, &request, &record.author, principal) {
+                    Ok(documents::Interrupted::NotCommitted) => {
+                        record.status = "needs-review".into();
+                        record.abandoned_inclusion_requests.push(request);
+                        record.inclusion_request = None;
+                        record.last_error = Some(error.to_string());
+                        #[cfg(test)]
+                        inclusion_physical_checkpoint(InclusionCheckpoint::BeforeLedgerUpdate, &scope.root.join(AREA));
+                        let revision = match write(scope, &record) {
+                            Ok(revision) => revision,
+                            Err(secondary) => return Err(InclusionIncomplete {
+                                return_ref: record.return_ref, including_revision,
+                                attempted_status: Some("needs-review"), acknowledged_update: None,
+                                document_outcome: "not_committed", settlement_observation: Some("not_committed"),
+                                receipt: ReceiptObservation::default(), cause: error, cause_is_document: true,
+                                receiving_write_error: Some(secondary), settlement_error: None,
+                            }.into_io()),
+                        };
+                        let mut response = response(&record, &revision);
+                        response["recovery"] = json!({"intent_committed":false,"returned_to_review":true});
+                        return Ok(response);
+                    }
+                    Ok(documents::Interrupted::Committed) => settlement_observation = Some("committed"),
+                    Err(observation_error) => {
+                        settlement_observation = Some("unavailable");
+                        settlement_error = Some(observation_error);
+                    }
+                }
             }
             record.status = "uncertain".into();
             record.last_error = Some(error.to_string());
-            write(scope, &record)?;
-            Err(io::Error::new(
-                error.kind(),
-                InclusionNotConfirmed {
-                    return_ref: record.return_ref,
-                    cause: error,
-                },
-            ))
+            #[cfg(test)]
+            inclusion_physical_checkpoint(InclusionCheckpoint::BeforeLedgerUpdate, &scope.root.join(AREA));
+            let (acknowledged_update, receiving_write_error) = match write(scope, &record) {
+                Ok(revision) => (Some(revision), None),
+                Err(secondary) => (None, Some(secondary)),
+            };
+            Err(InclusionIncomplete {
+                return_ref: record.return_ref, including_revision,
+                attempted_status: Some("uncertain"), acknowledged_update,
+                document_outcome: "unconfirmed", settlement_observation,
+                receipt: ReceiptObservation::default(), cause: error, cause_is_document: true,
+                receiving_write_error, settlement_error,
+            }.into_io())
         }
     }
 }
@@ -990,5 +1214,377 @@ pub(crate) fn dispatch(
         "receiving_review" => review(scope, input, &principal, now),
         "receiving_include" => include(scope, input, &principal, now, false),
         _ => include(scope, input, &principal, now, true),
+    }
+}
+
+
+#[cfg(all(test, unix))]
+mod incomplete_inclusion_tests {
+    use super::*;
+    use sha2::{Digest, Sha256};
+    use std::{cell::RefCell, os::unix::fs::{MetadataExt, PermissionsExt},
+        path::PathBuf, rc::Rc, sync::atomic::{AtomicU64, Ordering},
+        time::{SystemTime, UNIX_EPOCH}};
+
+    const HUMAN: &str = "receiving-error-native-human-fixture-credential";
+    const AGENT: &str = "receiving-error-native-agent-fixture-credential";
+    const BODY: &str = "<p>actual private native contribution body</p>";
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+
+    struct World { root: PathBuf, identity: (u64, u64) }
+    impl World {
+        fn new() -> Self {
+            assert_ne!(unsafe { libc::geteuid() }, 0,
+                "actual permission failure requires nonroot; unavailable execution must not pass");
+            let scratch = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ProjectCentral/now/tmp");
+            fs::create_dir_all(&scratch).unwrap();
+            let root = scratch.join(format!("receiving-incomplete-{}-{}-{}", std::process::id(),
+                SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos(),
+                NEXT.fetch_add(1, Ordering::Relaxed)));
+            fs::create_dir(&root).unwrap();
+            let root = fs::canonicalize(&root).unwrap();
+            let metadata = fs::symlink_metadata(&root).unwrap();
+            let world = Self { root, identity: (metadata.dev(), metadata.ino()) };
+            crate::initialize_central(&world.root).unwrap();
+            fs::create_dir_all(world.root.join("Work/demo")).unwrap();
+            fs::create_dir_all(world.root.join("Control/relations")).unwrap();
+            let grants: Vec<Value> = [(HUMAN, "human:receiving-error-fixture", "human"),
+                (AGENT, "agent:receiving-error-fixture", "agent")].into_iter().map(|(token, actor, kind)| json!({
+                "principal_ref":actor,"actor_kind":kind,"token_sha256":format!("{:x}",Sha256::digest(token.as_bytes())),
+                "scope_refs":["control:root"],"actions":["central.document.create","central.document.mutate",
+                    "central.receiving.submit","central.receiving.review","central.receiving.include","central.receiving.recover"],
+                "expires_at_unix_seconds":9999})).collect();
+            let policies = [
+                ("placement.json", "work-placement-policy", json!({"schema":"central.work-placement-policy/v1",
+                    "scope_ref":"control:root","writable":[{"path":"Work/demo","class":"repository"}],
+                    "enforcement":"native-actions","required_coverage":["file-content"],"lease_seconds":300})),
+                ("time.json", "civil-time-policy", json!({"schema":"central.civil-time-policy/v1",
+                    "scope_ref":"control:root","timezone":"Europe/London","day_boundary_minutes":0,"automatic_day_rollover":true})),
+                ("authority.json", "native-action-authority", json!({"schema":"central.native-action-authority/v1",
+                    "scope_ref":"control:root","grants":grants})),
+            ];
+            let scope = Scope::resolve(&world.root, None).unwrap();
+            let mut relations = Vec::new();
+            for (name, role, value) in policies {
+                let path = format!("Control/user/{name}");
+                fs::write(world.root.join(&path), source::encoded(&value).unwrap()).unwrap();
+                relations.push(json!({"ref":scope.source_ref(&path),"path":path,"roles":[role],
+                    "provenance":"human-adopted","standing":"architecture-contract","treatment":"projectcentral-user",
+                    "recognition":"controlled-native-fixture-not-personal-adoption","recorded_at_unix_seconds":1}));
+            }
+            fs::write(world.root.join(&scope.relations_path), source::encoded(&json!({
+                "schema":scope.relations_schema,"project_id":scope.relations_id,"relations":relations})).unwrap()).unwrap();
+            world
+        }
+        fn call(&self, operation: &str, input: &Value, token: &str) -> io::Result<Value> {
+            super::super::execute_with_token_at(&self.root, operation, input, Some(token), 100)
+        }
+        fn accepted(&self, label: &str) -> (Value, Value, Value, Value) {
+            let policy = self.call("policy", &json!({}), HUMAN).unwrap();
+            let document = self.call("document_create", &json!({"kind":"flow","document_id":format!("doc:{label}"),
+                "expected_policy_revision":policy["revision"],"title":"","fields":[]}), HUMAN).unwrap();
+            let original = json!({"producer_key":format!("producer:{label}"),"source_ref":document["source"]["ref"],
+                "document_id":document["document_id"],"expected_source_revision":document["revision"]["revision"],
+                "occurred_at_unix_seconds":42,"proposal":{"operation":"entry.add","entry_id":format!("entry:{label}"),
+                    "contribution_id":format!("part:{label}"),"html":BODY}});
+            let submitted = self.call("receiving_submit", &original, AGENT).unwrap();
+            let accepted = self.call("receiving_review", &json!({"return_ref":submitted["return_ref"],
+                "expected_return_revision":submitted["revision"],"expected_source_revision":document["revision"]["revision"],
+                "disposition":"accepted"}), HUMAN).unwrap();
+            (document, original, submitted, accepted)
+        }
+        fn include_input(document: &Value, reading: &Value) -> Value {
+            json!({"return_ref":reading["return_ref"],"expected_return_revision":reading["revision"],
+                "expected_source_revision":document["revision"]["revision"]})
+        }
+        fn current(&self, original: &Value, submitted: &Value) -> Value {
+            let before = self.receiving_bytes();
+            let by_ref = self.call("receiving_read", &json!({"return_ref":submitted["return_ref"]}), AGENT).unwrap();
+            let guarded = self.call("receiving_read", &json!({"producer_key":original["producer_key"],
+                "original_request":original}), AGENT).unwrap();
+            assert_eq!(guarded["lookup"]["original_request_verified"], true);
+            assert_eq!(by_ref["record"], guarded["record"]);
+            assert_eq!(by_ref["revision"], guarded["revision"]);
+            assert_eq!(self.receiving_bytes(), before, "native lookup must not resend or update Receiving");
+            for field in ["schema", "return_ref", "scope_ref", "sequence", "request_digest", "proposal",
+                "author", "authority_ref", "authority_revision", "occurred_at_unix_seconds", "received_at_unix_seconds"] {
+                assert_eq!(guarded["record"][field], submitted["record"][field], "{field}");
+            }
+            guarded
+        }
+        fn receiving_bytes(&self) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+            fs::read_dir(self.root.join(AREA)).unwrap().map(|entry| {
+                let path = entry.unwrap().path(); let bytes = fs::read(&path).unwrap(); (path, bytes)
+            }).collect()
+        }
+        fn document_read(&self, document: &Value) -> Value {
+            self.call("document_read", &json!({"source_ref":document["source"]["ref"],
+                "document_id":document["document_id"]}), HUMAN).unwrap()
+        }
+    }
+    impl Drop for World {
+        fn drop(&mut self) {
+            let result = (|| {
+                let metadata = fs::symlink_metadata(&self.root)?;
+                if !metadata.is_dir() || metadata.file_type().is_symlink()
+                    || (metadata.dev(), metadata.ino()) != self.identity {
+                    return Err(io::Error::other("owned Receiving fixture root changed affiliation"));
+                }
+                fs::remove_dir_all(&self.root)
+            })();
+            if let Err(error) = result {
+                let message = format!("cleanup owned Receiving fixture {}: {error}", self.root.display());
+                if std::thread::panicking() { eprintln!("{message}"); } else { panic!("{message}"); }
+            }
+        }
+    }
+    struct RestoreMode { path: PathBuf, identity: (u64, u64), permissions: fs::Permissions }
+    impl RestoreMode {
+        fn retain(path: &Path) -> Self {
+            let metadata = fs::symlink_metadata(path).unwrap();
+            assert!(!metadata.file_type().is_symlink());
+            Self { path:path.to_owned(),identity:(metadata.dev(),metadata.ino()),permissions:metadata.permissions() }
+        }
+    }
+    impl Drop for RestoreMode {
+        fn drop(&mut self) {
+            let result = (|| {
+                let metadata = fs::symlink_metadata(&self.path)?;
+                if metadata.file_type().is_symlink() || (metadata.dev(),metadata.ino()) != self.identity {
+                    return Err(io::Error::other("owned Receiving permission fixture changed affiliation"));
+                }
+                fs::set_permissions(&self.path, self.permissions.clone())
+            })();
+            if let Err(error) = result {
+                let message = format!("restore owned Receiving fixture {}: {error}", self.path.display());
+                if std::thread::panicking() { eprintln!("{message}"); } else { panic!("{message}"); }
+            }
+        }
+    }
+    struct PhysicalCheckpoint;
+    impl PhysicalCheckpoint {
+        fn permissions(phase: InclusionCheckpoint, expected: &Path) -> (Self, Rc<RefCell<Option<io::Error>>>) {
+            let expected = expected.to_owned();
+            let oracle = Rc::new(RefCell::new(None));
+            let observed = Rc::clone(&oracle);
+            INCLUSION_PHYSICAL_CHECKPOINT.with(|slot| {
+                assert!(slot.borrow().is_none());
+                *slot.borrow_mut() = Some((phase, Box::new(move |path| {
+                    assert_eq!(path, expected);
+                    // Only real owned filesystem permissions change. The native
+                    // owner still performs the actual operation and gets its IO.
+                    fs::set_permissions(path, fs::Permissions::from_mode(0o555)).unwrap();
+                    let oracle_path = path.join(".receiving-incomplete-unused-os-oracle");
+                    assert!(!oracle_path.exists());
+                    let error = fs::OpenOptions::new().write(true).create_new(true).open(&oracle_path)
+                        .expect_err("owned 0555 directory must refuse actual creation");
+                    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+                    assert_eq!(error.raw_os_error(), Some(libc::EACCES));
+                    assert!(!oracle_path.exists());
+                    *observed.borrow_mut() = Some(error);
+                })));
+            });
+            (Self, oracle)
+        }
+        fn assert_fired(&self) {
+            INCLUSION_PHYSICAL_CHECKPOINT.with(|slot| assert!(slot.borrow().is_none(),
+                "actual native operation did not reach its declared checkpoint"));
+        }
+    }
+    impl Drop for PhysicalCheckpoint {
+        fn drop(&mut self) { INCLUSION_PHYSICAL_CHECKPOINT.with(|slot| { slot.borrow_mut().take(); }); }
+    }
+    fn context(error: &io::Error) -> &InclusionIncomplete {
+        error.get_ref().and_then(|payload| payload.downcast_ref()).expect("actual native inclusion context")
+    }
+    fn formatted(error: &io::Error, action: &str) -> Value {
+        let result = inclusion_failure_result(action, error).expect("native context reaches SAME Action formatter");
+        assert_eq!(result.status, crate::result::ResultStatus::PartialCompletion);
+        let serialized = serde_json::to_value(result).unwrap();
+        assert_eq!(serialized["error"]["code"], "central.receiving.inclusion_incomplete");
+        let details = &serialized["error"]["details"];
+        let raw = serde_json::to_vec(details).unwrap();
+        assert!(raw.len() <= ERROR_DETAILS_PROFILE);
+        let disclosed = std::str::from_utf8(&raw).unwrap();
+        for private in [BODY, HUMAN, AGENT] { assert!(!disclosed.contains(private)); }
+        let debug = format!("{error:?}");
+        for private in [BODY, HUMAN, AGENT] { assert!(!debug.contains(private)); }
+        assert_eq!(details["automatic_retry"], false);
+        serialized
+    }
+    fn prepared_status(world: &World) -> Vec<Value> {
+        fs::read_dir(world.root.join(".central/source-returns/document-mutations")).unwrap().map(|entry| {
+            serde_json::from_slice(&fs::read(entry.unwrap().path()).unwrap()).unwrap()
+        }).collect()
+    }
+    fn move_basis(world: &World, document: &Value) -> Value {
+        world.call("document_mutate", &json!({"source_ref":document["source"]["ref"],
+            "document_id":document["document_id"],"expected_revision":document["revision"]["revision"],
+            "request_id":"human:actual-basis-moved","operation":"entry.add","entry_id":"entry:newer",
+            "contribution_id":"part:newer","html":"<p>actual newer human activity</p>"}), HUMAN).unwrap()
+    }
+    fn interrupted(world: &World, document: &Value, accepted: &Value) -> io::Error {
+        let target = world.root.join(document["source"]["path"].as_str().unwrap());
+        let restore = RestoreMode::retain(&target);
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o444)).unwrap();
+        let error = world.call("receiving_include", &World::include_input(document,accepted), HUMAN).unwrap_err();
+        assert_eq!(context(&error).cause.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(context(&error).cause.raw_os_error(), None);
+        drop(restore);
+        error
+    }
+
+    #[test]
+    fn actual_document_os_failure_and_failed_uncertain_ledger_retain_both_causes() {
+        let world = World::new();
+        let (document, original, submitted, accepted) = world.accepted("dual-os");
+        let target = world.root.join(document["source"]["path"].as_str().unwrap());
+        let before = fs::read(&target).unwrap(); let metadata = fs::symlink_metadata(&target).unwrap();
+        let parent_restore = RestoreMode::retain(target.parent().unwrap());
+        fs::set_permissions(target.parent().unwrap(),fs::Permissions::from_mode(0o555)).unwrap();
+        let source_oracle_path = target.parent().unwrap().join(".source-incomplete-unused-os-oracle");
+        let source_oracle = fs::OpenOptions::new().write(true).create_new(true).open(&source_oracle_path).unwrap_err();
+        assert_eq!(source_oracle.raw_os_error(), Some(libc::EACCES));
+        let ledger = world.root.join(AREA); let ledger_restore = RestoreMode::retain(&ledger);
+        let (checkpoint, oracle) = PhysicalCheckpoint::permissions(InclusionCheckpoint::BeforeLedgerUpdate,&ledger);
+        let error = world.call("receiving_include",&World::include_input(&document,&accepted),HUMAN).unwrap_err();
+        checkpoint.assert_fired();
+        let failure = context(&error);
+        assert_eq!(failure.cause.kind(),source_oracle.kind());
+        assert_eq!(failure.cause.raw_os_error(),source_oracle.raw_os_error());
+        let observed = oracle.borrow(); let observed = observed.as_ref().unwrap();
+        let secondary = failure.receiving_write_error.as_ref().unwrap();
+        assert_eq!(secondary.kind(),observed.kind()); assert_eq!(secondary.raw_os_error(),observed.raw_os_error());
+        let primary = std::error::Error::source(&error).unwrap().downcast_ref::<io::Error>().unwrap();
+        assert!(std::ptr::eq(primary,&failure.cause),"actual original IO object remains source(), not reconstruction");
+        let output = formatted(&error,"central.receiving.include");
+        let details = &output["error"]["details"];
+        assert_eq!(details["causes"]["document"]["raw_os_error"],source_oracle.raw_os_error().unwrap());
+        assert_eq!(details["causes"]["receiving_write"]["raw_os_error"],observed.raw_os_error().unwrap());
+        assert_eq!(details["receiving"]["persistence"],"unconfirmed");
+        assert!(details["receiving"]["update_acknowledged"].is_null());
+        drop(ledger_restore);
+        let current = world.current(&original,&submitted);
+        assert_eq!(current["record"]["status"],"including");
+        assert_eq!(current["revision"],failure.including_revision);
+        let intents = prepared_status(&world); assert_eq!(intents.len(),1); assert_eq!(intents[0]["status"],"prepared");
+        assert_eq!(fs::read(&target).unwrap(),before);
+        let after = fs::symlink_metadata(&target).unwrap(); assert_eq!((after.dev(),after.ino()),(metadata.dev(),metadata.ino()));
+        drop(parent_restore); assert!(!source_oracle_path.exists());
+    }
+
+    #[test]
+    fn actual_readonly_preflight_and_failed_uncertain_ledger_do_not_invent_document_errno() {
+        let world = World::new();
+        let (document, original, submitted, accepted) = world.accepted("dual-preflight");
+        let target = world.root.join(document["source"]["path"].as_str().unwrap());
+        let before = fs::read(&target).unwrap(); let source_restore = RestoreMode::retain(&target);
+        fs::set_permissions(&target,fs::Permissions::from_mode(0o444)).unwrap();
+        let ledger = world.root.join(AREA); let ledger_restore = RestoreMode::retain(&ledger);
+        let (checkpoint,oracle) = PhysicalCheckpoint::permissions(InclusionCheckpoint::BeforeLedgerUpdate,&ledger);
+        let error = world.call("receiving_include",&World::include_input(&document,&accepted),HUMAN).unwrap_err();
+        checkpoint.assert_fired(); let failure = context(&error);
+        assert_eq!(failure.cause.kind(),io::ErrorKind::PermissionDenied); assert_eq!(failure.cause.raw_os_error(),None);
+        assert_eq!(failure.receiving_write_error.as_ref().unwrap().raw_os_error(),oracle.borrow().as_ref().unwrap().raw_os_error());
+        let output = formatted(&error,"central.receiving.include");
+        assert!(output["error"]["details"]["causes"]["document"]["raw_os_error"].is_null());
+        drop(ledger_restore);
+        assert_eq!(world.current(&original,&submitted)["record"]["status"],"including");
+        assert_eq!(fs::read(&target).unwrap(),before); drop(source_restore);
+    }
+
+    #[test]
+    fn actual_committed_document_receipt_survives_failed_included_ledger() {
+        let world = World::new();
+        let (document, original, submitted, accepted) = world.accepted("committed-ledger-failed");
+        let ledger = world.root.join(AREA); let restore = RestoreMode::retain(&ledger);
+        let (checkpoint,oracle) = PhysicalCheckpoint::permissions(InclusionCheckpoint::BeforeLedgerUpdate,&ledger);
+        let error = world.call("receiving_include",&World::include_input(&document,&accepted),HUMAN).unwrap_err();
+        checkpoint.assert_fired(); let failure = context(&error);
+        assert!(!failure.cause_is_document); assert_eq!(failure.cause.raw_os_error(),oracle.borrow().as_ref().unwrap().raw_os_error());
+        let output = formatted(&error,"central.receiving.include"); let details = &output["error"]["details"];
+        assert_eq!(details["document"]["outcome"],"committed"); assert!(details["causes"]["document"].is_null());
+        assert_eq!(details["receiving"]["attempted_status"],"included"); assert_eq!(details["receiving"]["persistence"],"unconfirmed");
+        let committed = world.document_read(&document);
+        assert_eq!(details["document"]["operation_receipt"]["revision"],committed["revision"]["revision"]);
+        assert_ne!(committed["revision"],document["revision"]);
+        assert_eq!(committed["document"]["operations"].as_array().unwrap().len(),1);
+        assert_eq!(committed["document"]["contributions"][0]["author_ref"],"agent:receiving-error-fixture");
+        let intents = prepared_status(&world); assert_eq!(intents.len(),1); assert_eq!(intents[0]["status"],"committed");
+        drop(restore); let current = world.current(&original,&submitted);
+        assert_eq!(current["record"]["status"],"including"); assert_eq!(current["revision"],failure.including_revision);
+        assert_eq!(world.document_read(&document),committed,"native read only, no replay to manufacture success");
+    }
+
+    #[test]
+    fn actual_not_committed_settlement_survives_failed_needs_review_ledger() {
+        let world = World::new();
+        let (document,original,submitted,accepted) = world.accepted("not-committed-ledger-failed");
+        let interrupted = interrupted(&world,&document,&accepted);
+        assert_eq!(context(&interrupted).document_outcome,"unconfirmed");
+        let newer = move_basis(&world,&document);
+        let current = world.current(&original,&submitted);
+        let ledger = world.root.join(AREA); let restore = RestoreMode::retain(&ledger);
+        let (checkpoint,oracle) = PhysicalCheckpoint::permissions(InclusionCheckpoint::BeforeLedgerUpdate,&ledger);
+        let error = world.call("receiving_recover",&World::include_input(&document,&current),HUMAN).unwrap_err();
+        checkpoint.assert_fired(); let failure = context(&error);
+        assert_eq!(failure.cause.kind(),io::ErrorKind::AlreadyExists);
+        assert_eq!(failure.receiving_write_error.as_ref().unwrap().raw_os_error(),oracle.borrow().as_ref().unwrap().raw_os_error());
+        let output = formatted(&error,"central.receiving.recover"); let details = &output["error"]["details"];
+        assert_eq!(details["document"]["outcome"],"not_committed");
+        assert_eq!(details["document"]["settlement_observation"],"not_committed");
+        assert_eq!(details["receiving"]["attempted_status"],"needs-review"); assert_eq!(details["receiving"]["persistence"],"unconfirmed");
+        let intents = prepared_status(&world);
+        assert_eq!(intents.iter().filter(|intent|intent["status"]=="abandoned").count(),1);
+        drop(restore); let after = world.current(&original,&submitted);
+        assert_eq!(after["record"]["status"],"including"); assert_eq!(after["revision"],failure.including_revision);
+        assert!(after["record"]["abandoned_inclusion_requests"].is_null());
+        assert_eq!(world.document_read(&document),newer,"failed recovery does not overwrite newer native source");
+    }
+
+    #[test]
+    fn actual_failed_settlement_persistence_is_retained_separately() {
+        let world = World::new();
+        let (document,original,submitted,accepted) = world.accepted("settlement-failed");
+        let _interrupted = interrupted(&world,&document,&accepted);
+        let newer = move_basis(&world,&document);
+        let current = world.current(&original,&submitted);
+        let intents = world.root.join(".central/source-returns/document-mutations"); let restore = RestoreMode::retain(&intents);
+        let (checkpoint,oracle) = PhysicalCheckpoint::permissions(InclusionCheckpoint::BeforeSettlement,&intents);
+        let error = world.call("receiving_recover",&World::include_input(&document,&current),HUMAN).unwrap_err();
+        checkpoint.assert_fired(); let failure = context(&error);
+        assert_eq!(failure.cause.kind(),io::ErrorKind::AlreadyExists);
+        assert_eq!(failure.settlement_error.as_ref().unwrap().raw_os_error(),oracle.borrow().as_ref().unwrap().raw_os_error());
+        assert!(failure.receiving_write_error.is_none()); assert!(failure.acknowledged_update.is_some());
+        let output = formatted(&error,"central.receiving.recover"); let details = &output["error"]["details"];
+        assert_eq!(details["document"]["settlement_observation"],"unavailable");
+        assert_eq!(details["causes"]["recovery_observation"]["raw_os_error"],oracle.borrow().as_ref().unwrap().raw_os_error().unwrap());
+        assert_eq!(details["receiving"]["persistence"],"acknowledged");
+        let after = world.current(&original,&submitted);
+        assert_eq!(after["record"]["status"],"uncertain");
+        assert_eq!(after["revision"],failure.acknowledged_update.as_ref().unwrap().as_str());
+        assert_eq!(world.document_read(&document),newer);
+        drop(restore);
+        assert_eq!(prepared_status(&world).iter().filter(|intent|intent["status"]=="prepared").count(),1);
+    }
+
+    #[test]
+    fn actual_document_receipt_projection_omits_long_identity_without_copying_body() {
+        let world = World::new();
+        let (document,_,_,_) = world.accepted("long-receipt");
+        let actual = world.call("document_mutate", &json!({"source_ref":document["source"]["ref"],
+            "document_id":document["document_id"],"expected_revision":document["revision"]["revision"],
+            "request_id":"r".repeat(4096),"operation":"entry.add","entry_id":"entry:actual-long-receipt",
+            "contribution_id":"part:actual-long-receipt","html":BODY}),HUMAN).unwrap();
+        let key = actual["operation_receipt"]["request_key"].as_str().unwrap();
+        assert!(key.len()>ERROR_TEXT_PROFILE);
+        let observation = ReceiptObservation::from_result(&actual);
+        let facts = observation.operation.unwrap();
+        assert_eq!(facts["request_key"]["observation_omitted"],"diagnostic_text_profile");
+        assert_eq!(facts["request_key"]["byte_len"],key.len());
+        assert_eq!(facts["revision"],actual["operation_receipt"]["revision"]);
+        let text = serde_json::to_string(&facts).unwrap();
+        for private in [BODY,HUMAN,AGENT] { assert!(!text.contains(private)); }
+        assert!(facts.get("actor").is_none()); assert!(facts.get("document").is_none());
     }
 }

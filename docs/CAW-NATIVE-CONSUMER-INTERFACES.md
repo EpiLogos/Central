@@ -174,6 +174,38 @@ bounded record read; it adds no read registration, cursor increment or store.
 
 Decisions are human-only `central.receiving.review` dispositions: a proposal is `accepted` or `rejected`, a question is `answered` (with `answer`) or `rejected`; any Return may be left `pending` or `acknowledged` (seen, not decided — status unchanged). An optional `note` travels with the decision. A proposal naming an owner (e.g. `factory`) stays open after acceptance until the accepting human records that owner's realisation with `central.receiving.include {realisation_ref, realisation_owner_ref}`; Central never calls the owner, and replaying the same ref is idempotent while a different ref conflicts. Including a contribution keeps its original occurrence and receipt times rather than the review time; a missing occurrence stays missing.
 
+After a contribution's `including` update has been acknowledged, failure to
+complete its document/Receiving acknowledgement returns existing
+`partial_completion` with code `central.receiving.inclusion_incomplete`. The
+original document IO remains the native Rust error cause; actual follow-up
+Receiving and recovery-observation IO are retained separately. Added details
+carry actual IO kinds/raw OS codes (null when a native preflight has no errno),
+the prior acknowledged `including` revision, attempted final status and any
+acknowledged final update. A failed write has `persistence: unconfirmed`: it may
+have renamed before an error. These are invocation observations, not a CURRENT
+receipt state or a proof that the source remained unchanged.
+
+Document `committed`, actual returned operation/replay receipt facts, and an
+actual recovery `not_committed` observation are separate from Receiving's
+persisted `included`/`needs-review` state. No receipt or applied revision is
+invented. Current state remains `central.receiving.read` under its existing
+principal/scope and disclosure rules; neither a failure nor lookup triggers an
+automatic include, resend or recovery. Ordinary successful include/replay and
+successful return-to-review responses, schema, digest, identity and attribution
+are unchanged; unrelated generic IO status/code mappings are unchanged.
+
+Added diagnostic details copy only typed body-free native receipt scalars,
+never the document result, request, token, nested error Display or Debug.
+Strings exceeding 4096 bytes are explicitly omitted with their byte length;
+identities are never truncated/reminted. Actual cause-chain observations stop
+at eight source nodes, with explicit limit disclosure. Added details are bounded
+to 64 KiB, including JSON escaping, by explicit optional-observation omission.
+This bounds new facts, not the existing displayed error text or a universal
+JSON heap. Test-only permission checkpoints exercise actual dual/late ledger
+faults through the native owner and same formatter; the public executable tests
+exercise real single-fault JSON and current readback, not a dual-fault CLI or
+installed/human acceptance claim.
+
 Settled means `included | rejected | answered | cancelled`, or `accepted` for a proposal with no proposed owner. `central.receiving.list` rows carry `kind`, the request subject/owner, `declared_producer`, `summary`, `acknowledged` and `settled`; `open: true` pages only unsettled Returns, and `open_total` is the exact unsettled count for the scope. `central.now.read` composes each Return keyed to the NOW with its `decision` (disposition, answer, note) and `realisation`, so the asking Agent reads the person's decision where it works.
 
 ## Reproduce without a personal installation

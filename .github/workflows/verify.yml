@@ -29,6 +29,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2.9.2
         with:
           cache-on-failure: true
@@ -46,6 +48,44 @@ jobs:
             echo 'fresh-session proving Connector leaked into ctrl core dependencies' >&2
             exit 1
           fi
+
+      - name: Strict native owner lint
+        id: receiving-lint
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/receiving-quality"
+          cargo clippy --locked -p ctrl --lib -- -D warnings 2>&1 | tee "$RUNNER_TEMP/receiving-quality/clippy.log"
+      - name: Qualify formatting without changing tested source
+        id: receiving-format
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/receiving-quality"
+          git rev-parse HEAD > "$RUNNER_TEMP/receiving-quality/source-revision.txt"
+          cp ctrl/src/continuous_work/receiving.rs "$RUNNER_TEMP/receiving-quality/receiving.rs"
+          cp ctrl/tests/continuous_documents_receiving.rs "$RUNNER_TEMP/receiving-quality/continuous_documents_receiving.rs"
+          rustfmt --edition 2021 "$RUNNER_TEMP/receiving-quality/receiving.rs" "$RUNNER_TEMP/receiving-quality/continuous_documents_receiving.rs"
+          status=0
+          diff -u ctrl/src/continuous_work/receiving.rs "$RUNNER_TEMP/receiving-quality/receiving.rs" > "$RUNNER_TEMP/receiving-quality/receiving-format.diff" || status=$?
+          diff -u ctrl/tests/continuous_documents_receiving.rs "$RUNNER_TEMP/receiving-quality/continuous_documents_receiving.rs" > "$RUNNER_TEMP/receiving-quality/integration-format.diff" || status=$?
+          cat "$RUNNER_TEMP/receiving-quality/receiving-format.diff" "$RUNNER_TEMP/receiving-quality/integration-format.diff"
+          git diff --exit-code
+          exit "$status"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: receiving-owner-quality-${{ github.sha }}
+          path: ${{ runner.temp }}/receiving-quality
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain every failed native owner quality gate
+        if: steps.receiving-lint.outcome != 'success' || steps.receiving-format.outcome != 'success'
+        run: exit 1
 
   macos-native:
     runs-on: macos-latest
@@ -66,6 +106,22 @@ jobs:
           git rev-parse HEAD
           shasum -a256 target/debug/ctrl
           python3 ctrl/tests/native/receiving_lookup.py --ctrl "$PWD/target/debug/ctrl"
+      - name: Preserve actual native inclusion causes on macOS
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD > "$RUNNER_TEMP/receiving-inclusion-source.txt"
+          shasum -a256 target/debug/ctrl > "$RUNNER_TEMP/receiving-inclusion-binary.txt"
+          python3 ctrl/tests/native/receiving_inclusion_errors.py --ctrl "$PWD/target/debug/ctrl" | tee "$RUNNER_TEMP/receiving-inclusion-errors.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: receiving-inclusion-macos-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/receiving-inclusion-source.txt
+            ${{ runner.temp }}/receiving-inclusion-binary.txt
+            ${{ runner.temp }}/receiving-inclusion-errors.json
+          retention-days: 7
       - name: Explicit macOS extension acceptance
         run: cargo test -p central-macos-connectors -p central-shortcuts-connector --locked
 

@@ -166,6 +166,9 @@ fn execute(
         }
         Ok(value) => ActionResult::success(action, value),
         Err(error) => {
+            if let Some(result) = receiving::inclusion_failure_result(action, &error) {
+                return result;
+            }
             let (status, code) = match error.kind() {
                 io::ErrorKind::AlreadyExists => (
                     ResultStatus::VerificationFailure,
