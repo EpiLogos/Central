@@ -16,6 +16,29 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{fs, io, path::Path};
 
+/// Context for an actual document-owner failure, after its Receiving intent
+/// has been retained as uncertain. The original IO is preserved as a cause;
+/// retaining the displayed recovery guidance must not erase native evidence.
+#[derive(Debug)]
+struct InclusionNotConfirmed {
+    return_ref: String,
+    cause: io::Error,
+}
+impl std::fmt::Display for InclusionNotConfirmed {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "inclusion not confirmed; inspect/recover {}: {}",
+            self.return_ref, self.cause
+        )
+    }
+}
+impl std::error::Error for InclusionNotConfirmed {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.cause)
+    }
+}
+
 const AREA: &str = ".central/source-returns/contributions";
 const CONTRIBUTION: &str = "contribution";
 const REQUEST: &str = "request";
@@ -791,10 +814,10 @@ fn include(
             write(scope, &record)?;
             Err(io::Error::new(
                 error.kind(),
-                format!(
-                    "inclusion not confirmed; inspect/recover {}: {error}",
-                    record.return_ref
-                ),
+                InclusionNotConfirmed {
+                    return_ref: record.return_ref,
+                    cause: error,
+                },
             ))
         }
     }
