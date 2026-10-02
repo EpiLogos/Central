@@ -59,7 +59,8 @@ pub mod projectcentral_ops {
         ProjectCentralOutcome, SourceSignal, WikiCandidate, PROJECT_PROVENANCE, ROOT_WIKI_REF,
     };
     pub(crate) use super::projectcentral_ops_base::{
-        project_space_ref, project_wiki_value, write_json_new,
+        mutation_failure_result, project_space_ref, project_wiki_value, write_json_new,
+        MutationProgress,
     };
 
     pub fn register_projectcentral_actions(registry: &mut crate::action::ActionRegistry) {
