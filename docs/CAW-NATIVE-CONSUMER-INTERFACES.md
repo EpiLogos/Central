@@ -1,6 +1,6 @@
 # Native continuous-work consumer interfaces
 
-Implementation: Central #150/#153, draft PR #155. These are actual handlers in the existing `ctrl action run` registry, not a proposed schema. Root agency omits `project`; a participating Project supplies its existing immediate `Work` member, e.g. `"project":"one"`. Ordinary external repositories can be authorised by root policy without stamping ProjectCentral into them.
+Initial implementation provenance: Central #150/#153 and PR #155. For current native World/Workcell-root NOW/Day and ordinary Flow operations, use [architecture navigation](ARCHITECTURE-NAVIGATION.md) and the current handler revision; the original draft label is not current implementation standing. These are actual handlers in the existing `ctrl action run` registry, not a proposed schema. Root agency omits `project`; a participating Project supplies its existing immediate `Work` member, e.g. `"project":"one"`. Ordinary external repositories can be authorised by root policy without stamping ProjectCentral into them.
 
 ## Read → allocate → validate
 
