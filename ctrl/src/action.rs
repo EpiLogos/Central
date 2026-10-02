@@ -344,12 +344,15 @@ fn init_action(
             "central.init",
             to_value(initialized).expect("initialization serializes"),
         ),
-        Err(error) => ActionResult::failure(
-            Some("central.init"),
-            ResultStatus::InternalFailure,
-            error.to_string(),
-            None,
-        ),
+        Err(error) => crate::projectcentral_ops::mutation_failure_result("central.init", &error)
+            .unwrap_or_else(|| {
+                ActionResult::failure(
+                    Some("central.init"),
+                    ResultStatus::InternalFailure,
+                    error.to_string(),
+                    None,
+                )
+            }),
     }
 }
 

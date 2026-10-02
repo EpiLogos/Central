@@ -869,6 +869,16 @@ The user must be able to distinguish at least:
 
 The CLI must not collapse these failures into one generic non-zero result without a structured error.
 
+Native source publication distinguishes a refusal before publication from a
+failure to confirm an effect that has already occurred. The latter returns
+`partial_completion` with `central.publication_uncertain`, the actual source
+path, `published: true`, the original I/O cause and `automatic_retry: false`.
+A multi-source operation retains its acknowledged `completed_sources` when a
+later leg fails; `central.mutation_incomplete` does not erase those publications.
+These are invocation-local Return facts, not another persistent journal.
+Compatibility readback after `machine.adopt-current` likewise preserves the
+actual native result and `owner_completed: true` when its projection fails.
+
 ## 21. Security boundary
 
 Core code must treat external commands and Connector input as untrusted operational boundaries.
