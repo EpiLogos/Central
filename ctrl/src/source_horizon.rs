@@ -5,7 +5,7 @@ use crate::action::{
 use crate::control::AGENT_RETRIEVAL_DENY_MARKER;
 use crate::projectcentral::{
     read_project_manifest, AGENT_GOVERNANCE_DIR, ROOT_AGENT_GOVERNANCE_DIR, ROOT_HUMAN_SOURCE_DIR,
-    ROOT_WIKI_DIR, WIKI_DIR,
+    ROOT_WIKI_DIR, ROOT_WIKI_SOURCE, WIKI_DIR, WIKI_SOURCE,
 };
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
@@ -364,14 +364,19 @@ fn excluded_relative(relative: &str, excluded: &str) -> bool {
     relative == excluded || relative.starts_with(&format!("{excluded}/"))
 }
 
-/// These two exact canonical paths carry the native Wiki publisher's stable
-/// physical lock, not WikiDocument content. Other authored lock files and
-/// explicitly declared source relations retain their existing meaning.
-pub(crate) fn is_canonical_wiki_publication_lock(relative: &Path) -> bool {
+/// Only the caller's actual canonical Wiki source gives its stable physical
+/// lock this role. An identical relative path in another register is ordinary
+/// source material; explicitly declared source relations remain unchanged.
+pub(crate) fn is_canonical_wiki_publication_lock(relative: &Path, wiki_source: &str) -> bool {
     matches!(
-        relative.to_str(),
-        Some("Control/agents/wiki/.wiki.json.publication.lock")
-            | Some("ProjectCentral/agents/wiki/.wiki.json.publication.lock")
+        (wiki_source, relative.to_str()),
+        (
+            ROOT_WIKI_SOURCE,
+            Some("Control/agents/wiki/.wiki.json.publication.lock")
+        ) | (
+            WIKI_SOURCE,
+            Some("ProjectCentral/agents/wiki/.wiki.json.publication.lock")
+        )
     )
 }
 
@@ -389,12 +394,26 @@ pub(crate) fn insert_tree_bindings(
 ) -> io::Result<usize> {
     let mut files = Vec::new();
     collect_files(scan_root, world_root, 0, &mut files)?;
+    let wiki_source = if world_ref == CONTROL_WORLD_REF
+        && scan_root == world_root.join(ROOT_WIKI_DIR).as_path()
+    {
+        Some(ROOT_WIKI_SOURCE)
+    } else if world_ref.starts_with("project:")
+        && scan_root == world_root.join(WIKI_DIR).as_path()
+    {
+        Some(WIKI_SOURCE)
+    } else {
+        None
+    };
     let mut seen = 0usize;
     for file in files {
         let relative = normalize_relative(file.strip_prefix(world_root).map_err(|_| {
             io::Error::new(io::ErrorKind::InvalidData, "source escaped its world root")
         })?);
-        if is_canonical_wiki_publication_lock(Path::new(&relative))
+        let publication_lock = wiki_source.is_some_and(|source| {
+            is_canonical_wiki_publication_lock(Path::new(&relative), source)
+        });
+        if publication_lock
             || exclude
                 .iter()
                 .any(|excluded| excluded_relative(&relative, excluded))
