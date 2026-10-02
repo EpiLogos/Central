@@ -418,7 +418,13 @@ fn skipped_directory(name: &str) -> bool {
 /// Counts ordinary files without reading any content. Symlinks never count, and
 /// an unreadable subtree counts whatever is readable, because a map reports the
 /// world it can see rather than failing the whole tree.
-fn count_files(directory: &Path, depth: usize, excluded: &[&str], count: &mut usize) {
+fn count_files(
+    world_root: &Path,
+    directory: &Path,
+    depth: usize,
+    excluded: &[&str],
+    count: &mut usize,
+) {
     if depth > MAX_SCAN_DEPTH {
         return;
     }
@@ -437,9 +443,16 @@ fn count_files(directory: &Path, depth: usize, excluded: &[&str], count: &mut us
         let name = entry.file_name().to_string_lossy().into_owned();
         if file_type.is_dir() {
             if !skipped_directory(&name) && !excluded.contains(&name.as_str()) {
-                count_files(&entry.path(), depth + 1, excluded, count);
+                count_files(world_root, &entry.path(), depth + 1, excluded, count);
             }
         } else if file_type.is_file() && name != AGENT_RETRIEVAL_DENY_MARKER {
+            if entry
+                .path()
+                .strip_prefix(world_root)
+                .is_ok_and(crate::source_horizon::is_canonical_wiki_publication_lock)
+            {
+                continue;
+            }
             *count += 1;
         }
     }
@@ -450,7 +463,7 @@ fn source_area(central_root: &Path, relative: &str) -> SourceArea {
     let exists = path.is_dir();
     let mut sources = 0;
     if exists {
-        count_files(&path, 0, &[], &mut sources);
+        count_files(central_root, &path, 0, &[], &mut sources);
     }
     SourceArea {
         path: relative.to_owned(),
@@ -935,7 +948,13 @@ fn map_project(central_root: &Path, work_root: &Path, name: &str) -> ProjectMap 
     let project_root = work_root.join(name);
     let relative = format!("Work/{name}");
     let mut source_files = 0;
-    count_files(&project_root, 0, &[PROJECTCENTRAL_DIR], &mut source_files);
+    count_files(
+        &project_root,
+        &project_root,
+        0,
+        &[PROJECTCENTRAL_DIR],
+        &mut source_files,
+    );
     let projectcentral = map_projectcentral(central_root, &project_root, &relative);
     ProjectMap {
         name: name.to_owned(),
