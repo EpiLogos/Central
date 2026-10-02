@@ -58,6 +58,14 @@ jobs:
           cache-on-failure: true
       - name: Native source publication and compatibility on macOS
         run: cargo test -p ctrl --locked
+      - name: Recover an actual native Return after lost stdout on macOS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build -p ctrl --locked
+          git rev-parse HEAD
+          shasum -a256 target/debug/ctrl
+          python3 ctrl/tests/native/receiving_lookup.py --ctrl "$PWD/target/debug/ctrl"
       - name: Explicit macOS extension acceptance
         run: cargo test -p central-macos-connectors -p central-shortcuts-connector --locked
 

@@ -239,17 +239,65 @@ fn next_sequence(scope: &Scope) -> io::Result<u64> {
     )?;
     Ok(next)
 }
+fn receipt_reference(scope: &Scope, principal: &Principal, producer_key: &str) -> String {
+    format!("central:return:{}:{}", scope.world_ref,
+        source::key(&format!("{}\n{}", principal.principal_ref, producer_key)))
+}
+fn request_digest(input: &Value) -> io::Result<String> {
+    Ok(source::key(&serde_json::to_string(input)?))
+}
+/// Recover a producer's existing receipt without repeating arrival. Claimed
+/// producer labels never choose the authenticated carrier or its address.
+fn read_return(scope: &Scope, input: &Value, token: Option<&str>, now: u64) -> io::Result<Value> {
+    let reference = optional(input, "return_ref")?;
+    let producer_key = optional(input, "producer_key")?;
+    let expected_authority = optional(input, "expected_authority_revision")?;
+    let original = match input.get("original_request") {
+        None | Some(Value::Null) => None,
+        Some(value @ Value::Object(_)) => Some(value),
+        _ => return Err(invalid("original_request requires an object or null")),
+    };
+    if let (Some(key), Some(original)) = (producer_key.as_deref(), original) {
+        if text(original, "producer_key")? != key {
+            return Err(invalid("original_request producer_key differs from the lookup key"));
+        }
+    }
+    match (reference, producer_key) {
+        (Some(reference), None) => {
+            if original.is_some() || expected_authority.is_some() {
+                return Err(invalid("original_request and expected_authority_revision require the producer_key selector"));
+            }
+            let (record, revision) = read_record(scope, &reference)?;
+            require_disclosure(scope, &record)?;
+            Ok(response(&record, &revision))
+        }
+        (None, Some(producer_key)) => {
+            // Current permission to originate this scope's receipt establishes
+            // the carrier identity. Current disclosure remains a separate gate.
+            let principal = authority::authenticate(scope, token, "central.receiving.submit",
+                expected_authority.as_deref(), now)?;
+            let reference = receipt_reference(scope, &principal, &producer_key);
+            let (record, revision) = read_record(scope, &reference)?;
+            if record.author.principal_ref != principal.principal_ref {
+                return Err(conflict("Return receipt attribution differs from its authenticated producer"));
+            }
+            if let Some(original) = original {
+                if request_digest(original)? != record.request_digest {
+                    return Err(conflict("Return producer key has a different original request"));
+                }
+            }
+            require_disclosure(scope, &record)?;
+            let mut reading = response(&record, &revision);
+            reading["lookup"] = json!({"selector":"authenticated_producer_key",
+                "original_request_verified":original.is_some()});
+            Ok(reading)
+        }
+        _ => Err(invalid("receiving.read requires exactly one return_ref or producer_key selector")),
+    }
+}
 fn submit(scope: &Scope, input: &Value, principal: &Principal, now: u64) -> io::Result<Value> {
-    let reference = format!(
-        "central:return:{}:{}",
-        scope.world_ref,
-        source::key(&format!(
-            "{}\n{}",
-            principal.principal_ref,
-            text(input, "producer_key")?
-        ))
-    );
-    let digest = source::key(&serde_json::to_string(input)?);
+    let reference = receipt_reference(scope, principal, text(input, "producer_key")?);
+    let digest = request_digest(input)?;
     match read_record(scope, &reference) {
         Ok((existing, revision)) => {
             if existing.request_digest != digest
@@ -895,11 +943,7 @@ pub(crate) fn dispatch(
     let _sources = source::lock(scope)?;
     match operation {
         "receiving_list" => return list(scope, input),
-        "receiving_read" => {
-            let (record, revision) = read_record(scope, text(input, "return_ref")?)?;
-            require_disclosure(scope, &record)?;
-            return Ok(response(&record, &revision));
-        }
+        "receiving_read" => return read_return(scope, input, token, now),
         _ => {}
     }
     let action = match operation {
