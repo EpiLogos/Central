@@ -7,6 +7,14 @@ provenance: human-adopted
 temporal: docs update after Central #134
 ```
 
+Historical continuity contract: the native FlowRef registry and its
+`projectcentral.flow.*` operations were retired in Central #177. The domain
+account below preserves its #134 design basis; its action list and registry
+paths are historical. Use [Native Source Return](SOURCE-RETURN.md#flow-disclosure-seam-retired)
+and [current architecture navigation](ARCHITECTURE-NAVIGATION.md) for the
+implemented ordinary Flow source route. The DAY snapshot description below does
+not establish an executed current ordinary-Flow/Day join.
+
 A Flow is the continuity identity of one developing linguistic or conceptual thread over an ordinary file. Central owns that identity, revision-safe mutation, revision provenance, Source Change Horizon participation, and the DAY snapshot relation.
 
 This contract is the continuity law of the temporal working field. The ordinary file remains the human-facing source. Structured owner state lives under `.central/` at the register root and is derived operational metadata rather than visible frontmatter.
@@ -85,7 +93,7 @@ DAY close snapshots the exact current revision of every registered Flow into the
 
 A Flow can remain active through several DAY boundaries while each DAY preserves the exact revision present at close.
 
-Implementation standing: `projectcentral.now.rollover` currently requires `project` and snapshots the project register. Root DAY close follows the same snapshot law through the root field's mirroring procedure until a native root NOW Action exists. `projectcentral.flow.now` already reads both registers.
+Initial implementation standing (historical): `projectcentral.now.rollover` required `project` and snapshotted the project register; the initial root DAY path used the mirroring procedure. The former `projectcentral.flow.now` read both registers before the registry was retired. Native root NOW/Day Actions now exist; [current architecture navigation](ARCHITECTURE-NAVIGATION.md) names their owner. Their existence alone does not verify the historical registered-Flow snapshot relation or the current ordinary-Flow/Day join.
 
 ## Authority boundaries
 
@@ -111,3 +119,19 @@ Work/<project>/.central/flow-revisions/
 `projectcentral.flow.adopt` can give an existing retained Project file a FlowRef without moving it; for example `notes/2026-08-23-2310.md` remains in `notes/`.
 
 `projectcentral.now.init` opts a valid ProjectCentral into the NOW field. It does not create `flows/`. The first create (or an explicit path) materialises the directory. The current Flow file remains freely refinable.
+
+## Ordinary plural Flow operation, 2 October 2026
+
+The current ordinary plural `ql-doc` HTML file uses native `central.flow.read`
+and `central.flow.append` through the existing file owner's source CAS and
+history. Its implementation is `ctrl/src/flow_append.rs`; the authorised path is
+`Control/user/flows/`. It does not recreate the retired registry above.
+
+AIKit owns recipient-specific request dispatch, reading and reply inclusion
+through `conversation-send`, `conversation-read`, `conversation-list` and
+`conversation-reconcile` JSON actions on `aikit session-space encounter`.
+Requests and delivery cursors persist separately from the Flow source; uncertain
+delivery is not automatically replayed. See [architecture navigation](ARCHITECTURE-NAVIGATION.md)
+for exact owner/source revisions and the O:I plural specification for the
+experience. Central source append, participant delivery and returned reply
+inclusion are separate effects.
