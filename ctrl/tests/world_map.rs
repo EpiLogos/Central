@@ -13,7 +13,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static NEXT_TEMP_ROOT: AtomicU64 = AtomicU64::new(0);
 
-struct TempRoot(PathBuf);
+struct TempRoot {
+    outer: PathBuf,
+    central: PathBuf,
+}
 
 impl TempRoot {
     fn new(label: &str) -> Self {
@@ -22,22 +25,29 @@ impl TempRoot {
             .unwrap()
             .as_nanos();
         let sequence = NEXT_TEMP_ROOT.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
+        let scratch = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../ProjectCentral/now/tmp");
+        fs::create_dir_all(&scratch).unwrap();
+        let outer = scratch.join(format!(
             "central-world-map-{label}-{}-{nonce}-{sequence}",
             std::process::id()
         ));
-        fs::create_dir_all(&path).unwrap();
-        Self(path.join("Central"))
+        // Exclusive child creation admits this fixture's exact outer lifetime.
+        // An existing path is never adopted or removed by this fixture.
+        fs::create_dir(&outer).unwrap();
+        Self {
+            central: outer.join("Central"),
+            outer,
+        }
     }
 
     fn path(&self) -> &Path {
-        &self.0
+        &self.central
     }
 }
 
 impl Drop for TempRoot {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+        let _ = fs::remove_dir_all(&self.outer);
     }
 }
 
@@ -1111,4 +1121,42 @@ fn native_wiki_publication_locks_stay_material_and_do_not_become_sources() {
     assert_eq!(map.control.source_bindings, control_before.len() + 3);
     assert_eq!(fs::read(child_control_source).unwrap(), authored);
     assert_eq!(ground_fingerprint(root), before);
+}
+
+#[test]
+fn fixture_drop_releases_outer_and_preserves_neighbouring_native_ground() {
+    let fixture = healthy_ground("fixture-cleanup");
+    let sibling = healthy_ground("fixture-neighbour");
+    let scratch = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../ProjectCentral/now/tmp");
+    let outer = fixture.outer.clone();
+    let inner = fixture.path().to_path_buf();
+    let sibling_outer = sibling.outer.clone();
+    let sibling_inner = sibling.path().to_path_buf();
+    assert_eq!(outer.parent(), Some(scratch.as_path()));
+    assert_eq!(inner.parent(), Some(outer.as_path()));
+    assert_eq!(
+        inner.file_name().and_then(|name| name.to_str()),
+        Some("Central")
+    );
+    assert!(outer.is_dir());
+    assert!(inner.is_dir());
+    assert_ne!(outer, sibling_outer);
+
+    let unselected = sibling.path().join("Control/user/fixture-neighbour-source.md");
+    let bytes = b"neighbour fixture retains its exact authored source bytes\n";
+    fs::write(&unselected, bytes).unwrap();
+    let before = ground_fingerprint(sibling.path());
+    drop(fixture);
+    assert!(!outer.exists(), "the admitted outer directory must be released");
+    assert!(!inner.exists(), "the native inner Central is inside that lifetime");
+    assert!(scratch.is_dir(), "shared ProjectCentral scratch remains owned by NOW");
+    assert!(sibling_outer.is_dir());
+    assert!(sibling_inner.is_dir());
+    assert_eq!(fs::read(&unselected).unwrap(), bytes);
+    assert_eq!(ground_fingerprint(sibling.path()), before);
+
+    drop(sibling);
+    assert!(!sibling_outer.exists());
+    assert!(!sibling_inner.exists());
+    assert!(scratch.is_dir());
 }
