@@ -1893,16 +1893,20 @@ mod tests {
 
         let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
         let candidate = listener.local_addr().unwrap().port();
-        // The port is free on loopback-adjacent scopes the moment the
-        // wildcard listener disappears, but while it is held on the wildcard
-        // binding it is occupied on every interface and must not be offered.
+        // Hold the wildcard listener through both owner observations. A
+        // released ephemeral port is not a lease and may be claimed by another
+        // process before the next probe.
         let result = suggest_central_local_endpoint(&central, candidate, candidate);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::NotFound);
-        drop(listener);
 
-        let suggestion = suggest_central_local_endpoint(&central, candidate, candidate).unwrap();
-        assert_eq!(suggestion.port, candidate);
+        let range_start = candidate.saturating_sub(63).max(1);
+        let suggestion = suggest_central_local_endpoint(&central, range_start, candidate).unwrap();
+        assert_eq!(suggestion.range_start, range_start);
+        assert_eq!(suggestion.range_end, candidate);
+        assert!((range_start..=candidate).contains(&suggestion.port));
+        assert_ne!(suggestion.port, candidate);
+        assert_eq!(suggestion.protocol, "tcp");
         assert_eq!(suggestion.scope, SCOPE_LOCALHOST);
         assert!(suggestion
             .free_in
