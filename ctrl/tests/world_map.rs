@@ -1088,4 +1088,27 @@ fn native_wiki_publication_locks_stay_material_and_do_not_become_sources() {
     let projection = map_project_world(root, "garden").unwrap();
     assert_eq!(projection.sources.bindings, project_before.len() + 3);
     assert_eq!(projection.project.projectcentral.agent_wiki.sources, 4);
+
+    // This is ordinary native Project content, not this Project's canonical
+    // Wiki lock: the root register's spelling grants it no material role here.
+    let child_control_source = project.join("Control/agents/wiki/.wiki.json.publication.lock");
+    let authored = b"ordinary child Control source; preserve this file\n";
+    fs::create_dir_all(child_control_source.parent().unwrap()).unwrap();
+    fs::write(&child_control_source, authored).unwrap();
+    let source_files_before = projection.project.source_files;
+    let before = ground_fingerprint(root);
+    let projection = map_project_world(root, "garden").unwrap();
+    assert_eq!(projection.project.source_files, source_files_before + 1);
+    let map = map_world(root).unwrap();
+    let garden = map
+        .work
+        .projects
+        .iter()
+        .find(|project| project.name == "garden")
+        .unwrap();
+    assert_eq!(garden.source_files, source_files_before + 1);
+    assert_eq!(projection.sources.bindings, project_before.len() + 3);
+    assert_eq!(map.control.source_bindings, control_before.len() + 3);
+    assert_eq!(fs::read(child_control_source).unwrap(), authored);
+    assert_eq!(ground_fingerprint(root), before);
 }

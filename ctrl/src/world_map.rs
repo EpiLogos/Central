@@ -423,6 +423,7 @@ fn count_files(
     directory: &Path,
     depth: usize,
     excluded: &[&str],
+    wiki_source: Option<&str>,
     count: &mut usize,
 ) {
     if depth > MAX_SCAN_DEPTH {
@@ -443,14 +444,21 @@ fn count_files(
         let name = entry.file_name().to_string_lossy().into_owned();
         if file_type.is_dir() {
             if !skipped_directory(&name) && !excluded.contains(&name.as_str()) {
-                count_files(world_root, &entry.path(), depth + 1, excluded, count);
+                count_files(
+                    world_root,
+                    &entry.path(),
+                    depth + 1,
+                    excluded,
+                    wiki_source,
+                    count,
+                );
             }
         } else if file_type.is_file() && name != AGENT_RETRIEVAL_DENY_MARKER {
-            if entry
-                .path()
-                .strip_prefix(world_root)
-                .is_ok_and(crate::source_horizon::is_canonical_wiki_publication_lock)
-            {
+            if wiki_source.is_some_and(|source| {
+                entry.path().strip_prefix(world_root).is_ok_and(|relative| {
+                    crate::source_horizon::is_canonical_wiki_publication_lock(relative, source)
+                })
+            }) {
                 continue;
             }
             *count += 1;
@@ -461,9 +469,14 @@ fn count_files(
 fn source_area(central_root: &Path, relative: &str) -> SourceArea {
     let path = central_root.join(relative);
     let exists = path.is_dir();
+    let wiki_source = match relative {
+        crate::projectcentral::ROOT_WIKI_DIR => Some(ROOT_WIKI_SOURCE),
+        WIKI_DIR => Some(WIKI_SOURCE),
+        _ => None,
+    };
     let mut sources = 0;
     if exists {
-        count_files(central_root, &path, 0, &[], &mut sources);
+        count_files(central_root, &path, 0, &[], wiki_source, &mut sources);
     }
     SourceArea {
         path: relative.to_owned(),
@@ -953,6 +966,7 @@ fn map_project(central_root: &Path, work_root: &Path, name: &str) -> ProjectMap 
         &project_root,
         0,
         &[PROJECTCENTRAL_DIR],
+        None,
         &mut source_files,
     );
     let projectcentral = map_projectcentral(central_root, &project_root, &relative);
