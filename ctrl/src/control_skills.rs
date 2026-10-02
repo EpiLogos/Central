@@ -783,17 +783,29 @@ pub(crate) fn insert_skill_bindings(
     skills_root: &Path,
     world_ref: &str,
     bindings: &mut BTreeMap<String, SourceBinding>,
+    explicit_members: &std::collections::BTreeSet<PathBuf>,
 ) -> io::Result<()> {
     for name in child_directories(skills_root)? {
         let skill_dir = skills_root.join(&name);
-        let manifest = read_skill_manifest(&skill_dir)?;
-        let (provenance, standing) = manifest_horizon_metadata(manifest.as_ref());
+        let mut metadata = None;
         let mut files = Vec::new();
         collect_files(&skill_dir, world_root, 0, &mut files)?;
         for file in files {
             let relative = normalize_relative(file.strip_prefix(world_root).map_err(|_| {
                 io::Error::new(io::ErrorKind::InvalidData, "source escaped its world root")
             })?);
+            if explicit_members.contains(&crate::source_safety::normal_member_key(&relative)?) {
+                continue;
+            }
+            // Explicit accepted Source metadata supersedes this manifest for
+            // that member. A remaining Skill fallback still needs the same
+            // native parser and standing; malformed input is never swallowed.
+            if metadata.is_none() {
+                let manifest = read_skill_manifest(&skill_dir)?;
+                metadata = Some(manifest_horizon_metadata(manifest.as_ref()));
+            }
+            let (provenance, standing) = metadata.as_ref()
+                .expect("remaining Skill member initialized its native metadata");
             let reference = source_ref(world_ref, &relative);
             bindings.insert(
                 reference.clone(),

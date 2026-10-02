@@ -48,7 +48,8 @@ impl Drop for TempRoot {
 }
 
 fn execute(root: &Path, action: &str, input: serde_json::Value) -> central_ctrl::ActionResult {
-    let registry = create_core_action_registry();
+    let mut registry = create_core_action_registry();
+    central_ctrl::projectcentral_ops::register_projectcentral_actions(&mut registry);
     let connectors = ConnectorRegistry::default();
     let connector_context = ConnectorContext {
         platform: "test".to_owned(),

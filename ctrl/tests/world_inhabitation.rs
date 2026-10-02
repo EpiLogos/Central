@@ -320,10 +320,11 @@ fn world_here_places_a_path_in_the_local_and_project_world() {
     // outside Central and a path that does not exist are all results.
     let bare = world.here(&world.root().join("Work/bare/src"));
     assert_eq!(bare["project_world"]["state"], "absent");
-    assert!(bare["project_world"]["reason"]
-        .as_str()
-        .unwrap()
-        .contains("has no ProjectCentral"));
+    assert_eq!(bare["project_world"]["absence_kind"], "projectcentral-manifest-absent");
+    assert_eq!(bare["project_world"]["work_member_present"], true);
+    assert_eq!(bare["project_world"]["name"], "bare");
+    assert_eq!(bare["project_world"]["source"], "Work/bare/ProjectCentral/project.json");
+    assert!(!bare["project_world"]["reason"].as_str().unwrap().is_empty());
     for cwd in [
         world.root().to_path_buf(),
         world.root().join("Control/user"),

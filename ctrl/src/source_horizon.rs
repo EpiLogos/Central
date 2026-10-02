@@ -285,6 +285,24 @@ pub fn content_revision(path: &Path) -> io::Result<SourceRevision> {
 /// An absent final member is permitted for existing creation/dummy-member
 /// callers, without claiming that the material exists or can be delivered.
 pub(crate) fn retrieval_admission(world_root: &Path, source: &Path) -> io::Result<bool> {
+    retrieval_path_admission(world_root, source, false)
+}
+
+/// Creation observes the same existing ancestor treatments and physical form,
+/// but a genuinely absent suffix can be prepared by the native creator. This
+/// is no evidence of material, Source identity, delivery or write authority.
+pub(crate) fn retrieval_creation_admission(world_root: &Path, destination: &Path) -> io::Result<bool> {
+    retrieval_path_admission(world_root, destination, true)
+}
+
+#[cfg(test)]
+type CreationRootCheckpoint = Box<dyn FnOnce()>;
+#[cfg(test)]
+thread_local! {
+    static AFTER_CREATION_ROOT_CAPTURE: std::cell::RefCell<Option<CreationRootCheckpoint>> = const { std::cell::RefCell::new(None) };
+}
+
+fn retrieval_path_admission(world_root: &Path, source: &Path, allow_absent_suffix: bool) -> io::Result<bool> {
     use std::os::unix::fs::MetadataExt;
 
     let relative = source.strip_prefix(world_root).map_err(|_| {
@@ -315,6 +333,11 @@ pub(crate) fn retrieval_admission(world_root: &Path, source: &Path) -> io::Resul
         }
         Ok(())
     };
+    #[cfg(test)]
+    if allow_absent_suffix {
+        let checkpoint = AFTER_CREATION_ROOT_CAPTURE.with(|checkpoint| checkpoint.borrow_mut().take());
+        if let Some(checkpoint) = checkpoint { checkpoint(); }
+    }
     let mut current = canonical.clone();
     if marker(&current)? {
         check_root()?;
@@ -325,7 +348,8 @@ pub(crate) fn retrieval_admission(world_root: &Path, source: &Path) -> io::Resul
         current.push(part.as_os_str());
         let metadata = match fs::symlink_metadata(&current) {
             Ok(metadata) => metadata,
-            Err(error) if error.kind() == io::ErrorKind::NotFound && index + 1 == parts.len() => {
+            Err(error) if error.kind() == io::ErrorKind::NotFound
+                && (allow_absent_suffix || index + 1 == parts.len()) => {
                 check_root()?;
                 return Ok(true);
             }
@@ -616,6 +640,10 @@ pub fn project_source_bindings(project_root: &Path) -> io::Result<Vec<SourceBind
         ));
     }
     let world_ref = format!("project:{}", manifest.project_id);
+    let relations = read_ground_relations(project_root, &manifest.project_id)?;
+    let explicit_members = relations.iter()
+        .map(|relation| crate::source_safety::normal_member_key(&relation.path))
+        .collect::<io::Result<BTreeSet<_>>>()?;
     let mut bindings = BTreeMap::<String, SourceBinding>::new();
 
     // Skill ground participates first so a skill source keeps one logical
@@ -628,6 +656,7 @@ pub fn project_source_bindings(project_root: &Path) -> io::Result<Vec<SourceBind
             .join(crate::control_skills::SKILLS_SEGMENT),
         &world_ref,
         &mut bindings,
+        &explicit_members,
     )?;
 
     insert_tree_bindings(
@@ -664,7 +693,26 @@ pub fn project_source_bindings(project_root: &Path) -> io::Result<Vec<SourceBind
         &mut bindings,
     )?;
 
-    for relation in read_ground_relations(project_root, &manifest.project_id)? {
+    // Current accepted ProjectCentral already supports Wiki sources retained in place. They are
+    // participants, not generic Project truth, and therefore retain an explicit Wiki role.
+    for adopted in &manifest.wiki.adopted_sources {
+        validate_project_member(adopted)?;
+        let path = project_root.join(adopted);
+        if safe_regular_file(project_root, &path)? {
+            let reference = source_ref(&world_ref, adopted);
+            bindings.entry(reference.clone()).or_insert(SourceBinding {
+                source_ref: reference,
+                path: adopted.clone(),
+                roles: vec!["adopted-agent-wiki-source".to_owned()],
+                provenance: "unresolved".to_owned(),
+                standing: "unspecified".to_owned(),
+                treatment: "retain-native-in-place".to_owned(),
+                agent_retrieval_allowed: retrieval_allowed(project_root, &path),
+            });
+        }
+    }
+
+    for relation in relations {
         let relative = relation.path.clone();
         let path = project_root.join(&relative);
         if !safe_regular_file(project_root, &path)? {
@@ -694,30 +742,16 @@ pub fn project_source_bindings(project_root: &Path) -> io::Result<Vec<SourceBind
         );
     }
 
-    // Current accepted ProjectCentral already supports Wiki sources retained in place. They are
-    // participants, not generic Project truth, and therefore retain an explicit Wiki role.
-    for adopted in &manifest.wiki.adopted_sources {
-        validate_project_member(adopted)?;
-        let path = project_root.join(adopted);
-        if safe_regular_file(project_root, &path)? {
-            let reference = source_ref(&world_ref, adopted);
-            bindings.entry(reference.clone()).or_insert(SourceBinding {
-                source_ref: reference,
-                path: adopted.clone(),
-                roles: vec!["adopted-agent-wiki-source".to_owned()],
-                provenance: "unresolved".to_owned(),
-                standing: "unspecified".to_owned(),
-                treatment: "retain-native-in-place".to_owned(),
-                agent_retrieval_allowed: retrieval_allowed(project_root, &path),
-            });
-        }
-    }
 
     Ok(bindings.into_values().collect())
 }
 
 pub fn control_source_bindings(central_root: &Path) -> io::Result<Vec<SourceBinding>> {
     let world_ref = CONTROL_WORLD_REF;
+    let relations = read_control_ground_relations(central_root)?;
+    let explicit_members = relations.iter()
+        .map(|relation| crate::source_safety::normal_member_key(&relation.path))
+        .collect::<io::Result<BTreeSet<_>>>()?;
     let mut bindings = BTreeMap::<String, SourceBinding>::new();
     // Skill ground participates first (same law as the project side): skill
     // sources bind under the control-skill treatment with standing/provenance
@@ -729,6 +763,7 @@ pub fn control_source_bindings(central_root: &Path) -> io::Result<Vec<SourceBind
         &central_root.join(crate::control_skills::PERSONAL_SKILL_DIR),
         world_ref,
         &mut bindings,
+        &explicit_members,
     )?;
     if let Ok(machines) =
         crate::control_skills::child_directories(&central_root.join("Control/machines"))
@@ -742,6 +777,7 @@ pub fn control_source_bindings(central_root: &Path) -> io::Result<Vec<SourceBind
                     .join(crate::control_skills::SKILLS_SEGMENT),
                 world_ref,
                 &mut bindings,
+                &explicit_members,
             )?;
         }
     }
@@ -759,7 +795,7 @@ pub fn control_source_bindings(central_root: &Path) -> io::Result<Vec<SourceBind
         )?;
     }
 
-    for relation in read_control_ground_relations(central_root)? {
+    for relation in relations {
         let relative = relation.path.clone();
         let path = central_root.join(&relative);
         if !safe_regular_file(central_root, &path)? {
@@ -1427,5 +1463,282 @@ mod retrieval_tests {
         assert_eq!(error.kind(), actual.kind());
         assert_eq!(error.raw_os_error(), actual.raw_os_error());
         assert!(!retrieval_allowed(&ground.0, &directory));
+    }
+
+
+    fn declared_fixture_member(reference: &str, path: &str, role: &str) -> SourceBinding {
+        SourceBinding {
+            source_ref: reference.to_owned(), path: path.to_owned(), roles: vec![role.to_owned()],
+            provenance: "agent-maintained".to_owned(), standing: "durable-source".to_owned(),
+            treatment: "retain-native-fixture".to_owned(), agent_retrieval_allowed: true,
+        }
+    }
+
+    fn bind_fixture_member(scope: &crate::continuous_work::source::Scope, binding: &SourceBinding) {
+        let _mutation = crate::source_safety::lock(&scope.root, "source-mutation.lock").unwrap();
+        scope.bind(binding, 1).unwrap();
+    }
+
+    fn retained_fixture_file(path: &Path) -> (Vec<u8>, u64, u64, SystemTime) {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = fs::symlink_metadata(path).unwrap();
+        (fs::read(path).unwrap(), metadata.dev(), metadata.ino(), metadata.modified().unwrap())
+    }
+
+    fn one_fixture_member<'a>(bindings: &'a [SourceBinding], path: &str) -> &'a SourceBinding {
+        let key = crate::source_safety::normal_member_key(path).unwrap();
+        let members = bindings.iter().filter(|binding|
+            crate::source_safety::normal_member_key(&binding.path).unwrap() == key).collect::<Vec<_>>();
+        assert_eq!(members.len(), 1, "one current Source identity per declared member: {path}");
+        members[0]
+    }
+
+    #[test]
+    fn explicit_personal_and_machine_sources_do_not_parse_superseded_malformed_skill_manifests() {
+        let ground = Ground::new();
+        crate::initialize_central(&ground.0).unwrap();
+        let scope = crate::continuous_work::source::Scope::resolve(&ground.0, None).unwrap();
+        let mut expected = Vec::new();
+        let mut retained = Vec::new();
+        for (index, base) in ["Control/user/skills/Owned", "Control/machines/native-fixture/skills/Owned"].iter().enumerate() {
+            fs::create_dir_all(ground.0.join(base)).unwrap();
+            for (member, content) in [("SKILL.md", "explicit native body"), ("skill.json", "{not-json")] {
+                let actual = format!("{base}/{member}");
+                let literal = format!("{base}//./{member}");
+                fs::write(ground.0.join(&actual), content).unwrap();
+                let binding = declared_fixture_member(&format!("fixture:explicit:{index}:{member}"), &literal, "selected-native-source");
+                bind_fixture_member(&scope, &binding);
+                retained.push((actual, retained_fixture_file(&ground.0.join(&literal))));
+                expected.push((binding, content));
+            }
+        }
+        let sibling = "Control/user/skills/Open/SKILL.md";
+        fs::create_dir_all(ground.0.join("Control/user/skills/Open")).unwrap();
+        fs::write(ground.0.join(sibling), "unbound useful sibling").unwrap();
+        let relation_before = retained_fixture_file(&ground.0.join(CONTROL_GROUND_RELATIONS_SOURCE));
+        let bindings = control_source_bindings(&ground.0).unwrap();
+        for (binding, content) in expected {
+            assert_eq!(one_fixture_member(&bindings, &binding.path), &binding);
+            let reading = scope.read(&binding.source_ref).unwrap();
+            assert_eq!(reading.source, binding);
+            assert_eq!(reading.content, content);
+            assert_eq!(reading.revision.revision, crate::source_safety::content_revision_bytes(content.as_bytes()));
+        }
+        let open = one_fixture_member(&bindings, sibling);
+        assert_eq!(open.roles, vec!["skill-source"]);
+        assert_eq!(open.treatment, crate::control_skills::CONTROL_SKILL_TREATMENT);
+        assert_eq!(open.provenance, "unresolved");
+        assert_eq!(open.standing, "unspecified");
+        assert_eq!(scope.read(&open.source_ref).unwrap().content, "unbound useful sibling");
+        let report = reconcile_control_sources(&ground.0).unwrap();
+        assert!(report.horizon.sources.iter().any(|source| source.binding == *open));
+        for (path, before) in retained {
+            assert_eq!(retained_fixture_file(&ground.0.join(path)), before);
+        }
+        assert_eq!(retained_fixture_file(&ground.0.join(CONTROL_GROUND_RELATIONS_SOURCE)), relation_before);
+    }
+
+    #[test]
+    fn partial_and_unoverridden_skill_members_keep_native_manifest_failures() {
+        let ground = Ground::new();
+        crate::initialize_central(&ground.0).unwrap();
+        let scope = crate::continuous_work::source::Scope::resolve(&ground.0, None).unwrap();
+        let base = "Control/user/skills/Partial";
+        fs::create_dir_all(ground.0.join(base)).unwrap();
+        for (member, content) in [("SKILL.md", "selected body"), ("skill.json", "{malformed"), ("resource.txt", "remaining fallback")] {
+            let path = format!("{base}/{member}");
+            fs::write(ground.0.join(&path), content).unwrap();
+            if member != "resource.txt" {
+                bind_fixture_member(&scope, &declared_fixture_member(&format!("fixture:partial:{member}"), &path, "selected-native-source"));
+            }
+        }
+        let malformed_before = retained_fixture_file(&ground.0.join(format!("{base}/skill.json")));
+        assert_eq!(control_source_bindings(&ground.0).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        let resource = declared_fixture_member("fixture:partial:resource", &format!("{base}//resource.txt"), "selected-native-source");
+        bind_fixture_member(&scope, &resource);
+        assert_eq!(one_fixture_member(&control_source_bindings(&ground.0).unwrap(), &resource.path), &resource);
+        let unrelated = ground.0.join("Control/user/skills/Unrelated");
+        fs::create_dir(&unrelated).unwrap();
+        fs::write(unrelated.join("SKILL.md"), "genuine unoverridden body").unwrap();
+        fs::write(unrelated.join("skill.json"), "{another malformed manifest").unwrap();
+        assert_eq!(control_source_bindings(&ground.0).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        assert_eq!(retained_fixture_file(&ground.0.join(format!("{base}/skill.json"))), malformed_before);
+        assert_eq!(fs::read_to_string(unrelated.join("skill.json")).unwrap(), "{another malformed manifest");
+    }
+
+    #[test]
+    fn explicit_project_skill_sources_preserve_literal_identity_and_current_read() {
+        let ground = Ground::new();
+        crate::initialize_central(&ground.0).unwrap();
+        let project = ground.0.join("Work/Owned");
+        fs::create_dir(&project).unwrap();
+        crate::initialize_projectcentral(&ground.0, &project, "opaque/project").unwrap();
+        let scope = crate::continuous_work::source::Scope::resolve(&ground.0, Some("Owned")).unwrap();
+        assert_eq!(scope.world_ref, "project:opaque/project");
+        let base = "ProjectCentral/user/skills/Owned";
+        fs::create_dir_all(project.join(base)).unwrap();
+        let mut selected = Vec::new();
+        for (member, content) in [("SKILL.md", "project selected body"), ("skill.json", "{native malformed fixture")] {
+            let literal = format!("{base}//./{member}");
+            fs::write(project.join(&literal), content).unwrap();
+            let binding = declared_fixture_member(&format!("fixture:project:{member}"), &literal, "selected-project-source");
+            bind_fixture_member(&scope, &binding);
+            selected.push((binding, retained_fixture_file(&project.join(&literal))));
+        }
+        let manifest_before = retained_fixture_file(&project.join("ProjectCentral/project.json"));
+        let wiki_before = retained_fixture_file(&project.join(WIKI_SOURCE));
+        let relations_before = retained_fixture_file(&project.join(GROUND_RELATIONS_SOURCE));
+        let report = reconcile_project_sources(&project).unwrap();
+        let bindings = scope.bindings().unwrap();
+        for (binding, before) in selected {
+            assert_eq!(one_fixture_member(&bindings, &binding.path), &binding);
+            let reading = scope.read(&binding.source_ref).unwrap();
+            assert_eq!(reading.source, binding);
+            assert_eq!(reading.content.as_bytes(), before.0);
+            assert!(report.horizon.sources.iter().any(|source| source.binding == binding));
+            assert_eq!(retained_fixture_file(&project.join(&binding.path)), before);
+        }
+        assert_eq!(retained_fixture_file(&project.join("ProjectCentral/project.json")), manifest_before);
+        assert_eq!(retained_fixture_file(&project.join(WIKI_SOURCE)), wiki_before);
+        assert_eq!(retained_fixture_file(&project.join(GROUND_RELATIONS_SOURCE)), relations_before);
+    }
+
+    #[test]
+    fn native_adopted_wiki_fallback_yields_to_complete_literal_source_relation() {
+        for (index, literal) in ["docs/wiki.json", "docs//./wiki.json"].iter().enumerate() {
+            let ground = Ground::new();
+            crate::initialize_central(&ground.0).unwrap();
+            let project = ground.0.join("Work/Adopted");
+            fs::create_dir(&project).unwrap();
+            fs::create_dir(project.join("docs")).unwrap();
+            let source = project.join("docs/wiki.json");
+            let wiki = serde_json::to_vec(&serde_json::json!({"objects":[{
+                "profile":crate::projectcentral::WIKI_PROFILE,"object":"space","ref":"fixture:space:adopted",
+                "revision":1,"provenance":[],"parent_space_refs":[],"child_space_refs":[],"node_refs":[]
+            }]})).unwrap();
+            fs::write(&source, &wiki).unwrap();
+            let adopted_before = retained_fixture_file(&source);
+            let receipt = crate::adopt_in_place(&ground.0, &project, "opaque/adopted", "docs/wiki.json").unwrap();
+            assert_eq!(receipt.adopted_sources, vec!["docs/wiki.json"]);
+            assert_eq!(retained_fixture_file(&source), adopted_before);
+            let initial = reconcile_project_sources(&project).unwrap();
+            let generated = source_ref("project:opaque/adopted", "docs/wiki.json");
+            let initial_bindings = project_source_bindings(&project).unwrap();
+            let fallback = one_fixture_member(&initial_bindings, literal);
+            assert_eq!(fallback.source_ref, generated);
+            assert_eq!(fallback.roles, vec!["adopted-agent-wiki-source"]);
+            assert_eq!(fallback.provenance, "unresolved");
+            assert_eq!(fallback.standing, "unspecified");
+            assert_eq!(fallback.treatment, "retain-native-in-place");
+            assert!(initial.horizon.sources.iter().any(|source| source.binding == *fallback));
+            let manifest_before = retained_fixture_file(&project.join("ProjectCentral/project.json"));
+            let canonical_before = retained_fixture_file(&project.join(WIKI_SOURCE));
+            let scope = crate::continuous_work::source::Scope::resolve(&ground.0, Some("Adopted")).unwrap();
+            let declaration = declared_fixture_member(&format!("fixture:accepted:adopted:{index}"), literal, "adopted-agent-wiki-source");
+            bind_fixture_member(&scope, &declaration);
+            let relations_before = retained_fixture_file(&project.join(GROUND_RELATIONS_SOURCE));
+            let bindings = project_source_bindings(&project).unwrap();
+            assert_eq!(one_fixture_member(&bindings, literal), &declaration);
+            assert!(!bindings.iter().any(|binding| binding.source_ref == generated));
+            let reading = scope.read(&declaration.source_ref).unwrap();
+            assert_eq!(reading.source, declaration);
+            assert_eq!(reading.content.as_bytes(), wiki);
+            let reconciled = reconcile_project_sources(&project).unwrap();
+            assert_eq!(one_fixture_member(&reconciled.horizon.sources.iter().map(|source| source.binding.clone()).collect::<Vec<_>>(), literal), &declaration);
+            assert!(reconciled.new_changes.iter().any(|change| change.source_ref == generated && change.kind == SourceChangeKind::Removed));
+            assert!(reconciled.new_changes.iter().any(|change| change.source_ref == declaration.source_ref && change.kind == SourceChangeKind::Added));
+            fs::write(&source, format!("{}\n", String::from_utf8(wiki).unwrap())).unwrap();
+            let changed = reconcile_project_sources(&project).unwrap();
+            assert_eq!(changed.new_changes.len(), 1);
+            assert_eq!(changed.new_changes[0].source_ref, declaration.source_ref);
+            assert_eq!(changed.new_changes[0].source_path, *literal);
+            assert_eq!(changed.new_changes[0].kind, SourceChangeKind::Modified);
+            assert!(changed.horizon.changes.iter().any(|change| change.source_ref == generated && change.kind == SourceChangeKind::Removed));
+            assert!(!changed.horizon.sources.iter().any(|source| source.binding.source_ref == generated));
+            fs::write(&source, &adopted_before.0).unwrap();
+            assert_eq!(retained_fixture_file(&project.join("ProjectCentral/project.json")), manifest_before);
+            assert_eq!(retained_fixture_file(&project.join(WIKI_SOURCE)), canonical_before);
+            assert_eq!(retained_fixture_file(&project.join(GROUND_RELATIONS_SOURCE)), relations_before);
+            assert_eq!(fs::read(&source).unwrap(), adopted_before.0);
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!((fs::metadata(&source).unwrap().dev(), fs::metadata(&source).unwrap().ino()), (adopted_before.1, adopted_before.2));
+        }
+    }
+
+
+    #[test]
+    fn creation_aperture_admits_only_missing_suffix_without_claiming_current_material() {
+        use std::os::unix::fs::symlink;
+        let ground = Ground::new();
+        let root = ground.0.join("owner");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(root.join("existing")).unwrap();
+        let destination = root.join("existing/new/child/source.md");
+        assert!(retrieval_creation_admission(&root, &destination).unwrap());
+        assert_eq!(retrieval_admission(&root, &destination).unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert!(!root.join("existing/new").exists());
+        assert!(retrieval_admission(&root, &root.join("existing/source.md")).unwrap());
+        let alias = ground.0.join("owner-alias");
+        symlink(&root, &alias).unwrap();
+        assert!(retrieval_creation_admission(&alias, &alias.join("existing/new/child/source.md")).unwrap());
+        fs::write(root.join("existing/.no-agent-retrieval"), b"").unwrap();
+        assert!(!retrieval_creation_admission(&root, &destination).unwrap());
+        assert!(!retrieval_creation_admission(&alias, &alias.join("existing/new/child/source.md")).unwrap());
+        fs::remove_file(root.join("existing/.no-agent-retrieval")).unwrap();
+        assert!(retrieval_creation_admission(&root, &destination).unwrap());
+        assert!(!destination.exists());
+    }
+
+    #[test]
+    fn creation_aperture_retains_current_marker_and_physical_form_refusals() {
+        use std::os::unix::fs::symlink;
+        let ground = Ground::new();
+        let root = &ground.0;
+        let original = root.join("original.md");
+        fs::write(&original, b"retained original source").unwrap();
+        let retained = retained_fixture_file(&original);
+        fs::create_dir(root.join("ordinary")).unwrap();
+        symlink(root.join("ordinary"), root.join("redirected-parent")).unwrap();
+        symlink(&original, root.join("redirected-source")).unwrap();
+        for destination in [root.join("redirected-parent/new/source.md"), root.join("redirected-source")] {
+            assert_eq!(retrieval_creation_admission(root, &destination).unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        }
+        assert_eq!(retrieval_creation_admission(root, &root.join("original.md/child")).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        symlink(&original, root.join(AGENT_RETRIEVAL_DENY_MARKER)).unwrap();
+        assert_eq!(retrieval_creation_admission(root, &root.join("missing/child")).unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(retained_fixture_file(&original), retained);
+        assert!(!root.join("missing").exists());
+    }
+
+
+    #[test]
+    fn actual_creation_root_alias_retarget_cannot_acknowledge_old_owner_aperture() {
+        use std::os::unix::fs::symlink;
+        let ground = Ground::new();
+        let first = ground.0.join("first");
+        let other = ground.0.join("other");
+        fs::create_dir(&first).unwrap();
+        fs::create_dir(&other).unwrap();
+        fs::write(first.join("retained.md"), b"first retained source").unwrap();
+        fs::write(other.join("retained.md"), b"other retained source").unwrap();
+        let first_before = retained_fixture_file(&first.join("retained.md"));
+        let other_before = retained_fixture_file(&other.join("retained.md"));
+        let alias = ground.0.join("alias");
+        symlink(&first, &alias).unwrap();
+        let requested = alias.join("missing/child/source.md");
+        let moved_alias = alias.clone();
+        let moved_target = other.clone();
+        AFTER_CREATION_ROOT_CAPTURE.with(|checkpoint| *checkpoint.borrow_mut() = Some(Box::new(move || {
+            fs::remove_file(&moved_alias).unwrap();
+            symlink(&moved_target, &moved_alias).unwrap();
+        })));
+        assert_eq!(retrieval_creation_admission(&alias, &requested).unwrap_err().kind(), io::ErrorKind::Other);
+        assert_eq!(retained_fixture_file(&first.join("retained.md")), first_before);
+        assert_eq!(retained_fixture_file(&other.join("retained.md")), other_before);
+        assert!(!first.join("missing").exists());
+        assert!(!other.join("missing").exists());
+        // A fresh physical observation has its own admitted root basis; this
+        // does not adopt a Source identity or grant a writer authority.
+        assert!(retrieval_creation_admission(&alias, &requested).unwrap());
     }
 }

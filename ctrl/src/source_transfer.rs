@@ -712,6 +712,58 @@ fn io_failure(action: &str, error: io::Error) -> ActionResult {
     ActionResult::failure(Some(action), status, error.to_string(), None)
 }
 
+
+
+/// The pre-effect creation gate retains actual IO through the existing writer
+/// boundary; an observed marker has no fabricated errno or publication result.
+#[derive(Debug)]
+struct CreationAdmissionFailure { cause: Option<io::Error> }
+impl std::fmt::Display for CreationAdmissionFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.cause {
+            Some(cause) => write!(formatter, "Source creation aperture is unavailable: {cause}"),
+            None => formatter.write_str("Source creation is excluded by an observed .no-agent-retrieval treatment"),
+        }
+    }
+}
+impl std::error::Error for CreationAdmissionFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.cause.as_ref().map(|cause| cause as &(dyn std::error::Error + 'static))
+    }
+}
+fn creation_admission_details(error: &io::Error) -> Option<Value> {
+    let failure = error.get_ref()?.downcast_ref::<CreationAdmissionFailure>()?;
+    Some(json!({"failure_stage":"source_creation_aperture", "failed_source_effect":"none",
+        "marker_present":failure.cause.is_none(),
+        "io_error":failure.cause.as_ref().map(|cause| json!({"kind":format!("{:?}", cause.kind()),
+            "raw_os_error":cause.raw_os_error(), "message":cause.to_string()}))}))
+}
+fn require_creation_admission(root: &Path, destination: &Path) -> io::Result<()> {
+    match crate::source_horizon::retrieval_creation_admission(root, destination) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(io::Error::new(io::ErrorKind::PermissionDenied,
+            CreationAdmissionFailure { cause: None })),
+        Err(cause) => Err(io::Error::new(cause.kind(), CreationAdmissionFailure { cause: Some(cause) })),
+    }
+}
+fn creation_admission_result(action: &str, error: io::Error) -> ActionResult {
+    let details = creation_admission_details(&error);
+    let mut result = io_failure(action, error);
+    if let Some(error) = result.error.as_mut() { error.details = details; }
+    result
+}
+#[cfg(test)]
+type CreationCheckpoint = Box<dyn FnOnce(&Path)>;
+#[cfg(test)]
+thread_local! {
+    static BEFORE_CREATION_ADMISSION: std::cell::RefCell<Option<CreationCheckpoint>> = const { std::cell::RefCell::new(None) };
+}
+#[cfg(test)]
+fn before_creation_admission(root: &Path) {
+    let checkpoint = BEFORE_CREATION_ADMISSION.with(|checkpoint| checkpoint.borrow_mut().take());
+    if let Some(checkpoint) = checkpoint { checkpoint(root); }
+}
+
 fn write_record_file(root: &Path, relative: &str, value: &Value) -> io::Result<()> {
     if let Some(parent) = Path::new(relative).parent() {
         fs::create_dir_all(root.join(parent))?;
@@ -1240,6 +1292,9 @@ fn create_source(
 ) -> io::Result<()> {
     let root = ground.root.as_path();
     let _mutation = lock(root, "source-mutation.lock")?;
+    #[cfg(test)]
+    before_creation_admission(root);
+    require_creation_admission(root, &root.join(path))?;
     safe_source_member_path(root, path, false)?;
     if safe_source_member_path(root, path, true).is_ok() {
         return Err(conflict(format!(
@@ -1361,10 +1416,10 @@ fn apply_action(
         None
     };
 
-    // Validate every entry before mutating anything: a refusal leaves the
-    // receiving ground byte-identical. The bundle's own claims - names,
-    // scope, kinds and payloads - are judged first, before this ground's
-    // horizon is even reconciled.
+    // Validate bundle claims before reconciling the derived horizon. Then
+    // prepare every selected source before any source-content effect. Horizon
+    // state may already be reconciled when a later aperture observation fails;
+    // a failed source gate is not a claim that the whole Action wrote nothing.
     for entry in &bundle.sources {
         let expected_ref = crate::source_horizon::source_ref(&world_ref, &entry.path);
         if entry.source_ref != expected_ref {
@@ -1489,16 +1544,8 @@ fn apply_action(
         } else {
             match ground.would_be_binding(&entry.path) {
                 Ok(Some(binding)) => {
-                    if !retrieval_allowed(&root, &root.join(&entry.path)) {
-                        return ActionResult::failure(
-                            Some(action),
-                            ResultStatus::UnavailableCapability,
-                            format!(
-                                "path {} is masked on this ground by a .no-agent-retrieval treatment and is not applied",
-                                entry.path
-                            ),
-                            None,
-                        );
+                    if let Err(error) = require_creation_admission(&root, &root.join(&entry.path)) {
+                        return creation_admission_result(action, error);
                     }
                     if let Err(error) = enforce_write_authority(
                         &binding,
@@ -1537,6 +1584,7 @@ fn apply_action(
     let mut outcomes: Vec<TransferOutcome> = Vec::new();
     let mut status = "applied".to_owned();
     let mut last_error = None;
+    let mut creation_admission_failure = None;
     for (entry, local_revision) in &prepared {
         if status == "uncertain" {
             break;
@@ -1630,6 +1678,10 @@ fn apply_action(
                 }
                 Err(error) => {
                     status = "uncertain".to_owned();
+                    creation_admission_failure = creation_admission_details(&error).map(|mut details| {
+                        details["source_ref"] = json!(entry.source_ref);
+                        details
+                    });
                     last_error = Some(error.to_string());
                     break;
                 }
@@ -1696,6 +1748,9 @@ fn apply_action(
     };
     let mut receipt_value = serde_json::to_value(&receipt)
         .unwrap_or_else(|_| json!({"schema": SOURCE_TRANSFER_APPLY_RECEIPT_SCHEMA}));
+    if let Some(failure) = creation_admission_failure {
+        receipt_value["creation_admission_failure"] = failure;
+    }
     let record_relative = format!("{TRANSFER_RECORD_AREA}/{}.json", tail(&transfer_ref));
     if let Err(error) = write_record_file(&root, &record_relative, &receipt_value) {
         // The mutations already happened; the receipt is returned and its
@@ -2256,5 +2311,145 @@ fn build_descriptor(
             available: true,
             reason: None,
         },
+    }
+}
+
+
+#[cfg(test)]
+mod creation_admission_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
+
+    struct Fixture(PathBuf);
+    impl Fixture {
+        fn new() -> Self {
+            let scratch = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ProjectCentral/now/tmp");
+            fs::create_dir_all(&scratch).unwrap();
+            let root = scratch.join(format!("source-transfer-aperture-{}-{}-{}", std::process::id(), unix_seconds(), NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)));
+            fs::create_dir(&root).unwrap();
+            crate::initialize_central(&root).unwrap();
+            Self(root)
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            BEFORE_CREATION_ADMISSION.with(|checkpoint| { checkpoint.borrow_mut().take(); });
+            if let Err(error) = fs::remove_dir_all(&self.0) {
+                let failure = format!(
+                    "Failed to retire owned SourceTransfer fixture {}: {error} (kind={:?}, errno={:?})",
+                    self.0.display(), error.kind(), error.raw_os_error()
+                );
+                if std::thread::panicking() {
+                    eprintln!("{failure}");
+                } else {
+                    panic!("{failure}");
+                }
+            }
+        }
+    }
+    fn native(root: &Path, action: &str, input: Value) -> ActionResult {
+        let mut registry = crate::create_core_action_registry();
+        crate::projectcentral_ops::register_projectcentral_actions(&mut registry);
+        let connectors = crate::ConnectorRegistry::default();
+        let connector_context = crate::ConnectorContext { platform: "actual-fixture-os".to_owned() };
+        let options = crate::RootOptions { explicit_root: Some(root.to_path_buf()), ..crate::RootOptions::default() };
+        let context = ActionExecutionContext { root_options: &options, connectors: &connectors, connector_context: &connector_context };
+        registry.execute(action, &input, &context)
+    }
+    fn bundle(root: &Path, paths: &[&str]) -> (Value, Vec<String>) {
+        let mut refs = Vec::new();
+        for path in paths {
+            let file = root.join(path);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(file, format!("retained source {path}\n")).unwrap();
+            refs.push(crate::source_horizon::source_ref(CONTROL_WORLD_REF, path));
+        }
+        let result = native(root, "projectcentral.source.transfer.export", json!({
+            "source_refs":refs, "to_world_ref":CONTROL_WORLD_REF, "from_ground":"owned-origin", "to_ground":"owned-receiver",
+            "actor":"agent:fixture:transfer", "actor_kind":"agent"
+        }));
+        assert_eq!(result.status, ResultStatus::Success, "{result:?}");
+        (result.data.unwrap(), refs)
+    }
+    fn apply(root: &Path, bundle: Value, refs: Vec<String>) -> ActionResult {
+        native(root, "projectcentral.source.transfer.apply", json!({
+            "bundle":bundle,"actor":"agent:fixture:transfer","actor_kind":"agent",
+            "accept_unestablished_identity":true,"accept_unestablished_lineage":refs
+        }))
+    }
+
+    #[test]
+    fn actual_late_marker_blocks_creation_and_preserves_earlier_native_outcome() {
+        let origin = Fixture::new();
+        let receiver = Fixture::new();
+        let paths = ["Control/agents/expressions/a/EXPRESSION.md", "Control/agents/expressions/b/EXPRESSION.md"];
+        let (exported, refs) = bundle(&origin.0, &paths);
+        BEFORE_CREATION_ADMISSION.with(|checkpoint| *checkpoint.borrow_mut() = Some(Box::new(|_| {
+            BEFORE_CREATION_ADMISSION.with(|next| *next.borrow_mut() = Some(Box::new(|root| {
+                fs::write(root.join("Control/agents/.no-agent-retrieval"), b"").unwrap();
+            })));
+        })));
+        let result = apply(&receiver.0, exported, refs.clone());
+        assert_eq!(result.status, ResultStatus::Success, "{result:?}");
+        let receipt = result.data.unwrap();
+        assert_eq!(receipt["status"], "uncertain");
+        assert_eq!(receipt["applied_count"], 1);
+        assert_eq!(receipt["outcomes"].as_array().unwrap().len(), 1);
+        assert_eq!(receipt["outcomes"][0]["source_ref"], refs[0]);
+        assert_eq!(receipt["outcomes"][0]["outcome"], "established");
+        assert_eq!(receipt["creation_admission_failure"]["source_ref"], refs[1]);
+        assert_eq!(receipt["creation_admission_failure"]["failed_source_effect"], "none");
+        assert_eq!(receipt["creation_admission_failure"]["failure_stage"], "source_creation_aperture");
+        assert_eq!(receipt["creation_admission_failure"]["marker_present"], true);
+        assert!(receipt["creation_admission_failure"]["io_error"].is_null());
+        assert_eq!(fs::read(receiver.0.join(paths[0])).unwrap(), fs::read(origin.0.join(paths[0])).unwrap());
+        assert!(!receiver.0.join("Control/agents/expressions/b").exists());
+        let records = fs::read_dir(receiver.0.join(TRANSFER_RECORD_AREA)).unwrap().collect::<Result<Vec<_>,_>>().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(serde_json::from_slice::<Value>(&fs::read(records[0].path()).unwrap()).unwrap(), receipt);
+    }
+
+    #[test]
+    fn actual_late_creation_io_preserves_original_errno_and_restores_source_aperture() {
+        use std::os::unix::fs::PermissionsExt;
+        assert_ne!(unsafe { libc::geteuid() }, 0, "actual source creation EACCES proof requires a nonroot OS user");
+        let origin = Fixture::new();
+        let receiver = Fixture::new();
+        let path = "Control/agents/expressions/owned/EXPRESSION.md";
+        let (exported, refs) = bundle(&origin.0, &[path]);
+        let blocked = receiver.0.join("Control/agents");
+        let permissions = fs::metadata(&blocked).unwrap().permissions();
+        struct Restore(PathBuf, fs::Permissions);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                if let Err(error) = fs::set_permissions(&self.0, self.1.clone()) {
+                    if std::thread::panicking() { eprintln!("actual fixture aperture restore failed: {error}"); }
+                    else { panic!("actual fixture aperture restore failed: {error}"); }
+                }
+            }
+        }
+        let restore = Restore(blocked.clone(), permissions.clone());
+        BEFORE_CREATION_ADMISSION.with(|checkpoint| *checkpoint.borrow_mut() = Some(Box::new(|root| {
+            fs::set_permissions(root.join("Control/agents"), fs::Permissions::from_mode(0o000)).unwrap();
+        })));
+        let result = apply(&receiver.0, exported.clone(), refs.clone());
+        let actual = fs::symlink_metadata(blocked.join(".no-agent-retrieval")).unwrap_err();
+        assert_eq!(actual.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(result.status, ResultStatus::Success, "{result:?}");
+        let receipt = result.data.unwrap();
+        assert_eq!(receipt["status"], "uncertain");
+        assert_eq!(receipt["applied_count"], 0);
+        assert_eq!(receipt["creation_admission_failure"]["marker_present"], false);
+        assert_eq!(receipt["creation_admission_failure"]["io_error"]["kind"], format!("{:?}", actual.kind()));
+        assert_eq!(receipt["creation_admission_failure"]["io_error"]["raw_os_error"], json!(actual.raw_os_error()));
+        assert_eq!(receipt["creation_admission_failure"]["io_error"]["message"], actual.to_string());
+        drop(restore);
+        assert_eq!(fs::metadata(&blocked).unwrap().permissions().mode(), permissions.mode());
+        assert!(!receiver.0.join("Control/agents/expressions").exists());
+        let reopened = apply(&receiver.0, exported, refs);
+        assert_eq!(reopened.status, ResultStatus::Success, "{reopened:?}");
+        assert_eq!(reopened.data.unwrap()["status"], "applied");
+        assert_eq!(fs::read(receiver.0.join(path)).unwrap(), fs::read(origin.0.join(path)).unwrap());
     }
 }

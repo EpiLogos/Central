@@ -270,3 +270,25 @@ grounds name the same subject and every later apply records `verified`.
   renaming a project is a different world and needs its own decision.
 - Not a replication of `.central` state: horizons, records and cursors are
   each ground's own derived state and are never carried in a bundle.
+
+
+## Current creation aperture
+
+A bootstrap receiver may legitimately lack source parent directories. Native
+transfer preparation observes the same recursive `.no-agent-retrieval` and
+physical form relation at every existing ancestor. A genuine absent suffix
+permits creation preparation only; it never supplies read evidence or replaces
+receiver binding, write authority, identity or explicit lineage acceptance.
+The native creator checks the aperture again under its existing mutation lock
+before creating parents or source bytes. A marker refuses that source effect;
+an unavailable observation retains its actual IO kind, errno and stage.
+
+If the under-lock gate fails after earlier entries were applied, the existing
+uncertain receipt retains their actual outcomes and adds
+`creation_admission_failure` for the selected failed source. Its
+`failed_source_effect: "none"` describes that gate alone. It does not undo
+prior effects or claim the Action left all derived state unchanged. A semantic
+marker refusal has `marker_present: true` and no invented IO cause; an actual
+failed observation retains `io_error`. Recovery does not automatically retry
+an uncertain bundle. Existing writer publication and record-recovery limits
+remain separate from this aperture checkpoint.

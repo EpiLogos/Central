@@ -102,3 +102,15 @@ message remain in the error with effects none. Additive search fields and
 SourceClass::Unresolved require Rust/JSON consumers to preserve the distinction;
 unknown external Rust consumers are not assumed absent. An aperture or
 observation creates no lease, semantic identity or human recognition.
+
+
+The Source transfer creation route uses `retrieval_creation_admission` through
+that same native recursive treatment and form predicate. A genuinely absent
+suffix below inspected existing ancestors admits only a creation aperture; it
+is not proof of existing material, Source identity, payload freshness or write
+authority. Delivery admission keeps its existing final-absence distinction and
+qualifies actual material separately. Real IO failures retain their cause; only
+an observed marker establishes masking. The creator rechecks this aperture
+under its existing source-mutation lock before creating parents or source
+bytes. This supplies a current checkpoint, not exclusion of arbitrary external
+filesystem writers.
