@@ -105,8 +105,10 @@ live cwd but does not claim to discover every external process. Destinations
 are never overwritten. Source identity, source-relations bases and managed link
 inodes are rechecked. Interrupted publication can be replayed; newer source bytes
 or foreign link replacement cause conflicts rather than destructive repair.
-The native Flow owner prepares current-location updates in the same journal;
-Flow identity and historical source paths/receipts remain intact.
+The retired Flow registry has no relocation planning. Any leftover registry
+stays in place and is refused as a move target. Dated Flow source files use
+[ordinary file CAS and native history](../SOURCE-RETURN.md#flow-disclosure-seam-retired);
+the [historical Flow contract](../PROJECTCENTRAL-FLOW.md#flow) remains retained.
 
 A containing root can relocate with its ordinary files. Reconnect with the new
 root path and refresh the maps; SourceRefs and relative links are unchanged.
@@ -170,13 +172,16 @@ binaries are failures, not skipped green tests. Run:
 python3 tests/bkmr_joined.py --ctrl /built/ctrl --aikit /built/aikit --bkmr /installed/bkmr
 ```
 
-The suite covers persistence, two-Project federation, owner database read-only
-consumption, native imports, metadata preservation, private/stale source refusal,
-managed links, interrupted/replayed/rolled-back moves, whole-Project/root moves,
-Flow continuity, live skill companions/retirement, selected generation reporting,
-explicit record adoption and WAL-consistent backup. Hosted verification records
-both exact source revisions. Personal installation, real embedding inference and
-loaded commercial harness behaviour remain distinct observations.
+Verification must cover persistence, two-Project federation, owner database
+read-only consumption, native imports, metadata preservation, private/stale
+source refusal, managed links, interrupted/replayed/rolled-back moves,
+whole-Project/root moves, ordinary file CAS/history and retired-registry
+retention, live skill companions/retirement, selected generation reporting,
+explicit record adoption and WAL-consistent backup. A test of the retired
+FlowRef registry does not verify the current ordinary file route. Hosted results must name
+both exact source revisions and actual cases executed. Personal installation,
+real embedding inference and loaded commercial harness behaviour remain
+separate observations.
 
 ## Binding ownership metadata — source candidate
 

@@ -195,6 +195,7 @@ class Joined(unittest.TestCase):
         index = json.loads((self.root / ".central/bkmr/bindings.json").read_text())
         record = index["entries"][ref]
         self.assertIsNotNone(record.get("import_id"), record)
+        self.assertNotEqual(record["import_id"], record["id"], record)
         conn = sqlite3.connect(self.root / ".central/bkmr/index.db")
         try:
             columns = [x[1] for x in conn.execute("pragma table_info(bookmarks)")]
@@ -496,21 +497,35 @@ class Joined(unittest.TestCase):
         self.assertEqual(len(json.loads(self.native("search","--json","--np").stdout)),2)
         self.assertEqual(len(self.action("search",query="quartz")["hits"]),2)
 
-    def test_37_flow_source_move_uses_flow_owner_and_keeps_history(self):
+    def test_37_retired_flow_registry_stays_retained_through_current_source_moves(self):
         self.project("alpha")
-        self.write("Work/alpha/ProjectCentral/flows/.keep", b"")
-        def flow(op, **values):
-            values["project"] = "alpha"
-            result = self.run_cmd([self.ctrl,"--json","--root",self.root,"action","run",f"projectcentral.flow.{op}",json.dumps(values)])
-            return json.loads(result.stdout)["data"]
-        record = flow("create",path="ProjectCentral/flows/original.md",actor="fixture",actor_kind="human")["flow"]
-        plan = self.move(record["source_ref"], "ProjectCentral/flows/renamed.md")
-        reading = flow("read",flow_ref=record["flow_ref"],actor="fixture",actor_kind="human")
-        self.assertEqual(reading["flow"]["path"], "ProjectCentral/flows/renamed.md")
-        self.assertEqual(reading["flow"]["source_ref"], record["source_ref"])
-        self.assertEqual(reading["flow"]["revisions"], record["revisions"])
-        self.action("move-rollback",plan_id=plan["plan_id"],quiesced=True)
-        self.assertEqual(flow("read",flow_ref=record["flow_ref"],actor="fixture",actor_kind="human")["flow"]["path"], "ProjectCentral/flows/original.md")
+        legacy = self.write("Work/alpha/.central/flows.json", b"retained retired registry bytes\n")
+        history = self.write("Work/alpha/.central/flow-revisions/retained.bin", bytes([0, 255, 9]))
+        source = self.write("Work/alpha/ProjectCentral/user/flows/original.md", "current ordinary Flow source\n")
+        ref = self.action("locate", "alpha", path=str(source), binding_only=True)["source"]["ref"]
+        before = self.material_basis(legacy), self.material_basis(history)
+        source_before = self.material_basis(source)
+        unavailable = self.run_cmd([
+            self.ctrl, "--json", "--root", self.root, "action", "run", "projectcentral.flow.create",
+            json.dumps({"project":"alpha", "path":"ProjectCentral/flows/new.md", "actor":"fixture", "actor_kind":"human"})
+        ], success=False)
+        self.assertEqual(json.loads(unavailable.stdout)["error"]["code"], "invalid_input")
+        self.assertEqual(json.loads(unavailable.stdout)["error"]["message"], "Unknown Action: projectcentral.flow.create")
+        self.assertFalse((self.root / "Work/alpha/ProjectCentral/flows/new.md").exists())
+        self.action("move-plan", source_ref=ref, destination=".central/flows.json", success=False)
+        plan = self.move(ref, "ProjectCentral/user/flows/renamed.md")
+        moved = self.root / "Work/alpha/ProjectCentral/user/flows/renamed.md"
+        self.assertFalse(source.exists())
+        self.assertEqual(self.material_basis(moved), source_before)
+        self.assertEqual(self.action("resolve", "alpha", source_ref=ref, content=True)["content"], source_before[-1].decode())
+        self.assertEqual(self.action("locate", "alpha", path=str(moved), binding_only=True)["source"]["ref"], ref)
+        self.assertEqual((self.material_basis(legacy), self.material_basis(history)), before)
+        self.action("move-rollback", plan_id=plan["plan_id"], quiesced=True)
+        self.assertTrue(source.is_file())
+        self.assertFalse(moved.exists())
+        self.assertEqual(self.material_basis(source), source_before)
+        self.assertEqual(self.action("resolve", "alpha", source_ref=ref, content=True)["content"], source_before[-1].decode())
+        self.assertEqual((self.material_basis(legacy), self.material_basis(history)), before)
 
     def test_38_record_adoption_retains_authored_description_title_and_tags(self):
         path = self.write("ordinary/note.txt")
@@ -880,24 +895,51 @@ class Joined(unittest.TestCase):
         self.assertTrue(any(item["source"]["ref"] == prior and item["path"] == str(source) for item in retained))
         self.assertEqual((self.material_basis(source), self.material_basis(manifest)), before)
 
+    def native_inherited_exclusion(self, source_ref):
+        project = self.project("alpha")
+        self.link(source_ref, "ProjectCentral/user/root-note.md", "alpha")
+        prior = self.action("resolve", "alpha", source_ref=source_ref, binding_only=True)
+        self.assertEqual(prior["source"]["ref"], source_ref)
+        self.assertEqual(prior["world_ref"], "control:root")
+        paths = []
+        for scope, name, owner, record in [
+            ("root", None, self.root, {"schema":"central.world-relations/v1", "ref":"control:root", "revision":"r1", "parent":None,
+                "sources":[{"ref":source_ref, "revision":"r1", "authority":"human-authored", "treatment":"retain-native"}],
+                "retained_extension":{"actual":True}}),
+            ("project", "alpha", project, {"schema":"central.world-relations/v1", "ref":"alpha", "revision":"r1", "parent":"control:root",
+                "excluded_sources":[source_ref]})
+        ]:
+            output = self.run_cmd([self.ctrl, "--json", "--root", self.root, "action", "run", "central.world-relations.save",
+                                  json.dumps({"scope":scope, "project":name, "record":record})])
+            receipt = json.loads(output.stdout)
+            self.assertTrue(receipt["ok"], receipt)
+            paths.append(owner / receipt["data"]["source_path"])
+        self.assert_native_inherited_exclusion(source_ref)
+        return paths
+
+    def assert_native_inherited_exclusion(self, source_ref):
+        result = self.run_cmd([self.ctrl, "--json", "--root", self.root, "action", "run", "central.world.effective-sources",
+                              json.dumps({"scope":"project", "project":"alpha", "world_ref":"alpha"})])
+        sources = json.loads(result.stdout)["data"]["sources"]
+        selected = [row for row in sources if row["ref"] == source_ref]
+        self.assertEqual(len(selected), 1, sources)
+        self.assertEqual(selected[0]["state"], "excluded", selected)
+        self.assertEqual(selected[0]["propagation_path"], ["control:root", "alpha"], selected)
+
     def test_55_native_world_store_broken_links_fail_current_context_and_reopen_without_writes(self):
         source = self.write("Control/user/excluded.md", "actual native excluded body\n")
         ref = self.action("locate", path=str(source), binding_only=True)["source"]["ref"]
-        record = {"schema":"central.world-relations/v1", "ref":"control:root", "revision":"r1", "excluded_sources":[ref], "retained_extension":{"actual":True}}
-        output = self.run_cmd([self.ctrl,"--json","--root",self.root,"action","run","central.world-relations.save",json.dumps({"scope":"root","record":record})])
-        receipt = json.loads(output.stdout)
-        self.assertTrue(receipt["ok"], receipt)
-        container = self.root / "Control/relations/worlds"
-        record_path = self.root / receipt["data"]["source_path"]
-        before = self.material_basis(source), self.material_basis(record_path)
-        self.action("resolve", source_ref=ref, binding_only=True, success=False)
+        record_paths = self.native_inherited_exclusion(ref)
+        container = record_paths[0].parent
+        before = [self.material_basis(path) for path in [source, *record_paths]]
+        self.action("resolve", "alpha", source_ref=ref, binding_only=True, success=False)
         retained = self.base / "retained-worlds"
         container.rename(retained)
         container.symlink_to(self.base / "actual-absent-container", target_is_directory=True)
         link_inode = container.lstat().st_ino
         try:
             for metadata_only in [True, False]:
-                failure = self.action("resolve", source_ref=ref, binding_only=metadata_only, success=False)
+                failure = self.action("resolve", "alpha", source_ref=ref, binding_only=metadata_only, success=False)
                 self.assertEqual(failure["error"]["details"]["material_state"], "unavailable")
                 self.assertEqual(failure["error"]["details"]["effects"], "none")
                 self.assertNotIn("actual native excluded body", json.dumps(failure))
@@ -905,34 +947,35 @@ class Joined(unittest.TestCase):
         finally:
             container.unlink()
             retained.rename(container)
-        failure = self.action("resolve", source_ref=ref, binding_only=True, success=False)
+        self.assert_native_inherited_exclusion(ref)
+        failure = self.action("resolve", "alpha", source_ref=ref, binding_only=True, success=False)
         self.assertEqual(failure["error"]["details"]["material_state"], "withheld")
-        self.assertEqual((self.material_basis(source), self.material_basis(record_path)), before)
+        self.assertEqual([self.material_basis(path) for path in [source, *record_paths]], before)
 
     def test_56_native_world_store_eacces_preserves_actual_cause_and_exclusion(self):
         self.assertNotEqual(os.geteuid(), 0, "Actual native World store EACCES proof requires a nonroot execution owner")
         source = self.write("Control/user/excluded.md", "retained excluded body\n")
         ref = self.action("locate", path=str(source), binding_only=True)["source"]["ref"]
-        output = self.run_cmd([self.ctrl,"--json","--root",self.root,"action","run","central.world-relations.save",json.dumps({"scope":"root","record":{"schema":"central.world-relations/v1","ref":"control:root","revision":"r1","excluded_sources":[ref]}})])
-        record_path = self.root / json.loads(output.stdout)["data"]["source_path"]
-        container = record_path.parent
-        before = self.material_basis(source), self.material_basis(record_path)
+        record_paths = self.native_inherited_exclusion(ref)
+        container = record_paths[0].parent
+        before = [self.material_basis(path) for path in [source, *record_paths]]
         mode = container.stat().st_mode & 0o7777
         try:
             container.chmod(0)
             with self.assertRaises(OSError) as actual:
                 list(container.iterdir())
             self.assertEqual(actual.exception.errno, errno.EACCES)
-            failure = self.action("resolve", source_ref=ref, binding_only=True, success=False)
+            failure = self.action("resolve", "alpha", source_ref=ref, binding_only=True, success=False)
             self.assertEqual(failure["error"]["details"]["material_state"], "unavailable")
             self.assertEqual(failure["error"]["details"]["io_error"]["kind"], "PermissionDenied")
             self.assertEqual(failure["error"]["details"]["io_error"]["raw_os_error"], actual.exception.errno)
             self.assertNotIn("retained excluded body", json.dumps(failure))
         finally:
             container.chmod(mode)
-        failure = self.action("resolve", source_ref=ref, binding_only=True, success=False)
+        self.assert_native_inherited_exclusion(ref)
+        failure = self.action("resolve", "alpha", source_ref=ref, binding_only=True, success=False)
         self.assertEqual(failure["error"]["details"]["material_state"], "withheld")
-        self.assertEqual((self.material_basis(source), self.material_basis(record_path)), before)
+        self.assertEqual([self.material_basis(path) for path in [source, *record_paths]], before)
 
 
     def test_57_selected_project_skill_source_keeps_literal_accepted_identity_without_bulk_fallback(self):
