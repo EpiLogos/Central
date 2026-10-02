@@ -45,6 +45,7 @@ pub mod source_transfer;
 pub mod system_disclosure;
 pub mod template_stamp;
 pub mod wiki_read;
+mod wiki_publication;
 pub mod world;
 pub mod world_here;
 pub mod world_map;

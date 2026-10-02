@@ -1412,13 +1412,17 @@ pub fn apply_reproject(central_root: &Path, name: &str) -> io::Result<ReprojectR
     left_alone.extend(survey.occupied);
 
     let mut stamped = Vec::new();
+    let mut progress = crate::projectcentral_ops::MutationProgress::default();
     // Stamp in canonical order: every parent directory precedes what it
     // contains, so one pass is enough. Nothing existing is ever written, and
     // `write_json_new` refuses to overwrite as a backstop.
     for step in survey.missing.iter() {
         match step.kind {
             ScaffoldKind::Directory => {
-                fs::create_dir_all(central_root.join(&step.path))?;
+                progress.check(
+                    &central_root.join(&step.path),
+                    fs::create_dir_all(central_root.join(&step.path)),
+                )?;
                 stamped.push(step.clone());
             }
             ScaffoldKind::File => {
@@ -1440,7 +1444,10 @@ pub fn apply_reproject(central_root: &Path, name: &str) -> io::Result<ReprojectR
                 } else {
                     continue;
                 };
-                write_json_new(&central_root.join(&step.path), &value)?;
+                progress.publish(&central_root.join(&step.path), || {
+                    write_json_new(&central_root.join(&step.path), &value)?;
+                    Ok(true)
+                })?;
                 stamped.push(step.clone());
             }
         }
@@ -2098,23 +2105,20 @@ fn reproject_apply_action(
     };
     match apply_reproject(&root, name) {
         Ok(receipt) => serialized(action, receipt),
-        Err(error)
-            if error.kind() == io::ErrorKind::NotFound
-                || error.kind() == io::ErrorKind::InvalidInput =>
-        {
-            ActionResult::failure(
-                Some(action),
-                ResultStatus::InvalidInput,
-                error.to_string(),
-                None,
-            )
+        Err(error) => {
+            if let Some(result) = crate::projectcentral_ops::mutation_failure_result(action, &error)
+            {
+                return result;
+            }
+            let status = if error.kind() == io::ErrorKind::NotFound
+                || error.kind() == io::ErrorKind::InvalidInput
+            {
+                ResultStatus::InvalidInput
+            } else {
+                ResultStatus::InternalFailure
+            };
+            ActionResult::failure(Some(action), status, error.to_string(), None)
         }
-        Err(error) => ActionResult::failure(
-            Some(action),
-            ResultStatus::InternalFailure,
-            error.to_string(),
-            None,
-        ),
     }
 }
 
