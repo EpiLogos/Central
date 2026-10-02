@@ -1072,3 +1072,178 @@ fn native_scope_preserves_unchanged_root_alias_and_opaque_manifest_identity() {
     assert_eq!(fs::read(&manifest).unwrap(), before);
     assert_eq!(fs::metadata(&manifest).unwrap().ino(), inode);
 }
+
+/// These tests deliberately expose nonregular native records. Bound the real
+/// reader process so the old blocking FIFO path cannot hang the test runner.
+fn bounded_world_record(world: &World) -> Value {
+    bounded_world_record_at(world, world.root())
+}
+
+fn bounded_world_record_at(world: &World, cwd: &Path) -> Value {
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    struct OwnedChild(std::process::Child);
+    impl Drop for OwnedChild {
+        fn drop(&mut self) {
+            if matches!(self.0.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    let stdout_path = world.root().join(".world-record-check.stdout");
+    let stderr_path = world.root().join(".world-record-check.stderr");
+    let input = json!({"cwd":cwd}).to_string();
+    let mut child = OwnedChild(
+        Command::new(env!("CARGO_BIN_EXE_ctrl"))
+            .arg("--json")
+            .arg("--root")
+            .arg(world.root())
+            .args(["action", "run", "central.world.here", &input])
+            .env_remove("CENTRAL_NATIVE_TOKEN")
+            .stdin(Stdio::null())
+            .stdout(fs::File::create(&stdout_path).unwrap())
+            .stderr(fs::File::create(&stderr_path).unwrap())
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = child.0.try_wait().unwrap() {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "native World disclosure exceeded its test deadline");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let bytes = fs::read(&stdout_path).unwrap();
+    let stderr = fs::read_to_string(&stderr_path).unwrap();
+    assert!(status.success(), "actual ctrl failed: {status}; {stderr}");
+    let reading: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(reading["ok"], true, "{reading}; {stderr}");
+    reading["data"]["world_record"].clone()
+}
+
+fn controlled_root_world_record() -> Value {
+    json!({"schema":"central.world-relations/v1", "ref":"control:root", "revision":"w1",
+        "parent":null, "sources":[], "retained_extension":{"qualification":"owned native fixture"}})
+}
+
+#[test]
+#[cfg(unix)]
+fn world_disclosure_uses_native_optional_absence_and_refuses_redirected_container() {
+    use std::os::unix::fs::symlink;
+    let world = World::new(&[]);
+    let store = RelationRecordStore::worlds_at_root(world.root());
+    let dir = store.source_dir();
+    assert!(store.list().unwrap().is_empty());
+    assert_eq!(bounded_world_record(&world)["state"], "absent");
+    fs::create_dir_all(dir.parent().unwrap()).unwrap();
+    symlink(world.root().join("unavailable-owned-world-container"), &dir).unwrap();
+    assert!(store.list().is_err());
+    let refused = bounded_world_record(&world);
+    assert_eq!(refused["state"], "unavailable", "{refused}");
+    assert_eq!(refused["native_error"]["owner"], "Central/RelationRecordStore");
+    assert!(fs::symlink_metadata(&dir).unwrap().file_type().is_symlink());
+    fs::remove_file(&dir).unwrap();
+    assert_eq!(bounded_world_record(&world)["state"], "absent");
+}
+
+#[test]
+fn world_disclosure_does_not_acknowledge_invalid_schema_or_incomplete_native_list() {
+    let world = World::new(&[]);
+    let store = RelationRecordStore::worlds_at_root(world.root());
+    store.save(&controlled_root_world_record(), None).unwrap();
+    let path = store.source_path("control:root").unwrap();
+    let original = fs::read(&path).unwrap();
+    assert_eq!(bounded_world_record(&world)["state"], "present");
+    let mut wrong: Value = serde_json::from_slice(&original).unwrap();
+    wrong["schema"] = json!("unowned.world-record/v1");
+    let wrong_bytes = serde_json::to_vec(&wrong).unwrap();
+    fs::write(&path, &wrong_bytes).unwrap();
+    assert!(store.list().is_err());
+    assert_eq!(bounded_world_record(&world)["state"], "unavailable");
+    assert_eq!(fs::read(&path).unwrap(), wrong_bytes);
+    fs::write(&path, &original).unwrap();
+    let unreadable = store.source_dir().join("unreadable-owned-world.json");
+    fs::write(&unreadable, b"not JSON").unwrap();
+    assert!(store.list().is_err());
+    assert_eq!(bounded_world_record(&world)["state"], "unavailable");
+    assert_eq!(fs::read(&path).unwrap(), original);
+    assert_eq!(fs::read(&unreadable).unwrap(), b"not JSON");
+    fs::remove_file(&unreadable).unwrap();
+    let restored = bounded_world_record(&world);
+    assert_eq!(restored["state"], "present");
+    assert_eq!(restored["ref"], "control:root");
+    assert_eq!(restored["revision"], "w1");
+    assert_eq!(fs::read(&path).unwrap(), original);
+}
+
+#[test]
+#[cfg(unix)]
+fn world_disclosure_refuses_native_record_symlink_and_fifo_without_following_them() {
+    use std::ffi::CString;
+    use std::os::unix::fs::{symlink, FileTypeExt};
+    let world = World::new(&[]);
+    let store = RelationRecordStore::worlds_at_root(world.root());
+    store.save(&controlled_root_world_record(), None).unwrap();
+    let path = store.source_path("control:root").unwrap();
+    let original = fs::read(&path).unwrap();
+    let retained = world.root().join("retained-owned-world-record.json");
+    fs::rename(&path, &retained).unwrap();
+    symlink(&retained, &path).unwrap();
+    assert_eq!(bounded_world_record(&world)["state"], "unavailable");
+    assert_eq!(fs::read(&retained).unwrap(), original);
+    fs::remove_file(&path).unwrap();
+    let fifo = CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    assert_eq!(bounded_world_record(&world)["state"], "unavailable");
+    assert!(fs::symlink_metadata(&path).unwrap().file_type().is_fifo());
+    assert_eq!(fs::read(&retained).unwrap(), original);
+    fs::remove_file(&path).unwrap();
+    fs::rename(&retained, &path).unwrap();
+    assert_eq!(bounded_world_record(&world)["state"], "present");
+    assert_eq!(fs::read(&path).unwrap(), original);
+}
+
+#[test]
+fn world_disclosure_preserves_over_budget_native_record_as_unavailable() {
+    let world = World::new(&[]);
+    let store = RelationRecordStore::worlds_at_root(world.root());
+    store.save(&controlled_root_world_record(), None).unwrap();
+    let path = store.source_path("control:root").unwrap();
+    let original = fs::read(&path).unwrap();
+    let mut retained = original.clone();
+    retained.resize(8 * 1024 * 1024 + 1, b' ');
+    fs::write(&path, &retained).unwrap();
+    let refused = bounded_world_record(&world);
+    assert_eq!(refused["state"], "unavailable", "{refused}");
+    assert_eq!(refused["native_error"]["capacity"]["byte_len"], retained.len());
+    assert_eq!(refused["native_error"]["capacity"]["limit"], 8 * 1024 * 1024);
+    assert_eq!(fs::read(&path).unwrap(), retained);
+    fs::write(&path, &original).unwrap();
+    assert_eq!(bounded_world_record(&world)["state"], "present");
+    assert_eq!(fs::read(&path).unwrap(), original);
+}
+
+#[test]
+fn world_disclosure_preserves_native_project_owner_source_location() {
+    let world = World::new(&[]);
+    let project_root = world.root().join("Work/one");
+    let store = RelationRecordStore::worlds_in_project(&project_root);
+    store.save(&json!({"schema":"central.world-relations/v1", "ref":"project:test/one",
+        "revision":"project-world-r1", "parent":"control:root", "sources":[]}), None).unwrap();
+    let path = store.source_path("project:test/one").unwrap();
+    let retained = fs::read(&path).unwrap();
+    let native = store.read("project:test/one").unwrap();
+    let expected_source = path.strip_prefix(world.root()).unwrap().to_string_lossy();
+    assert_eq!(project_root.join(&native.source_path), path);
+    let reading = bounded_world_record_at(&world, &project_root.join("src"));
+    assert_eq!(reading["state"], "present", "{reading}");
+    assert_eq!(reading["ref"], "project:test/one");
+    assert_eq!(reading["revision"], "project-world-r1");
+    assert_eq!(reading["source"], expected_source.as_ref());
+    assert_eq!(fs::read(&path).unwrap(), retained);
+}

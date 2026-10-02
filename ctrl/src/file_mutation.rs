@@ -151,15 +151,28 @@ impl NativeFileRead {
     }
 
     pub(crate) fn read_bytes(&mut self, limit: usize) -> io::Result<Vec<u8>> {
-        use std::io::{Seek, SeekFrom};
         if limit == 0 || limit > MAX {
             return Err(invalid("Native read capacity must be within the existing 4 MiB bound"));
         }
+        self.read_bytes_with_capacity(limit, "Native source exceeds the 4 MiB eager read capacity")
+    }
+
+    /// Owner declarations retain the existing file-map 8 MiB metadata capacity.
+    /// This does not widen ordinary Source delivery or change material capture.
+    pub(crate) fn read_metadata_bytes(&mut self, limit: usize) -> io::Result<Vec<u8>> {
+        if limit == 0 || limit > 8 * 1024 * 1024 {
+            return Err(invalid("Native metadata capacity must be within the existing 8 MiB bound"));
+        }
+        self.read_bytes_with_capacity(limit, "Native declaration exceeds the 8 MiB metadata read capacity")
+    }
+
+    fn read_bytes_with_capacity(&mut self, limit: usize, overflow: &'static str) -> io::Result<Vec<u8>> {
+        use std::io::{Seek, SeekFrom};
         let read = |file: &mut File| -> io::Result<Vec<u8>> {
             let mut bytes = Vec::new();
             file.take((limit + 1) as u64).read_to_end(&mut bytes)?;
             if bytes.len() > limit {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "Native source exceeds the 4 MiB eager read capacity"));
+                return Err(io::Error::new(io::ErrorKind::InvalidData, overflow));
             }
             Ok(bytes)
         };

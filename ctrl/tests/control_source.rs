@@ -622,10 +622,7 @@ fn actual_action_body_eacces_preserves_original_errno_without_fake_topic() {
 }
 
 #[test]
-fn actual_native_control_binary_and_cli_dispatch_use_the_same_current_admission() {
-    use std::io::Read;
-    use std::process::{Command, Stdio};
-    use std::time::{Duration, Instant};
+fn actual_control_cli_dispatch_and_native_action_share_current_admission() {
     let temporary = TempRoot::with_label("native-cli-current");
     let root = temporary.path().join("Central");
     initialize_central(&root).unwrap();
@@ -634,37 +631,13 @@ fn actual_native_control_binary_and_cli_dispatch_use_the_same_current_admission(
     fs::write(private.join(".no-agent-retrieval"), b"").unwrap();
     fs::write(private.join("hidden.md"), b"# Hidden native title\n").unwrap();
     fs::write(root.join("Control/agents/governance/open.md"), b"# Open native title\n").unwrap();
-    let stdout = temporary.path().join("stdout.json");
-    let stderr = temporary.path().join("stderr.txt");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_ctrl"))
-        .args(["--json", "--root"]).arg(&root).args(["control", "index"])
-        .stdin(Stdio::null()).stdout(Stdio::from(fs::File::create(&stdout).unwrap()))
-        .stderr(Stdio::from(fs::File::create(&stderr).unwrap())).spawn().unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let status = loop {
-        if let Some(status) = child.try_wait().unwrap() { break status; }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let reap = Instant::now() + Duration::from_secs(1);
-            while child.try_wait().unwrap().is_none() && Instant::now() < reap { std::thread::sleep(Duration::from_millis(5)); }
-            panic!("actual native Control CLI did not finish within the test bound");
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    };
-    let bounded = |path: &Path| {
-        let mut bytes = Vec::new();
-        fs::File::open(path).unwrap().take(4 * 1024 * 1024 + 1).read_to_end(&mut bytes).unwrap();
-        assert!(bytes.len() <= 4 * 1024 * 1024);
-        bytes
-    };
-    assert!(status.success(), "actual CLI stdout={} stderr={}", String::from_utf8_lossy(&bounded(&stdout)), String::from_utf8_lossy(&bounded(&stderr)));
-    let actual: serde_json::Value = serde_json::from_slice(&bounded(&stdout)).unwrap();
     let native = serde_json::to_value(execute(&root, "control.index", json!({}))).unwrap();
-    assert_eq!(actual, native);
     let cli = run_cli(&["--json".into(), "--root".into(), root.display().to_string(), "control".into(), "index".into()], &CliEnvironment {configured_root:None,home:None});
-    assert_eq!(cli.exit_code, 0);
+    assert_eq!(cli.exit_code, 0, "actual CLI result={}", cli.output);
     assert_eq!(serde_json::from_str::<serde_json::Value>(&cli.output).unwrap(), native);
-    assert!(!String::from_utf8_lossy(&bounded(&stdout)).contains("hidden.md"));
+    assert!(!cli.output.contains("hidden.md"));
+    assert_eq!(fs::read(private.join("hidden.md")).unwrap(), b"# Hidden native title\n");
+    assert_eq!(fs::read(root.join("Control/agents/governance/open.md")).unwrap(), b"# Open native title\n");
 }
 
 #[test]

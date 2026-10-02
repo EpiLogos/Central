@@ -20,6 +20,12 @@ pub use crate::file_map_catalog::SCHEMA;
 pub(crate) use crate::file_map_catalog::*;
 pub(crate) use crate::file_map_index::refresh;
 use crate::file_map_index::search;
+#[cfg(test)]
+type BeforeReadAcknowledgement = Box<dyn FnOnce()>;
+#[cfg(test)]
+thread_local! {
+    static BEFORE_READ_ACKNOWLEDGEMENT: std::cell::RefCell<Option<BeforeReadAcknowledgement>> = const { std::cell::RefCell::new(None) };
+}
 fn register_source(all: &[Scope], scope: &Scope, input: &Value) -> io::Result<Value> {
     expect_basis(scope, input)?;
     let raw = text(input, "path")?;
@@ -99,25 +105,50 @@ fn register_source(all: &[Scope], scope: &Scope, input: &Value) -> io::Result<Va
         json!({"source_ref":reference,"world_ref":scope.world,"revision":scope.basis()?,"source_bytes_changed":false}),
     )
 }
-pub(crate) fn verified_links(all: &[Scope], scope: &Scope) -> io::Result<Vec<(PathBuf, Entry)>> {
+fn link_descriptors(all: &[Scope], scope: &Scope, requested: Option<&str>) -> io::Result<Vec<(PathBuf, Entry)>> {
     let mut result = Vec::new();
     for (relative, link) in scope.ground()?.links {
+        if requested.is_some_and(|reference| reference != link.source_ref) { continue; }
         let member = relative_member(&scope.root, &relative)?;
         let metadata = fs::symlink_metadata(&member)?;
-        if !metadata.file_type().is_symlink()
-            || metadata.dev() != link.device
-            || metadata.ino() != link.inode
-            || fs::read_link(&member)? != Path::new(&link.target)
-        {
+        if !metadata.file_type().is_symlink() || metadata.dev()!=link.device || metadata.ino()!=link.inode || fs::read_link(&member)?!=Path::new(&link.target) {
             return Err(conflict("Registered link was replaced or redirected"));
         }
-        let (_, source) = lookup(all, &link.source_ref)?;
-        if source.world_ref != link.world_ref || member.canonicalize()? != source.path {
-            return Err(conflict("Registered link no longer reaches its source"));
-        }
-        result.push((member, source));
+        let candidate=binding_by_ref(all,&link.source_ref)?.ok_or_else(|| read_refusal(io::ErrorKind::NotFound,"Registered link owner is unavailable","known","link_metadata","unavailable"))?;
+        let source=candidate.observe()?;
+        if source.world_ref!=link.world_ref || member.canonicalize()?!=source.path { return Err(conflict("Registered link no longer reaches its source")); }
+        result.push((member,source));
     }
     Ok(result)
+}
+pub(crate) fn verified_links(all: &[Scope], scope: &Scope) -> io::Result<Vec<(PathBuf, Entry)>> {
+    link_descriptors(all,scope,None)?.into_iter().map(|(path,source)| Ok((path,with_revision(source)?))).collect()
+}
+fn binding_only(input: &Value) -> io::Result<bool> {
+    let selected=match input.get("binding_only") {
+        None => false,
+        Some(value) => value.as_bool().ok_or_else(|| invalid("binding_only must be a boolean"))?,
+    };
+    if selected && (input["content"]==true || input.get("expected_revision").is_some()) {
+        return Err(invalid("binding_only cannot request content or a payload expected_revision"));
+    }
+    Ok(selected)
+}
+fn read_admission(all: &[Scope], candidate: &BindingCandidate, input: &Value) -> io::Result<()> {
+    let scope=selected(all,input)?;
+    if input["project"].is_string() && scope.world!=candidate.scope.world && !link_descriptors(all,scope,Some(&candidate.source.source_ref))?.iter().any(|(_,entry)| entry.source.source_ref==candidate.source.source_ref) {
+        return Err(read_refusal(io::ErrorKind::PermissionDenied,"Source belongs to another Project scope and has no declared link here","known","project_admission","withheld"));
+    }
+    if !context_allows(all,scope,&candidate.source.source_ref).map_err(|error| read_failure(error,"known","context_admission","unavailable"))? {
+        return Err(read_refusal(io::ErrorKind::PermissionDenied,"Source excluded by requesting World's effective source relations","known","context_admission","withheld"));
+    }
+    if let Some(world) = all.iter().find(|scope| scope.world == "control:root") {
+        let path=candidate.path()?;
+        if path.starts_with(&world.root) && !source_horizon::retrieval_admission(&world.root,&path).map_err(|error| read_failure(error,"known","world_source_admission","unavailable"))? {
+            return Err(read_refusal(io::ErrorKind::PermissionDenied,"Source excluded by current enclosing World treatment","known","world_source_admission","withheld"));
+        }
+    }
+    Ok(())
 }
 fn relative_member(root: &Path, raw: &str) -> io::Result<PathBuf> {
     let member = relative(raw)?;
@@ -127,99 +158,85 @@ fn relative_member(root: &Path, raw: &str) -> io::Result<PathBuf> {
     Ok(root.join(member))
 }
 fn locate(all: &[Scope], input: &Value) -> io::Result<Value> {
-    let raw = text(input, "path")?;
-    let lexical = if Path::new(raw).is_absolute() {
-        PathBuf::from(raw)
-    } else {
-        selected(all, input)?.root.join(relative(raw)?)
-    };
+    let metadata_only=binding_only(input)?;
+    let raw=text(input,"path")?;
+    let lexical=if Path::new(raw).is_absolute() { PathBuf::from(raw) } else { selected(all,input)?.root.join(relative(raw)?) };
     for scope in all {
-        if input["project"].is_string() && selected(all, input)?.world != scope.world {
-            continue;
-        }
-        let candidate = lexical
-            .strip_prefix(&scope.root)
-            .ok()
-            .and_then(Path::to_str);
-        if candidate.is_some_and(|path| scope.ground().is_ok_and(|g| g.links.contains_key(path))) {
-            for (link_path, entry) in verified_links(all, scope)? {
-                if link_path == lexical {
-                    let mut request = input.clone();
-                    request.as_object_mut().unwrap().remove("project");
-                    request["source_ref"] = json!(entry.source.source_ref);
-                    let mut result = resolve(all, &request)?;
-                    result["encountered_link"] = json!({"path":link_path,"world_ref":scope.world});
-                    return Ok(result);
-                }
-            }
+        if input["project"].is_string() && selected(all,input)?.world!=scope.world { continue; }
+        let Some(member)=lexical.strip_prefix(&scope.root).ok().and_then(Path::to_str) else { continue; };
+        if let Some(link)=scope.ground()?.links.get(member) {
+            let actual=link_descriptors(all,scope,Some(&link.source_ref))?;
+            if !actual.iter().any(|(path,_)| *path==lexical) { return Err(conflict("Selected registered link changed")); }
+            let mut request=input.clone();
+            request.as_object_mut().ok_or_else(|| invalid("Expected object input"))?.remove("project");
+            request["source_ref"]=json!(link.source_ref);
+            let mut result=resolve(all,&request)?;
+            result["encountered_link"]=json!({"path":lexical,"world_ref":scope.world});
+            return Ok(result);
         }
     }
-    let target = if Path::new(raw).is_absolute() {
-        safe_member(Path::new("/"), raw.trim_start_matches('/'), true)?
-    } else {
-        safe_member(&selected(all, input)?.root, raw, true)?
-    };
-    for scope in all {
-        if input["project"].is_string() && selected(all, input)?.world != scope.world {
-            continue;
-        }
-        if let Some(entry) = entries(scope)?.into_iter().find(|e| e.path == target) {
-            let mut request = input.clone();
-            request["source_ref"] = json!(entry.source.source_ref);
-            return resolve(all, &request);
-        }
+    if let Some(candidate)=binding_by_path(all,&lexical)? {
+        let mut request=input.clone();
+        request["source_ref"]=json!(candidate.source.source_ref);
+        return resolve(all,&request);
     }
-    if !source_horizon::retrieval_allowed(Path::new("/"), &target)
-        || (target.is_dir() && target.join(".no-agent-retrieval").exists())
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "Location is excluded by source policy",
-        ));
+    require_no_unobserved_route(all,None,Some(&lexical))?;
+    // An ordinary unregistered location is not a retrieval grant. Validate its
+    // actual route, current treatment and form without opening its byte body.
+    let target=if Path::new(raw).is_absolute() { safe_member(Path::new("/"),raw.trim_start_matches('/'),true)? } else { safe_member(&selected(all,input)?.root,raw,true)? };
+    if !source_horizon::retrieval_admission(Path::new("/"),&target)? {
+        return Err(read_refusal(io::ErrorKind::PermissionDenied,"Location is excluded by current source treatment","unknown","source_admission","withheld"));
     }
-    Err(io::Error::new(
-        io::ErrorKind::NotFound,
-        "Location is unregistered",
-    ))
+    let form=fs::symlink_metadata(&target)?;
+    if !(form.is_file() || form.is_dir()) { return Err(invalid("Unregistered material form is unsupported")); }
+    if binding_by_path(all,&target)?.is_some() { return Err(conflict("Location ownership changed during observation")); }
+    if metadata_only {
+        target.to_str().ok_or_else(|| invalid("Location cannot be represented by native JSON"))?;
+        return Ok(json!({"ownership":"unregistered","binding_only":true,"requested_path":raw}));
+    }
+    Err(io::Error::new(io::ErrorKind::NotFound,"Location is unregistered"))
 }
 pub(crate) fn resolve(all: &[Scope], input: &Value) -> io::Result<Value> {
-    let (scope, entry) = lookup(all, text(input, "source_ref")?)?;
-    if input["project"].is_string()
-        && selected(all, input)?.world != scope.world
-        && !verified_links(all, selected(all, input)?)?
-            .iter()
-            .any(|(_, linked)| linked.source.source_ref == entry.source.source_ref)
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "Source belongs to another Project scope and has no declared link here",
-        ));
-    }
-    if !context_allows(all, selected(all, input)?, &entry.source.source_ref)? {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "Source excluded by the requesting World's effective source relations",
-        ));
-    }
-    if let Some(revision) = input["expected_revision"].as_str() {
-        if revision != entry.revision {
-            return Err(conflict("Source revision changed"));
+    let metadata_only=binding_only(input)?;
+    let reference=text(input,"source_ref")?;
+    let candidate=match binding_by_ref(all,reference)? {
+        Some(candidate)=>candidate,
+        None=>{
+            require_no_unobserved_route(all,Some(reference),None)?;
+            if binding_by_ref(all,reference)?.is_some() { return Err(conflict("Source ownership changed during observation")); }
+            return if metadata_only { Ok(json!({"ownership":"unregistered","binding_only":true,"source_ref":reference})) } else {
+                Err(io::Error::new(io::ErrorKind::NotFound,"Source is outside participating maps"))
+            };
         }
-    }
-    let mut value = serde_json::to_value(&entry)?;
-    value["project"] = json!(scope.project);
-    if input["content"] == true {
-        if input["content_encoding"] == "base64" {
+    };
+    read_admission(all,&candidate,input)?;
+    let mut entry=candidate.observe()?;
+    let original_metadata=entry.clone();
+    let mut value=if metadata_only {
+        let mut descriptor=serde_json::to_value(&entry)?;
+        descriptor.as_object_mut().ok_or_else(|| invalid("Invalid source descriptor"))?.remove("revision");
+        descriptor["ownership"]=json!("owned");
+        descriptor["binding_only"]=json!(true);
+        descriptor["relation_revision"]=json!(candidate.relation_revision);
+        descriptor["material_metadata_basis"]=metadata_basis(&entry)?;
+        descriptor
+    } else {
+        entry=with_revision(entry).map_err(|error| read_failure(error,"known","payload_revision","unavailable"))?;
+        if input["expected_revision"].as_str().is_some_and(|expected| expected!=entry.revision) { return Err(conflict("Source revision changed")); }
+        serde_json::to_value(&entry)?
+    };
+    value["project"]=json!(candidate.scope.project);
+    if !metadata_only && input["content"]==true {
+        if input["content_encoding"]=="base64" {
             use base64::Engine;
-            value["content"] =
-                json!(base64::engine::general_purpose::STANDARD.encode(payload(&entry)?));
-            value["content_encoding"] = json!("base64");
+            value["content"]=json!(base64::engine::general_purpose::STANDARD.encode(payload(&entry).map_err(|error| read_failure(error,"known","payload_read","unavailable"))?));
+            value["content_encoding"]=json!("base64");
         } else {
-            value["content"] = json!(content(&entry)?);
-            value["content_encoding"] = json!("utf-8");
+            value["content"]=json!(content(&entry).map_err(|error| read_failure(error,"known","payload_read","unavailable"))?);
+            value["content_encoding"]=json!("utf-8");
         }
     }
-    if entry.path.file_name().is_some_and(|n| n == "SKILL.md") {
+    if !metadata_only && entry.path.file_name().is_some_and(|n| n == "SKILL.md") {
         let skill_dir = entry.path.parent().unwrap();
         let manifest_path = skill_dir.join("skill.json");
         if manifest_path.exists() {
@@ -233,7 +250,7 @@ pub(crate) fn resolve(all: &[Scope], input: &Value) -> io::Result<Value> {
                 true,
             )?;
         }
-        let manifest = crate::control_skills::read_skill_manifest(skill_dir)?;
+        let manifest = crate::control_skills::read_skill_manifest(skill_dir).map_err(|error| read_failure(error,"known","skill_projection","unavailable"))?;
         let mut faults = Vec::<String>::new();
         if let Some(manifest) = &manifest {
             if skill_dir.file_name().and_then(|s| s.to_str()) != Some(&manifest.name) {
@@ -257,15 +274,18 @@ pub(crate) fn resolve(all: &[Scope], input: &Value) -> io::Result<Value> {
         value["skill_manifest"] = serde_json::to_value(manifest)?;
         value["skill_directory"] = json!(skill_dir);
     }
-    if !context_allows(all, selected(all, input)?, &entry.source.source_ref)? {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "Source disclosure changed during read",
-        ));
+    let current=binding_by_ref(all,reference)?.ok_or_else(|| read_refusal(io::ErrorKind::AlreadyExists,"Source ownership disappeared during read","known","final_binding","unavailable"))?;
+    read_admission(all,&current,input)?;
+    let mut observed=current.observe()?;
+    if current.scope.world!=candidate.scope.world || current.scope.root!=candidate.scope.root || current.relation_revision!=candidate.relation_revision || current.selection_metadata_basis!=candidate.selection_metadata_basis || observed.path!=entry.path || observed.source!=entry.source || observed.kind!=entry.kind {
+        return Err(read_refusal(io::ErrorKind::AlreadyExists,"Source binding changed during read","known","final_binding","unavailable"));
     }
-    let (_, current) = lookup(all, &entry.source.source_ref)?;
-    if current.path != entry.path || current.revision != entry.revision {
-        return Err(conflict("Source binding changed during read"));
+    if metadata_only {
+        if observed.revision!=original_metadata.revision { return Err(conflict("Source metadata changed during read")); }
+        metadata_basis(&observed)?;
+    } else {
+        observed=with_revision(observed).map_err(|error| read_failure(error,"known","final_payload_revision","unavailable"))?;
+        if observed.revision!=entry.revision { return Err(conflict("Source binding changed during read")); }
     }
     Ok(value)
 }
@@ -444,7 +464,27 @@ pub(crate) fn relative_between(from: &Path, to: &Path) -> PathBuf {
     }
     result
 }
+fn selected_metadata_basis(all: &[Scope], op: &str, input: &Value) -> io::Result<Option<(String, String, Option<String>)>> {
+    let candidate = if op == "resolve" {
+        binding_by_ref(all,text(input,"source_ref")?)?
+    } else {
+        let raw=text(input,"path")?;
+        let path=if Path::new(raw).is_absolute() { PathBuf::from(raw) } else { selected(all,input)?.root.join(relative(raw)?) };
+        let mut linked=None;
+        for scope in all {
+            if input["project"].is_string() && selected(all,input)?.world!=scope.world { continue; }
+            let Some(member)=path.strip_prefix(&scope.root).ok().and_then(Path::to_str) else { continue; };
+            if let Some(link)=scope.ground()?.links.get(member) {
+                linked=Some(link.source_ref.clone()); break;
+            }
+        }
+        if let Some(reference)=linked { binding_by_ref(all,&reference)? } else { binding_by_path(all,&path)? }
+    };
+    Ok(candidate.map(|candidate| (candidate.scope.world,candidate.source.source_ref,candidate.selection_metadata_basis)))
+}
+
 pub fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
+    let read_root = if matches!(op,"resolve"|"locate") { Some(ReadRoot::capture(root)?) } else { None };
     let root = root.canonicalize()?;
     // Reads do not acquire a filesystem lock, create a DB or reconcile state.
     // Mutation is serialized in one existing owner lock namespace.
@@ -462,6 +502,9 @@ pub fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
         scopes(&root)?
     };
     let scope = selected(&all, input)?;
+    let read_roots = if read_root.is_some() { all.iter().map(|scope| ReadRoot::capture(&scope.root)).collect::<io::Result<Vec<_>>>()? } else { Vec::new() };
+    let retained_bases = if read_root.is_some() { ownership_bases(&all)? } else { Vec::new() };
+
     let mut locks = Vec::new();
     if !matches!(
         op,
@@ -501,6 +544,14 @@ pub fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
             )?);
         }
     }
+    if let Some(original) = &read_root {
+        original.validate()?;
+        for owner in &read_roots { owner.validate()?; }
+        if ownership_bases(&all)? != retained_bases { return Err(conflict("Native declarations changed before selected read")); }
+    }
+    let retained_selected_metadata = if read_root.is_some() {
+        selected_metadata_basis(&all,op,input)?
+    } else { None };
     let data = match op {
         "skill-tree" => super::file_map_skills::tree(&all, input)?,
         "projection-record" => super::file_map_projection::execute(&all, input, true)?,
@@ -521,6 +572,38 @@ pub fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
         "link" => link(&all, input)?,
         _ => return Err(invalid("Unknown file-map operation")),
     };
+    if let Some(original) = &read_root {
+        #[cfg(test)]
+        {
+            let checkpoint = BEFORE_READ_ACKNOWLEDGEMENT.with(|checkpoint| checkpoint.borrow_mut().take());
+            if let Some(checkpoint) = checkpoint { checkpoint(); }
+        }
+        original.validate()?;
+        for owner in &read_roots { owner.validate()?; }
+        let current = scopes(&root)?;
+        if current.len()!=all.len() || current.iter().zip(&all).any(|(current,retained)| current.world!=retained.world || current.root!=retained.root || current.project!=retained.project) {
+            return Err(conflict("Participating owner scopes changed during read"));
+        }
+        if ownership_bases(&current)? != retained_bases {
+            return Err(conflict("Native ownership declarations changed before acknowledgement"));
+        }
+        // Reuse the same read after all operation checkpoints. No descriptor
+        // remains open for each item in a World; only the selected read is
+        // repeated. Even an unregistered response requires a current route.
+        if selected_metadata_basis(&current,op,input)? != retained_selected_metadata {
+            return Err(conflict("Selected native metadata changed before acknowledgement"));
+        }
+        let qualified = if op == "resolve" { resolve(&current, input)? } else { locate(&current, input)? };
+        if selected_metadata_basis(&current,op,input)? != retained_selected_metadata {
+            return Err(conflict("Selected native metadata changed during final qualification"));
+        }
+        if qualified != data { return Err(conflict("Native read result changed before acknowledgement")); }
+        for owner in &read_roots { owner.validate()?; }
+        if ownership_bases(&current)? != retained_bases {
+            return Err(conflict("Native ownership declarations changed during final qualification"));
+        }
+        original.validate()?;
+    }
     Ok(
         json!({"schema":SCHEMA,"operation":op,"result":data,"automatic_agent_or_model_invocation":false}),
     )
@@ -542,7 +625,7 @@ fn action(op: &str, input: &Value, context: &ActionExecutionContext<'_>) -> Acti
                 _ => "central.file_map_failure",
             },
             e.to_string(),
-            None,
+            if matches!(op,"resolve"|"locate") { Some(read_failure_details(&e)) } else { None },
         ),
     }
 }
@@ -585,7 +668,7 @@ pub fn register(registry: &mut ActionRegistry) {
             "resolve" => |_, i, c| action("resolve", i, c),
             _ => |_, i, c| action("link", i, c),
         };
-        let inputs = [
+        let mut inputs: Vec<_> = [
             "selected_capsules",
             "source_revision",
             "tree_revision",
@@ -632,6 +715,262 @@ pub fn register(registry: &mut ActionRegistry) {
             selection: None,
         })
         .collect();
+        if matches!(op,"resolve"|"locate") {
+            inputs.push(ActionInputDefinition {name:"binding_only".into(),input_type:"boolean".into(),required:false,choices:None,selection:None});
+        }
         registry.register(ActionDescriptor{id:format!("central.file-map.{op}"),title:format!("File map {op}"),description:"Persistent bkmr file map; source and placement meaning remain in Central. Reads never rebuild the owner's database or execute openers. Writes require current source-relations revision.".into(),inputs,output:ActionOutputDefinition{output_type:SCHEMA.into()},mutation_class:if matches!(op,"inspect"|"search"|"resolve"|"locate"|"projection-read"|"skill-tree"){MutationClass::ReadOnly}else{MutationClass::LocallyMutating},preview_supported:false,required_ports:vec![],availability:ActionAvailability{available:true,reason:None}},handler).expect("unique file map Action");
     }
+}
+
+#[cfg(test)]
+mod binding_read_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    struct Fixture { root: PathBuf, source: PathBuf, relations: PathBuf }
+    impl Fixture {
+        fn new() -> Self {
+            let scratch = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ProjectCentral/now/tmp");
+            fs::create_dir_all(&scratch).unwrap();
+            let root = scratch.join(format!("file-map-binding-{}-{}-{}", std::process::id(),
+                SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos(), NEXT.fetch_add(1, Ordering::Relaxed)));
+            fs::create_dir(&root).unwrap();
+            fs::create_dir_all(root.join("Control/user")).unwrap();
+            let source = root.join("Control/user/note.md");
+            fs::write(&source, "retained actual body\n").unwrap();
+            let relations = root.join(source_horizon::CONTROL_GROUND_RELATIONS_SOURCE);
+            fs::create_dir_all(relations.parent().unwrap()).unwrap();
+            fs::write(&relations, serde_json::to_vec(&json!({
+                "schema":source_horizon::CONTROL_GROUND_RELATIONS_SCHEMA,"project_id":"control:root",
+                "extension":{"retained":true},"relations":[{"ref":"opaque:fixture:note","path":"Control/user/note.md",
+                "roles":["agent-governance-source"],"provenance":"unresolved","standing":"unspecified",
+                "treatment":"retain-native-in-place"}]
+            })).unwrap()).unwrap();
+            Self { root, source, relations }
+        }
+        fn request(&self, metadata_only: bool) -> Value {
+            json!({"source_ref":"opaque:fixture:note","binding_only":metadata_only,"content":!metadata_only})
+        }
+        fn checkpoint(&self, callback: impl FnOnce() + 'static) {
+            BEFORE_READ_ACKNOWLEDGEMENT.with(|slot| { assert!(slot.borrow().is_none()); *slot.borrow_mut()=Some(Box::new(callback)); });
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            BEFORE_READ_ACKNOWLEDGEMENT.with(|slot| slot.borrow_mut().take());
+            if let Err(error)=fs::remove_dir_all(&self.root) {
+                let message=format!("Owned file-map fixture cleanup failed at {}: {:?} errno {:?}: {}",self.root.display(),error.kind(),error.raw_os_error(),error);
+                if std::thread::panicking() { eprintln!("{message}"); } else { panic!("{message}"); }
+            }
+        }
+    }
+
+    #[test]
+    fn captured_payload_removal_before_acknowledgement_is_not_delivered() {
+        let fixture=Fixture::new(); let source=fixture.source.clone();
+        fixture.checkpoint(move || fs::remove_file(source).unwrap());
+        let error=execute(&fixture.root,"resolve",&fixture.request(false)).unwrap_err();
+        assert_eq!(error.kind(),io::ErrorKind::NotFound);
+        assert_eq!(read_failure_details(&error)["ownership"],"known");
+        assert!(fixture.relations.is_file());
+    }
+    #[test]
+    fn captured_payload_same_inode_change_before_acknowledgement_conflicts() {
+        let fixture=Fixture::new(); let source=fixture.source.clone(); let inode=fs::metadata(&source).unwrap().ino();
+        fixture.checkpoint(move || fs::write(source,"changed actual body\n").unwrap());
+        assert_eq!(execute(&fixture.root,"resolve",&fixture.request(false)).unwrap_err().kind(),io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::metadata(&fixture.source).unwrap().ino(),inode);
+        assert_eq!(fs::read(&fixture.source).unwrap(),b"changed actual body\n");
+    }
+    #[test]
+    fn metadata_only_replacement_before_acknowledgement_conflicts_without_body_delivery() {
+        let fixture=Fixture::new(); let source=fixture.source.clone(); let replacement=fixture.root.join("replacement");
+        fs::write(&replacement,"retained actual body\n").unwrap(); let inode=fs::metadata(&source).unwrap().ino();
+        fixture.checkpoint(move || fs::rename(replacement,source).unwrap());
+        assert_eq!(execute(&fixture.root,"resolve",&fixture.request(true)).unwrap_err().kind(),io::ErrorKind::AlreadyExists);
+        assert_ne!(fs::metadata(&fixture.source).unwrap().ino(),inode);
+        assert_eq!(fs::read(&fixture.source).unwrap(),b"retained actual body\n");
+    }
+    #[test]
+    fn accepted_relation_change_before_acknowledgement_conflicts_and_preserves_source() {
+        let fixture=Fixture::new(); let path=fixture.relations.clone();
+        fixture.checkpoint(move || { let mut value:Value=serde_json::from_slice(&fs::read(&path).unwrap()).unwrap(); value["relations"][0]["standing"]=json!("changed-observed-standing"); fs::write(path,serde_json::to_vec(&value).unwrap()).unwrap(); });
+        assert_eq!(execute(&fixture.root,"resolve",&fixture.request(true)).unwrap_err().kind(),io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&fixture.source).unwrap(),b"retained actual body\n");
+    }
+    #[test]
+    fn late_native_withdrawal_is_denied_and_unchanged_reopen_remains_useful() {
+        let fixture=Fixture::new(); let marker=fixture.root.join("Control/user/.no-agent-retrieval"); let create=marker.clone();
+        fixture.checkpoint(move || fs::write(create,b"").unwrap());
+        let error=execute(&fixture.root,"resolve",&fixture.request(true)).unwrap_err();
+        assert_eq!(error.kind(),io::ErrorKind::PermissionDenied);
+        assert_eq!(read_failure_details(&error)["material_state"],"withheld");
+        fs::remove_file(marker).unwrap();
+        let result=execute(&fixture.root,"resolve",&fixture.request(true)).unwrap();
+        assert_eq!(result["result"]["source"]["ref"],"opaque:fixture:note");
+        assert!(result["result"].get("revision").is_none());
+        assert_eq!(fs::read(&fixture.source).unwrap(),b"retained actual body\n");
+    }
+    #[test]
+    fn healthy_no_owner_does_not_survive_new_accepted_owner_before_acknowledgement() {
+        let fixture=Fixture::new(); let relations=fixture.relations.clone();
+        fixture.checkpoint(move || { let mut value:Value=serde_json::from_slice(&fs::read(&relations).unwrap()).unwrap(); value["relations"][0]["ref"]=json!("opaque:fixture:new"); fs::write(relations,serde_json::to_vec(&value).unwrap()).unwrap(); });
+        assert_eq!(execute(&fixture.root,"resolve",&json!({"source_ref":"opaque:fixture:new","binding_only":true})).unwrap_err().kind(),io::ErrorKind::AlreadyExists);
+    }
+    #[test]
+    fn original_root_alias_retarget_is_not_a_new_owner_acknowledgement() {
+        let fixture=Fixture::new(); let other=Fixture::new(); let alias=fixture.root.join("owner-alias");
+        std::os::unix::fs::symlink(&fixture.root,&alias).unwrap(); let retarget=alias.clone(); let destination=other.root.clone();
+        fixture.checkpoint(move || { fs::remove_file(&retarget).unwrap(); std::os::unix::fs::symlink(destination,retarget).unwrap(); });
+        assert_eq!(execute(&alias,"resolve",&fixture.request(true)).unwrap_err().kind(),io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&fixture.source).unwrap(),b"retained actual body\n");
+        assert_eq!(fs::read(&other.source).unwrap(),b"retained actual body\n");
+    }
+
+    #[test]
+    fn registered_native_file_keeps_actual_owner_roles_and_standing() {
+        let fixture = Fixture::new();
+        fs::remove_file(&fixture.relations).unwrap();
+        let before = fs::read(&fixture.source).unwrap();
+        let inode = fs::metadata(&fixture.source).unwrap().ino();
+        let native = source_horizon::control_source_bindings(&fixture.root).unwrap()
+            .into_iter().find(|binding| binding.path == "Control/user/note.md").unwrap();
+        let registered = execute(&fixture.root, "register", &json!({"path":"Control/user/note.md", "expected_revision":"absent", "title":"retained useful title"})).unwrap();
+        assert_eq!(registered["result"]["source_ref"], native.source_ref);
+        let declaration = fs::read(&fixture.relations).unwrap();
+        for metadata_only in [true, false] {
+            let resolved = execute(&fixture.root, "resolve", &json!({"source_ref":native.source_ref,"binding_only":metadata_only})).unwrap();
+            assert_eq!(resolved["result"]["source"], serde_json::to_value(&native).unwrap());
+            assert_eq!(resolved["result"]["title"], "retained useful title");
+        }
+        assert_eq!(fs::read(&fixture.source).unwrap(), before);
+        assert_eq!(fs::metadata(&fixture.source).unwrap().ino(), inode);
+        assert_eq!(fs::read(&fixture.relations).unwrap(), declaration);
+    }
+
+    #[test]
+    fn registered_native_skill_keeps_manifest_authored_binding_without_body_revision_in_metadata_mode() {
+        let fixture = Fixture::new();
+        fs::remove_file(&fixture.relations).unwrap();
+        let skill = fixture.root.join("Control/user/skills/actual");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(skill.join("SKILL.md"), "---\nname: actual\ndescription: Actual native test source\n---\nRead this retained source.\n").unwrap();
+        fs::write(skill.join("skill.json"), serde_json::to_vec(&json!({"schema":"central.skill/v1","name":"actual","scope":"control-user","standing":"active","provenance":"human-authored"})).unwrap()).unwrap();
+        let native = source_horizon::control_source_bindings(&fixture.root).unwrap().into_iter()
+            .find(|binding| binding.path == "Control/user/skills/actual/SKILL.md").unwrap();
+        assert_eq!(native.provenance, "human-authored");
+        assert_eq!(native.standing, "active");
+        execute(&fixture.root, "register", &json!({"path":"Control/user/skills/actual/SKILL.md","expected_revision":"absent"})).unwrap();
+        let before = fs::read(skill.join("SKILL.md")).unwrap();
+        let result = execute(&fixture.root, "resolve", &json!({"source_ref":native.source_ref,"binding_only":true})).unwrap();
+        assert_eq!(result["result"]["source"], serde_json::to_value(&native).unwrap());
+        assert!(result["result"].get("revision").is_none());
+        assert!(result["result"].get("content").is_none());
+        assert_eq!(fs::read(skill.join("SKILL.md")).unwrap(), before);
+    }
+
+    #[test]
+    fn cross_scope_explicit_ref_cannot_hide_another_native_owner() {
+        let fixture = Fixture::new();
+        let project = fixture.root.join("Work/alpha");
+        fs::create_dir_all(project.join("ProjectCentral/user")).unwrap();
+        fs::write(project.join("ProjectCentral/project.json"), serde_json::to_vec(&json!({"schema":"central.project/v1","project_id":"alpha","human_source":"ProjectCentral/user","wiki":{"profile":"okf-wiki/v1","source":"ProjectCentral/agents/wiki/wiki.json"}})).unwrap()).unwrap();
+        let body = project.join("ProjectCentral/user/native.md");
+        fs::write(&body, b"actual foreign owner body\n").unwrap();
+        let native = source_horizon::project_source_bindings(&project).unwrap().into_iter()
+            .find(|binding| binding.path == "ProjectCentral/user/native.md").unwrap();
+        let mut root_doc: Value = serde_json::from_slice(&fs::read(&fixture.relations).unwrap()).unwrap();
+        root_doc["relations"][0]["ref"] = json!(native.source_ref);
+        fs::write(&fixture.relations, serde_json::to_vec(&root_doc).unwrap()).unwrap();
+        let root_before = fs::read(&fixture.relations).unwrap();
+        let project_before = fs::read(&body).unwrap();
+        let error = execute(&fixture.root, "resolve", &json!({"source_ref":native.source_ref,"binding_only":true})).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(read_failure_details(&error)["ownership"], "known");
+        assert_eq!(fs::read(&fixture.relations).unwrap(), root_before);
+        assert_eq!(fs::read(&body).unwrap(), project_before);
+    }
+
+    #[test]
+    fn selected_explicit_skill_source_does_not_parse_unrelated_fallback_manifest() {
+        let fixture = Fixture::new();
+        let skill = fixture.root.join("Control/user/skills/selected");
+        fs::create_dir_all(&skill).unwrap();
+        let body = skill.join("SKILL.md");
+        let manifest = skill.join("skill.json");
+        fs::write(&body, b"retained selected native Source body").unwrap();
+        fs::write(&manifest, b"actual malformed unoverridden Skill metadata").unwrap();
+        let mut doc: Value = serde_json::from_slice(&fs::read(&fixture.relations).unwrap()).unwrap();
+        doc["relations"][0]["path"] = json!("Control/user/skills/selected/SKILL.md");
+        fs::write(&fixture.relations,serde_json::to_vec(&doc).unwrap()).unwrap();
+        let before = fs::read(&body).unwrap();
+        let before_manifest = fs::read(&manifest).unwrap();
+        let inode = fs::metadata(&body).unwrap().ino();
+        let selected = execute(&fixture.root,"resolve",&fixture.request(true)).unwrap();
+        assert_eq!(selected["result"]["source"]["ref"],"opaque:fixture:note");
+        assert_eq!(selected["result"]["source"]["roles"],json!(["agent-governance-source"]));
+        assert!(selected["result"].get("revision").is_none());
+        assert!(source_horizon::control_source_bindings(&fixture.root).is_err(),
+            "Bulk fallback must still reject the genuinely unoverridden malformed manifest member");
+        assert!(execute(&fixture.root,"resolve",&fixture.request(false)).is_err(),
+            "Default Skill projection still needs its own native manifest");
+        assert_eq!(fs::read(&body).unwrap(),before);
+        assert_eq!(fs::read(&manifest).unwrap(),before_manifest);
+        assert_eq!(fs::metadata(&body).unwrap().ino(),inode);
+    }
+
+    #[test]
+    fn selected_project_skill_uses_same_native_metadata_and_accepted_source_override() {
+        let fixture = Fixture::new();
+        let project = fixture.root.join("Work/alpha");
+        let skill = project.join("ProjectCentral/user/skills/selected");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(project.join("ProjectCentral/project.json"),serde_json::to_vec(&json!({
+            "schema":"central.project/v1","project_id":"alpha","human_source":"ProjectCentral/user",
+            "wiki":{"profile":"okf-wiki/v1","source":"ProjectCentral/agents/wiki/wiki.json"}})).unwrap()).unwrap();
+        fs::write(skill.join("SKILL.md"),b"actual Project Skill Source body").unwrap();
+        fs::write(skill.join("skill.json"),serde_json::to_vec(&json!({"schema":"central.skill/v1",
+            "name":"selected","scope":"projectcentral-user","standing":"active","provenance":"adopted"})).unwrap()).unwrap();
+        let native = source_horizon::project_source_bindings(&project).unwrap().into_iter()
+            .find(|binding| binding.path=="ProjectCentral/user/skills/selected/SKILL.md").unwrap();
+        let reading = execute(&fixture.root,"resolve",&json!({"project":"alpha","source_ref":native.source_ref,"binding_only":true})).unwrap();
+        assert_eq!(reading["result"]["source"],serde_json::to_value(&native).unwrap());
+        let relations = project.join(source_horizon::GROUND_RELATIONS_SOURCE);
+        fs::create_dir_all(relations.parent().unwrap()).unwrap();
+        fs::write(&relations,serde_json::to_vec(&json!({"schema":source_horizon::GROUND_RELATIONS_SCHEMA,"project_id":"alpha",
+            "relations":[{"ref":"opaque:accepted-project-skill","path":"ProjectCentral/user/skills/selected/SKILL.md",
+                "roles":["project-human-authored-source"],"provenance":"human-authored","standing":"accepted","treatment":"retain-native-in-place"}]})).unwrap()).unwrap();
+        fs::write(skill.join("skill.json"),b"actual malformed other fallback metadata").unwrap();
+        let source_before=fs::read(skill.join("SKILL.md")).unwrap();
+        let reading = execute(&fixture.root,"resolve",&json!({"project":"alpha","source_ref":"opaque:accepted-project-skill","binding_only":true})).unwrap();
+        assert_eq!(reading["result"]["source"]["ref"],"opaque:accepted-project-skill");
+        assert_eq!(reading["result"]["source"]["standing"],"accepted");
+        assert!(source_horizon::project_source_bindings(&project).is_err());
+        assert_eq!(fs::read(skill.join("SKILL.md")).unwrap(),source_before);
+    }
+
+    #[test]
+    fn selected_skill_metadata_revision_is_reobserved_before_acknowledgement() {
+        let fixture = Fixture::new();
+        let skill=fixture.root.join("Control/user/skills/actual");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(skill.join("SKILL.md"),b"actual selected Skill body").unwrap();
+        let metadata=skill.join("skill.json");
+        fs::write(&metadata,serde_json::to_vec(&json!({"schema":"central.skill/v1","name":"actual",
+            "scope":"control-user","standing":"active","provenance":"human-authored","retained":{"value":"before"}})).unwrap()).unwrap();
+        let body_before=fs::read(skill.join("SKILL.md")).unwrap();
+        fixture.checkpoint(move || {
+            let mut doc:Value=serde_json::from_slice(&fs::read(&metadata).unwrap()).unwrap();
+            doc["retained"]["value"]=json!("after");
+            fs::write(&metadata,serde_json::to_vec(&doc).unwrap()).unwrap();
+        });
+        let reference=source_horizon::source_ref("control:root","Control/user/skills/actual/SKILL.md");
+        let error=execute(&fixture.root,"resolve",&json!({"source_ref":reference,"binding_only":true})).unwrap_err();
+        assert_eq!(error.kind(),io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(skill.join("SKILL.md")).unwrap(),body_before);
+        assert_eq!(execute(&fixture.root,"resolve",&json!({"source_ref":reference,"binding_only":true})).unwrap()["result"]["source"]["standing"],"active");
+    }
+
 }

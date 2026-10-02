@@ -630,6 +630,51 @@ pub fn control_ground_relations_subject_ref(central_root: &Path) -> io::Result<O
     Ok(file.subject_ref)
 }
 
+fn project_tree_bindings(manifest: &crate::projectcentral::ProjectCentralManifest) -> [(&str, &str, &str, &str); 3] {
+    [(&manifest.human_source, "project-human-source-aperture", "unresolved", "projectcentral-user"),
+        (AGENT_GOVERNANCE_DIR, "agent-governance-source", "unresolved", "projectcentral-agent-governance"),
+        (WIKI_DIR, "agent-wiki-source", "agent-maintained", "projectcentral-agent-wiki")]
+}
+
+/// Resolve one Project member from current already-observed native metadata.
+/// Accepted exact normal-member declarations take precedence over fallbacks;
+/// no other Skill is traversed, and this observation never grants retrieval.
+pub(crate) fn project_binding_for_observed_path(
+    manifest: &crate::projectcentral::ProjectCentralManifest, path: &str,
+    relations: Option<&Value>, skill_manifest: Option<&crate::control_skills::SkillManifest>,
+    agent_retrieval_allowed: bool,
+) -> io::Result<Option<SourceBinding>> {
+    let validation = manifest.validate();
+    if !validation.valid { return Err(io::Error::new(io::ErrorKind::InvalidData, validation.errors.join("; "))); }
+    let member = crate::source_safety::normal_member_key(path)?;
+    let declared = relations.map(|value| parse_relations_value(value, GROUND_RELATIONS_SCHEMA, &manifest.project_id)).transpose()?;
+    for relation in declared.into_iter().flat_map(|file| file.relations) {
+        if crate::source_safety::normal_member_key(&relation.path)? != member { continue; }
+        return Ok(Some(SourceBinding { source_ref:relation.source_ref, path:relation.path,
+            roles:relation.roles, provenance:relation.provenance, standing:relation.standing,
+            treatment:relation.treatment, agent_retrieval_allowed }));
+    }
+    let world = format!("project:{}", manifest.project_id);
+    if let Some(binding) = crate::control_skills::project_skill_binding(&world, &manifest.human_source,
+        path, skill_manifest, agent_retrieval_allowed)? { return Ok(Some(binding)); }
+    for (directory, role, provenance, treatment) in project_tree_bindings(manifest) {
+        let aperture = crate::source_safety::normal_member_key(directory)?;
+        if member.starts_with(&aperture) && member != aperture {
+            return Ok(Some(SourceBinding { source_ref:source_ref(&world,path), path:path.to_owned(),
+                roles:vec![role.to_owned()], provenance:provenance.to_owned(), standing:"unspecified".to_owned(),
+                treatment:treatment.to_owned(), agent_retrieval_allowed }));
+        }
+    }
+    for adopted in &manifest.wiki.adopted_sources {
+        if crate::source_safety::normal_member_key(adopted)? == member {
+            return Ok(Some(SourceBinding { source_ref:source_ref(&world,adopted), path:adopted.clone(),
+                roles:vec!["adopted-agent-wiki-source".to_owned()], provenance:"unresolved".to_owned(),
+                standing:"unspecified".to_owned(), treatment:"retain-native-in-place".to_owned(), agent_retrieval_allowed }));
+        }
+    }
+    Ok(None)
+}
+
 pub fn project_source_bindings(project_root: &Path) -> io::Result<Vec<SourceBinding>> {
     let manifest = read_project_manifest(project_root)?;
     let validation = manifest.validate();
@@ -659,39 +704,10 @@ pub fn project_source_bindings(project_root: &Path) -> io::Result<Vec<SourceBind
         &explicit_members,
     )?;
 
-    insert_tree_bindings(
-        project_root,
-        &project_root.join(&manifest.human_source),
-        &world_ref,
-        &["project-human-source-aperture"],
-        "unresolved",
-        "unspecified",
-        "projectcentral-user",
-        &[],
-        &mut bindings,
-    )?;
-    insert_tree_bindings(
-        project_root,
-        &project_root.join(AGENT_GOVERNANCE_DIR),
-        &world_ref,
-        &["agent-governance-source"],
-        "unresolved",
-        "unspecified",
-        "projectcentral-agent-governance",
-        &[],
-        &mut bindings,
-    )?;
-    insert_tree_bindings(
-        project_root,
-        &project_root.join(WIKI_DIR),
-        &world_ref,
-        &["agent-wiki-source"],
-        "agent-maintained",
-        "unspecified",
-        "projectcentral-agent-wiki",
-        &[],
-        &mut bindings,
-    )?;
+    for (directory, role, provenance, treatment) in project_tree_bindings(&manifest) {
+        insert_tree_bindings(project_root, &project_root.join(directory), &world_ref,
+            &[role], provenance, "unspecified", treatment, &[], &mut bindings)?;
+    }
 
     // Current accepted ProjectCentral already supports Wiki sources retained in place. They are
     // participants, not generic Project truth, and therefore retain an explicit Wiki role.

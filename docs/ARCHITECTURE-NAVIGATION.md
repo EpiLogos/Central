@@ -9,7 +9,7 @@ updated: 2026-10-02
 This is an implementation-facing navigation companion for O:I #65/#220 and the
 existing documentation programme. It recovers native owners and successors;
 it does not adopt a new design or claim the whole running experience complete.
-Inspected native checkout revision: `abdb67f3e0b091617ca485f2352b6e26c62e99ec`. Active repair source may advance
+Earlier implementation baseline (retained): `abdb67f3e0b091617ca485f2352b6e26c62e99ec`. Active repair source may advance
 that cut; identify the file revision before relying on its returned result.
 
 ## Governing source and successors
@@ -30,6 +30,8 @@ baseline, current implementation and observed result keep their own standing.
 | Workcell-root / child NOW / Day | `central.now.workcell-root`, `central.now.allocate`, native Day actions | `ctrl/src/continuous_work/placement.rs`; `temporal.rs` | Native refs, placement/time revisions; Day closure and ongoing NOW lifecycle are distinct. |
 | Ordinary plural Flow | `central.flow.read`, `central.flow.append` through `ctrl action run` | `ctrl/src/flow_append.rs`; `ctrl/tests/flow_append.rs` | CAS source append with request digest and departed-caller gate; AIKit owns dispatch, not Central. |
 | Receiving | `central.receiving.*` | `ctrl/src/continuous_work/receiving.rs` | Native receipt readback is distinct from human Recognition. |
+| Source binding / file map | `central.file-map.resolve`, `locate` | `ctrl/src/file_map.rs`; `file_map_catalog.rs` | Native ownership, requesting context and body permission are distinct; pending metadata mode is described below. |
+| World / AgentSet record reader | Native read/list/effective-sources Actions; `central.world.here` consumer | `ctrl/src/agent_set_store.rs`; `agent_set_actions.rs`; `world_here.rs` | Store owns identity/material admission; projection preserves its refusal and owning-root source location. Pending coherent qualification. |
 
 ## Diagram and consumer relation
 
@@ -93,3 +95,42 @@ error; it cannot be represented as an unchanged pre-publication refusal.
 Follow the dated native receipt before replaying a partially completed action.
 Current source admission, independent promotion, live-origin withdrawal and
 delivered agent context require their own owners and evidence.
+
+## Native ownership and World disclosure — pending source cut
+
+For ownership routing, follow `central.file-map.resolve` / `locate` to
+[`file_map.rs`](../ctrl/src/file_map.rs) and
+[`file_map_catalog.rs`](../ctrl/src/file_map_catalog.rs). The
+[binding-only companion](integrations/BKMR-FILE-MAP.md#binding-ownership-metadata--source-candidate)
+separates native ownership metadata from body permission, declared identity,
+payload revision and healthy nonownership. Registered bkmr data remains
+acceleration material; it cannot replace Source roles or provenance.
+
+For World/AgentSet material, follow
+[`RelationRecordStore`](../ctrl/src/agent_set_store.rs) through the
+[same held native reader, capacity and complete-membership checkpoints](NATIVE-FILESYSTEM-READING.md#native-relation-records--source-candidate).
+For `central.world.here`, follow
+[`world_record`](../ctrl/src/world_here.rs) to that owner, then to the declared
+World ref and the actual record at its owning root. The
+[World projection](NATIVE-FILESYSTEM-READING.md#world-disclosure) preserves that
+owner-relative source location; declared record revision, physical content
+revision, projection state and runtime verification remain distinct.
+
+This is source-described candidate behavior, not installed or executed
+acceptance. Basis: Central `7a0e2c21505ad7cf6590db8701fc473102fd399b`
+preimages, native owner v4 packet SHA-256
+`390656e902c866959304094a9b92c46f52434ba04140e17fe10a683bb8f7ca79`,
+unchanged response handover
+`15ebcf6037f3e0f5cf43b896ff97cdc0a5460d0363d13aa35dec96f35a0568c8`,
+and World consumer v1.3 packet
+`c5652f528091f7952c0b77076c7084f8c2033f16417dc9fae74417f8c3d868e5`.
+The 58 native joined Python, 13 binding, 18 Store and five World-consumer test
+definitions remain UNRUN on the coherent cut. Source installation and hosted
+Linux/macOS/native joined results must identify that exact composed revision.
+
+The remaining questions are which coherent owner/consumer cut passes those
+gates, how AIKit's current-owner admission reaches selected agent context, and
+how ordinary root Return producer registration and lifecycle complete their
+missing join. Initial-allocation authority and human Recognition keep their
+separate standing. The existing diagrams retain their recorded arrow bases;
+no implemented or verified join is inferred from these proposals.

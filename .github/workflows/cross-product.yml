@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: EpiLogos/ai-kit
-          ref: 299e54f765edbd7db89dd55164c036a2486085c1
+          ref: 338232e5fca8d1df81ac81a37fd9d610278e2e43
           path: ai-kit
           persist-credentials: false
       - uses: Swatinem/rust-cache@v2

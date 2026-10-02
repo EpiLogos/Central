@@ -856,6 +856,18 @@ fn world_effective_sources(
 }
 
 fn store_failure(action: &str, error: RelationRecordStoreError) -> ActionResult {
+    let read_only = matches!(action, AGENT_SET_LIST_ACTION | AGENT_SET_READ_ACTION
+        | AGENT_SET_RESOLVE_ACTION | WORLD_RELATIONS_LIST_ACTION
+        | WORLD_RELATIONS_READ_ACTION | WORLD_EFFECTIVE_SOURCES_ACTION);
+    if read_only {
+        if let RelationRecordStoreError::RecordBudget { byte_len, limit } = &error {
+            return ActionResult::failure_coded(Some(action), ResultStatus::UnavailableCapability,
+                "central.relation_record_budget", error.to_string(), Some(json!({
+                    "effects":"none", "io_error":Value::Null,
+                    "capacity":{"byte_len":byte_len,"limit":limit,"profile":"eager-relation-metadata"},
+                })));
+        }
+    }
     let status = match &error {
         RelationRecordStoreError::NotFound(_)
         | RelationRecordStoreError::MissingForUpdate { .. } => ResultStatus::VerificationFailure,
@@ -867,10 +879,23 @@ fn store_failure(action: &str, error: RelationRecordStoreError) -> ActionResult 
         | RelationRecordStoreError::RefMismatch { .. }
         | RelationRecordStoreError::SourcePathMismatch { .. }
         | RelationRecordStoreError::UnsafeRoot(_)
-        | RelationRecordStoreError::UnsafeSource(_) => ResultStatus::InvalidInput,
+        | RelationRecordStoreError::UnsafeSource(_)
+        | RelationRecordStoreError::RecordBudget { .. } => ResultStatus::InvalidInput,
         RelationRecordStoreError::Io(_) => ResultStatus::InternalFailure,
     };
-    ActionResult::failure(Some(action), status, error.to_string(), None)
+    // Only these existing owner reads can assert effects:none. The shared
+    // writer/error path must not turn an uncertain mutation into a refusal.
+    let details = if read_only
+    {
+        Some(json!({
+            "effects": "none",
+            "io_error": error.io_error().map(|cause| json!({
+                "kind": format!("{:?}", cause.kind()),
+                "raw_os_error": cause.raw_os_error(), "message": cause.to_string(),
+            })),
+        }))
+    } else { None };
+    ActionResult::failure(Some(action), status, error.to_string(), details)
 }
 
 #[cfg(test)]

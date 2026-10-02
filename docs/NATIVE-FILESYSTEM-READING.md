@@ -1,10 +1,17 @@
+---
+role: architecture
+standing: agent-inference
+scope: Central native filesystem material, relation-store qualification and World projection
+design_refs: []
+updated: 2026-10-02
+---
 # Native Central filesystem reading
 
 `central.files.list` and `central.files.read` expose actual filesystem material
 under the configured Central root. An ordinary Work directory needs no
 ProjectCentral manifest, adoption, role assignment or inferred Project identity.
 These read-only actions neither reconcile a source horizon nor invoke an agent.
-A file reading also carries its existing authored Source binding when Central
+A file reading also carries its existing native Source binding when Central
 already recognizes one, allowing a client to open that same editable source
 without manufacturing an adoption or inferring authority from the path.
 
@@ -26,9 +33,10 @@ A missing/replaced location is not silently redirected to another source.
 
 This is a filesystem reading contract, not a general write or authority grant.
 Participating authored sources retain `projectcentral.source.read/write` and
-their existing provenance, authority, CAS and history contracts. An ordinary
-file's edit/write/history operation remains a separate required owner seam;
-clients must not implement those mutations by writing directly to disk.
+their existing provenance, authority, CAS and history contracts. Ordinary
+[creation and history](#creation-and-history-are-separate-owner-operations) use
+their separate native owner operations; clients must not implement those
+mutations by writing directly to disk.
 
 Text reads are bounded at 4 MiB and refuse non-UTF-8 or NUL-containing binary
 content. Directory reading refuses more than 20,000 entries or a non-UTF-8 name
@@ -114,3 +122,108 @@ an observed marker establishes masking. The creator rechecks this aperture
 under its existing source-mutation lock before creating parents or source
 bytes. This supplies a current checkpoint, not exclusion of arbitrary external
 filesystem writers.
+
+## Creation and history are separate owner operations
+
+[`central.files.create`](../ctrl/src/file_creation.rs) first-saves an ordinary
+file into an existing eligible native directory. It takes a returned `parent`
+location, one `name`, `content`, declared `actor`/`actor_kind`,
+`expected_absent:true` and `operation_ref`; `agent_session_ref` is optional.
+`content_encoding` defaults to UTF-8 or accepts base64, bounded to 4 MiB decoded.
+Creation shares the ordinary owner's protected/source policy, lock, snapshots
+and history. Held-parent `linkat` publication atomically refuses an existing
+destination; it does not overwrite another writer's file.
+
+The native result is `central.file-mutation/v1`, with `outcome:created` or an
+exact idempotent `outcome:unchanged`, location, revision, operation identity and
+independent current readback. Existing destinations, changed requests or later
+edits refuse first-save replay. A committed creation whose readback or recovery
+finalization fails retains that effect; retry the same operation identity
+rather than automatically minting another or overwriting.
+
+Existing-file write, history, recovery preview and restore use the
+[native ordinary-file mutation and recovery](NATIVE-ORDINARY-FILE-RECOVERY.md#actions)
+operations. Availability is revalidated, and declared attribution is not an
+authentication or protected-ground override. A returned physical location or
+created file does not adopt a directory, mint a World/Project/Source identity,
+invoke an agent, or transfer the Source owner's authority.
+
+The creation source SHA-256 at the inspected preimage is
+`038011d82b5587a2e6971e3cd47ec45ecbaef004da29a281ab64c29f73c3ddba`;
+its native tests are in [`file_creation.rs`](../ctrl/tests/file_creation.rs).
+These source relations do not establish personal installation, composed desktop
+acceptance or human Recognition.
+
+## Native relation records — source candidate
+
+This section describes the pending native-owner source cut, not an executed or
+installed result. Central's `RelationRecordStore` owns the four root/Project
+AgentSet and World containers. It distinguishes optional absence from unsafe
+forms, unavailable IO and changed affiliation; a failed native collection
+cannot become an empty exclusion graph. See [binding ownership metadata](integrations/BKMR-FILE-MAP.md#binding-ownership-metadata--source-candidate).
+
+Reads reuse [`NativeFileRead`](../ctrl/src/file_mutation.rs) with the same held
+no-follow, nonblocking and close-on-exec descriptors. The Store qualifies its
+owner/container and each captured record, then reopens returned material
+sequentially after collection checkpoints. It retains small basis records,
+not one open descriptor per record.
+
+A complete list observes exact admitted JSON names initially and again after
+material qualification, with owner/container affiliation checked around both
+observations. A changed membership is unavailable under the earlier basis,
+including an initially empty existing container. Both observations preserve
+the same entry rules: symbolic entries refuse before extension filtering;
+only ordinary `.json` files participate; other ordinary non-JSON material is
+ignored. A newly observed name is checked without reading its body. A fresh
+native operation can observe the new collection. These checkpoints are not an
+atomic snapshot or exclusion of external writers; late or net changes between
+observations remain outside the guarantee. Complete-list memory remains
+proportional to total record bytes/count.
+
+### Capacity and public error contract
+
+The eager relation metadata profile admits at most 8 MiB serialized bytes per
+record. Larger retained material stays untouched and unavailable; it is never
+truncated or silently omitted. Serialized save candidates, including their
+newline, are checked before directory or staging effects. This is an
+engineering capacity, not a World/AgentSet domain limit or human Recognition.
+No explicit larger finite profile is exposed by this cut.
+
+[`RelationRecordStoreError`](../ctrl/src/agent_set_store.rs) retains original IO
+through `Io(RelationRecordIoError)`; clones share an `Arc<io::Error>`, exposed
+through `io_error()` and `Error::source`. Rust callers constructing the former
+`Io(String)` must migrate to the real error carrier, for example
+`RelationRecordStoreError::Io(error.into())` for an actual `io::Error`. The
+additive `RecordBudget { byte_len: u64, limit: u64 }` also requires exhaustive
+match updates. Successful record JSON, schema, refs, revisions and unknown
+fields retain their existing meanings.
+
+The six read-only native AgentSet/World Action boundaries report
+`effects:"none"` and original IO kind/errno/message. Capacity reports
+`central.relation_record_budget`, status `unavailable_capability`, capacity
+`byte_len`/`limit`/`profile` and `io_error:null`. A membership consistency
+refusal has no invented OS errno. This read contract does not certify the
+inherited save CAS, staging or after-effect uncertainty, nor redefine mutation
+errors.
+
+### World disclosure
+
+The pending `central.world.here` consumer uses
+[`RelationRecordStore::list`](../ctrl/src/agent_set_store.rs) in
+[`world_record`](../ctrl/src/world_here.rs), rather than independently accepting
+raw JSON. It projects native failures and qualifies absence through that owner.
+A reading's `source_path` is relative to the Store's owning root; the consumer
+joins that root before displaying a location relative to Central, including
+for Project records. The displayed World-record `revision` is its declared
+field, distinct from the physical file's content revision. The boundary keeps
+presentation from acknowledging material its native owner refuses.
+
+Source basis: native owner v4 packet SHA-256
+`390656e902c866959304094a9b92c46f52434ba04140e17fe10a683bb8f7ca79`,
+Store after-image
+`52b45d4437a50b0e8ed42accf06572c5d410847a9d4f34230aacf4d6ab3831b1`;
+World consumer v1.3 packet
+`c5652f528091f7952c0b77076c7084f8c2033f16417dc9fae74417f8c3d868e5`.
+The 18 native Store and five World-consumer test definitions are UNRUN on this
+composed cut. Linux/macOS, source-install and native joined qualification remain
+required. See [architecture navigation](ARCHITECTURE-NAVIGATION.md#native-ownership-and-world-disclosure--pending-source-cut).

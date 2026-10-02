@@ -13,7 +13,7 @@ use crate::action::{
     ActionAvailability, ActionDescriptor, ActionExecutionContext, ActionInputDefinition,
     ActionOutputDefinition, ActionRegistry, MutationClass,
 };
-use crate::agent_set_store::RelationRecordStore;
+use crate::agent_set_store::{RelationRecordStore, RelationRecordStoreError};
 use crate::continuous_work::{placement, source::Scope, temporal};
 use crate::machine::{MachineDeclaration, WORKCELL_BINDING_KIND};
 use crate::pasu::{PasuIdentityManifest, PASU_IDENTITY_MANIFEST_PATH};
@@ -545,14 +545,16 @@ fn root_nows(root: &Path) -> Result<BTreeMap<String, String>, String> {
 /// with the identity the scope derives: the Project manifest's `project_id`,
 /// or `control:root` for the Local World.
 fn world_record(root: &Path, project: Option<&Scope>) -> Value {
-    let (store, expected) = match project {
+    let (store, expected, owner_root) = match project {
         Some(scope) => (
             RelationRecordStore::worlds_in_project(&scope.root),
             scope.world_ref.clone(),
+            scope.root.as_path(),
         ),
         None => (
             RelationRecordStore::worlds_at_root(root),
             CONTROL_WORLD_REF.to_owned(),
+            root,
         ),
     };
     let dir = store.source_dir();
@@ -562,74 +564,53 @@ fn world_record(root: &Path, project: Option<&Scope>) -> Value {
             .unwrap_or_else(|_| display(path))
     };
     let source = relative(&dir);
-    let entries = match fs::read_dir(&dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return json!({
-                "state": "absent", "expected_ref": expected, "source": source,
-                "detail": format!("no world record is authored at {source}; the World inherits control:root by convention"),
-            })
-        }
+    // Identity, schema and material qualification belong to the native Store.
+    // A projection must not acknowledge a raw file the owning reader refuses.
+    let declared = match store.list() {
+        Ok(readings) => readings,
         Err(error) => {
-            return json!({"state": "unavailable", "expected_ref": expected, "source": source, "detail": error.to_string()})
-        }
-    };
-    let mut files: Vec<PathBuf> = entries
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("json"))
-        .collect();
-    files.sort();
-    let mut declared = Vec::new();
-    let mut unreadable = Vec::new();
-    for file in &files {
-        let parsed = fs::read(file)
-            .map_err(|error| error.to_string())
-            .and_then(|bytes| {
-                serde_json::from_slice::<Value>(&bytes).map_err(|error| error.to_string())
-            });
-        match parsed {
-            Ok(record) => match record.get("ref").and_then(Value::as_str) {
-                Some(reference) => declared.push((file.clone(), reference.to_owned(), record)),
-                None => unreadable.push(format!("{}: carries no ref", relative(file))),
-            },
-            Err(error) => unreadable.push(format!("{}: {error}", relative(file))),
-        }
-    }
-    let matching: Vec<_> = declared
-        .iter()
-        .filter(|(_, reference, _)| reference == &expected)
-        .collect();
-    match matching.as_slice() {
-        [(file, reference, record)] => {
-            let expected_path = store.source_path(reference).ok();
-            if expected_path.as_deref() != Some(file.as_path()) {
-                return json!({
-                    "state": "mismatch", "ref": reference, "expected_ref": expected, "source": relative(file),
-                    "detail": format!(
-                        "the record for {reference} is stored as {} but its ref derives {}",
-                        relative(file),
-                        expected_path.as_deref().map(relative).unwrap_or_default()
-                    ),
+            let mut native_error = json!({"owner":"Central/RelationRecordStore", "reason":error.to_string()});
+            if let Some(cause) = error.io_error() {
+                native_error["io_error"] = json!({
+                    "kind":format!("{:?}", cause.kind()), "raw_os_error":cause.raw_os_error(),
                 });
             }
-            json!({
-                "state": "present", "ref": reference, "expected_ref": expected, "source": relative(file),
-                "revision": record.get("revision"), "parent": record.get("parent"),
-                "detail": "the authored world record matches the identity this scope derives",
-            })
+            if let RelationRecordStoreError::RecordBudget { byte_len, limit } = &error {
+                native_error["capacity"] = json!({"byte_len":byte_len, "limit":limit});
+            }
+            if let RelationRecordStoreError::SourcePathMismatch { ref_, expected: native_path, actual } = &error {
+                return json!({
+                    "state":"mismatch", "ref":ref_, "expected_ref":expected, "source":relative(actual),
+                    "detail":format!("the record for {ref_} is stored as {} but its ref derives {}",
+                        relative(actual), relative(native_path)),
+                    "native_error":native_error,
+                });
+            }
+            return json!({
+                "state":"unavailable", "expected_ref":expected, "source":source,
+                "detail":error.to_string(), "native_error":native_error,
+            });
         }
-        [] if declared.is_empty() && unreadable.is_empty() => json!({
-            "state": "absent", "expected_ref": expected, "source": source,
-            "detail": format!("no world record is authored at {source}; the World inherits control:root by convention"),
+    };
+    let matching: Vec<_> = declared
+        .iter()
+        .filter(|reading| reading.ref_ == expected)
+        .collect();
+    match matching.as_slice() {
+        [reading] => json!({
+            "state":"present", "ref":reading.ref_, "expected_ref":expected,
+            "source":relative(&owner_root.join(&reading.source_path)),
+            "revision":reading.record.get("revision"), "parent":reading.record.get("parent"),
+            "detail":"the authored world record matches the identity this scope derives",
         }),
         [] if declared.is_empty() => json!({
-            "state": "unavailable", "expected_ref": expected, "source": source,
-            "detail": format!("world records cannot be read: {}", unreadable.join("; ")),
+            "state": "absent", "expected_ref": expected, "source": source,
+            "detail": format!("no world record is authored at {source}; the World inherits control:root by convention"),
         }),
         [] => {
             let refs: Vec<&str> = declared
                 .iter()
-                .map(|(_, reference, _)| reference.as_str())
+                .map(|reading| reading.ref_.as_str())
                 .collect();
             json!({
                 "state": "mismatch", "ref": refs[0], "declared_refs": refs, "expected_ref": expected, "source": source,
