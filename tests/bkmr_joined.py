@@ -422,11 +422,44 @@ class Joined(unittest.TestCase):
         self.assertEqual(before, self.db_digest())
 
     def test_28_aikit_owner_disconnect_never_returns_cached_source(self):
-        self.write("Control/user/note.md"); self.action("refresh")
+        body = b"quartz native-owner disconnect must not deliver this retained body\n"
+        source = self.write("Control/user/note.md", body)
+        self.action("refresh")
         ref = self.locate("Control/user/note.md")["source"]["ref"]
-        self.ai("knowledge","search","quartz")
-        self.ai("knowledge","read","source="+ref, success=False,
-                env=dict(self.env,CENTRAL_CTRL_BIN=str(self.base / "missing-ctrl")))
+        search = self.ai("knowledge", "search", "quartz")
+        self.assertIn(ref, json.dumps(search))
+        warm = self.ai("knowledge", "read", "source=" + ref)
+        self.assertTrue(warm["ok"], warm)
+        self.assertIn(body.decode().strip(), json.dumps(warm))
+        basis = self.db_digest()
+        inode = source.stat().st_ino
+        missing_owner = self.base / "missing-ctrl"
+        self.assertFalse(missing_owner.exists())
+        disconnected = self.run_cmd(
+            [self.aikit, "--json", "-C", self.root, "knowledge", "read", "source=" + ref],
+            success=False, env=dict(self.env, CENTRAL_CTRL_BIN=str(missing_owner)))
+        failure = json.loads(disconnected.stdout)
+        self.assertEqual(failure["schema"], 1, failure)
+        self.assertIs(failure["ok"], False, failure)
+        # AIKit338 loses the unavailable-owner cause during attachment and
+        # reports source_missing. This assertion characterises that cut; it
+        # does not certify a truthful native unavailability classification.
+        self.assertEqual(failure["error"]["code"], "knowledge.source_missing", failure)
+        self.assertIn(ref, failure["error"]["message"])
+        self.assertIsInstance(failure["error"]["details"], dict)
+        self.assertNotIn("data", failure)
+        self.assertNotIn("context", failure)
+        self.assertNotIn(body.decode().strip(), disconnected.stdout)
+        self.assertNotIn(body.decode().strip(), disconnected.stderr)
+        self.assertEqual(source.read_bytes(), body)
+        self.assertEqual(source.stat().st_ino, inode)
+        self.assertEqual(self.db_digest(), basis)
+        reopened = self.ai("knowledge", "read", "source=" + ref)
+        self.assertTrue(reopened["ok"], reopened)
+        self.assertIn(body.decode().strip(), json.dumps(reopened))
+        self.assertEqual(source.read_bytes(), body)
+        self.assertEqual(source.stat().st_ino, inode)
+        self.assertEqual(self.db_digest(), basis)
 
     def test_29_aikit_root_search_works_with_only_a_project_database(self):
         self.project("alpha"); self.write("Work/alpha/ProjectCentral/user/note.md")

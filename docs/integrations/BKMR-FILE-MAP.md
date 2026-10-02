@@ -246,9 +246,38 @@ native owner v4 packet SHA-256
 `390656e902c866959304094a9b92c46f52434ba04140e17fe10a683bb8f7ca79` and
 unchanged response handover
 `15ebcf6037f3e0f5cf43b896ff97cdc0a5460d0363d13aa35dec96f35a0568c8`.
-Its 58 native joined Python, 13 binding and 18 Store test definitions are UNRUN
-on the composed cut. The existing cross-product workflow records both source
-revisions and binary hashes and pins AIKit
-`338232e5fca8d1df81ac81a37fd9d610278e2e43`; its earlier green jobs are a
-baseline, not proof of this new Central producer. Preserve the original
-unqualified predecessor receipts. See [architecture navigation](../ARCHITECTURE-NAVIGATION.md#native-ownership-and-world-disclosure--pending-source-cut).
+Hosted qualification is now recorded by [joined run 37061204754](https://github.com/EpiLogos/Central/actions/runs/37061204754):
+all 58 unique selected cases executed and passed, with no skips, in 9.267 seconds
+on Ubuntu 24.04.5. The cut was Central
+`452525d45fce20c2c667b87ee9590e7f5a3883c6`, AIKit
+`338232e5fca8d1df81ac81a37fd9d610278e2e43`, bkmr 7.6.7 and Rust 1.98.1.
+Both real owner and consumer binaries were built with `--locked`. Their SHA-256
+values were ctrl
+`7627827bcbf35dd8c03f241aff9b2a83b01fadd1b39b389fc9176c5b993a7bc8`
+and aikit
+`82edd6bb5c912dad0e402c70913decfa8155c644233c974dfba7201e50702583`.
+The complete joined log has SHA-256
+`842e7281ccff711c72b307a94862de52e1cf40c7ff69116e5af8f021e40d86d6`.
+
+[Normal run 37061163439](https://github.com/EpiLogos/Central/actions/runs/37061163439)
+also passed Linux workspace and native macOS checks at merge
+`cadc4942a5aa64dd1e00216b5203dea2ff7052d7`. Its complete source tree
+`4ffb02d0f04684c1b974ebd50a5d014d45043cfe` equals the joined Central tree;
+normal checks used Rust 1.99.0. Their ephemeral Linux source-install smoke
+omitted `--locked`, resolved 121 highest-compatible dependencies and published
+no installed binary SHA-256. That reduced-install proof has a separate dependency
+cut from the locked joined binaries.
+
+The original joined case 28 only required a nonzero disconnect exit and parseable
+JSON. Its stronger successor now checks a successful current read, the actual
+failure envelope, absence of the unique retained body, unchanged source/database
+and a current read after reconnection. Those new assertions remain UNRUN until a
+successor hosted replay. AIKit338 turns failed known-owner attachment into
+`knowledge.source_missing`; this existing loss of the native unavailable-owner
+cause is unresolved on that consumer cut. The stronger case does not certify
+truthful owner-error propagation.
+
+These receipts qualify the stated hosted source and joined boundaries, not the
+personal installed/running World, later Source revisions, human acceptance or
+newer prepared AIKit R4 consumers. Preserve the original failed and unqualified
+predecessor receipts. See [architecture navigation](../ARCHITECTURE-NAVIGATION.md#native-ownership-and-world-disclosure--pending-source-cut).
