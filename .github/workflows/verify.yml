@@ -56,6 +56,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.2
         with:
           cache-on-failure: true
+      - name: Native source publication and compatibility on macOS
+        run: cargo test -p ctrl --locked
       - name: Explicit macOS extension acceptance
         run: cargo test -p central-macos-connectors -p central-shortcuts-connector --locked
 
