@@ -1,5 +1,11 @@
 # Central documentation
 
+## Current operation navigation
+
+[Architecture navigation](ARCHITECTURE-NAVIGATION.md) connects the governing
+source to current native World/NOW/Day, ordinary plural Flow and receiving
+operations. Read it before applying an older implementation census.
+
 This index explains the documentation corpus by **role** rather than alphabetical
 filename. Each document has one authority class: normative source law, product
 meaning, implementation evidence, or supporting guidance. Read the class that
