@@ -232,7 +232,11 @@ pub fn read_skill_manifest(skill_dir: &Path) -> io::Result<Option<SkillManifest>
     if !path.is_file() {
         return Ok(None);
     }
-    let manifest: SkillManifest = serde_json::from_slice(&fs::read(&path)?).map_err(|error| {
+    Ok(Some(parse_skill_manifest(&fs::read(&path)?, &path)?))
+}
+
+pub(crate) fn parse_skill_manifest(bytes: &[u8], path: &Path) -> io::Result<SkillManifest> {
+    let manifest: SkillManifest = serde_json::from_slice(bytes).map_err(|error| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("{} is not a valid skill manifest: {error}", path.display()),
@@ -247,7 +251,46 @@ pub fn read_skill_manifest(skill_dir: &Path) -> io::Result<Option<SkillManifest>
             ),
         ));
     }
-    Ok(Some(manifest))
+    Ok(manifest)
+}
+
+fn manifest_horizon_metadata(manifest: Option<&SkillManifest>) -> (String, String) {
+    match manifest {
+        Some(manifest) => (
+            manifest.provenance.horizon_str().to_owned(),
+            manifest.standing.as_str().to_owned(),
+        ),
+        None => ("unresolved".to_owned(), "unspecified".to_owned()),
+    }
+}
+
+/// Select only this source's enclosing native Control Skill manifest. This
+/// does not discover other Skills or infer their standing from directory names.
+pub(crate) fn control_skill_manifest_path(path: &str) -> io::Result<Option<String>> {
+    crate::source_safety::relative_member(path)?;
+    let parts: Vec<_> = path.split('/').collect();
+    let count = if parts.len() >= 5 && parts[..3] == ["Control", "user", "skills"] {
+        4
+    } else if parts.len() >= 6 && parts[0] == "Control" && parts[1] == "machines" && parts[3] == "skills" {
+        5
+    } else {
+        return Ok(None);
+    };
+    Ok(Some(format!("{}/{}", parts[..count].join("/"), SKILL_MANIFEST)))
+}
+
+pub(crate) fn control_skill_binding(
+    path: &str,
+    manifest: Option<&SkillManifest>,
+    agent_retrieval_allowed: bool,
+) -> io::Result<Option<SourceBinding>> {
+    if control_skill_manifest_path(path)?.is_none() { return Ok(None); }
+    let (provenance, standing) = manifest_horizon_metadata(manifest);
+    Ok(Some(SourceBinding {
+        source_ref: source_ref("control:root", path), path: path.to_owned(),
+        roles: vec!["skill-source".to_owned()], provenance, standing,
+        treatment: CONTROL_SKILL_TREATMENT.to_owned(), agent_retrieval_allowed,
+    }))
 }
 
 fn write_skill_manifest(skill_dir: &Path, manifest: &SkillManifest) -> io::Result<()> {
@@ -744,13 +787,7 @@ pub(crate) fn insert_skill_bindings(
     for name in child_directories(skills_root)? {
         let skill_dir = skills_root.join(&name);
         let manifest = read_skill_manifest(&skill_dir)?;
-        let (provenance, standing) = match &manifest {
-            Some(manifest) => (
-                manifest.provenance.horizon_str().to_owned(),
-                manifest.standing.as_str().to_owned(),
-            ),
-            None => ("unresolved".to_owned(), "unspecified".to_owned()),
-        };
+        let (provenance, standing) = manifest_horizon_metadata(manifest.as_ref());
         let mut files = Vec::new();
         collect_files(&skill_dir, world_root, 0, &mut files)?;
         for file in files {

@@ -222,13 +222,14 @@ pub fn plan(scope: &Scope, input: &Value, principal: &Principal, now: u64) -> io
         let entries = relations["relations"]
             .as_array_mut()
             .ok_or_else(|| invalid("invalid source relations"))?;
-        if entries
-            .iter()
-            .any(|entry| entry["path"] == to_raw && entry["ref"] != reading.source.source_ref)
-        {
-            return Err(conflict(
-                "destination is already another SourceRef's identity",
-            ));
+        let destination_key = crate::source_safety::normal_member_key(to_raw)?;
+        for entry in entries.iter() {
+            let declared_path = entry["path"].as_str().ok_or_else(|| invalid("source relation path must be text"))?;
+            if crate::source_safety::normal_member_key(declared_path)? == destination_key
+                && entry["ref"] != reading.source.source_ref
+            {
+                return Err(conflict("destination is already another SourceRef's identity"));
+            }
         }
         if let Some(entry) = entries
             .iter_mut()

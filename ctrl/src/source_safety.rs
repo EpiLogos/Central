@@ -171,6 +171,12 @@ pub(crate) fn relative_member(raw: &str) -> io::Result<PathBuf> {
     Ok(path.to_path_buf())
 }
 
+/// A comparison key for one already-valid lexical native member. The
+/// original path/ref remain source data; this performs no filesystem lookup.
+pub(crate) fn normal_member_key(raw: &str) -> io::Result<PathBuf> {
+    Ok(relative_member(raw)?.components().collect())
+}
+
 pub(crate) fn reject_symlink_components(project_root: &Path, relative: &Path) -> io::Result<()> {
     let mut current = project_root.to_path_buf();
     for component in relative.components() {

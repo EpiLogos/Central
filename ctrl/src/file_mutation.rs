@@ -60,7 +60,7 @@ pub(crate) fn directory(root: &Path, relative: &Path) -> io::Result<File> {
             libc::openat(
                 file.as_raw_fd(),
                 name.as_ptr(),
-                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
             )
         };
         if fd < 0 {
@@ -86,13 +86,94 @@ pub(crate) fn open_native_file(root: &Path, relative: &str) -> io::Result<File> 
         libc::openat(
             parent.as_raw_fd(),
             name.as_ptr(),
-            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK,
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
         )
     };
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(unsafe { File::from_raw_fd(fd) })
+}
+
+/// Read-only material capture through the existing native descriptors. The
+/// caller retains any original root alias and its treatment/owner relation.
+pub(crate) struct NativeFileRead {
+    file: File,
+    root: File,
+    parent: File,
+    canonical_root: PathBuf,
+    relative: PathBuf,
+    admitted: fs::Metadata,
+}
+
+impl NativeFileRead {
+    pub(crate) fn open(canonical_root: &Path, expected_root: (u64, u64), relative: &Path) -> io::Result<Self> {
+        let relative_text = relative.to_str().ok_or_else(|| invalid("Read member is not UTF-8"))?;
+        if relative.components().count() == 0 || !relative.components().all(|part|
+            matches!(part, std::path::Component::Normal(_)))
+        {
+            return Err(invalid("Read requires a normal relative member"));
+        }
+        let root = directory(canonical_root, Path::new(""))?;
+        let root_metadata = root.metadata()?;
+        if (root_metadata.dev(), root_metadata.ino()) != expected_root {
+            return Err(io::Error::other("Native read owner root changed before material capture"));
+        }
+        let parent = directory(canonical_root, relative.parent().ok_or_else(|| invalid("Read has no parent"))?)?;
+        let file = open_native_file(canonical_root, relative_text)?;
+        let admitted = file.metadata()?;
+        if !admitted.is_file() {
+            return Err(invalid("Read requires a regular file"));
+        }
+        let reading = Self { file, root, parent, canonical_root: canonical_root.to_path_buf(), relative: relative.to_path_buf(), admitted };
+        reading.validate()?;
+        Ok(reading)
+    }
+
+    pub(crate) fn validate(&self) -> io::Result<()> {
+        let root = directory(&self.canonical_root, Path::new(""))?.metadata()?;
+        let held_root = self.root.metadata()?;
+        let parent = directory(&self.canonical_root, self.relative.parent().ok_or_else(|| invalid("Read has no parent"))?)?.metadata()?;
+        let held_parent = self.parent.metadata()?;
+        let named = fs::symlink_metadata(self.canonical_root.join(&self.relative))?;
+        let held = self.file.metadata()?;
+        if root.dev() != held_root.dev() || root.ino() != held_root.ino()
+            || parent.dev() != held_parent.dev() || parent.ino() != held_parent.ino()
+            || !named.is_file() || named.dev() != self.admitted.dev() || named.ino() != self.admitted.ino()
+            || held.dev() != self.admitted.dev() || held.ino() != self.admitted.ino()
+            || named.len() != self.admitted.len() || held.len() != self.admitted.len()
+            || named.mtime() != self.admitted.mtime() || named.mtime_nsec() != self.admitted.mtime_nsec()
+            || held.mtime() != self.admitted.mtime() || held.mtime_nsec() != self.admitted.mtime_nsec()
+        {
+            return Err(io::Error::other("Native read material affiliation or content basis changed"));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn read_bytes(&mut self, limit: usize) -> io::Result<Vec<u8>> {
+        use std::io::{Seek, SeekFrom};
+        if limit == 0 || limit > MAX {
+            return Err(invalid("Native read capacity must be within the existing 4 MiB bound"));
+        }
+        let read = |file: &mut File| -> io::Result<Vec<u8>> {
+            let mut bytes = Vec::new();
+            file.take((limit + 1) as u64).read_to_end(&mut bytes)?;
+            if bytes.len() > limit {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "Native source exceeds the 4 MiB eager read capacity"));
+            }
+            Ok(bytes)
+        };
+        self.validate()?;
+        let bytes = read(&mut self.file)?;
+        self.validate()?;
+        self.file.seek(SeekFrom::Start(0))?;
+        let current = read(&mut self.file)?;
+        self.validate()?;
+        if current != bytes {
+            return Err(io::Error::other("Native source bytes changed during read"));
+        }
+        Ok(bytes)
+    }
 }
 pub(crate) fn rename_in(parent: &File, from: &str, to: &str) -> io::Result<()> {
     let from = std::ffi::CString::new(from).map_err(io::Error::other)?;
@@ -881,3 +962,141 @@ pub fn register(registry: &mut ActionRegistry) {
 
 include!("file_creation.rs");
 include!("flow_append.rs");
+
+#[cfg(test)]
+mod read_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+
+    struct Ground(PathBuf);
+    impl Ground {
+        fn new() -> Self {
+            let scratch = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ProjectCentral/now/tmp");
+            fs::create_dir_all(&scratch).unwrap();
+            let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+            let path = scratch.join(format!("native-control-read-{}-{nonce}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+            fs::create_dir(&path).unwrap();
+            fs::create_dir(path.join("nested")).unwrap();
+            fs::write(path.join("nested/source.md"), b"retained actual source").unwrap();
+            Self(path)
+        }
+        fn reader(&self) -> NativeFileRead {
+            let metadata = fs::metadata(&self.0).unwrap();
+            NativeFileRead::open(&fs::canonicalize(&self.0).unwrap(), (metadata.dev(), metadata.ino()), Path::new("nested/source.md")).unwrap()
+        }
+    }
+    impl Drop for Ground {
+        fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
+    }
+
+    #[test]
+    fn actual_read_retains_bytes_inode_and_accepts_a_fresh_native_replacement() {
+        let ground = Ground::new();
+        let path = ground.0.join("nested/source.md");
+        let before = fs::metadata(&path).unwrap();
+        assert_eq!(ground.reader().read_bytes(MAX).unwrap(), b"retained actual source");
+        let after = fs::metadata(&path).unwrap();
+        assert_eq!((before.dev(), before.ino(), before.mtime(), before.mtime_nsec()), (after.dev(), after.ino(), after.mtime(), after.mtime_nsec()));
+        let mut stale = ground.reader();
+        fs::rename(&path, ground.0.join("retained.md")).unwrap();
+        fs::write(&path, b"fresh actual source").unwrap();
+        assert!(stale.read_bytes(MAX).is_err());
+        assert_eq!(ground.reader().read_bytes(MAX).unwrap(), b"fresh actual source");
+        assert_eq!(fs::read(ground.0.join("retained.md")).unwrap(), b"retained actual source");
+    }
+
+    #[test]
+    fn actual_parent_replacement_final_symlink_and_fifo_cannot_redirect_reading() {
+        use std::os::unix::fs::symlink;
+        let ground = Ground::new();
+        let mut reader = ground.reader();
+        fs::rename(ground.0.join("nested"), ground.0.join("retained")).unwrap();
+        fs::create_dir(ground.0.join("nested")).unwrap();
+        fs::write(ground.0.join("nested/source.md"), b"other source").unwrap();
+        assert!(reader.read_bytes(MAX).is_err());
+        fs::remove_file(ground.0.join("nested/source.md")).unwrap();
+        symlink(ground.0.join("retained/source.md"), ground.0.join("nested/source.md")).unwrap();
+        let root_metadata = fs::metadata(&ground.0).unwrap();
+        let identity = (root_metadata.dev(), root_metadata.ino());
+        let error = NativeFileRead::open(&ground.0, identity, Path::new("nested/source.md")).err().unwrap();
+        assert_eq!(error.raw_os_error(), Some(libc::ELOOP));
+        fs::remove_file(ground.0.join("nested/source.md")).unwrap();
+        let fifo = std::ffi::CString::new(ground.0.join("nested/source.md").as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        let started = std::time::Instant::now();
+        assert_eq!(NativeFileRead::open(&ground.0, identity, Path::new("nested/source.md")).err().unwrap().kind(), io::ErrorKind::InvalidInput);
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        assert_eq!(fs::read(ground.0.join("retained/source.md")).unwrap(), b"retained actual source");
+    }
+
+    #[test]
+    fn actual_replaced_owner_root_refuses_before_material_capture_under_old_affiliation() {
+        let ground = Ground::new();
+        let root = ground.0.join("owner");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("source.md"), b"original owner source").unwrap();
+        let metadata = fs::metadata(&root).unwrap();
+        let identity = (metadata.dev(), metadata.ino());
+        let retained = ground.0.join("retained-owner");
+        fs::rename(&root, &retained).unwrap();
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("source.md"), b"another owner source").unwrap();
+        assert_eq!(NativeFileRead::open(&root, identity, Path::new("source.md")).err().unwrap().kind(), io::ErrorKind::Other);
+        assert_eq!(fs::read(retained.join("source.md")).unwrap(), b"original owner source");
+    }
+
+    #[test]
+    fn actual_read_descriptors_are_not_inherited_by_exec_probe() {
+        let Ok(inventory) = std::env::var("CENTRAL_READ_FD_PROBE") else { return; };
+        for entry in inventory.split(',') {
+            let fields: Vec<_> = entry.split(':').collect();
+            let fd: i32 = fields[0].parse().unwrap();
+            let dev: u64 = fields[1].parse().unwrap();
+            let ino: u64 = fields[2].parse().unwrap();
+            let mut observed = std::mem::MaybeUninit::<libc::stat>::uninit();
+            if unsafe { libc::fstat(fd, observed.as_mut_ptr()) } == -1 {
+                assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::EBADF));
+            } else {
+                let observed = unsafe { observed.assume_init() };
+                assert_ne!((observed.st_dev as u64, observed.st_ino as u64), (dev, ino), "actual native read descriptor survived exec");
+            }
+        }
+    }
+
+    #[test]
+    fn actual_exec_does_not_inherit_held_native_root_parent_or_file() {
+        use std::process::{Command, Stdio};
+        let ground = Ground::new();
+        let reader = ground.reader();
+        let inventory = [&reader.root, &reader.parent, &reader.file].into_iter().map(|file| {
+            let metadata = file.metadata().unwrap();
+            format!("{}:{}:{}", file.as_raw_fd(), metadata.dev(), metadata.ino())
+        }).collect::<Vec<_>>().join(",");
+        let diagnostic = ground.0.join("exec-probe.log");
+        let log = File::create(&diagnostic).unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "file_mutation::read_tests::actual_read_descriptors_are_not_inherited_by_exec_probe", "--nocapture"])
+            .env("CENTRAL_READ_FD_PROBE", inventory).stdin(Stdio::null())
+            .stdout(Stdio::from(log.try_clone().unwrap())).stderr(Stdio::from(log)).spawn().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() { break status; }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let reap = std::time::Instant::now() + std::time::Duration::from_secs(1);
+                while child.try_wait().unwrap().is_none() && std::time::Instant::now() < reap {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                panic!("actual native descriptor exec probe exceeded its bound");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        let mut log = File::open(&diagnostic).unwrap();
+        let mut output = String::new();
+        (&mut log).take(MAX as u64).read_to_string(&mut output).unwrap();
+        assert!(status.success(), "actual exec probe failed: {output}");
+        assert!(output.contains("1 passed"), "probe did not execute actual descriptor check: {output}");
+        assert_eq!(reader.file.metadata().unwrap().ino(), fs::metadata(ground.0.join("nested/source.md")).unwrap().ino());
+    }
+}

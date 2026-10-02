@@ -280,21 +280,76 @@ pub fn content_revision(path: &Path) -> io::Result<SourceRevision> {
     })
 }
 
-pub(crate) fn retrieval_allowed(world_root: &Path, source: &Path) -> bool {
-    let mut cursor = source.parent();
-    while let Some(dir) = cursor {
-        if !dir.starts_with(world_root) {
-            break;
-        }
-        if dir.join(AGENT_RETRIEVAL_DENY_MARKER).is_file() {
-            return false;
-        }
-        if dir == world_root {
-            break;
-        }
-        cursor = dir.parent();
+/// Current stock retrieval admission within the supplied owner's boundary.
+/// This observes treatment and form; it grants neither authorship nor mutation.
+/// An absent final member is permitted for existing creation/dummy-member
+/// callers, without claiming that the material exists or can be delivered.
+pub(crate) fn retrieval_admission(world_root: &Path, source: &Path) -> io::Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+
+    let relative = source.strip_prefix(world_root).map_err(|_| {
+        io::Error::new(io::ErrorKind::InvalidInput, "Retrieval source is outside its owner boundary")
+    })?;
+    if !relative.components().all(|part| matches!(part, Component::Normal(_))) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Retrieval source requires a normal member path"));
     }
-    true
+    let canonical = fs::canonicalize(world_root)?;
+    let root_metadata = fs::symlink_metadata(&canonical)?;
+    if !root_metadata.is_dir() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Retrieval owner root is not a directory"));
+    }
+    let marker = |directory: &Path| -> io::Result<bool> {
+        match fs::symlink_metadata(directory.join(AGENT_RETRIEVAL_DENY_MARKER)) {
+            Ok(metadata) if metadata.is_file() => Ok(true),
+            Ok(_) => Err(io::Error::new(io::ErrorKind::PermissionDenied,
+                "Retrieval marker must be an unredirected regular file")),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error),
+        }
+    };
+    let check_root = || -> io::Result<()> {
+        let current = fs::canonicalize(world_root)?;
+        let metadata = fs::symlink_metadata(&current)?;
+        if current != canonical || metadata.dev() != root_metadata.dev() || metadata.ino() != root_metadata.ino() {
+            return Err(io::Error::other("Retrieval owner root affiliation changed"));
+        }
+        Ok(())
+    };
+    let mut current = canonical.clone();
+    if marker(&current)? {
+        check_root()?;
+        return Ok(false);
+    }
+    let parts: Vec<_> = relative.components().collect();
+    for (index, part) in parts.iter().enumerate() {
+        current.push(part.as_os_str());
+        let metadata = match fs::symlink_metadata(&current) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound && index + 1 == parts.len() => {
+                check_root()?;
+                return Ok(true);
+            }
+            Err(error) => return Err(error),
+        };
+        if metadata.file_type().is_symlink() || (!metadata.is_dir() && !metadata.is_file()) {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Retrieval member is redirected or not ordinary material"));
+        }
+        if index + 1 != parts.len() && !metadata.is_dir() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "Retrieval parent is not a directory"));
+        }
+        if metadata.is_dir() && marker(&current)? {
+            check_root()?;
+            return Ok(false);
+        }
+    }
+    check_root()?;
+    Ok(true)
+}
+
+/// Compatibility projection for existing binding metadata. A failed
+/// observation cannot grant readability; actual delivery uses the fallible API.
+pub(crate) fn retrieval_allowed(world_root: &Path, source: &Path) -> bool {
+    retrieval_admission(world_root, source).unwrap_or(false)
 }
 
 fn safe_regular_file(world_root: &Path, path: &Path) -> io::Result<bool> {
@@ -440,10 +495,36 @@ fn read_relations_file(
     schema: &str,
     expected_id: &str,
 ) -> io::Result<Vec<GroundRelation>> {
-    if !path.is_file() {
-        return Ok(Vec::new());
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let value: Value = serde_json::from_slice(&bytes)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    Ok(parse_relations_value(&value, schema, expected_id)?.relations)
+}
+
+/// The same accepted relation grammar governs mutation, bulk bindings and
+/// selected observations. A duplicated ref or path cannot acquire a different
+/// meaning merely because a consumer happens to choose the first or last row.
+pub(crate) fn validate_relations_value(
+    value: &Value,
+    schema: &str,
+    expected_id: &str,
+) -> io::Result<()> {
+    parse_relations_value(value, schema, expected_id).map(|_| ())
+}
+
+fn parse_relations_value(
+    value: &Value,
+    schema: &str,
+    expected_id: &str,
+) -> io::Result<GroundRelationsFile> {
+    if !value.get("relations").is_some_and(Value::is_array) {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "relations must be an array"));
     }
-    let relations: GroundRelationsFile = serde_json::from_slice(&fs::read(path)?)
+    let relations: GroundRelationsFile = serde_json::from_value(value.clone())
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     if relations.schema != schema || relations.project_id != expected_id {
         return Err(io::Error::new(
@@ -459,7 +540,20 @@ fn read_relations_file(
             )
         })?;
     }
-    Ok(relations.relations)
+    let mut refs = BTreeSet::new();
+    let mut paths = BTreeSet::new();
+    for relation in &relations.relations {
+        validate_project_member(&relation.path)?;
+        let member_key = crate::source_safety::normal_member_key(&relation.path)?;
+        if relation.source_ref.trim().is_empty() || relation.source_ref.len() > 4096 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "source ref requires non-empty text of at most 4096 bytes"));
+        }
+        if !refs.insert(&relation.source_ref) || !paths.insert(member_key) {
+            return Err(io::Error::new(io::ErrorKind::InvalidData,
+                "ambiguous duplicate source relation; reconcile before mutation"));
+        }
+    }
+    Ok(relations)
 }
 
 fn read_ground_relations(
@@ -578,7 +672,14 @@ pub fn project_source_bindings(project_root: &Path) -> io::Result<Vec<SourceBind
         }
         // An explicit recognised relation is the identity/standing authority for its path.
         // Remove the aperture fallback first so one physical source produces one logical change.
-        bindings.retain(|_, binding| binding.path != relative);
+        let member_key = crate::source_safety::normal_member_key(&relative)?;
+        let mut replaced = Vec::new();
+        for (reference, binding) in &bindings {
+            if crate::source_safety::normal_member_key(&binding.path)? == member_key {
+                replaced.push(reference.clone());
+            }
+        }
+        for reference in replaced { bindings.remove(&reference); }
         bindings.insert(
             relation.source_ref.clone(),
             SourceBinding {
@@ -666,7 +767,14 @@ pub fn control_source_bindings(central_root: &Path) -> io::Result<Vec<SourceBind
         }
         // Same law as the project flow: an explicit recognised relation is the
         // identity/standing authority for its path; the tree fallback is replaced.
-        bindings.retain(|_, binding| binding.path != relative);
+        let member_key = crate::source_safety::normal_member_key(&relative)?;
+        let mut replaced = Vec::new();
+        for (reference, binding) in &bindings {
+            if crate::source_safety::normal_member_key(&binding.path)? == member_key {
+                replaced.push(reference.clone());
+            }
+        }
+        for reference in replaced { bindings.remove(&reference); }
         bindings.insert(
             relation.source_ref.clone(),
             SourceBinding {
@@ -1238,5 +1346,86 @@ pub fn register_source_horizon_actions(registry: &mut ActionRegistry) {
         registry
             .register(descriptor, handler)
             .expect("Source Change Horizon Action ids are valid");
+    }
+}
+
+#[cfg(test)]
+mod retrieval_tests {
+    use super::*;
+
+    struct Ground(PathBuf);
+    impl Ground {
+        fn new() -> Self {
+            let scratch = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ProjectCentral/now/tmp");
+            fs::create_dir_all(&scratch).unwrap();
+            let path = scratch.join(format!("retrieval-{}-{}-{}", std::process::id(), unix_seconds(), NEXT_STATE_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for Ground {
+        fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
+    }
+
+    #[test]
+    fn actual_root_ancestor_directory_self_and_dummy_member_share_one_admission() {
+        let ground = Ground::new();
+        let root = &ground.0;
+        let private = root.join("Control/user/private");
+        fs::create_dir_all(&private).unwrap();
+        fs::write(private.join("source.md"), b"retained source").unwrap();
+        for directory in [root.to_path_buf(), root.join("Control"), root.join("Control/user"), private.clone()] {
+            let marker = directory.join(AGENT_RETRIEVAL_DENY_MARKER);
+            fs::write(&marker, b"").unwrap();
+            assert!(!retrieval_admission(root, &private).unwrap());
+            assert!(!retrieval_admission(root, &private.join("source.md")).unwrap());
+            assert!(!retrieval_admission(root, &private.join("new-member")).unwrap());
+            fs::remove_file(marker).unwrap();
+            assert!(retrieval_admission(root, &private).unwrap());
+            assert!(retrieval_admission(root, &private.join("new-member")).unwrap());
+        }
+        assert_eq!(fs::read(private.join("source.md")).unwrap(), b"retained source");
+    }
+
+    #[test]
+    fn actual_root_alias_is_supported_but_member_and_marker_redirection_refuse() {
+        use std::os::unix::fs::symlink;
+        let ground = Ground::new();
+        let root = ground.0.join("root");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("source.md"), b"unchanged").unwrap();
+        let alias = ground.0.join("alias");
+        symlink(&root, &alias).unwrap();
+        assert!(retrieval_admission(&alias, &alias.join("source.md")).unwrap());
+        symlink(root.join("source.md"), root.join("redirected")).unwrap();
+        assert_eq!(retrieval_admission(&root, &root.join("redirected")).unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        symlink(root.join("source.md"), root.join(AGENT_RETRIEVAL_DENY_MARKER)).unwrap();
+        assert_eq!(retrieval_admission(&root, &root.join("source.md")).unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert!(!retrieval_allowed(&root, &root.join("source.md")));
+        assert_eq!(fs::read(root.join("source.md")).unwrap(), b"unchanged");
+    }
+
+    #[test]
+    fn actual_marker_stat_permission_error_is_not_an_absent_marker() {
+        use std::os::unix::fs::PermissionsExt;
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!("qualification unavailable: marker-stat EACCES requires a nonroot OS user");
+            return;
+        }
+        let ground = Ground::new();
+        let directory = ground.0.join("blocked");
+        fs::create_dir(&directory).unwrap();
+        struct Restore(PathBuf);
+        impl Drop for Restore {
+            fn drop(&mut self) { let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o700)); }
+        }
+        let _restore = Restore(directory.clone());
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o000)).unwrap();
+        let actual = fs::symlink_metadata(directory.join(AGENT_RETRIEVAL_DENY_MARKER)).unwrap_err();
+        let error = retrieval_admission(&ground.0, &directory).unwrap_err();
+        assert_eq!(actual.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(error.kind(), actual.kind());
+        assert_eq!(error.raw_os_error(), actual.raw_os_error());
+        assert!(!retrieval_allowed(&ground.0, &directory));
     }
 }

@@ -39,3 +39,66 @@ Native tests exercise the public Action registry over real temporary Central
 ground, ordinary unadopted source files, exact content revisions, unchanged
 source bytes, retrieval exclusions, root mismatches, restored symlink changes,
 and binary/oversized content. There is no simulated filesystem backend.
+
+`control.search` and `control.index` use the existing source-horizon retrieval
+relation fallibly. They check the supplied native root, selected directory and
+ancestors before traversal and before/after body and standing-source IO. A marked
+descendant contributes no child filename, title or body; an excluded selected
+root is a refusal rather than a successful empty reading. Actual IO failures
+retain their kind, OS error and message in the two Actions. Missing standing
+relations may be undeclared; unreadable or malformed relations are errors.
+
+These eager Control reads admit at most 4 MiB per file. An oversized source fails
+the whole command without a truncated result. Search retains an explicit
+non-text skip for non-UTF-8 or NUL-containing material. Index requires text.
+Body reads reuse held no-follow/nonblocking native descriptors, compare their
+current named/root/parent affiliation and bytes, and close the descriptors at
+exec. An unchanged root alias remains useful; retargeting requires a fresh
+reading. Affiliation is physical evidence, never semantic World/Source identity.
+Current checkpoints do not claim atomic exclusion of arbitrary external writers.
+Existing boolean binding projections conservatively deny failed observations;
+they do not supply the fallible current-body admission or prove other consumers
+have completed their own read-path migration.
+
+Aperture admission is not proof that previously read material still exists.
+After all collection and emission checkpoints, before acknowledging Control
+hits, titles or non-text skip metadata, these consumers reopen every returned
+source through the same bounded native reader and qualify its
+captured native content revision and physical observation basis. Removed or
+changed material fails that reading; a fresh operation can observe the current
+source. The operation retains small basis records, not descriptors for the tree.
+Governance standing likewise qualifies its captured relation source before
+output. A genuinely absent relation source must still be observed as absent;
+an appearance, disappearance, change or unavailable observation cannot silently
+emit the previous standing. Neither this check nor the physical basis creates
+a semantic identity, permission lease or atomic snapshot of external writers.
+
+
+Control search additionally returns each delivered hit's source_binding
+(the existing native SourceBinding, or null) and source_revision (actual
+content revision and byte length). A non-text skip has the same material
+metadata; a withheld directory has neither a fabricated binding nor body
+revision. The authored class means explicit native human-authored or
+human-adopted provenance. The unresolved class leaves human authorship
+unclaimed; an existing binding still discloses its exact Agent/derived/observed
+provenance and standing. Durable standing alone does not establish human
+adoption. Root aperture classes describe the root independently of file evidence.
+
+Exact accepted source relations take precedence over the selected native Skill
+manifest, then the existing native tree binding. Other material remains useful
+without minting a SourceRef. Only selected Skill manifests are read; search
+does not scan the World to classify a hit. Their typed parser and native
+horizon conversion are shared with the Skill owner. The shared relation
+validator checks actual schema, World id, subject, normal member paths, and
+duplicate refs or paths. Ambiguity is refused without rewriting declarations.
+Every metadata source used for disclosure is qualified after all checkpoints,
+including a prior true absence, alongside the delivered body basis.
+
+The public locate_control_root now returns io::Result<ControlSourceRoot>
+rather than a String error. The control.open Action observes current owner
+affiliation, ordinary directory form, ancestor retrieval treatment and genuine
+final absence; it opens no application or source body. Real IO kind, errno and
+message remain in the error with effects none. Additive search fields and
+SourceClass::Unresolved require Rust/JSON consumers to preserve the distinction;
+unknown external Rust consumers are not assumed absent. An aperture or
+observation creates no lease, semantic identity or human recognition.

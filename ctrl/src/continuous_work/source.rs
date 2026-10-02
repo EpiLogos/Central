@@ -56,7 +56,18 @@ pub struct Scope {
 }
 impl Scope {
     pub fn resolve(central: &Path, project: Option<&str>) -> io::Result<Self> {
+        let requested_central = central.to_path_buf();
         let central = fs::canonicalize(central)?;
+        let admitted_central = crate::file_mutation::directory(&central, Path::new(""))?.metadata()?;
+        let require_requested_central = || -> io::Result<()> {
+            let current = fs::canonicalize(&requested_central)?;
+            let metadata = crate::file_mutation::directory(&current, Path::new(""))?.metadata()?;
+            if metadata.dev() != admitted_central.dev() || metadata.ino() != admitted_central.ino() {
+                return Err(io::Error::other("Requested Central root affiliation changed during scope resolution"));
+            }
+            Ok(())
+        };
+        require_requested_central()?;
         crate::file_mutation::directory(&central, Path::new("Control"))?;
         crate::file_mutation::directory(&central, Path::new("Work"))?;
         if let Some(project) = project {
@@ -64,14 +75,21 @@ impl Scope {
             if member.components().count() != 1 {
                 return Err(invalid("project is one existing Central/Work member"));
             }
-            crate::file_mutation::directory(&central, &Path::new("Work").join(&member))?;
+            let project_directory = crate::file_mutation::directory(&central, &Path::new("Work").join(&member))?;
+            let admitted_project = project_directory.metadata()?;
             let root = central.join("Work").join(member);
-            crate::file_mutation::open_native_file(&root, "ProjectCentral/project.json")?;
-            let manifest = crate::projectcentral::read_project_manifest(&root)?;
+            let mut reading = crate::file_mutation::NativeFileRead::open(
+                &root, (admitted_project.dev(), admitted_project.ino()),
+                Path::new("ProjectCentral/project.json"))?;
+            let bytes = reading.read_bytes(4 * 1024 * 1024)?;
+            let manifest = crate::projectcentral::parse_project_manifest(
+                &bytes, &root.join("ProjectCentral/project.json"))?;
             let validation = manifest.validate();
             if !validation.valid {
                 return Err(invalid(validation.errors.join("; ")));
             }
+            reading.validate()?;
+            require_requested_central()?;
             Ok(Self {
                 central_root: central,
                 root,
@@ -83,6 +101,7 @@ impl Scope {
                 relations_id: manifest.project_id,
             })
         } else {
+            require_requested_central()?;
             Ok(Self {
                 central_root: central.clone(),
                 root: central,
@@ -116,24 +135,8 @@ impl Scope {
             Err(e) => return Err(e),
         };
         let value: Value = serde_json::from_str(&raw)?;
-        if value["schema"] != self.relations_schema || value["project_id"] != self.relations_id {
-            return Err(invalid(
-                "source relations have changed World identity or schema",
-            ));
-        }
-        let entries = value["relations"]
-            .as_array()
-            .ok_or_else(|| invalid("relations must be an array"))?;
-        let mut refs = std::collections::BTreeSet::new();
-        let mut paths = std::collections::BTreeSet::new();
-        for entry in entries {
-            relative_member(text(entry, "path")?)?;
-            if !refs.insert(text(entry, "ref")?) || !paths.insert(text(entry, "path")?) {
-                return Err(invalid(
-                    "ambiguous duplicate source relation; reconcile before mutation",
-                ));
-            }
-        }
+        crate::source_horizon::validate_relations_value(
+            &value, &self.relations_schema, &self.relations_id)?;
         Ok((value, revision(&raw)))
     }
     pub fn bindings(&self) -> io::Result<Vec<SourceBinding>> {
@@ -203,14 +206,16 @@ impl Scope {
     /// Caller holds source-mutation.lock. Existing identities and unrelated
     /// JSON fields are retained, including subject and Recognition metadata.
     pub fn bind(&self, binding: &SourceBinding, recorded_at: u64) -> io::Result<()> {
-        relative_member(&binding.path)?;
+        let member_key = crate::source_safety::normal_member_key(&binding.path)?;
         let (mut relations, basis) = self.relations()?;
         let entries = relations["relations"]
             .as_array_mut()
             .ok_or_else(|| invalid("invalid relations"))?;
         for old in entries.iter() {
-            if old["ref"] == binding.source_ref || old["path"] == binding.path {
-                if old["ref"] == binding.source_ref && old["path"] == binding.path {
+            let old_path = old["path"].as_str().ok_or_else(|| invalid("source relation path must be text"))?;
+            let same_member = crate::source_safety::normal_member_key(old_path)? == member_key;
+            if old["ref"] == binding.source_ref || same_member {
+                if old["ref"] == binding.source_ref && same_member {
                     return Ok(());
                 }
                 return Err(conflict(

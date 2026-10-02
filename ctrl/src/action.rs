@@ -422,12 +422,17 @@ fn control_open_action(
     };
     let source = match locate_control_root(&root.path, &target) {
         Ok(source) => source,
-        Err(message) => {
+        Err(error) => {
+            let status = match error.kind() {
+                io::ErrorKind::InvalidInput => ResultStatus::InvalidInput,
+                io::ErrorKind::NotFound => ResultStatus::InvalidCentralStructure,
+                _ => ResultStatus::InternalFailure,
+            };
             return ActionResult::failure(
                 Some("control.open"),
-                ResultStatus::InvalidInput,
-                message,
-                None,
+                status,
+                error.to_string(),
+                Some(json!({"io_error": {"kind": format!("{:?}", error.kind()), "raw_os_error": error.raw_os_error(), "message": error.to_string()}, "effects": "none"})),
             );
         }
     };
@@ -474,19 +479,19 @@ fn control_search_action(
             Some("control.search"),
             ResultStatus::InvalidCentralStructure,
             error.to_string(),
-            None,
+            Some(json!({"io_error": {"kind": format!("{:?}", error.kind()), "raw_os_error": error.raw_os_error(), "message": error.to_string()}, "effects": "none"})),
         ),
         Err(error) if error.kind() == io::ErrorKind::InvalidInput => ActionResult::failure(
             Some("control.search"),
             ResultStatus::InvalidInput,
             error.to_string(),
-            None,
+            Some(json!({"io_error": {"kind": format!("{:?}", error.kind()), "raw_os_error": error.raw_os_error(), "message": error.to_string()}, "effects": "none"})),
         ),
         Err(error) => ActionResult::failure(
             Some("control.search"),
             ResultStatus::InternalFailure,
             error.to_string(),
-            None,
+            Some(json!({"io_error": {"kind": format!("{:?}", error.kind()), "raw_os_error": error.raw_os_error(), "message": error.to_string()}, "effects": "none"})),
         ),
     }
 }
@@ -516,13 +521,13 @@ fn control_index_action(
             Some("control.index"),
             ResultStatus::InvalidCentralStructure,
             error.to_string(),
-            None,
+            Some(json!({"io_error": {"kind": format!("{:?}", error.kind()), "raw_os_error": error.raw_os_error(), "message": error.to_string()}, "effects": "none"})),
         ),
         Err(error) => ActionResult::failure(
             Some("control.index"),
             ResultStatus::InternalFailure,
             error.to_string(),
-            None,
+            Some(json!({"io_error": {"kind": format!("{:?}", error.kind()), "raw_os_error": error.raw_os_error(), "message": error.to_string()}, "effects": "none"})),
         ),
     }
 }
@@ -902,7 +907,7 @@ pub fn create_core_action_registry() -> ActionRegistry {
     let mut control_open = descriptor(
         "control.open",
         "Locate Control source root",
-        "Resolve one stable authored Control source root without imposing a schema below it.",
+        "Observe one stable Control aperture and its current retrieval/form/IO state. Root class describes the aperture, not each file's authorship; no application or source body is opened.",
         MutationClass::ReadOnly,
         "control-source-root",
     );
@@ -921,7 +926,7 @@ pub fn create_core_action_registry() -> ActionRegistry {
     let mut control_search = descriptor(
         "control.search",
         "Search Control source",
-        "Search readable authored content below the three stable Control roots without creating an index.",
+        "Search readable material below the three stable Control roots without creating an index; disclose its actual native binding/provenance/standing and current body revision, leaving unbound authorship unresolved and excluding Agent Wiki.",
         MutationClass::ReadOnly,
         "control-source-search",
     );

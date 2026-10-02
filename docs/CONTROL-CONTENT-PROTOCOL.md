@@ -571,3 +571,24 @@ Wiki revision or explicit proposal back to human source
 ```
 
 At Project scope, ProjectCentral repeats the same relation. Skills operate that relation; they do not replace either side of it.
+
+
+## Native Control reader disclosure
+
+Ordinary files remain first-class source; no mandatory profile or relation
+ledger is required to make natural prose useful. Native search reports what its
+current source evidence establishes. File location and durable bytes alone do
+not attest human adoption. Each delivered hit carries its actual native
+binding/provenance/standing when one exists and its current body revision; an
+unbound file remains searchable with unresolved human authorship. This machine
+evidence does not rewrite originating meaning or promote Agent NOW Returns,
+observed evidence or generated material into human ground.
+
+Declared human files, including accepted pre-split files retained in place,
+remain authored through their existing native Source relation. Native Skill
+manifests supply their existing provenance and standing. Agent Wiki retains its
+separate knowledge route and is excluded from Control search. Root aperture
+class is not a statement about every descendant. An unreadable, malformed or
+ambiguous metadata source is an explicit failure, not an empty/default human
+judgement. Current body and metadata bases must be qualified before output;
+these observations do not atomically exclude arbitrary external writers.
