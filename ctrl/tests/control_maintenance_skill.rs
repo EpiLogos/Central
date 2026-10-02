@@ -219,7 +219,8 @@ fn declared_human_legacy_file_is_owner_recognised_and_retained_in_place() {
     fs::write(&relation_file, &relations).unwrap();
     fs::write(root.join("Control/agents/wiki/unselected.txt"), b"declared-human-needle").unwrap();
     let before = fs::read(&source).unwrap();
-    let registry = create_core_action_registry();
+    let mut registry = create_core_action_registry();
+    central_ctrl::projectcentral_ops::register_projectcentral_actions(&mut registry);
     let connectors = ConnectorRegistry::default();
     let connector_context = ConnectorContext { platform:"fixture-os".to_owned() };
     let root_options = RootOptions { explicit_root:Some(root.clone()), ..RootOptions::default() };
