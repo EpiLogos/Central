@@ -1,19 +1,19 @@
 ---
 name: control-maintenance
-description: Audit human-authored Central Control source, identify durable-content problems or missing preference areas, and propose reviewable changes without turning generated advice into authored truth.
+description: Audit Central Control material, distinguish authored ground from Agent material and observations, and propose reviewable durable changes without turning generated advice into authored truth.
 ---
 
 # Control maintenance
 
 Use this Skill when the user wants to audit, tidy, configure, review, or extend durable material under `Control/user/`, `Control/agents/`, or `Control/machines/`.
 
-Control is **human-owned authored source**. The Skill is a reusable procedure around that source; it is not a hidden memory database and does not become Control content itself.
+Control contains **human-owned authored source** alongside Agent-maintained knowledge, continuity and observed material. Their source roles remain distinct. The Skill is a reusable procedure around that field; it is not a hidden memory database and does not become Control content itself.
 
 Read before acting:
 
 1. `docs/CONTROL-CONTENT-PROTOCOL.md` in full where relevant, especially source classes, scope, durable change proposals, conflict/supersession, Control-maintenance Skills, and quality criteria.
 2. `docs/CENTRAL-SYSTEM-SPEC.md` for the Control/derived-state boundary and canonical Action semantics.
-3. The relevant live Control root through `control.open` / `control.search` or ordinary filesystem reads. Direct filesystem source is authoritative; do not require an import or personal-profile database.
+3. The relevant live Control root through `control.open` / `control.search`, then the existing native source read. `control.open` locates a root; its container class does not establish every file's authorship or deliver its body. Direct filesystem source is authoritative for its current bytes; use the current native binding, provenance and standing to establish its source role. Do not require an import or personal-profile database.
 4. Other Skills only when a finding genuinely belongs in reusable procedure rather than durable Control.
 
 The governing flow is:
@@ -47,15 +47,17 @@ Control/user
     durable human self-description, interests, cross-context working preferences, decision criteria
 
 Control/agents
-    durable human-agent relationship, collaboration style, initiative, evidence/verification expectations
+    authored Agent governance alongside Agent-maintained Wiki knowledge and NOW continuity
 
 Control/machines
-    portable machine roles and intended computing-environment state
+    portable machine roles and intended computing-environment source; observations retain their own role
 ```
 
 Do not assume all three roots need a full audit every time. Use the narrowest scope that can answer the request.
 
-Record the source paths actually inspected. Treat those files as authored source. Keep `.central/`, indexes, observations, caches, summaries, and other generated/local material separate even when they help locate or interpret source.
+Record the paths actually inspected and the current native source basis. Inspection does not establish human authorship. Retain the returned binding/ref and byte revision where available, source roles, provenance, standing, treatment and established native owner attribution. If the source is unbound, keep it unbound; if the source or metadata cannot be read, record the actual failure rather than inferring absence or authored standing. Useful eligible text does not require automatic adoption or a new binding.
+
+Preserve known pre-split human authorship and stable source identity; a lookalike filename is not that provenance. Do not substitute a root class, durable standing, search label or arbitrary content field for an accepted human-source basis. Keep `.central/`, indexes, observations, caches, summaries, Agent Wiki knowledge and NOW continuation distinct from authored ground. Use their existing native owners; never rewrite the Wiki or create source relations merely to fill an audit field.
 
 ### 2. Inventory without inventing a schema
 
@@ -68,7 +70,8 @@ Build a lightweight audit inventory containing, for each relevant source item:
 - apparent scope;
 - durable subject or purpose;
 - relevant neighbouring/overlapping sources;
-- source class (`authored` for live Control source);
+- current native source class and its binding/provenance/standing basis, with unbound or unavailable explicitly retained;
+- returned source ref and current byte revision where available;
 - whether the item needs deeper review.
 
 Do not convert the tree into a mandatory universal profile schema merely to make the audit easier.
@@ -255,7 +258,7 @@ If the user requested only an audit, stop with the review packet.
 
 After explicit acceptance, mutate only the accepted Control paths. Preserve unrelated authored material.
 
-Re-read the changed source directly from the filesystem and report the final source paths. Do not require a re-import or generated-index update before the source is considered live.
+Re-read the accepted source through its existing native owner and report the final paths and current byte revision where returned. Do not require a re-import or generated-index update before the accepted source is considered live.
 
 When relocating procedure, complete or explicitly hand off the Skill/Action change rather than deleting useful procedure and losing it.
 
@@ -272,7 +275,7 @@ Completion evidence can include:
 - project-specific mechanics deliberately excluded from Control;
 - post-write filesystem re-read.
 
-Evidence explains the change. Evidence is not itself authored Control unless the human explicitly adopts a durable statement from it.
+Evidence explains the change. Evidence is not itself authored Control unless the human explicitly adopts a durable statement from it. A successful read, returned binding/revision or passing test records an observed result; it does not create adoption, Recognition or mutation authority.
 
 ## Verification/confidence scope example
 
@@ -321,7 +324,7 @@ A durable preference about evidence can belong in `Control/agents`; the commands
 
 A complete Control-maintenance pass can answer:
 
-- Which authored Control source was actually inspected?
+- Which material was actually inspected, and which current native source basis distinguishes authored ground from Agent, observed, derived or unbound material?
 - Which relevant items are clean?
 - Which findings are stale, duplicate, conflicting, low-value, misplaced, or procedure-candidates?
 - What evidence supports each classification?
