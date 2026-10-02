@@ -156,7 +156,8 @@ acceptance or human Recognition.
 
 ## Native relation records — source candidate
 
-This section describes the pending native-owner source cut, not an executed or
+This section retains the original native-owner source candidate and its
+subsequent scoped hosted qualification. It does not establish a personal
 installed result. Central's `RelationRecordStore` owns the four root/Project
 AgentSet and World containers. It distinguishes optional absence from unsafe
 forms, unavailable IO and changed affiliation; a failed native collection
@@ -208,7 +209,7 @@ errors.
 
 ### World disclosure
 
-The pending `central.world.here` consumer uses
+The qualified Source cut's `central.world.here` consumer uses
 [`RelationRecordStore::list`](../ctrl/src/agent_set_store.rs) in
 [`world_record`](../ctrl/src/world_here.rs), rather than independently accepting
 raw JSON. It projects native failures and qualifies absence through that owner.
@@ -224,6 +225,13 @@ Store after-image
 `52b45d4437a50b0e8ed42accf06572c5d410847a9d4f34230aacf4d6ab3831b1`;
 World consumer v1.3 packet
 `c5652f528091f7952c0b77076c7084f8c2033f16417dc9fae74417f8c3d868e5`.
-The 18 native Store and five World-consumer test definitions are UNRUN on this
-composed cut. Linux/macOS, source-install and native joined qualification remain
-required. See [architecture navigation](ARCHITECTURE-NAVIGATION.md#native-ownership-and-world-disclosure--pending-source-cut).
+The 18 Store and five World-consumer definitions were UNRUN at the original
+source capture. They subsequently executed and passed on both Linux and macOS
+in [normal run 37061163439](https://github.com/EpiLogos/Central/actions/runs/37061163439),
+at merge `cadc4942a5aa64dd1e00216b5203dea2ff7052d7`, whose full tree
+equals Central `452525d45fce20c2c667b87ee9590e7f5a3883c6`. These
+results qualify the stated held-reader, error, capacity, membership and owning-
+root projection relations; they do not certify every inherited mutation path.
+[The scoped qualification account](ARCHITECTURE-NAVIGATION.md#scoped-native-qualification--2-october-2026)
+keeps the joined composition, source-install dependency cut, prior failures and
+remaining consumer/installed boundaries distinct. See [architecture navigation](ARCHITECTURE-NAVIGATION.md#native-ownership-and-world-disclosure--pending-source-cut).

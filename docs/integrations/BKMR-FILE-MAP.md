@@ -185,7 +185,7 @@ separate observations.
 
 ## Binding ownership metadata — source candidate
 
-This is the pending Central native-owner source contract. It adds optional
+This metadata mode is implemented on the qualified Source cuts below. It adds optional
 Boolean `binding_only:true` to existing `central.file-map.resolve` and
 `central.file-map.locate`, retaining their `central.file-map/v1` envelope and
 default Entry/payload shapes. True is invalid with `content:true` or any
@@ -201,7 +201,7 @@ matching Skill metadata is read through its existing native parser. A malformed
 unselected fallback remains a genuine bulk-horizon failure, while an explicit
 selected Source does not depend on that unrelated fallback.
 
-| Native disposition | Proposed result and consumer consequence |
+| Native disposition | Native result and consumer consequence |
 | --- | --- |
 | Eligible owned source | `ownership:"owned"`, `binding_only:true`, exact existing `source`, `world_ref`, `project`, admitted `path`/`kind`, existing title/tags/native-import fields, `relation_revision` and `material_metadata_basis`. Select the intended source family and target privacy before a body read through the same owner. |
 | Healthy complete metadata establishes no owner | Success containing only `ownership:"unregistered"`, `binding_only:true` and the exact requested `source_ref` (resolve) or `requested_path` (locate). A consumer may decline. |
@@ -271,8 +271,14 @@ cut from the locked joined binaries.
 The original joined case 28 only required a nonzero disconnect exit and parseable
 JSON. Its stronger successor now checks a successful current read, the actual
 failure envelope, absence of the unique retained body, unchanged source/database
-and a current read after reconnection. Those new assertions remain UNRUN until a
-successor hosted replay. AIKit338 turns failed known-owner attachment into
+and a current read after reconnection. Those stronger assertions executed in
+[joined run 37066338855](https://github.com/EpiLogos/Central/actions/runs/37066338855)
+at Central `5eb41c635f2978f5adb34f0c947f774eda498827` with the same
+AIKit338 composition: all 58 unique cases passed with zero failures/skips in
+9.380 seconds. The full raw log SHA-256 is
+`7050ee8dc5c3085555f5c0d5d790d7168ff45716aa539e3fd58c751ed3993a2d`;
+the locked ctrl binary is
+`b30f6240ca7e047f8d8587323b2d7a6c3646bca88d73e86ffbe9b8579a107aeb`. AIKit338 turns failed known-owner attachment into
 `knowledge.source_missing`; this existing loss of the native unavailable-owner
 cause is unresolved on that consumer cut. The stronger case does not certify
 truthful owner-error propagation.
@@ -281,3 +287,8 @@ These receipts qualify the stated hosted source and joined boundaries, not the
 personal installed/running World, later Source revisions, human acceptance or
 newer prepared AIKit R4 consumers. Preserve the original failed and unqualified
 predecessor receipts. See [architecture navigation](../ARCHITECTURE-NAVIGATION.md#native-ownership-and-world-disclosure--pending-source-cut).
+
+See [the scoped qualification account](../ARCHITECTURE-NAVIGATION.md#scoped-native-qualification--2-october-2026)
+for the exact earlier four failures, the 16-path source union, retired Flow
+fixture classification and separate receiving-recovery result. A no-body
+disconnect pass does not repair the lost native cause or qualify newer R4.
