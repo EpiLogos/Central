@@ -118,6 +118,38 @@ impl Snapshot {
     }
 }
 
+// A held source descriptor preserves bytes, but a migration also promises to
+// retain the selected source at its requested location. Check both its original
+// path binding and its resolved physical parent at the publication checkpoints.
+struct CopyBasis<'a> {
+    parent: &'a File,
+    parent_path: &'a Path,
+    requested_parent: &'a Path,
+    name: &'a OsStr,
+    snapshot: &'a Snapshot,
+}
+impl CopyBasis<'_> {
+    fn check_parent(&self) -> io::Result<()> {
+        let held = self.parent.metadata()?;
+        for path in [self.parent_path, self.requested_parent] {
+            let current = fs::metadata(path)?;
+            if !held.is_dir() || !current.is_dir() || !same_file(&held, &current) {
+                return Err(conflict("Migration source parent identity changed"));
+            }
+        }
+        Ok(())
+    }
+    fn check(&self) -> io::Result<()> {
+        self.check_parent()?;
+        let current = Snapshot::read(self.parent, self.name)?
+            .ok_or_else(|| conflict("Migration source disappeared"))?;
+        if !self.snapshot.matches(&current) {
+            return Err(conflict("Migration source identity or contents changed"));
+        }
+        self.check_parent()
+    }
+}
+
 pub(crate) struct Publication {
     parent_path: PathBuf,
     parent: File,
@@ -259,13 +291,25 @@ impl Publication {
                 "Refusing to overwrite an existing migration target",
             ));
         }
-        let source_parent = fs::canonicalize(source.parent().ok_or_else(|| {
+        let requested_parent = source.parent().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "Migration source has no parent",
             )
-        })?)?;
-        let parent = File::open(&source_parent)?;
+        })?;
+        let requested_parent = if requested_parent.is_absolute() {
+            requested_parent.to_path_buf()
+        } else {
+            std::env::current_dir()?.join(requested_parent)
+        };
+        let source_parent = fs::canonicalize(&requested_parent)?;
+        use std::os::unix::fs::OpenOptionsExt;
+        let parent = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(
+                libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+            )
+            .open(&source_parent)?;
         let name = source.file_name().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -275,17 +319,21 @@ impl Publication {
         let snapshot = Snapshot::read(&parent, name)?.ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotFound, "Migration source disappeared")
         })?;
-        self.publish(
-            &snapshot.bytes,
-            Some(&snapshot),
-            Some((&parent, name, &snapshot)),
-        )
+        let basis = CopyBasis {
+            parent: &parent,
+            parent_path: &source_parent,
+            requested_parent: &requested_parent,
+            name,
+            snapshot: &snapshot,
+        };
+        basis.check()?;
+        self.publish(&snapshot.bytes, Some(&snapshot), Some(&basis))
     }
     fn publish(
         &self,
         bytes: &[u8],
         metadata_source: Option<&Snapshot>,
-        copy_basis: Option<(&File, &OsStr, &Snapshot)>,
+        copy_basis: Option<&CopyBasis<'_>>,
     ) -> io::Result<()> {
         if bytes.len() as u64 > MAX_SOURCE_BYTES {
             return Err(io::Error::new(
@@ -324,12 +372,8 @@ impl Publication {
             // mutable inode, so neither can be the other's expected privacy.
             expected.verify(&stage)?;
             self.check_basis()?;
-            if let Some((parent, name, basis)) = copy_basis {
-                let current = Snapshot::read(parent, name)?
-                    .ok_or_else(|| conflict("Migration source disappeared"))?;
-                if !basis.matches(&current) {
-                    return Err(conflict("Migration source changed before staging"));
-                }
+            if let Some(basis) = copy_basis {
+                basis.check()?;
             }
             stage.set_len(0)?;
             stage.seek(SeekFrom::Start(0))?;
@@ -337,12 +381,8 @@ impl Publication {
             stage.sync_all()?;
             expected.verify(&stage)?;
             self.check_basis()?;
-            if let Some((parent, name, basis)) = copy_basis {
-                let current = Snapshot::read(parent, name)?
-                    .ok_or_else(|| conflict("Migration source disappeared"))?;
-                if !basis.matches(&current) {
-                    return Err(conflict("Migration source changed before publication"));
-                }
+            if let Some(basis) = copy_basis {
+                basis.check()?;
             }
             // Publish only the create-new inode held by this operation.
             // A substituted named stage must not become native source.
@@ -386,6 +426,9 @@ impl Publication {
             expected.verify(&reading.file)?;
             if !same_file(&self.parent.metadata()?, &fs::metadata(&self.parent_path)?) {
                 return Err(io::Error::other("Published Wiki parent identity changed"));
+            }
+            if let Some(basis) = copy_basis {
+                basis.check()?;
             }
             Ok(())
         })();
@@ -928,6 +971,308 @@ pub(crate) mod tests {
         assert_eq!(
             fs::read(retained.join("wiki.json")).unwrap(),
             b"actual published candidate"
+        );
+    }
+
+    fn migration_fixture() -> (NativeFixture, PathBuf, PathBuf) {
+        let scratch = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../ProjectCentral/now/tmp");
+        fs::create_dir_all(&scratch).unwrap();
+        let fixture = NativeFixture::new_in(&scratch);
+        let source_parent = fixture.path().join("selected-source");
+        let target_parent = fixture.path().join("migration-target");
+        fs::create_dir(&source_parent).unwrap();
+        fs::create_dir(&target_parent).unwrap();
+        let source = source_parent.join("wiki.json");
+        let target = target_parent.join("wiki.json");
+        fs::write(&source, b"original selected migration source").unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).unwrap();
+        (fixture, source, target)
+    }
+
+    #[test]
+    fn actual_migration_source_parent_replacement_refuses_before_candidate_bytes() {
+        let (fixture, source, target) = migration_fixture();
+        let selected_parent = source.parent().unwrap().to_path_buf();
+        let retained_parent = fixture.path().join("retained-selected-parent");
+        let observer_retained = retained_parent.clone();
+        let observer_source = source.clone();
+        let observed = std::sync::Arc::new(std::sync::Mutex::new(None::<PathBuf>));
+        let observed_stage = observed.clone();
+        ON_STAGE_CREATED.with(|slot| {
+            *slot.borrow_mut() = Some(Box::new(move |stage| {
+                fs::rename(&selected_parent, &observer_retained).unwrap();
+                fs::create_dir(&selected_parent).unwrap();
+                fs::write(&observer_source, b"foreign source at requested parent").unwrap();
+                *observed_stage.lock().unwrap() = Some(stage.to_path_buf());
+            }));
+        });
+        let owner = Publication::acquire(&target).unwrap();
+        let error = owner.copy_new(&source).unwrap_err();
+        assert!(uncertainty(&error).is_none());
+        assert!(
+            error.to_string().contains("source parent identity changed"),
+            "{error}"
+        );
+        assert!(!target.exists());
+        let stage = observed.lock().unwrap().clone().unwrap();
+        assert_eq!(fs::read(&stage).unwrap(), b"");
+        drop(owner);
+        assert_eq!(fs::read(&stage).unwrap(), b"");
+        assert_eq!(
+            fs::read(retained_parent.join("wiki.json")).unwrap(),
+            b"original selected migration source"
+        );
+        assert_eq!(
+            fs::read(&source).unwrap(),
+            b"foreign source at requested parent"
+        );
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn actual_migration_requested_parent_alias_retarget_refuses_before_candidate_bytes() {
+        let (fixture, source, target) = migration_fixture();
+        let foreign_parent = fixture.path().join("foreign-parent");
+        fs::create_dir(&foreign_parent).unwrap();
+        let foreign_source = foreign_parent.join("wiki.json");
+        fs::write(&foreign_source, b"foreign source behind retargeted alias").unwrap();
+        let selected_alias = fixture.path().join("selected-parent-alias");
+        std::os::unix::fs::symlink(source.parent().unwrap(), &selected_alias).unwrap();
+        let requested_source = selected_alias.join("wiki.json");
+        let observed = std::sync::Arc::new(std::sync::Mutex::new(None::<PathBuf>));
+        let observed_stage = observed.clone();
+        let observer_alias = selected_alias.clone();
+        ON_STAGE_CREATED.with(|slot| {
+            *slot.borrow_mut() = Some(Box::new(move |stage| {
+                fs::remove_file(&observer_alias).unwrap();
+                std::os::unix::fs::symlink(&foreign_parent, &observer_alias).unwrap();
+                *observed_stage.lock().unwrap() = Some(stage.to_path_buf());
+            }));
+        });
+        let owner = Publication::acquire(&target).unwrap();
+        let error = owner.copy_new(&requested_source).unwrap_err();
+        assert!(uncertainty(&error).is_none());
+        assert!(
+            error.to_string().contains("source parent identity changed"),
+            "{error}"
+        );
+        assert!(!target.exists());
+        let stage = observed.lock().unwrap().clone().unwrap();
+        assert_eq!(fs::read(&stage).unwrap(), b"");
+        drop(owner);
+        assert_eq!(
+            fs::read(&source).unwrap(),
+            b"original selected migration source"
+        );
+        assert_eq!(
+            fs::read(&foreign_source).unwrap(),
+            b"foreign source behind retargeted alias"
+        );
+        assert_eq!(
+            fs::read(&requested_source).unwrap(),
+            b"foreign source behind retargeted alias"
+        );
+        assert_eq!(fs::read(&stage).unwrap(), b"");
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn actual_migration_unchanged_source_parent_alias_preserves_source_and_privacy() {
+        let (fixture, source, target) = migration_fixture();
+        let selected_alias = fixture.path().join("selected-parent-alias");
+        std::os::unix::fs::symlink(source.parent().unwrap(), &selected_alias).unwrap();
+        let owner = Publication::acquire(&target).unwrap();
+        owner.copy_new(&selected_alias.join("wiki.json")).unwrap();
+        assert_eq!(
+            fs::read(&target).unwrap(),
+            b"original selected migration source"
+        );
+        assert_eq!(
+            fs::read(&source).unwrap(),
+            b"original selected migration source"
+        );
+        assert_eq!(fs::metadata(&target).unwrap().mode() & 0o7777, 0o600);
+        assert_eq!(fs::metadata(&source).unwrap().mode() & 0o7777, 0o600);
+        assert_ne!(
+            fs::metadata(&source).unwrap().ino(),
+            fs::metadata(&target).unwrap().ino()
+        );
+        drop(owner);
+        assert_eq!(
+            fs::read(&source).unwrap(),
+            b"original selected migration source"
+        );
+        assert_eq!(
+            fs::read(&target).unwrap(),
+            b"original selected migration source"
+        );
+    }
+
+    #[test]
+    fn actual_migration_source_parent_replacement_after_publication_retains_completed_copy() {
+        let (fixture, source, target) = migration_fixture();
+        let retained_parent = fixture.path().join("retained-selected-parent");
+        let observer_retained = retained_parent.clone();
+        let observer_source = source.clone();
+        let selected_parent = source.parent().unwrap().to_path_buf();
+        after_publication(move |_| {
+            fs::rename(&selected_parent, &observer_retained).unwrap();
+            fs::create_dir(&selected_parent).unwrap();
+            fs::write(&observer_source, b"foreign source at requested parent").unwrap();
+        });
+        let owner = Publication::acquire(&target).unwrap();
+        let error = owner.copy_new(&source).unwrap_err();
+        let failure = uncertainty(&error)
+            .expect("the real destination rename must remain attributable");
+        assert!(failure.published);
+        assert_eq!(
+            failure.source_path,
+            fs::canonicalize(target.parent().unwrap())
+                .unwrap()
+                .join("wiki.json")
+        );
+        assert_eq!(failure.cause.kind(), io::ErrorKind::AlreadyExists);
+        assert!(failure
+            .cause
+            .to_string()
+            .contains("source parent identity changed"));
+        assert!(!failure.cause.to_string().contains("source unchanged"));
+        assert_eq!(
+            fs::read(&target).unwrap(),
+            b"original selected migration source"
+        );
+        assert_eq!(
+            fs::read(&source).unwrap(),
+            b"foreign source at requested parent"
+        );
+        assert_eq!(
+            fs::read(retained_parent.join("wiki.json")).unwrap(),
+            b"original selected migration source"
+        );
+        drop(owner);
+        assert_eq!(
+            fs::read(&target).unwrap(),
+            b"original selected migration source"
+        );
+    }
+
+    #[test]
+    fn actual_migration_requested_parent_alias_retarget_after_publication_retains_completed_copy() {
+        let (fixture, source, target) = migration_fixture();
+        let foreign_parent = fixture.path().join("foreign-parent");
+        fs::create_dir(&foreign_parent).unwrap();
+        let foreign_source = foreign_parent.join("wiki.json");
+        fs::write(&foreign_source, b"foreign source behind retargeted alias").unwrap();
+        let selected_alias = fixture.path().join("selected-parent-alias");
+        std::os::unix::fs::symlink(source.parent().unwrap(), &selected_alias).unwrap();
+        let requested_source = selected_alias.join("wiki.json");
+        let observer_alias = selected_alias.clone();
+        after_publication(move |_| {
+            fs::remove_file(&observer_alias).unwrap();
+            std::os::unix::fs::symlink(&foreign_parent, &observer_alias).unwrap();
+        });
+        let owner = Publication::acquire(&target).unwrap();
+        let error = owner.copy_new(&requested_source).unwrap_err();
+        let failure = uncertainty(&error)
+            .expect("alias drift after the actual destination effect is uncertain");
+        assert!(failure.published);
+        assert_eq!(
+            failure.source_path,
+            fs::canonicalize(target.parent().unwrap())
+                .unwrap()
+                .join("wiki.json")
+        );
+        assert!(failure
+            .cause
+            .to_string()
+            .contains("source parent identity changed"));
+        assert_eq!(
+            fs::read(&source).unwrap(),
+            b"original selected migration source"
+        );
+        assert_eq!(
+            fs::read(&foreign_source).unwrap(),
+            b"foreign source behind retargeted alias"
+        );
+        assert_eq!(
+            fs::read(&requested_source).unwrap(),
+            b"foreign source behind retargeted alias"
+        );
+        drop(owner);
+        assert_eq!(
+            fs::read(&target).unwrap(),
+            b"original selected migration source"
+        );
+    }
+
+    #[test]
+    fn actual_migration_source_file_change_after_publication_retains_completed_snapshot() {
+        let (_fixture, source, target) = migration_fixture();
+        let observer_source = source.clone();
+        after_publication(move |_| {
+            fs::write(
+                &observer_source,
+                b"subsequent source authored after destination effect",
+            )
+            .unwrap();
+        });
+        let owner = Publication::acquire(&target).unwrap();
+        let error = owner.copy_new(&source).unwrap_err();
+        let failure = uncertainty(&error)
+            .expect("the completed copy must not be retried over a changed source");
+        assert!(failure.published);
+        assert_eq!(
+            failure.source_path,
+            fs::canonicalize(target.parent().unwrap())
+                .unwrap()
+                .join("wiki.json")
+        );
+        assert!(failure
+            .cause
+            .to_string()
+            .contains("source identity or contents changed"));
+        assert_eq!(
+            fs::read(&source).unwrap(),
+            b"subsequent source authored after destination effect"
+        );
+        drop(owner);
+        assert_eq!(
+            fs::read(&target).unwrap(),
+            b"original selected migration source"
+        );
+    }
+
+    #[test]
+    fn actual_migration_missing_source_parent_after_publication_retains_original_errno() {
+        let (fixture, source, target) = migration_fixture();
+        let retained_parent = fixture.path().join("retained-selected-parent");
+        let observer_retained = retained_parent.clone();
+        let selected_parent = source.parent().unwrap().to_path_buf();
+        after_publication(move |_| {
+            fs::rename(&selected_parent, &observer_retained).unwrap();
+        });
+        let owner = Publication::acquire(&target).unwrap();
+        let error = owner.copy_new(&source).unwrap_err();
+        let failure = uncertainty(&error)
+            .expect("the completed destination and original OS cause must survive");
+        assert!(failure.published);
+        assert_eq!(
+            failure.source_path,
+            fs::canonicalize(target.parent().unwrap())
+                .unwrap()
+                .join("wiki.json")
+        );
+        assert_eq!(failure.cause.kind(), io::ErrorKind::NotFound);
+        assert_eq!(failure.cause.raw_os_error(), Some(libc::ENOENT));
+        assert!(!source.exists());
+        assert_eq!(
+            fs::read(retained_parent.join("wiki.json")).unwrap(),
+            b"original selected migration source"
+        );
+        drop(owner);
+        assert_eq!(
+            fs::read(&target).unwrap(),
+            b"original selected migration source"
         );
     }
 

@@ -136,11 +136,17 @@ fn compatibility_command_uses_native_owner_for_creation_noop_and_conflict() {
             "action",
             "run",
             "machine.declaration",
-            "{}",
+            r#"{"role":"current"}"#,
         ])
         .output()
         .unwrap();
-    assert!(read.status.success());
+    assert!(
+        read.status.success(),
+        "machine.declaration status: {}; stdout: {}; stderr: {}",
+        read.status,
+        String::from_utf8_lossy(&read.stdout),
+        String::from_utf8_lossy(&read.stderr)
+    );
     let read: Value = serde_json::from_slice(&read.stdout).unwrap();
     assert_eq!(
         read["data"]["declaration"]["bindings"],

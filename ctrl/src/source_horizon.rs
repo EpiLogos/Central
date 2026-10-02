@@ -364,6 +364,17 @@ fn excluded_relative(relative: &str, excluded: &str) -> bool {
     relative == excluded || relative.starts_with(&format!("{excluded}/"))
 }
 
+/// These two exact canonical paths carry the native Wiki publisher's stable
+/// physical lock, not WikiDocument content. Other authored lock files and
+/// explicitly declared source relations retain their existing meaning.
+pub(crate) fn is_canonical_wiki_publication_lock(relative: &Path) -> bool {
+    matches!(
+        relative.to_str(),
+        Some("Control/agents/wiki/.wiki.json.publication.lock")
+            | Some("ProjectCentral/agents/wiki/.wiki.json.publication.lock")
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn insert_tree_bindings(
     world_root: &Path,
@@ -383,9 +394,10 @@ pub(crate) fn insert_tree_bindings(
         let relative = normalize_relative(file.strip_prefix(world_root).map_err(|_| {
             io::Error::new(io::ErrorKind::InvalidData, "source escaped its world root")
         })?);
-        if exclude
-            .iter()
-            .any(|excluded| excluded_relative(&relative, excluded))
+        if is_canonical_wiki_publication_lock(Path::new(&relative))
+            || exclude
+                .iter()
+                .any(|excluded| excluded_relative(&relative, excluded))
         {
             continue;
         }

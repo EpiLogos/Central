@@ -999,3 +999,93 @@ fn world_map_exposes_the_pasu_identity_anchor_and_validates_the_subject_ref() {
     assert!(map.control.identity.present);
     assert_eq!(map.control.identity.ground_relations_subject_ref, None);
 }
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn native_wiki_publication_locks_stay_material_and_do_not_become_sources() {
+    use central_ctrl::{control_source_bindings, ensure_root_federation, project_source_bindings};
+    use std::os::unix::fs::MetadataExt;
+
+    // Both lock files must come from the actual native publisher. A change to
+    // its naming or lifecycle cannot be hidden by manufacturing test locks.
+    let temp = healthy_ground("native-publication-locks");
+    let root = temp.path();
+    let project = root.join("Work/garden");
+    let root_wiki = root.join(ROOT_WIKI_SOURCE);
+    let project_wiki = project.join(central_ctrl::WIKI_SOURCE);
+    let locks = [
+        root_wiki.with_file_name(".wiki.json.publication.lock"),
+        project_wiki.with_file_name(".wiki.json.publication.lock"),
+    ];
+    let lock_basis = locks.map(|path| {
+        let metadata = fs::symlink_metadata(&path).unwrap();
+        assert!(metadata.is_file());
+        assert_eq!(metadata.nlink(), 1);
+        let bytes = fs::read(&path).unwrap();
+        (path, metadata.dev(), metadata.ino(), bytes)
+    });
+    let control_before = control_source_bindings(root).unwrap();
+    let project_before = project_source_bindings(&project).unwrap();
+    assert_eq!(control_before.len(), 3);
+    assert_eq!(project_before.len(), 1);
+    assert!(control_before
+        .iter()
+        .all(|source| !source.path.ends_with(".publication.lock")));
+    assert!(project_before
+        .iter()
+        .all(|source| !source.path.ends_with(".publication.lock")));
+    let map_before = map_world(root).unwrap();
+    assert_eq!(map_before.control.source_bindings, control_before.len());
+    assert_eq!(map_before.control.agent_wiki.sources, 1);
+    let projection_before = map_project_world(root, "garden").unwrap();
+    assert_eq!(projection_before.sources.bindings, project_before.len());
+    assert_eq!(projection_before.project.projectcentral.agent_wiki.sources, 1);
+
+    // Publication replay and both native reads preserve the actual source and
+    // the stable physical lock. They neither recreate nor remove the lock.
+    let before = ground_fingerprint(root);
+    let wiki_modified = fs::metadata(&root_wiki).unwrap().modified().unwrap();
+    ensure_root_federation(root, Some("central:wiki:project:garden")).unwrap();
+    assert_eq!(control_source_bindings(root).unwrap(), control_before);
+    assert_eq!(project_source_bindings(&project).unwrap(), project_before);
+    assert_eq!(map_world(root).unwrap(), map_before);
+    assert_eq!(map_project_world(root, "garden").unwrap(), projection_before);
+    assert_eq!(ground_fingerprint(root), before);
+    assert_eq!(
+        fs::metadata(&root_wiki).unwrap().modified().unwrap(),
+        wiki_modified
+    );
+    for (path, device, inode, bytes) in lock_basis {
+        let metadata = fs::symlink_metadata(&path).unwrap();
+        assert_eq!((metadata.dev(), metadata.ino()), (device, inode));
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+
+    // Authored locks, a different publisher-looking basename and the same
+    // basename in a noncanonical subdirectory remain normal source material.
+    for (world_root, wiki) in [(root, root_wiki), (project.as_path(), project_wiki)] {
+        let wiki_dir = wiki.parent().unwrap();
+        let files = [
+            wiki_dir.join("authored.lock"),
+            wiki_dir.join(".other.json.publication.lock"),
+            wiki_dir.join("notes/.wiki.json.publication.lock"),
+        ];
+        fs::create_dir_all(wiki_dir.join("notes")).unwrap();
+        for source in files {
+            fs::write(&source, "authored retained lockfile source\n").unwrap();
+            let expected = source.strip_prefix(world_root).unwrap().to_str().unwrap();
+            let bindings = if world_root == root {
+                control_source_bindings(world_root).unwrap()
+            } else {
+                project_source_bindings(world_root).unwrap()
+            };
+            assert!(bindings.iter().any(|binding| binding.path == expected));
+        }
+    }
+    let map = map_world(root).unwrap();
+    assert_eq!(map.control.source_bindings, control_before.len() + 3);
+    assert_eq!(map.control.agent_wiki.sources, 4);
+    let projection = map_project_world(root, "garden").unwrap();
+    assert_eq!(projection.sources.bindings, project_before.len() + 3);
+    assert_eq!(projection.project.projectcentral.agent_wiki.sources, 4);
+}
