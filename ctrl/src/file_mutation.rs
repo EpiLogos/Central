@@ -2034,15 +2034,24 @@ mod record_publication_tests {
         assert_eq!(reading["proposal"]["return_ref"], reference); assert_eq!(reading["proposal"]["status"], "pending");
         assert_eq!(fs::read_to_string(project.join("ProjectCentral/agents/wiki/notes.md")).unwrap(), body);
     }
-    fn fail_actual_accepted_return(root: PathBuf, restored: Arc<std::sync::Mutex<Option<RestoreMode>>>) {
+    fn fail_actual_accepted_return(root: PathBuf, reference: String, source: String,
+        restored: Arc<std::sync::Mutex<Option<RestoreMode>>>) {
         at(RecordCheckpoint::AfterPublish, move |target| {
             let is_record = target.parent() == Some(root.join(".central/source-returns").as_path());
-            let accepted = is_record && serde_json::from_slice::<Value>(&fs::read(target).unwrap()).unwrap()["status"] == "accepted";
+            let accepted = if is_record {
+                let actual: Value = serde_json::from_slice(&fs::read(target).unwrap()).unwrap();
+                assert_eq!(actual["return_ref"], reference, "actual published record belongs to this native Return");
+                assert_eq!(actual["source_ref"], source, "actual published record retains the native Source");
+                if actual["status"] == "accepted" { true } else {
+                    assert_eq!(actual["status"], "applying", "only the prior native applying publication may precede acceptance");
+                    false
+                }
+            } else { false };
             if accepted {
                 let restore = RestoreMode::new(target.to_path_buf());
                 fs::set_permissions(target, fs::Permissions::from_mode(0)).unwrap();
                 *restored.lock().unwrap() = Some(restore);
-            } else { fail_actual_accepted_return(root, restored); }
+            } else { fail_actual_accepted_return(root, reference, source, restored); }
         });
     }
     #[test]
@@ -2056,11 +2065,21 @@ mod record_publication_tests {
         assert!(proposal.ok); let data = proposal.data.unwrap();
         let reference = data["proposal"]["return_ref"].as_str().unwrap().to_owned();
         let restored = Arc::new(std::sync::Mutex::new(None));
-        fail_actual_accepted_return(project.clone(), restored.clone());
+        // The existing physical publisher reports canonical target coordinates;
+        // this fixture retains a lexical CARGO_MANIFEST_DIR/../ Run-space path.
+        let physical_project = fs::canonicalize(&project).unwrap();
+        fail_actual_accepted_return(physical_project.clone(), reference.clone(), source.clone(), restored.clone());
         let failed = native_action(&fixture.root, "projectcentral.source.return_accept", json!({
             "project":"Proof","return_ref":reference,"expected_revision":revision,
             "acceptance":"human-accepted","accepted_by_ref":"human:native-fixture"
         }));
+        let record = restored.lock().unwrap().as_ref()
+            .expect("the actual accepted-record checkpoint must have changed its owned file permissions").path.clone();
+        assert_eq!(record.parent(), Some(physical_project.join(".central/source-returns").as_path()));
+        assert_eq!(fs::metadata(&record).unwrap().mode() & 0o777, 0);
+        let oracle = File::open(&record).unwrap_err();
+        assert_eq!(oracle.kind(), io::ErrorKind::PermissionDenied);
+        assert!(oracle.raw_os_error().is_some(), "genuine native OS read refusal must retain errno");
         assert!(!failed.ok); assert_eq!(failed.status, ResultStatus::PartialCompletion);
         let error = failed.error.unwrap(); assert_eq!(error.code, "central.publication_uncertain");
         let details = error.details.as_ref().unwrap(); assert_eq!(details["record_publication"]["published"], true);
@@ -2069,8 +2088,6 @@ mod record_publication_tests {
         let actual = crate::world_source::read_world_source(&project, &source).unwrap();
         assert_eq!(actual.content, "after native return");
         assert_eq!(details["prior_owner_observation"]["revision_observation"], actual.revision.revision);
-        let record = restored.lock().unwrap().as_ref().unwrap().path.clone();
-        let oracle = File::open(&record).unwrap_err();
         assert_eq!(details["record_publication"]["cause"]["raw_os_error"], json!(oracle.raw_os_error()));
         assert_eq!(oracle.kind(), io::ErrorKind::PermissionDenied);
         assert!(!serde_json::to_string(&error).unwrap().contains("after native return"));
