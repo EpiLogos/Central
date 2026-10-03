@@ -49,7 +49,7 @@ def run(binary: str) -> dict:
         def invoke(action, value):
             # Regular temporary descriptors avoid inherited-pipe EOF dependency.
             # Timeout owns/reaps the single native ctrl child; this path invokes no provider.
-            with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+            with tempfile.TemporaryFile(dir=root) as stdout, tempfile.TemporaryFile(dir=root) as stderr:
                 completed = subprocess.run(argv(action,value),env=environment,stdout=stdout,stderr=stderr,
                                            timeout=20,check=False)
                 assert os.fstat(stdout.fileno()).st_size <= CAPTURE, "actual stdout exceeds proof capture profile"
@@ -71,7 +71,7 @@ def run(binary: str) -> dict:
         reader, writer = os.pipe()
         os.close(reader)
         try:
-            with tempfile.TemporaryFile() as stderr:
+            with tempfile.TemporaryFile(dir=root) as stderr:
                 lost = subprocess.run(argv("central.receiving.submit",original),env=environment,
                                       stdout=writer,stderr=stderr,timeout=20,check=False)
                 assert os.fstat(stderr.fileno()).st_size <= CAPTURE
