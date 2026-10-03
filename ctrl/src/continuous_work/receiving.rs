@@ -306,18 +306,29 @@ pub mod native_inclusion_fixture {
     }
     impl HeldNode {
         fn open(path: &Path, directory: bool) -> io::Result<Self> {
-            let flags = libc::O_NOFOLLOW | libc::O_NONBLOCK
-                | if directory { libc::O_DIRECTORY } else { 0 };
-            let file = OpenOptions::new().read(true).custom_flags(flags).open(path)?;
+            let flags =
+                libc::O_NOFOLLOW | libc::O_NONBLOCK | if directory { libc::O_DIRECTORY } else { 0 };
+            let file = OpenOptions::new()
+                .read(true)
+                .custom_flags(flags)
+                .open(path)?;
             let metadata = file.metadata()?;
             if metadata.uid() != unsafe { libc::geteuid() }
                 || metadata.is_dir() != directory
                 || (!directory && (!metadata.is_file() || metadata.nlink() != 1))
             {
-                return Err(invalid("fixture node must be held, owned and of its declared physical type"));
+                return Err(invalid(
+                    "fixture node must be held, owned and of its declared physical type",
+                ));
             }
-            let node = Self { path: path.to_owned(), file, device: metadata.dev(),
-                inode: metadata.ino(), original_mode: metadata.mode() & 0o7777, directory };
+            let node = Self {
+                path: path.to_owned(),
+                file,
+                device: metadata.dev(),
+                inode: metadata.ino(),
+                original_mode: metadata.mode() & 0o7777,
+                directory,
+            };
             node.recheck()?;
             Ok(node)
         }
@@ -326,22 +337,28 @@ pub mod native_inclusion_fixture {
             let named = fs::symlink_metadata(&self.path)?;
             if named.file_type().is_symlink()
                 || [&held, &named].iter().any(|metadata| {
-                    metadata.dev() != self.device || metadata.ino() != self.inode
+                    metadata.dev() != self.device
+                        || metadata.ino() != self.inode
                         || metadata.uid() != unsafe { libc::geteuid() }
                         || metadata.is_dir() != self.directory
                         || (!self.directory && (!metadata.is_file() || metadata.nlink() != 1))
                 })
             {
-                return Err(io::Error::other("owned fixture node lost physical affiliation; no restore or cleanup"));
+                return Err(io::Error::other(
+                    "owned fixture node lost physical affiliation; no restore or cleanup",
+                ));
             }
             Ok(())
         }
         fn chmod(&self, mode: u32) -> io::Result<()> {
             self.recheck()?;
-            self.file.set_permissions(fs::Permissions::from_mode(mode))?;
+            self.file
+                .set_permissions(fs::Permissions::from_mode(mode))?;
             self.recheck()?;
             if self.file.metadata()?.mode() & 0o7777 != mode {
-                return Err(io::Error::other("actual fixture permission change was not observed"));
+                return Err(io::Error::other(
+                    "actual fixture permission change was not observed",
+                ));
             }
             Ok(())
         }
@@ -357,7 +374,9 @@ pub mod native_inclusion_fixture {
             file.take(maximum + 1).read_to_end(&mut bytes)?;
             self.recheck()?;
             if bytes.len() as u64 > maximum || bytes.len() as u64 != self.file.metadata()?.len() {
-                return Err(io::Error::other("fixture file changed during bounded native read"));
+                return Err(io::Error::other(
+                    "fixture file changed during bounded native read",
+                ));
             }
             Ok(bytes)
         }
@@ -390,8 +409,11 @@ pub mod native_inclusion_fixture {
         }
         pub fn finish(mut self) -> io::Result<()> {
             let restoration = self.restore();
-            let observation = self.fired.borrow_mut().take().unwrap_or_else(||
-                Err(io::Error::other("native include never reached the declared physical checkpoint")));
+            let observation = self.fired.borrow_mut().take().unwrap_or_else(|| {
+                Err(io::Error::other(
+                    "native include never reached the declared physical checkpoint",
+                ))
+            });
             let fired = match observation {
                 Ok(fired) => fired,
                 Err(error) => {
@@ -415,8 +437,12 @@ pub mod native_inclusion_fixture {
                 "source_readonly_fault":self.source_readonly,"return_ref":self.admission.return_ref,
                 "include_request_sha256":self.admission.include_request_sha256});
             let path = self.root.path.join(OBSERVATION);
-            let mut file = OpenOptions::new().write(true).create_new(true).mode(0o600)
-                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(&path)?;
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(&path)?;
             let encoded = source::encoded(&facts)?;
             file.write_all(encoded.as_bytes())?;
             file.sync_all()?;
@@ -425,7 +451,9 @@ pub mod native_inclusion_fixture {
             if reading.bounded_bytes(16 * 1024)? != encoded.as_bytes()
                 || reading.file.metadata()?.mode() & 0o777 != 0o600
             {
-                return Err(io::Error::other("native fixture observation publication is unconfirmed"));
+                return Err(io::Error::other(
+                    "native fixture observation publication is unconfirmed",
+                ));
             }
             self.root.file.sync_all()?;
             Ok(())
@@ -433,7 +461,9 @@ pub mod native_inclusion_fixture {
     }
     impl Drop for NativeInclusionFixture {
         fn drop(&mut self) {
-            INCLUSION_PHYSICAL_CHECKPOINT.with(|slot| { slot.borrow_mut().take(); });
+            INCLUSION_PHYSICAL_CHECKPOINT.with(|slot| {
+                slot.borrow_mut().take();
+            });
             if !self.restored {
                 if let Err(error) = self.restore() {
                     // No best-effort success: retain the owned fixture and make
@@ -445,63 +475,104 @@ pub mod native_inclusion_fixture {
     }
     pub fn arm(args: &[String]) -> io::Result<NativeInclusionFixture> {
         if unsafe { libc::geteuid() } == 0 {
-            return Err(invalid("native EACCES fixture requires an actual nonroot uid"));
+            return Err(invalid(
+                "native EACCES fixture requires an actual nonroot uid",
+            ));
         }
-        if args.len() != 7 || args[0] != "--json" || args[1] != "--root"
-            || args[3] != "action" || args[4] != "run" || args[5] != "central.receiving.include"
+        if args.len() != 7
+            || args[0] != "--json"
+            || args[1] != "--root"
+            || args[3] != "action"
+            || args[4] != "run"
+            || args[5] != "central.receiving.include"
         {
             return Err(invalid("selected native fixture requires the exact explicit-root receiving.include CLI command"));
         }
         let locator = Path::new(&args[2]);
         if !locator.is_absolute() || fs::canonicalize(locator)? != locator {
-            return Err(invalid("native fixture root must be the explicit canonical physical directory"));
+            return Err(invalid(
+                "native fixture root must be the explicit canonical physical directory",
+            ));
         }
         let root = Rc::new(HeldNode::open(locator, true)?);
         if root.original_mode & 0o077 != 0 {
-            return Err(invalid("native fixture root must be private to its owned uid"));
+            return Err(invalid(
+                "native fixture root must be private to its owned uid",
+            ));
         }
         let control = HeldNode::open(&locator.join(CONTROL), false)?;
         if control.original_mode != 0o600 {
-            return Err(invalid("native fixture admission must be an owned mode0600 regular file"));
+            return Err(invalid(
+                "native fixture admission must be an owned mode0600 regular file",
+            ));
         }
         let admission: Admission = serde_json::from_slice(&control.bounded_bytes(16 * 1024)?)?;
         if admission.schema != "central.fci06-native-admission/v1"
-            || !matches!(admission.mode.as_str(), "committed-ledger-denied" | "readonly-document-ledger-denied")
+            || !matches!(
+                admission.mode.as_str(),
+                "committed-ledger-denied" | "readonly-document-ledger-denied"
+            )
             || (admission.root_device, admission.root_inode) != (root.device, root.inode)
         {
-            return Err(invalid("native fixture mode/root admission does not match the held physical root"));
+            return Err(invalid(
+                "native fixture mode/root admission does not match the held physical root",
+            ));
         }
         let input: Value = serde_json::from_str(&args[6])?;
         if source::key(&serde_json::to_string(&input)?) != admission.include_request_sha256
-            || input["return_ref"] != admission.return_ref || input.get("project").is_some()
+            || input["return_ref"] != admission.return_ref
+            || input.get("project").is_some()
         {
-            return Err(invalid("native fixture requires the exact admitted include input and root scope"));
+            return Err(invalid(
+                "native fixture requires the exact admitted include input and root scope",
+            ));
         }
         let scope = Scope::resolve(locator, None)?;
-        let now = SystemTime::now().duration_since(UNIX_EPOCH)
-            .map_err(io::Error::other)?.as_secs();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(io::Error::other)?
+            .as_secs();
         let token = std::env::var("CENTRAL_NATIVE_TOKEN").ok();
-        let principal = authority::authenticate(&scope, token.as_deref(), "central.receiving.include",
-            input.get("expected_authority_revision").and_then(Value::as_str), now)?;
+        let principal = authority::authenticate(
+            &scope,
+            token.as_deref(),
+            "central.receiving.include",
+            input
+                .get("expected_authority_revision")
+                .and_then(Value::as_str),
+            now,
+        )?;
         principal.require_human()?;
         let record = checked(&scope, &input)?;
-        if record.status != "accepted" || target(&record)? != admission.source_ref
-            || record.review.as_ref().is_none_or(|review| review.disposition != "accepted"
-                || review.reviewer_ref != principal.principal_ref)
+        if record.status != "accepted"
+            || target(&record)? != admission.source_ref
+            || record.review.as_ref().is_none_or(|review| {
+                review.disposition != "accepted" || review.reviewer_ref != principal.principal_ref
+            })
         {
-            return Err(invalid("fixture must observe the actual accepted Return/reviewer before arming"));
+            return Err(invalid(
+                "fixture must observe the actual accepted Return/reviewer before arming",
+            ));
         }
         let reading = scope.read(&admission.source_ref)?;
         if reading.revision.revision != text(&input, "expected_source_revision")? {
-            return Err(invalid("native fixture source basis is stale before arming"));
+            return Err(invalid(
+                "native fixture source basis is stale before arming",
+            ));
         }
         let member = crate::source_safety::relative_member(&reading.source.path)?;
         let source = Rc::new(HeldNode::open(&scope.root.join(member), false)?);
         if (source.device, source.inode) != (admission.source_device, admission.source_inode)
-            || source::key(std::str::from_utf8(&source.bounded_bytes(crate::source_safety::MAX_SOURCE as u64)?)
-                .map_err(|error| invalid(error.to_string()))?) != admission.source_sha256
+            || source::key(
+                std::str::from_utf8(
+                    &source.bounded_bytes(crate::source_safety::MAX_SOURCE as u64)?,
+                )
+                .map_err(|error| invalid(error.to_string()))?,
+            ) != admission.source_sha256
         {
-            return Err(invalid("native fixture source physical identity/bytes changed before arming"));
+            return Err(invalid(
+                "native fixture source physical identity/bytes changed before arming",
+            ));
         }
         let ledger = Rc::new(HeldNode::open(&scope.root.join(AREA), true)?);
         if ledger.original_mode & 0o200 == 0 {
@@ -509,9 +580,21 @@ pub mod native_inclusion_fixture {
         }
         let fired = Rc::new(RefCell::new(None));
         let source_readonly = admission.mode == "readonly-document-ledger-denied";
-        let fixture = NativeInclusionFixture { root:Rc::clone(&root), ledger:Rc::clone(&ledger),
-            source, control, admission, fired:Rc::clone(&fired), source_readonly, restored:false };
-        if source_readonly { fixture.source.chmod(fixture.source.original_mode & !0o222)?; }
+        let fixture = NativeInclusionFixture {
+            root: Rc::clone(&root),
+            ledger: Rc::clone(&ledger),
+            source,
+            control,
+            admission,
+            fired: Rc::clone(&fired),
+            source_readonly,
+            restored: false,
+        };
+        if source_readonly {
+            fixture
+                .source
+                .chmod(fixture.source.original_mode & !0o222)?;
+        }
         let return_ref = fixture.admission.return_ref.clone();
         INCLUSION_PHYSICAL_CHECKPOINT.with(|slot| -> io::Result<()> {
             if slot.borrow().is_some() { return Err(invalid("native fixture checkpoint is already owned")); }
@@ -701,7 +784,11 @@ fn read_record(scope: &Scope, reference: &str) -> io::Result<(Received, String)>
     }
     Ok((record, source::revision(&raw)))
 }
-fn write(scope: &Scope, record: &Received, disposition: crate::file_mutation::RecordDisposition) -> io::Result<String> {
+fn write(
+    scope: &Scope,
+    record: &Received,
+    disposition: crate::file_mutation::RecordDisposition,
+) -> io::Result<String> {
     source::directories(&scope.root, Path::new(AREA))?;
     let raw = source::encoded(record)?;
     if raw.len() > crate::source_safety::MAX_SOURCE {
@@ -710,8 +797,10 @@ fn write(scope: &Scope, record: &Received, disposition: crate::file_mutation::Re
         ));
     }
     crate::file_mutation::atomic_record(
-        &scope.root, Path::new(&path(&record.return_ref)),
-        raw.as_bytes(), disposition,
+        &scope.root,
+        Path::new(&path(&record.return_ref)),
+        raw.as_bytes(),
+        disposition,
     )?;
     Ok(source::revision(&raw))
 }
@@ -762,8 +851,10 @@ fn next_sequence(scope: &Scope) -> io::Result<u64> {
         .checked_add(1)
         .ok_or_else(|| invalid("receiving sequence exhausted"))?;
     crate::file_mutation::atomic_record(
-        &scope.root, Path::new(&cursor_path),
-        &serde_json::to_vec(&json!({"schema":"central.receiving-cursor/v1","sequence":next}))?, crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+        &scope.root,
+        Path::new(&cursor_path),
+        &serde_json::to_vec(&json!({"schema":"central.receiving-cursor/v1","sequence":next}))?,
+        crate::file_mutation::RecordDisposition::ReplaceOrCreate,
     )?;
     Ok(next)
 }
@@ -929,9 +1020,21 @@ fn submit(scope: &Scope, input: &Value, principal: &Principal, now: u64) -> io::
         admit_contribution(scope, input, principal, &mut record)?;
     }
     record.sequence = next_sequence(scope)?;
-    let revision = write(scope, &record, crate::file_mutation::RecordDisposition::CreateNew).map_err(|error|
-        crate::file_mutation::record_owner_error_with_ref(error, "receiving.submit_after_cursor",
-            &record.return_ref, None, None, "cursor_acknowledged_return_record_unconfirmed"))?;
+    let revision = write(
+        scope,
+        &record,
+        crate::file_mutation::RecordDisposition::CreateNew,
+    )
+    .map_err(|error| {
+        crate::file_mutation::record_owner_error_with_ref(
+            error,
+            "receiving.submit_after_cursor",
+            &record.return_ref,
+            None,
+            None,
+            "cursor_acknowledged_return_record_unconfirmed",
+        )
+    })?;
     Ok(response(&record, &revision))
 }
 /// Evidence is retained from the actual scoped SourceRef at the supplied
@@ -1152,7 +1255,11 @@ fn review(scope: &Scope, input: &Value, principal: &Principal, now: u64) -> io::
         record.acknowledgement = Some(json!({"principal_ref":principal.principal_ref,
             "authority_ref":principal.authority_ref,"authority_revision":principal.authority_revision,
             "recorded_at_unix_seconds":now}));
-        let revision = write(scope, &record, crate::file_mutation::RecordDisposition::ReplaceOrCreate)?;
+        let revision = write(
+            scope,
+            &record,
+            crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+        )?;
         return Ok(response(&record, &revision));
     }
     if !matches!(
@@ -1172,7 +1279,11 @@ fn review(scope: &Scope, input: &Value, principal: &Principal, now: u64) -> io::
         }
         .into();
         record.review = None;
-        let revision = write(scope, &record, crate::file_mutation::RecordDisposition::ReplaceOrCreate)?;
+        let revision = write(
+            scope,
+            &record,
+            crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+        )?;
         return Ok(response(&record, &revision));
     }
     let note = bounded_text(input, "note", BOUNDED_TEXT)?;
@@ -1220,7 +1331,11 @@ fn review(scope: &Scope, input: &Value, principal: &Principal, now: u64) -> io::
         answer,
     });
     record.status = disposition.into();
-    let revision = write(scope, &record, crate::file_mutation::RecordDisposition::ReplaceOrCreate)?;
+    let revision = write(
+        scope,
+        &record,
+        crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+    )?;
     Ok(response(&record, &revision))
 }
 fn include(
@@ -1295,7 +1410,11 @@ fn include(
     record.inclusion_request = Some(request.clone());
     record.status = "including".into();
     record.last_error = None;
-    let including_revision = write(scope, &record, crate::file_mutation::RecordDisposition::ReplaceOrCreate)?;
+    let including_revision = write(
+        scope,
+        &record,
+        crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+    )?;
     let result = documents::mutate_reviewed(scope, &request, &record.author, principal, now);
     match result {
         Ok(result) => {
@@ -1327,7 +1446,11 @@ fn include(
                 InclusionCheckpoint::BeforeLedgerUpdate,
                 &scope.root.join(AREA),
             );
-            let revision = match write(scope, &record, crate::file_mutation::RecordDisposition::ReplaceOrCreate) {
+            let revision = match write(
+                scope,
+                &record,
+                crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+            ) {
                 Ok(revision) => revision,
                 Err(error) => {
                     return Err(InclusionIncomplete {
@@ -1374,7 +1497,11 @@ fn include(
                             InclusionCheckpoint::BeforeLedgerUpdate,
                             &scope.root.join(AREA),
                         );
-                        let revision = match write(scope, &record, crate::file_mutation::RecordDisposition::ReplaceOrCreate) {
+                        let revision = match write(
+                            scope,
+                            &record,
+                            crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+                        ) {
                             Ok(revision) => revision,
                             Err(secondary) => {
                                 return Err(InclusionIncomplete {
@@ -1414,7 +1541,11 @@ fn include(
                 InclusionCheckpoint::BeforeLedgerUpdate,
                 &scope.root.join(AREA),
             );
-            let (acknowledged_update, receiving_write_error) = match write(scope, &record, crate::file_mutation::RecordDisposition::ReplaceOrCreate) {
+            let (acknowledged_update, receiving_write_error) = match write(
+                scope,
+                &record,
+                crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+            ) {
                 Ok(revision) => (Some(revision), None),
                 Err(secondary) => (None, Some(secondary)),
             };
@@ -1493,7 +1624,11 @@ fn realise(
         "standing":"owner-reported-realisation-recorded-by-accepting-human"}));
     record.status = "included".into();
     record.last_error = None;
-    let revision = write(scope, &record, crate::file_mutation::RecordDisposition::ReplaceOrCreate)?;
+    let revision = write(
+        scope,
+        &record,
+        crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+    )?;
     Ok(response(&record, &revision))
 }
 fn list(scope: &Scope, input: &Value) -> io::Result<Value> {

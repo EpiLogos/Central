@@ -1955,10 +1955,23 @@ mod record_publication_tests {
         let fixture = Fixture::new(); let source_fixture = Fixture::new();
         crate::root::initialize_central(&fixture.root).unwrap();
         crate::root::initialize_central(&source_fixture.root).unwrap();
-        let backend = crate::file_map_backend::Backend::new(&source_fixture.root);
+        // The direct backend expects a physical owner path, as the public
+        // file-map Action already supplies. The native Run fixture keeps its
+        // lexical ctrl/../ location for cleanup; both spellings own one directory.
+        let physical_source = fs::canonicalize(&source_fixture.root).unwrap();
+        assert_ne!(physical_source, source_fixture.root);
+        let lexical_metadata = fs::symlink_metadata(&source_fixture.root).unwrap();
+        let physical_metadata = fs::symlink_metadata(&physical_source).unwrap();
+        assert!(lexical_metadata.is_dir() && physical_metadata.is_dir());
+        assert_eq!((lexical_metadata.dev(), lexical_metadata.ino()),
+            (physical_metadata.dev(), physical_metadata.ino()));
+        let refused = crate::file_map::safe_member(&source_fixture.root, "records", true).unwrap_err();
+        assert_eq!(refused.kind(), io::ErrorKind::InvalidInput);
+        let backend = crate::file_map_backend::Backend::new(&physical_source);
         let version = backend.version().expect("actual native bkmr executable prerequisite");
         assert_eq!(version.trim(), format!("bkmr {}", crate::file_map_backend::VERSION));
         backend.prepare().unwrap();
+        assert_eq!(fs::canonicalize(backend.db()).unwrap(), backend.db());
         backend.run(&["add".into(), "https://example.invalid/native-backup".into(), "native".into(),
             "--title".into(), "Actual retained bookmark".into(), "--description".into(), "Native backup provenance".into(),
             "--no-web".into(), "--no-embed".into()]).unwrap();
