@@ -1418,10 +1418,16 @@ mod incomplete_inclusion_tests {
         }).collect()
     }
     fn move_basis(world: &World, document: &Value) -> Value {
-        world.call("document_mutate", &json!({"source_ref":document["source"]["ref"],
+        let mutation = world.call("document_mutate", &json!({"source_ref":document["source"]["ref"],
             "document_id":document["document_id"],"expected_revision":document["revision"]["revision"],
             "request_id":"human:actual-basis-moved","operation":"entry.add","entry_id":"entry:newer",
-            "contribution_id":"part:newer","html":"<p>actual newer human activity</p>"}), HUMAN).unwrap()
+            "contribution_id":"part:newer","html":"<p>actual newer human activity</p>"}), HUMAN).unwrap();
+        let current = world.document_read(document);
+        assert_eq!(mutation["document"], current["document"]);
+        assert_eq!(mutation["revision"], current["revision"]);
+        assert_eq!(mutation["operation_receipt"]["status"], "committed");
+        assert_eq!(mutation["operation_receipt"]["revision"], current["revision"]["revision"]);
+        current
     }
     fn interrupted(world: &World, document: &Value, accepted: &Value) -> io::Error {
         let target = world.root.join(document["source"]["path"].as_str().unwrap());
