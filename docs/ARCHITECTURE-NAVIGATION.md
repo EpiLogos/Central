@@ -2,7 +2,7 @@
 role: architecture
 standing: agent-inference
 scope: Central native operations and composed O:I consumer boundaries
-updated: 2026-10-02
+updated: 2026-10-03
 ---
 # Central architecture navigation
 
@@ -188,3 +188,31 @@ It does not verify every world-map/context relation. Receiving recovery does
 not verify the different ordinary NOW operation. Keep those mapping questions with O:I #65/#220's
 APD15/APD20 obligations, alongside current AIKit R4, Gateway/Factory consumer,
 ordinary Root Return/lifecycle and installed/human experience qualifications.
+
+## Publication recovery qualification — 3 October 2026
+
+The [native publication and interruption account](NATIVE-FILESYSTEM-READING.md#hosted-publication-and-interruption--3-october-2026)
+records Source `01af4e53d3d8a53f86b6d6e37f0fa365c501bdad` and independent
+Linux/macOS qualification of the physical publisher, ordinary owner recovery
+and selected Source Return/Receiving routes. Locate the public ordinary
+operations in [the recovery contract](NATIVE-ORDINARY-FILE-RECOVERY.md#actions),
+then `ctrl/src/file_mutation.rs`; Source edits and Returns remain owned by
+`ctrl/src/world_source.rs` and their native source operations. Physical
+publication, attributed history, semantic Source acceptance and human Return
+retain different owners and meanings.
+
+The [whole Verify run](https://github.com/EpiLogos/Central/actions/runs/37104764412)
+passes at the named tested/published tree. Its 22 default plus one mandatory
+BKMR case per host, real interruption/refusal controls and selected consumer
+assertions do not establish the whole campaign or installed personal World.
+The dated 2 October read/list, binding, World-disclosure and Receiving proofs
+above retain their original cuts and limits; this successor is not backdated.
+
+Repository documentation maintenance and workspace navigation remain different
+checks. The inherited workspace disposition retains 135 unresolved diagnostics:
+133 occurrences of 60 historical mirror reference strings and two QL references,
+with zero introduced by the preceding correction. Recover the actual sources
+or governed named-revision successors and actual QL-root availability, then
+replay the workspace check and unfamiliar-feature navigation. Preserve history;
+no fabricated mirrors, Source aliases or matrix standing upgrade closes R6.
+Source inventories and untouched bodies remain explicit uninspected coverage.

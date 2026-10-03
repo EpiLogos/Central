@@ -3,7 +3,7 @@ role: architecture
 standing: agent-inference
 scope: Central native filesystem material, relation-store qualification and World projection
 design_refs: []
-updated: 2026-10-02
+updated: 2026-10-03
 ---
 # Native Central filesystem reading
 
@@ -259,3 +259,43 @@ Actual failure after rename is typed uncertainty with the original cause and
 No universal exclusion of noncooperating filesystem writers or power-loss proof
 is claimed. Source-class, retrieval policy, writes into protected human ground,
 Source CAS and other owners' capacities remain separate and unchanged.
+
+## Hosted publication and interruption — 3 October 2026
+
+At `01af4e53d3d8a53f86b6d6e37f0fa365c501bdad`, the physical publisher above
+and the ordinary-file recovery owner have scoped independent hosted evidence.
+The [Verify run](https://github.com/EpiLogos/Central/actions/runs/37104764412)
+tested `dd1e278ac48276fe5aecd3b5c3219f205cacc021`; its full tree equals the
+published Source tree `f23381d08812a593bc136cf8ae9b520611ebec40`.
+
+Use [`central.files.history` and the recovery operations](NATIVE-ORDINARY-FILE-RECOVERY.md#actions)
+to inspect and reconcile the same owner history after interruption. The
+`file_mutation.rs` owner durably publishes pending evidence before ordinary
+file replacement and reconciles it through existing history. Three real killed
+child cases qualified precommit, postrename and changed-basis recovery on both
+Linux and macOS. A changed third-party basis remains unresolved until explicit
+fixture restoration permits recovery; the owner does not fabricate a Change
+from that external edit or resend the write. Two invalid child admissions
+actually refuse with exit 78 and empty stdout. The default Ctrl is unarmed;
+the separate qualification child alone selects `native-ordinary-interruption-child`.
+This boundary keeps test interruption control out of normal product operation.
+
+Each host passed 22 default native publication cases and one separately
+mandatory real BKMR 7.6.7 backup case: 23 definitions per host. The Source Return
+and ordinary-file assertion totals are observations, not extra unique cases.
+The independent audit and Parent qualification rehashed both uploaded archives,
+372 Source blobs/kinds/execute bits and six actual Ctrl/child/BKMR images.
+Mac's later lost-stdout Receiving case retained one submission and one receipt;
+its two single inclusion faults retain their actual IO or preflight cause.
+Simultaneous dual inclusion failure is not established by those cases.
+
+Provenance: Parent qualification SHA-256
+`dd70b7402dcc88eb20ddd81e55d15faaaffab7c5834f2de4b88382f558a86eec`;
+actual 23-definition raw join
+`32c7ef5cdb51f124156ed5227a4a26c27a5c715d65927e6112ed88960809c104`.
+Earlier `a620aced` durable-pending/Darwin-xattr failures and `964205` child-lint
+failures remain historical results, superseded only for the later replayed routes.
+No default unit-test executable bytes, per-case numeric admission/PID archive,
+global process census, live capture/RSS bound, personal installation, current
+Factory/Gateway/desktop consumer or human acceptance follows from this proof.
+The recorded Source/blob census is not deep inspection of every product body.
