@@ -1008,27 +1008,41 @@ fn request_and_contribution_shapes_stay_distinct_and_attribution_is_not_borrowed
     );
 }
 
-
 /// New lookup proofs use only native task scratch. Existing fixtures keep their
 /// own standing; no test allocates a personal World or new development checkout.
 struct ReceiptLookupWorld(PathBuf);
 impl ReceiptLookupWorld {
-    fn path(&self) -> &Path { &self.0 }
+    fn path(&self) -> &Path {
+        &self.0
+    }
 }
 impl Drop for ReceiptLookupWorld {
     fn drop(&mut self) {
         if let Err(error) = fs::remove_dir_all(&self.0) {
-            let message = format!("receiving lookup fixture cleanup {}: {error}", self.0.display());
-            if std::thread::panicking() { eprintln!("{message}"); } else { panic!("{message}"); }
+            let message = format!(
+                "receiving lookup fixture cleanup {}: {error}",
+                self.0.display()
+            );
+            if std::thread::panicking() {
+                eprintln!("{message}");
+            } else {
+                panic!("{message}");
+            }
         }
     }
 }
 fn receipt_lookup_world() -> ReceiptLookupWorld {
     let scratch = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ProjectCentral/now/tmp");
     fs::create_dir_all(&scratch).unwrap();
-    let path = scratch.join(format!("receiving-lookup-{}-{}-{}", std::process::id(),
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos(),
-        NEXT.fetch_add(1, Ordering::Relaxed)));
+    let path = scratch.join(format!(
+        "receiving-lookup-{}-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
     fs::create_dir(&path).unwrap();
     let world = ReceiptLookupWorld(path);
     configure_world(world.path());
@@ -1037,12 +1051,19 @@ fn receipt_lookup_world() -> ReceiptLookupWorld {
 fn lookup_request(original: &Value, guarded: bool) -> Value {
     let mut input = json!({"project":original.get("project").cloned().unwrap_or(Value::Null),
         "producer_key":original["producer_key"]});
-    if guarded { input["original_request"] = original.clone(); }
+    if guarded {
+        input["original_request"] = original.clone();
+    }
     input
 }
 fn receiving_snapshot(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
-    fs::read_dir(root.join(".central/source-returns/contributions")).unwrap()
-        .map(|entry| { let path = entry.unwrap().path(); let bytes = fs::read(&path).unwrap(); (path, bytes) })
+    fs::read_dir(root.join(".central/source-returns/contributions"))
+        .unwrap()
+        .map(|entry| {
+            let path = entry.unwrap().path();
+            let bytes = fs::read(&path).unwrap();
+            (path, bytes)
+        })
         .collect()
 }
 
@@ -1057,11 +1078,23 @@ fn receipt_lookup_confirms_original_publication_without_another_arrival() {
     drop(submitted); // API acknowledgement discarded; CLI transport proof is separate.
     let before = receiving_snapshot(world.path());
     let document_before = read(world.path(), &doc, None);
-    let recovered = call(world.path(), "receiving_read", &lookup_request(&input, true), AGENT).unwrap();
+    let recovered = call(
+        world.path(),
+        "receiving_read",
+        &lookup_request(&input, true),
+        AGENT,
+    )
+    .unwrap();
     assert_eq!(recovered["return_ref"], reference);
     assert_eq!(recovered["record"], original_record);
     assert_eq!(recovered["lookup"]["original_request_verified"], true);
-    let by_ref = execute_at(world.path(), "receiving_read", &json!({"return_ref":reference}), 100).unwrap();
+    let by_ref = execute_at(
+        world.path(),
+        "receiving_read",
+        &json!({"return_ref":reference}),
+        100,
+    )
+    .unwrap();
     assert!(by_ref.get("lookup").is_none());
     assert_eq!(by_ref["record"], recovered["record"]);
     assert_eq!(by_ref["revision"], recovered["revision"]);
@@ -1076,30 +1109,58 @@ fn receipt_lookup_original_request_guard_preserves_exact_input_and_conflicts() {
     let input = proposal(&doc, None, "lookup:guard", "entry:guard");
     call(world.path(), "receiving_submit", &input, AGENT).unwrap();
     let before = receiving_snapshot(world.path());
-    let unguarded = call(world.path(), "receiving_read", &lookup_request(&input, false), AGENT).unwrap();
+    let unguarded = call(
+        world.path(),
+        "receiving_read",
+        &lookup_request(&input, false),
+        AGENT,
+    )
+    .unwrap();
     assert_eq!(unguarded["lookup"]["original_request_verified"], false);
-    for (field, value) in [("occurred_at_unix_seconds",json!(43)),("expected_authority_revision",json!("old-different"))] {
+    for (field, value) in [
+        ("occurred_at_unix_seconds", json!(43)),
+        ("expected_authority_revision", json!("old-different")),
+    ] {
         let mut changed = lookup_request(&input, true);
         changed["original_request"][field] = value;
-        assert_eq!(call(world.path(), "receiving_read", &changed, AGENT).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            call(world.path(), "receiving_read", &changed, AGENT)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AlreadyExists
+        );
     }
     let mut different_key = lookup_request(&input, true);
     different_key["original_request"]["producer_key"] = json!("different");
-    assert_eq!(call(world.path(), "receiving_read", &different_key, AGENT).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(
+        call(world.path(), "receiving_read", &different_key, AGENT)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::InvalidInput
+    );
     assert_eq!(receiving_snapshot(world.path()), before);
 }
 
 #[test]
 fn receipt_lookup_owner_rejects_malformed_selectors_and_expectation_types() {
     let world = receipt_lookup_world();
-    for input in [json!({}),json!({"return_ref":"r","producer_key":"k"}),
-        json!({"producer_key":7}),json!({"producer_key":"k","original_request":[]}),
+    for input in [
+        json!({}),
+        json!({"return_ref":"r","producer_key":"k"}),
+        json!({"producer_key":7}),
+        json!({"producer_key":"k","original_request":[]}),
         json!({"producer_key":"k","original_request":{}}),
         json!({"producer_key":"k","original_request":{"producer_key":false}}),
         json!({"producer_key":"k","expected_authority_revision":false}),
         json!({"producer_key":"k","expected_authority_revision":""}),
-        json!({"return_ref":"r","original_request":{}})] {
-        assert_eq!(call(world.path(), "receiving_read", &input, AGENT).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        json!({"return_ref":"r","original_request":{}}),
+    ] {
+        assert_eq!(
+            call(world.path(), "receiving_read", &input, AGENT)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
     }
     let doc = document(world.path(), None, "day", "doc:null");
     let original = proposal(&doc, None, "lookup:null", "entry:null");
@@ -1108,7 +1169,10 @@ fn receipt_lookup_owner_rejects_malformed_selectors_and_expectation_types() {
     input["return_ref"] = Value::Null;
     input["original_request"] = Value::Null;
     input["expected_authority_revision"] = Value::Null;
-    assert_eq!(call(world.path(), "receiving_read", &input, AGENT).unwrap()["return_ref"], submitted["return_ref"]);
+    assert_eq!(
+        call(world.path(), "receiving_read", &input, AGENT).unwrap()["return_ref"],
+        submitted["return_ref"]
+    );
 }
 
 #[test]
@@ -1125,14 +1189,45 @@ fn receipt_lookup_uses_actual_principal_scope_and_current_authority() {
     assert_ne!(ours["return_ref"], in_project["return_ref"]);
     let mut lookup = lookup_request(&original, true);
     lookup["actor"] = json!("agent:other");
-    lookup["declared_producer"] = json!({"ref":"agent:other","actor_kind":"agent","attribution":"verified"});
-    assert_eq!(call(world.path(), "receiving_read", &lookup, AGENT).unwrap()["return_ref"], ours["return_ref"]);
-    assert_eq!(call(world.path(), "receiving_read", &lookup, OTHER).unwrap()["return_ref"], other["return_ref"]);
-    assert_eq!(call(world.path(), "receiving_read", &lookup_request(&scoped,true), AGENT).unwrap()["return_ref"], in_project["return_ref"]);
-    assert_eq!(execute_at(world.path(), "receiving_read", &lookup,100).unwrap_err().kind(), io::ErrorKind::PermissionDenied);
-    assert_eq!(execute_with_token_at(world.path(),"receiving_read",&lookup,Some(AGENT),10000).unwrap_err().kind(),io::ErrorKind::PermissionDenied);
+    lookup["declared_producer"] =
+        json!({"ref":"agent:other","actor_kind":"agent","attribution":"verified"});
+    assert_eq!(
+        call(world.path(), "receiving_read", &lookup, AGENT).unwrap()["return_ref"],
+        ours["return_ref"]
+    );
+    assert_eq!(
+        call(world.path(), "receiving_read", &lookup, OTHER).unwrap()["return_ref"],
+        other["return_ref"]
+    );
+    assert_eq!(
+        call(
+            world.path(),
+            "receiving_read",
+            &lookup_request(&scoped, true),
+            AGENT
+        )
+        .unwrap()["return_ref"],
+        in_project["return_ref"]
+    );
+    assert_eq!(
+        execute_at(world.path(), "receiving_read", &lookup, 100)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::PermissionDenied
+    );
+    assert_eq!(
+        execute_with_token_at(world.path(), "receiving_read", &lookup, Some(AGENT), 10000)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::PermissionDenied
+    );
     lookup["expected_authority_revision"] = json!("stale-current-authority");
-    assert_eq!(call(world.path(), "receiving_read", &lookup, AGENT).unwrap_err().kind(),io::ErrorKind::AlreadyExists);
+    assert_eq!(
+        call(world.path(), "receiving_read", &lookup, AGENT)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::AlreadyExists
+    );
 }
 
 #[test]
@@ -1146,63 +1241,114 @@ fn receipt_lookup_observes_current_target_withdrawal_and_reopening() {
     let source_before = fs::read(&source_path).unwrap();
     let marker = source_path.parent().unwrap().join(".no-agent-retrieval");
     assert!(!marker.exists());
-    fs::write(&marker,b"controlled fixture withdrawal").unwrap();
-    assert_eq!(call(world.path(), "receiving_read", &lookup_request(&original,true), AGENT)
-        .unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+    fs::write(&marker, b"controlled fixture withdrawal").unwrap();
+    assert_eq!(
+        call(
+            world.path(),
+            "receiving_read",
+            &lookup_request(&original, true),
+            AGENT
+        )
+        .unwrap_err()
+        .kind(),
+        io::ErrorKind::PermissionDenied
+    );
     fs::remove_file(marker).unwrap();
-    let reopened = call(world.path(), "receiving_read", &lookup_request(&original,true), AGENT).unwrap();
+    let reopened = call(
+        world.path(),
+        "receiving_read",
+        &lookup_request(&original, true),
+        AGENT,
+    )
+    .unwrap();
     assert_eq!(reopened["return_ref"], submitted["return_ref"]);
     assert_eq!(receiving_snapshot(world.path()), before);
-    assert_eq!(fs::read(source_path).unwrap(),source_before);
+    assert_eq!(fs::read(source_path).unwrap(), source_before);
 }
 
 #[test]
 fn receipt_lookup_actual_record_eacces_is_error_not_absence_or_resend() {
     use std::os::unix::fs::PermissionsExt;
-    assert_ne!(unsafe { libc::geteuid() },0,"requires actual nonroot EACCES; unavailable prerequisite must not pass");
+    assert_ne!(
+        unsafe { libc::geteuid() },
+        0,
+        "requires actual nonroot EACCES; unavailable prerequisite must not pass"
+    );
     let world = receipt_lookup_world();
     let doc = document(world.path(), None, "day", "doc:record-permission");
     let original = proposal(&doc, None, "lookup:permission", "entry:permission");
     call(world.path(), "receiving_submit", &original, AGENT).unwrap();
     let before = receiving_snapshot(world.path());
-    let paths:Vec<_> = before.keys().filter(|path| path.file_name().unwrap()!="cursor.json").collect();
-    assert_eq!(paths.len(),1);
+    let paths: Vec<_> = before
+        .keys()
+        .filter(|path| path.file_name().unwrap() != "cursor.json")
+        .collect();
+    assert_eq!(paths.len(), 1);
     let path = paths[0];
     let mode = fs::metadata(path).unwrap().permissions();
-    fs::set_permissions(path,fs::Permissions::from_mode(0)).unwrap();
-    let error = call(world.path(),"receiving_read",&lookup_request(&original,true),AGENT).unwrap_err();
-    fs::set_permissions(path,mode).unwrap();
-    assert_eq!(error.kind(),io::ErrorKind::PermissionDenied);
-    assert_eq!(error.raw_os_error(),Some(libc::EACCES));
-    assert_eq!(receiving_snapshot(world.path()),before);
-    assert!(call(world.path(),"receiving_read",&lookup_request(&original,true),AGENT).is_ok());
+    fs::set_permissions(path, fs::Permissions::from_mode(0)).unwrap();
+    let error = call(
+        world.path(),
+        "receiving_read",
+        &lookup_request(&original, true),
+        AGENT,
+    )
+    .unwrap_err();
+    fs::set_permissions(path, mode).unwrap();
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(error.raw_os_error(), Some(libc::EACCES));
+    assert_eq!(receiving_snapshot(world.path()), before);
+    assert!(call(
+        world.path(),
+        "receiving_read",
+        &lookup_request(&original, true),
+        AGENT
+    )
+    .is_ok());
 }
-
 
 #[test]
 fn receipt_lookup_reports_actual_included_state_without_recovering_or_reviewing() {
     let world = receipt_lookup_world();
-    let doc = document(world.path(),None,"day","doc:included-lookup");
-    let original = proposal(&doc,None,"lookup:included","entry:included");
-    let submitted = call(world.path(),"receiving_submit",&original,AGENT).unwrap();
-    let accepted = review(world.path(),&submitted,&doc,None);
-    let included = call(world.path(),"receiving_include",&inclusion(&accepted,&doc,None),HUMAN).unwrap();
+    let doc = document(world.path(), None, "day", "doc:included-lookup");
+    let original = proposal(&doc, None, "lookup:included", "entry:included");
+    let submitted = call(world.path(), "receiving_submit", &original, AGENT).unwrap();
+    let accepted = review(world.path(), &submitted, &doc, None);
+    let included = call(
+        world.path(),
+        "receiving_include",
+        &inclusion(&accepted, &doc, None),
+        HUMAN,
+    )
+    .unwrap();
     let before = receiving_snapshot(world.path());
-    let document_before = read(world.path(),&doc,None);
-    let lookup = call(world.path(),"receiving_read",&lookup_request(&original,true),AGENT).unwrap();
-    assert_eq!(lookup["record"],included["record"]);
-    assert_eq!(lookup["included"],true);
-    assert_eq!(lookup["record"]["occurred_at_unix_seconds"],42);
-    assert_eq!(lookup["record"]["received_at_unix_seconds"],submitted["record"]["received_at_unix_seconds"]);
-    assert_eq!(receiving_snapshot(world.path()),before);
-    assert_eq!(read(world.path(),&doc,None),document_before);
+    let document_before = read(world.path(), &doc, None);
+    let lookup = call(
+        world.path(),
+        "receiving_read",
+        &lookup_request(&original, true),
+        AGENT,
+    )
+    .unwrap();
+    assert_eq!(lookup["record"], included["record"]);
+    assert_eq!(lookup["included"], true);
+    assert_eq!(lookup["record"]["occurred_at_unix_seconds"], 42);
+    assert_eq!(
+        lookup["record"]["received_at_unix_seconds"],
+        submitted["record"]["received_at_unix_seconds"]
+    );
+    assert_eq!(receiving_snapshot(world.path()), before);
+    assert_eq!(read(world.path(), &doc, None), document_before);
 }
 
 #[test]
 fn receipt_lookup_preserves_genuine_uncertain_inclusion_without_recovering() {
     use std::os::unix::fs::PermissionsExt;
-    assert_ne!(unsafe { libc::geteuid() }, 0,
-        "requires actual nonroot readonly target failure; unavailable prerequisite must not pass");
+    assert_ne!(
+        unsafe { libc::geteuid() },
+        0,
+        "requires actual nonroot readonly target failure; unavailable prerequisite must not pass"
+    );
     let world = receipt_lookup_world();
     let doc = document(world.path(), None, "day", "doc:uncertain-lookup");
     let original = proposal(&doc, None, "lookup:uncertain", "entry:uncertain");
@@ -1214,30 +1360,59 @@ fn receipt_lookup_preserves_genuine_uncertain_inclusion_without_recovering() {
     let original_mode = original_permissions.mode();
     // Restore this fixture-owned source on both normal return and assertion
     // unwind. A cleanup failure cannot become a green permission proof.
-    struct RestorePermissions { path: PathBuf, permissions: fs::Permissions }
+    struct RestorePermissions {
+        path: PathBuf,
+        permissions: fs::Permissions,
+    }
     impl Drop for RestorePermissions {
         fn drop(&mut self) {
             if let Err(error) = fs::set_permissions(&self.path, self.permissions.clone()) {
-                let message = format!("restore receiving lookup fixture source {}: {error}", self.path.display());
-                if std::thread::panicking() { eprintln!("{message}"); } else { panic!("{message}"); }
+                let message = format!(
+                    "restore receiving lookup fixture source {}: {error}",
+                    self.path.display()
+                );
+                if std::thread::panicking() {
+                    eprintln!("{message}");
+                } else {
+                    panic!("{message}");
+                }
             }
         }
     }
-    let restore = RestorePermissions { path: target.clone(), permissions: original_permissions };
+    let restore = RestorePermissions {
+        path: target.clone(),
+        permissions: original_permissions,
+    };
     fs::set_permissions(&target, fs::Permissions::from_mode(0o444)).unwrap();
-    let failed = call(world.path(), "receiving_include", &inclusion(&accepted, &doc, None), HUMAN)
-        .unwrap_err();
+    let failed = call(
+        world.path(),
+        "receiving_include",
+        &inclusion(&accepted, &doc, None),
+        HUMAN,
+    )
+    .unwrap_err();
     assert_eq!(failed.kind(), io::ErrorKind::PermissionDenied);
     // Only the actual native owner has written the phase and retained intent.
     // There is no hand-written status, receiving.recover or subsequent review.
-    let uncertain = execute_at(world.path(), "receiving_read",
-        &json!({"return_ref":submitted["return_ref"]}), 100).unwrap();
+    let uncertain = execute_at(
+        world.path(),
+        "receiving_read",
+        &json!({"return_ref":submitted["return_ref"]}),
+        100,
+    )
+    .unwrap();
     assert_eq!(uncertain["record"]["status"], "uncertain");
     assert!(uncertain["record"]["inclusion_request"].is_object());
     assert_eq!(uncertain["included"], false);
     assert!(uncertain["record"]["applied_source_revision"].is_null());
     let area_before = receiving_snapshot(world.path());
-    let lookup = call(world.path(), "receiving_read", &lookup_request(&original, true), AGENT).unwrap();
+    let lookup = call(
+        world.path(),
+        "receiving_read",
+        &lookup_request(&original, true),
+        AGENT,
+    )
+    .unwrap();
     assert_eq!(lookup["lookup"]["original_request_verified"], true);
     assert_eq!(lookup["return_ref"], uncertain["return_ref"]);
     assert_eq!(lookup["record"], uncertain["record"]);
@@ -1245,15 +1420,23 @@ fn receipt_lookup_preserves_genuine_uncertain_inclusion_without_recovering() {
     assert_eq!(lookup["record"]["status"], "uncertain");
     assert_eq!(lookup["included"], false);
     assert_eq!(lookup["record"]["occurred_at_unix_seconds"], 42);
-    assert_eq!(lookup["record"]["received_at_unix_seconds"], submitted["record"]["received_at_unix_seconds"]);
+    assert_eq!(
+        lookup["record"]["received_at_unix_seconds"],
+        submitted["record"]["received_at_unix_seconds"]
+    );
     assert_eq!(receiving_snapshot(world.path()), area_before);
     assert_eq!(fs::read(&target).unwrap(), source_before);
-    assert_eq!(fs::metadata(&target).unwrap().permissions().mode() & 0o777, 0o444);
+    assert_eq!(
+        fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+        0o444
+    );
     drop(restore);
-    assert_eq!(fs::metadata(&target).unwrap().permissions().mode(), original_mode);
+    assert_eq!(
+        fs::metadata(&target).unwrap().permissions().mode(),
+        original_mode
+    );
     assert_eq!(fs::read(target).unwrap(), source_before);
 }
-
 
 // These contextual-cause regressions exercise the actual native document and
 // Receiving owners. The readonly-file preflight is distinct from real OS
@@ -1268,8 +1451,11 @@ impl RestoreReceivingFixtureMode {
         use std::os::unix::fs::MetadataExt;
         let metadata = fs::symlink_metadata(path).unwrap();
         assert!(!metadata.file_type().is_symlink());
-        Self { path: path.into(), identity: (metadata.dev(), metadata.ino()),
-            permissions: metadata.permissions() }
+        Self {
+            path: path.into(),
+            identity: (metadata.dev(), metadata.ino()),
+            permissions: metadata.permissions(),
+        }
     }
 }
 impl Drop for RestoreReceivingFixtureMode {
@@ -1280,13 +1466,22 @@ impl Drop for RestoreReceivingFixtureMode {
             if metadata.file_type().is_symlink()
                 || (metadata.dev(), metadata.ino()) != self.identity
             {
-                return Err(io::Error::other("owned permission fixture changed physical affiliation"));
+                return Err(io::Error::other(
+                    "owned permission fixture changed physical affiliation",
+                ));
             }
             fs::set_permissions(&self.path, self.permissions.clone())
         })();
         if let Err(error) = result {
-            let message = format!("restore receiving cause fixture {}: {error}", self.path.display());
-            if std::thread::panicking() { eprintln!("{message}"); } else { panic!("{message}"); }
+            let message = format!(
+                "restore receiving cause fixture {}: {error}",
+                self.path.display()
+            );
+            if std::thread::panicking() {
+                eprintln!("{message}");
+            } else {
+                panic!("{message}");
+            }
         }
     }
 }
@@ -1304,29 +1499,59 @@ fn assert_actual_uncertain_lookup(
 ) {
     let cause = original_inclusion_io(failed);
     assert_eq!(failed.kind(), cause.kind());
-    assert_eq!(failed.to_string(), format!(
-        "inclusion not confirmed; inspect/recover {}: {cause}",
-        submitted["return_ref"].as_str().unwrap()));
+    assert_eq!(
+        failed.to_string(),
+        format!(
+            "inclusion not confirmed; inspect/recover {}: {cause}",
+            submitted["return_ref"].as_str().unwrap()
+        )
+    );
     // The context is a custom io::Error; the OS code belongs to the preserved
     // original cause, never an errno reconstructed from a kind or message.
     assert_eq!(failed.raw_os_error(), None);
-    let uncertain = execute_at(root, "receiving_read",
-        &json!({"return_ref":submitted["return_ref"]}), 100).unwrap();
+    let uncertain = execute_at(
+        root,
+        "receiving_read",
+        &json!({"return_ref":submitted["return_ref"]}),
+        100,
+    )
+    .unwrap();
     assert_eq!(uncertain["record"]["status"], "uncertain");
     assert!(uncertain["record"]["inclusion_request"].is_object());
     assert_eq!(uncertain["included"], false);
     assert!(uncertain["record"]["applied_source_revision"].is_null());
     assert_eq!(uncertain["record"]["last_error"], cause.to_string());
-    for field in ["schema", "return_ref", "scope_ref", "sequence", "request_digest",
-        "kind", "source_ref", "document_id", "proposal", "author", "authority_ref",
-        "authority_revision", "occurred_at_unix_seconds", "received_at_unix_seconds"]
-    {
-        assert_eq!(uncertain["record"][field], submitted["record"][field], "{field}");
+    for field in [
+        "schema",
+        "return_ref",
+        "scope_ref",
+        "sequence",
+        "request_digest",
+        "kind",
+        "source_ref",
+        "document_id",
+        "proposal",
+        "author",
+        "authority_ref",
+        "authority_revision",
+        "occurred_at_unix_seconds",
+        "received_at_unix_seconds",
+    ] {
+        assert_eq!(
+            uncertain["record"][field], submitted["record"][field],
+            "{field}"
+        );
     }
     assert_eq!(uncertain["record"]["source_ref"], document["source"]["ref"]);
     assert_eq!(uncertain["record"]["occurred_at_unix_seconds"], 42);
     let area_before = receiving_snapshot(root);
-    let lookup = call(root, "receiving_read", &lookup_request(original, true), AGENT).unwrap();
+    let lookup = call(
+        root,
+        "receiving_read",
+        &lookup_request(original, true),
+        AGENT,
+    )
+    .unwrap();
     assert_eq!(lookup["lookup"]["selector"], "authenticated_producer_key");
     assert_eq!(lookup["lookup"]["original_request_verified"], true);
     assert_eq!(lookup["return_ref"], uncertain["return_ref"]);
@@ -1340,8 +1565,11 @@ fn assert_actual_uncertain_lookup(
 #[test]
 fn receiving_include_retains_actual_parent_directory_os_cause_and_uncertain_receipt() {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
-    assert_ne!(unsafe { libc::geteuid() }, 0,
-        "requires actual nonroot directory EACCES; unavailable prerequisite must not pass");
+    assert_ne!(
+        unsafe { libc::geteuid() },
+        0,
+        "requires actual nonroot directory EACCES; unavailable prerequisite must not pass"
+    );
     let world = receipt_lookup_world();
     let doc = document(world.path(), None, "flow", "doc:directory-cause");
     let original = proposal(&doc, None, "cause:directory", "entry:directory-cause");
@@ -1351,13 +1579,18 @@ fn receiving_include_retains_actual_parent_directory_os_cause_and_uncertain_rece
     let parent = target.parent().unwrap();
     let source_before = fs::read(&target).unwrap();
     let source_metadata = fs::symlink_metadata(&target).unwrap();
-    assert!(!source_metadata.permissions().readonly(), "actual source stays writable");
+    assert!(
+        !source_metadata.permissions().readonly(),
+        "actual source stays writable"
+    );
     let source_identity = (source_metadata.dev(), source_metadata.ino());
     let restore = RestoreReceivingFixtureMode::retain(parent);
     let parent_identity = restore.identity;
     let parent_mode = restore.permissions.mode();
     let receiving_area = world.path().join(".central/source-returns/contributions");
-    let document_area = world.path().join(".central/source-returns/document-mutations");
+    let document_area = world
+        .path()
+        .join(".central/source-returns/document-mutations");
     assert!(parent.starts_with(world.path()));
     assert_ne!(parent, world.path());
     assert!(!receiving_area.starts_with(parent));
@@ -1365,34 +1598,55 @@ fn receiving_include_retains_actual_parent_directory_os_cause_and_uncertain_rece
     fs::set_permissions(parent, fs::Permissions::from_mode(0o555)).unwrap();
     let oracle_path = parent.join(".receiving-cause-unused-os-oracle");
     assert!(!oracle_path.exists());
-    let oracle = fs::OpenOptions::new().write(true).create_new(true).open(&oracle_path)
+    let oracle = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&oracle_path)
         .expect_err("the real owned parent must refuse new file creation");
     assert_eq!(oracle.kind(), io::ErrorKind::PermissionDenied);
     assert_eq!(oracle.raw_os_error(), Some(libc::EACCES));
     assert!(!oracle_path.exists());
-    let failed = call(world.path(), "receiving_include", &inclusion(&accepted, &doc, None), HUMAN)
-        .unwrap_err();
+    let failed = call(
+        world.path(),
+        "receiving_include",
+        &inclusion(&accepted, &doc, None),
+        HUMAN,
+    )
+    .unwrap_err();
     let cause = original_inclusion_io(&failed);
     assert_eq!(cause.kind(), oracle.kind());
     assert_eq!(cause.raw_os_error(), oracle.raw_os_error());
     assert_actual_uncertain_lookup(world.path(), &doc, &original, &submitted, &failed);
     // No test writes an including/uncertain status. The native document owner
     // must have retained its prepared intent before the actual OS refusal.
-    let intents: Vec<Value> = fs::read_dir(&document_area).unwrap().map(|entry| {
-        serde_json::from_slice(&fs::read(entry.unwrap().path()).unwrap()).unwrap()
-    }).collect();
+    let intents: Vec<Value> = fs::read_dir(&document_area)
+        .unwrap()
+        .map(|entry| serde_json::from_slice(&fs::read(entry.unwrap().path()).unwrap()).unwrap())
+        .collect();
     assert_eq!(intents.len(), 1);
     assert_eq!(intents[0]["status"], "prepared");
     assert_eq!(intents[0]["source_ref"], doc["source"]["ref"]);
     assert_eq!(intents[0]["previous_revision"], doc["revision"]["revision"]);
     assert_eq!(fs::read(&target).unwrap(), source_before);
     let current_source = fs::symlink_metadata(&target).unwrap();
-    assert_eq!((current_source.dev(), current_source.ino()), source_identity);
-    assert_eq!(current_source.permissions().mode(), source_metadata.permissions().mode());
-    assert_eq!(fs::metadata(parent).unwrap().permissions().mode() & 0o777, 0o555);
+    assert_eq!(
+        (current_source.dev(), current_source.ino()),
+        source_identity
+    );
+    assert_eq!(
+        current_source.permissions().mode(),
+        source_metadata.permissions().mode()
+    );
+    assert_eq!(
+        fs::metadata(parent).unwrap().permissions().mode() & 0o777,
+        0o555
+    );
     drop(restore);
     let current_parent = fs::symlink_metadata(parent).unwrap();
-    assert_eq!((current_parent.dev(), current_parent.ino()), parent_identity);
+    assert_eq!(
+        (current_parent.dev(), current_parent.ino()),
+        parent_identity
+    );
     assert_eq!(current_parent.permissions().mode(), parent_mode);
     assert_eq!(fs::read(&target).unwrap(), source_before);
 }
@@ -1400,8 +1654,11 @@ fn receiving_include_retains_actual_parent_directory_os_cause_and_uncertain_rece
 #[test]
 fn receiving_include_retains_actual_custom_preflight_cause_without_fabricating_errno() {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
-    assert_ne!(unsafe { libc::geteuid() }, 0,
-        "requires actual nonroot readonly fixture; unavailable prerequisite must not pass");
+    assert_ne!(
+        unsafe { libc::geteuid() },
+        0,
+        "requires actual nonroot readonly fixture; unavailable prerequisite must not pass"
+    );
     let world = receipt_lookup_world();
     let doc = document(world.path(), None, "flow", "doc:preflight-cause");
     let original = proposal(&doc, None, "cause:preflight", "entry:preflight-cause");
@@ -1413,12 +1670,20 @@ fn receiving_include_retains_actual_custom_preflight_cause_without_fabricating_e
     let identity = restore.identity;
     let mode = restore.permissions.mode();
     fs::set_permissions(&target, fs::Permissions::from_mode(0o444)).unwrap();
-    let failed = call(world.path(), "receiving_include", &inclusion(&accepted, &doc, None), HUMAN)
-        .unwrap_err();
+    let failed = call(
+        world.path(),
+        "receiving_include",
+        &inclusion(&accepted, &doc, None),
+        HUMAN,
+    )
+    .unwrap_err();
     let cause = original_inclusion_io(&failed);
     assert_eq!(cause.kind(), io::ErrorKind::PermissionDenied);
-    assert_eq!(cause.raw_os_error(), None,
-        "custom native writable-link refusal is not an OS EACCES receipt");
+    assert_eq!(
+        cause.raw_os_error(),
+        None,
+        "custom native writable-link refusal is not an OS EACCES receipt"
+    );
     assert_actual_uncertain_lookup(world.path(), &doc, &original, &submitted, &failed);
     assert_eq!(fs::read(&target).unwrap(), source_before);
     let current = fs::symlink_metadata(&target).unwrap();
@@ -1429,30 +1694,49 @@ fn receiving_include_retains_actual_custom_preflight_cause_without_fabricating_e
     assert_eq!(fs::read(target).unwrap(), source_before);
 }
 
-
 #[test]
 fn receiving_inclusion_error_debug_retains_native_cause_without_proposed_body_or_credential() {
     use std::os::unix::fs::PermissionsExt;
-    assert_ne!(unsafe { libc::geteuid() }, 0,
-        "requires actual readonly native source failure; unavailable execution must not pass");
+    assert_ne!(
+        unsafe { libc::geteuid() },
+        0,
+        "requires actual readonly native source failure; unavailable execution must not pass"
+    );
     let world = receipt_lookup_world();
     let doc = document(world.path(), None, "flow", "doc:private-error-debug");
-    let mut original = proposal(&doc,None,"debug:private-owner-error","entry:private-owner-error");
+    let mut original = proposal(
+        &doc,
+        None,
+        "debug:private-owner-error",
+        "entry:private-owner-error",
+    );
     let private_body = "<p>actual body selected for inclusion error privacy regression</p>";
     original["proposal"]["html"] = json!(private_body);
-    let submitted = call(world.path(),"receiving_submit",&original,AGENT).unwrap();
-    let accepted = review(world.path(),&submitted,&doc,None);
+    let submitted = call(world.path(), "receiving_submit", &original, AGENT).unwrap();
+    let accepted = review(world.path(), &submitted, &doc, None);
     let target = world.path().join(doc["source"]["path"].as_str().unwrap());
     let before = fs::read(&target).unwrap();
     let restore = RestoreReceivingFixtureMode::retain(&target);
-    fs::set_permissions(&target,fs::Permissions::from_mode(0o444)).unwrap();
-    let error = call(world.path(),"receiving_include",&inclusion(&accepted,&doc,None),HUMAN).unwrap_err();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o444)).unwrap();
+    let error = call(
+        world.path(),
+        "receiving_include",
+        &inclusion(&accepted, &doc, None),
+        HUMAN,
+    )
+    .unwrap_err();
     let cause = original_inclusion_io(&error);
-    assert_eq!(cause.kind(),io::ErrorKind::PermissionDenied);
-    assert_eq!(cause.raw_os_error(),None,"actual custom preflight must not acquire a fabricated OS code");
+    assert_eq!(cause.kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(
+        cause.raw_os_error(),
+        None,
+        "actual custom preflight must not acquire a fabricated OS code"
+    );
     let debug = format!("{error:?}");
-    for private in [private_body, HUMAN, AGENT] { assert!(!debug.contains(private)); }
-    assert_actual_uncertain_lookup(world.path(),&doc,&original,&submitted,&error);
-    assert_eq!(fs::read(&target).unwrap(),before);
+    for private in [private_body, HUMAN, AGENT] {
+        assert!(!debug.contains(private));
+    }
+    assert_actual_uncertain_lookup(world.path(), &doc, &original, &submitted, &error);
+    assert_eq!(fs::read(&target).unwrap(), before);
     drop(restore);
 }

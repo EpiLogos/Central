@@ -575,7 +575,7 @@ pub fn index_governance(central_root: &Path) -> io::Result<GovernanceIndex> {
         let entry = GovernanceIndexEntry {
             file: rel
                 .strip_prefix(&format!("{GOVERNANCE_DIR}/"))
-                .unwrap_or(&rel)
+                .unwrap_or(rel)
                 .to_owned(),
             topic: if topic.is_empty() {
                 path.file_stem()

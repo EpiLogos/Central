@@ -84,7 +84,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Retain every failed native owner quality gate
-        if: steps.receiving-lint.outcome != 'success' || steps.receiving-format.outcome != 'success'
+        if: always() && (steps.receiving-lint.outcome != 'success' || steps.receiving-format.outcome != 'success')
         run: exit 1
 
   macos-native:

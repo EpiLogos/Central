@@ -102,7 +102,7 @@ pub(crate) fn mutation_failure_result(action: &str, error: &io::Error) -> Option
         code,
         error.to_string(),
         Some(json!({
-            "published": uncertain.map_or(true, |failure| failure.published),
+            "published": uncertain.is_none_or(|failure| failure.published),
             "outcome": if uncertain.is_some() { "unknown" } else { "partial" },
             "source_path": source,
             "completed_sources": incomplete.map(|failure| &failure.completed_sources).cloned().unwrap_or_default(),
