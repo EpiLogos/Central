@@ -8,7 +8,9 @@ publish = false
 # Explicit native qualification only. Default workspace/test/lint selection
 # cannot build or invoke the physical inclusion-failure child.
 native-receiving-incomplete-child = []
-# Real ordinary-file checkpoint qualification; absent from default selection.
+# Default-off native ordinary-file checkpoint qualification. The selected child
+# links central_ctrl normally and alone arms its exact owned-root admission.
+# The opted-in library contains the bridge; default builds contain no hooks.
 native-ordinary-interruption-child = []
 
 [lib]

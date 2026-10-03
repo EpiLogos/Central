@@ -1134,7 +1134,7 @@ fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
             return Err(conflict("Parent directory changed during commit"));
         }
         atomic_record(&root, pending.strip_prefix(&root).map_err(io::Error::other)?, &serde_json::to_vec(&event)?, RecordDisposition::ReplaceOrCreate)?;
-        #[cfg(all(test, unix, feature = "native-ordinary-interruption-child"))]
+        #[cfg(all(unix, feature = "native-ordinary-interruption-child"))]
         native_interruption_fixture::checkpoint(&root, &loc, &pending, &meta, false)?;
         // The journal fsync can yield to an external editor. Re-read after it
         // before publishing the staged file; owner writers are already locked.
@@ -1156,7 +1156,7 @@ fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
         )?;
         committed = true;
         parent.sync_all()?;
-        #[cfg(all(test, unix, feature = "native-ordinary-interruption-child"))]
+        #[cfg(all(unix, feature = "native-ordinary-interruption-child"))]
         native_interruption_fixture::checkpoint(&root, &loc, &pending, &staged.metadata()?, true)?;
         fs::rename(&pending, area.join(format!("event-{cursor}.json")))?;
         File::open(&area)?.sync_all()?;
@@ -2144,9 +2144,10 @@ mod record_publication_tests {
 }
 
 
-// Only the explicitly selected native test executable includes this bridge.
-// Default library/binary builds cannot install, read or reach a fixture.
-#[cfg(all(test, unix, feature = "native-ordinary-interruption-child"))]
+// The default-off qualification feature compiles this bridge in the library.
+// Only the selected native child arms it; default builds omit it and its hooks.
+// A feature-enabled ordinary CLI never arms a fixture or reads its admission.
+#[cfg(all(unix, feature = "native-ordinary-interruption-child"))]
 pub mod native_interruption_fixture {
     use super::*;
     use sha2::{Digest, Sha256};

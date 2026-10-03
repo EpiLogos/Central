@@ -1,12 +1,13 @@
-// Explicit qualification includes the same production CLI/owner Source.
-// The ordinary library/binary has no interruption fixture bridge.
-include!("../src/lib.rs");
+// Link the existing production library; do not include its cfg(test) unit tree.
+// Only this selected child arms the default-off qualification bridge.
+#[cfg(unix)]
+use central_ctrl::{run_cli_with_surface, CliEnvironment, StdioTerminalSurface};
 
 fn main() {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     #[cfg(unix)]
     {
-        if let Err(error) = file_mutation::native_interruption_fixture::arm(&args) {
+        if let Err(error) = central_ctrl::file_mutation::native_interruption_fixture::arm(&args) {
             eprintln!("native ordinary interruption admission refused: {error}");
             std::process::exit(78);
         }
