@@ -142,7 +142,69 @@ Either kind may carry `summary`, `evidence_refs` (≤128), `reply_to` (an opaque
 
 Either kind may also carry `artifacts` — up to 16 exact source selections `{source_ref, expected_revision, producer_ref?, proposed_target_ref?}` (e.g. README drafts proposed for adoption). Central reads each at its exact revision and retains the bytes, binding, revision, `content_sha256`, the authenticated `submitted_by` and the declared producer (never promoted to identity), with standing `retained-source-evidence-not-human-adoption`; at most 512 KiB of text per Return. Arrival adopts nothing. A Return is disclosed only while its target document and every artifact origin are still readable: revoking retrieval on any of them withholds it from `list` (counted in `withheld_unavailable_sources`) and refuses `read`, review and inclusion. List rows carry `artifact_count`.
 
+
+`central.receiving.read` accepts exactly one non-null selector: the known
+`return_ref`, or the original `producer_key`. Both are nonempty strings of at
+most 4096 bytes. Optional `original_request` is an object; optional
+`expected_authority_revision` is bounded nonempty text. Null means absent;
+malformed types are refused, never silently dropped. The latter two fields
+require the producer-key selector. Existing by-ref responses remain unchanged.
+
+Producer-key lookup requires the protected credential's current exact-scope
+`central.receiving.submit` grant. It uses the SAME native receipt identity and
+asserts the retained authenticated carrier, not a `declared_producer` label.
+Current target/artifact disclosure remains a separate requirement. With
+`original_request`, Central compares the immutable exact original submit JSON
+(including occurrence time, project spelling and old authority expectation)
+against its retained request digest. The lookup's current authority expectation
+is independent; a changed original request conflicts rather than resubmitting.
+The existing `central.receiving-reading/v1` response adds transient
+`lookup {selector: authenticated_producer_key, original_request_verified: bool}`
+only on this selector. No persistent schema, receipt ref or hash changes.
+
+A key-only match confirms publication under that principal/key/scope, not the
+acceptance of changed queued input. A guarded match confirms the exact original
+input and returns CURRENT review/inclusion state; it does not perform human
+review, Recognition or inclusion recovery. Failed, denied, absent or unavailable
+lookup keeps the sender's original intent unresolved and never triggers an
+automatic resend. A receipt must not be reconstructed by consumer-side hashing.
+Existing original author, authority, occurrence/receipt times and all stored
+proposal/evidence remain retained. Lookup uses the existing owner lock order and
+bounded record read; it adds no read registration, cursor increment or store.
+
 Decisions are human-only `central.receiving.review` dispositions: a proposal is `accepted` or `rejected`, a question is `answered` (with `answer`) or `rejected`; any Return may be left `pending` or `acknowledged` (seen, not decided — status unchanged). An optional `note` travels with the decision. A proposal naming an owner (e.g. `factory`) stays open after acceptance until the accepting human records that owner's realisation with `central.receiving.include {realisation_ref, realisation_owner_ref}`; Central never calls the owner, and replaying the same ref is idempotent while a different ref conflicts. Including a contribution keeps its original occurrence and receipt times rather than the review time; a missing occurrence stays missing.
+
+After a contribution's `including` update has been acknowledged, failure to
+complete its document/Receiving acknowledgement returns existing
+`partial_completion` with code `central.receiving.inclusion_incomplete`. The
+original document IO remains the native Rust error cause; actual follow-up
+Receiving and recovery-observation IO are retained separately. Added details
+carry actual IO kinds/raw OS codes (null when a native preflight has no errno),
+the prior acknowledged `including` revision, attempted final status and any
+acknowledged final update. A failed write has `persistence: unconfirmed`: it may
+have renamed before an error. These are invocation observations, not a CURRENT
+receipt state or a proof that the source remained unchanged.
+
+Document `committed`, actual returned operation/replay receipt facts, and an
+actual recovery `not_committed` observation are separate from Receiving's
+persisted `included`/`needs-review` state. No receipt or applied revision is
+invented. Current state remains `central.receiving.read` under its existing
+principal/scope and disclosure rules; neither a failure nor lookup triggers an
+automatic include, resend or recovery. Ordinary successful include/replay and
+successful return-to-review responses, schema, digest, identity and attribution
+are unchanged; unrelated generic IO status/code mappings are unchanged.
+
+Added diagnostic details copy only typed body-free native receipt scalars,
+never the document result, request, token, nested error Display or Debug.
+Strings exceeding 4096 bytes are explicitly omitted with their byte length;
+identities are never truncated/reminted. Actual cause-chain observations stop
+at eight source nodes, with explicit limit disclosure. Added details are bounded
+to 64 KiB, including JSON escaping, by explicit optional-observation omission.
+This bounds new facts, not the existing displayed error text or a universal
+JSON heap. Test-only permission checkpoints exercise actual dual/late ledger
+faults through the native owner and same formatter; the public executable tests
+exercise real single-fault JSON and current readback, not a dual-fault CLI or
+installed/human acceptance claim.
 
 Settled means `included | rejected | answered | cancelled`, or `accepted` for a proposal with no proposed owner. `central.receiving.list` rows carry `kind`, the request subject/owner, `declared_producer`, `summary`, `acknowledged` and `settled`; `open: true` pages only unsettled Returns, and `open_total` is the exact unsettled count for the scope. `central.now.read` composes each Return keyed to the NOW with its `decision` (disposition, answer, note) and `realisation`, so the asking Agent reads the person's decision where it works.
 
@@ -161,3 +223,45 @@ The Python proof creates and deletes its own controlled World and prints complet
 The ten initial Rust policy/NOW tests also passed in that run. The workspace subsequently stopped at an existing fixed Action-count assertion; that assertion was corrected to verify the retained baseline plus exact new descriptors. Follow PR checks for the latest full workspace result. Tests added later are not covered by the earlier binary proof.
 
 This is a repository implementation boundary, not installed-world or independent full-feature acceptance. Personal governance adoption, real-machine enforcement, actual original-template fidelity and the independent full-feature journey retain their separate acceptance duties.
+
+## Physical publication beneath native owner results
+
+Document intents, Receiving records/cursors, history snapshots/events and
+migration journals delegate exact bytes to the existing rooted native physical
+publisher. Native locks, authenticated principal/scope, request digest, SourceRef,
+ReturnRef, schema, revisions and recovery remain with their current owners.
+No new journal, identity, writer or automatic retry route is introduced.
+
+An actual post-rename supporting-record failure retains publication uncertainty;
+it cannot certify that no native state changed. If Source publication or an
+acknowledged/observed owner phase preceded later reconciliation/recording failure,
+the error also retains scalar `prior_owner_observation`. An observed revision
+is evidence for that phase, not current-state authority. Native owner reads and
+existing recovery determine current state after restoration. Physical publication
+never proves semantic Source acceptance.
+
+Receiving's existing `central.receiving.inclusion_incomplete` envelope remains
+the outer owner for inclusion/recovery failures. Its typed original/supplemental
+causes now also expose bounded physical publication/prior-owner observations
+where those actually occurred. A failed first `including` record publication
+has no invented acknowledged including revision; it reports physical uncertainty
+through `central.publication_uncertain`. Original producer input, digest, ReturnRef,
+current guarded/by-ref read, successful include/replay and generic unrelated
+IO mappings remain unchanged. Document and migration failures likewise preserve
+actual prior owner progress and original cause instead of treating a failed
+final journal write as undoing already performed work.
+
+Added physical facts retain no source body, request or token, and cannot grant
+retrieval or mutation permission. Each `record_publication` and `prior_owner_observation` is at most 8 KiB with
+explicit diagnostic text omission; Receiving retains its existing 64 KiB aggregate
+added-details profile. Receiving's existing incomplete-inclusion displayed context
+and all serialized persistent record schemas are preserved. Native qualification, installed experience and
+human acceptance remain separate.
+
+A Receiving submit can acknowledge its existing sequence cursor before its
+first Return record fails. The actual cursor observation remains separate from
+Return-record acknowledgement; no Return receipt is manufactured. File-map
+database adoption likewise distinguishes actual backup-link visibility, backup
+file sync and complete observed backup bytes from a final adoption receipt and
+containing-directory durability. Later failures retain only those actual prior
+observations, with existing inspection/recovery as current-state authority.

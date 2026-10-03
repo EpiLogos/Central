@@ -13,7 +13,7 @@ use crate::action::{
     ActionAvailability, ActionDescriptor, ActionExecutionContext, ActionInputDefinition,
     ActionOutputDefinition, ActionRegistry, MutationClass,
 };
-use crate::agent_set_store::RelationRecordStore;
+use crate::agent_set_store::{RelationRecordStore, RelationRecordStoreError};
 use crate::continuous_work::{placement, source::Scope, temporal};
 use crate::machine::{MachineDeclaration, WORKCELL_BINDING_KIND};
 use crate::pasu::{PasuIdentityManifest, PASU_IDENTITY_MANIFEST_PATH};
@@ -24,6 +24,7 @@ use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -62,15 +63,8 @@ pub fn world_here(
     now: u64,
 ) -> io::Result<Value> {
     let root = fs::canonicalize(central_root)?;
-    if !root.join("Control").is_dir() || !root.join("Work").is_dir() {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!(
-                "{} is not a Central root (Control/ and Work/ are required)",
-                root.display()
-            ),
-        ));
-    }
+    crate::file_mutation::directory(&root, Path::new("Control"))?;
+    crate::file_mutation::directory(&root, Path::new("Work"))?;
     let (cwd_reading, from_cwd) = resolve_cwd(&root, cwd, now);
     let resolution = match project {
         Some(name) => Resolution::Member {
@@ -308,6 +302,28 @@ fn resolve_cwd(root: &Path, cwd: &Path, now: u64) -> (Value, Resolution) {
     }
 }
 
+fn project_directory_identity(root: &Path, relative: &Path) -> io::Result<(u64, u64)> {
+    let held = crate::file_mutation::directory(root, relative)?;
+    let metadata = held.metadata()?;
+    Ok((metadata.dev(), metadata.ino()))
+}
+
+fn require_project_directory_identity(root: &Path, relative: &Path, expected: (u64, u64)) -> io::Result<()> {
+    if project_directory_identity(root, relative)? != expected {
+        return Err(io::Error::other("Project material parent affiliation changed during World reading"));
+    }
+    Ok(())
+}
+
+fn confirm_project_absence<T>(observation: io::Result<T>) -> io::Result<()> {
+    match observation {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+        Ok(_) => Err(io::Error::new(io::ErrorKind::AlreadyExists,
+            "Project material appeared during absence observation")),
+    }
+}
+
 fn project_world(root: &Path, resolution: Resolution) -> (Value, Option<Scope>) {
     let (name, via, worktree) = match resolution {
         Resolution::Member {
@@ -340,28 +356,94 @@ fn project_world(root: &Path, resolution: Resolution) -> (Value, Option<Scope>) 
     if let Some(worktree) = worktree {
         facet["worktree"] = worktree;
     }
-    let absent = |mut facet: Value, reason: String| {
+    let absent = |mut facet: Value, kind: &str, member_present: bool, reason: String| {
         facet["state"] = json!("absent");
         facet["reason"] = json!(reason);
+        facet["absence_kind"] = json!(kind);
+        facet["work_member_present"] = json!(member_present);
         (facet, None)
     };
-    if !root.join(&path).is_dir() {
-        return absent(facet, format!("{path} does not exist"));
-    }
-    if !root.join(&manifest).is_file() {
-        return absent(
-            facet,
-            format!("{path} has no ProjectCentral ({manifest} is absent); it is a Work member without a Project World"),
-        );
+    let unavailable = |mut facet: Value, stage: &str, error: io::Error| {
+        facet["state"] = json!("unavailable");
+        facet["reason"] = json!(format!("ProjectCentral cannot be observed: {error}"));
+        facet["observation_stage"] = json!(stage);
+        facet["io_error"] = json!({"kind": format!("{:?}", error.kind()),
+            "raw_os_error": error.raw_os_error(), "message": error.to_string()});
+        (facet, None)
+    };
+    let work = Path::new("Work");
+    let work_identity = match project_directory_identity(root, work) {
+        Ok(identity) => identity,
+        Err(error) => return unavailable(facet, "work_parent", error),
+    };
+    let member = Path::new(&path);
+    let member_identity = match project_directory_identity(root, member) {
+        Ok(identity) => identity,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            if let Err(error) = require_project_directory_identity(root, work, work_identity) {
+                return unavailable(facet, "work_parent", error);
+            }
+            if let Err(error) = confirm_project_absence(crate::file_mutation::directory(root, member))
+                .and_then(|()| require_project_directory_identity(root, work, work_identity))
+            {
+                return unavailable(facet, "work_member_recheck", error);
+            }
+            return absent(facet, "work-member-absent", false, format!("{path} does not exist"));
+        }
+        Err(error) => return unavailable(facet, "work_member", error),
+    };
+    let projectcentral = member.join("ProjectCentral");
+    let projectcentral_identity = match project_directory_identity(root, &projectcentral) {
+        Ok(identity) => identity,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            if let Err(error) = require_project_directory_identity(root, member, member_identity) {
+                return unavailable(facet, "work_member", error);
+            }
+            if let Err(error) = confirm_project_absence(crate::file_mutation::directory(root, &projectcentral))
+                .and_then(|()| require_project_directory_identity(root, member, member_identity))
+                .and_then(|()| require_project_directory_identity(root, work, work_identity))
+            {
+                return unavailable(facet, "projectcentral_parent_recheck", error);
+            }
+            return absent(facet, "projectcentral-manifest-absent", true,
+                format!("{path} is an existing Work member without ProjectCentral"));
+        }
+        Err(error) => return unavailable(facet, "projectcentral_parent", error),
+    };
+    let held_manifest = match crate::file_mutation::open_native_file(root, &manifest) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            if let Err(error) = require_project_directory_identity(root, &projectcentral, projectcentral_identity) {
+                return unavailable(facet, "projectcentral_parent", error);
+            }
+            if let Err(error) = confirm_project_absence(crate::file_mutation::open_native_file(root, &manifest))
+                .and_then(|()| require_project_directory_identity(root, &projectcentral, projectcentral_identity))
+                .and_then(|()| require_project_directory_identity(root, member, member_identity))
+                .and_then(|()| require_project_directory_identity(root, work, work_identity))
+            {
+                return unavailable(facet, "project_manifest_recheck", error);
+            }
+            return absent(facet, "projectcentral-manifest-absent", true,
+                format!("{path} has no ProjectCentral manifest ({manifest} is absent)"));
+        }
+        Err(error) => return unavailable(facet, "project_manifest", error),
+    };
+    match held_manifest.metadata() {
+        Ok(metadata) if metadata.is_file() => {},
+        Ok(_) => return unavailable(facet, "project_manifest_form", io::Error::new(
+            io::ErrorKind::InvalidInput, "ProjectCentral manifest must be a regular file")),
+        Err(error) => return unavailable(facet, "project_manifest_form", error),
     }
     let scope = match Scope::resolve(root, Some(&name)) {
         Ok(scope) => scope,
-        Err(error) => {
-            facet["state"] = json!("unavailable");
-            facet["reason"] = json!(format!("ProjectCentral cannot be read: {error}"));
-            return (facet, None);
-        }
+        Err(error) => return unavailable(facet, "project_scope", error),
     };
+    for (relative, expected) in [(work, work_identity), (member, member_identity),
+        (projectcentral.as_path(), projectcentral_identity)] {
+        if let Err(error) = require_project_directory_identity(root, relative, expected) {
+            return unavailable(facet, "project_parent_recheck", error);
+        }
+    }
     let (roots, missing) = roots(
         root,
         &format!("{path}/ProjectCentral"),
@@ -463,14 +545,16 @@ fn root_nows(root: &Path) -> Result<BTreeMap<String, String>, String> {
 /// with the identity the scope derives: the Project manifest's `project_id`,
 /// or `control:root` for the Local World.
 fn world_record(root: &Path, project: Option<&Scope>) -> Value {
-    let (store, expected) = match project {
+    let (store, expected, owner_root) = match project {
         Some(scope) => (
             RelationRecordStore::worlds_in_project(&scope.root),
             scope.world_ref.clone(),
+            scope.root.as_path(),
         ),
         None => (
             RelationRecordStore::worlds_at_root(root),
             CONTROL_WORLD_REF.to_owned(),
+            root,
         ),
     };
     let dir = store.source_dir();
@@ -480,74 +564,53 @@ fn world_record(root: &Path, project: Option<&Scope>) -> Value {
             .unwrap_or_else(|_| display(path))
     };
     let source = relative(&dir);
-    let entries = match fs::read_dir(&dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return json!({
-                "state": "absent", "expected_ref": expected, "source": source,
-                "detail": format!("no world record is authored at {source}; the World inherits control:root by convention"),
-            })
-        }
+    // Identity, schema and material qualification belong to the native Store.
+    // A projection must not acknowledge a raw file the owning reader refuses.
+    let declared = match store.list() {
+        Ok(readings) => readings,
         Err(error) => {
-            return json!({"state": "unavailable", "expected_ref": expected, "source": source, "detail": error.to_string()})
-        }
-    };
-    let mut files: Vec<PathBuf> = entries
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("json"))
-        .collect();
-    files.sort();
-    let mut declared = Vec::new();
-    let mut unreadable = Vec::new();
-    for file in &files {
-        let parsed = fs::read(file)
-            .map_err(|error| error.to_string())
-            .and_then(|bytes| {
-                serde_json::from_slice::<Value>(&bytes).map_err(|error| error.to_string())
-            });
-        match parsed {
-            Ok(record) => match record.get("ref").and_then(Value::as_str) {
-                Some(reference) => declared.push((file.clone(), reference.to_owned(), record)),
-                None => unreadable.push(format!("{}: carries no ref", relative(file))),
-            },
-            Err(error) => unreadable.push(format!("{}: {error}", relative(file))),
-        }
-    }
-    let matching: Vec<_> = declared
-        .iter()
-        .filter(|(_, reference, _)| reference == &expected)
-        .collect();
-    match matching.as_slice() {
-        [(file, reference, record)] => {
-            let expected_path = store.source_path(reference).ok();
-            if expected_path.as_deref() != Some(file.as_path()) {
-                return json!({
-                    "state": "mismatch", "ref": reference, "expected_ref": expected, "source": relative(file),
-                    "detail": format!(
-                        "the record for {reference} is stored as {} but its ref derives {}",
-                        relative(file),
-                        expected_path.as_deref().map(relative).unwrap_or_default()
-                    ),
+            let mut native_error = json!({"owner":"Central/RelationRecordStore", "reason":error.to_string()});
+            if let Some(cause) = error.io_error() {
+                native_error["io_error"] = json!({
+                    "kind":format!("{:?}", cause.kind()), "raw_os_error":cause.raw_os_error(),
                 });
             }
-            json!({
-                "state": "present", "ref": reference, "expected_ref": expected, "source": relative(file),
-                "revision": record.get("revision"), "parent": record.get("parent"),
-                "detail": "the authored world record matches the identity this scope derives",
-            })
+            if let RelationRecordStoreError::RecordBudget { byte_len, limit } = &error {
+                native_error["capacity"] = json!({"byte_len":byte_len, "limit":limit});
+            }
+            if let RelationRecordStoreError::SourcePathMismatch { ref_, expected: native_path, actual } = &error {
+                return json!({
+                    "state":"mismatch", "ref":ref_, "expected_ref":expected, "source":relative(actual),
+                    "detail":format!("the record for {ref_} is stored as {} but its ref derives {}",
+                        relative(actual), relative(native_path)),
+                    "native_error":native_error,
+                });
+            }
+            return json!({
+                "state":"unavailable", "expected_ref":expected, "source":source,
+                "detail":error.to_string(), "native_error":native_error,
+            });
         }
-        [] if declared.is_empty() && unreadable.is_empty() => json!({
-            "state": "absent", "expected_ref": expected, "source": source,
-            "detail": format!("no world record is authored at {source}; the World inherits control:root by convention"),
+    };
+    let matching: Vec<_> = declared
+        .iter()
+        .filter(|reading| reading.ref_ == expected)
+        .collect();
+    match matching.as_slice() {
+        [reading] => json!({
+            "state":"present", "ref":reading.ref_, "expected_ref":expected,
+            "source":relative(&owner_root.join(&reading.source_path)),
+            "revision":reading.record.get("revision"), "parent":reading.record.get("parent"),
+            "detail":"the authored world record matches the identity this scope derives",
         }),
         [] if declared.is_empty() => json!({
-            "state": "unavailable", "expected_ref": expected, "source": source,
-            "detail": format!("world records cannot be read: {}", unreadable.join("; ")),
+            "state": "absent", "expected_ref": expected, "source": source,
+            "detail": format!("no world record is authored at {source}; the World inherits control:root by convention"),
         }),
         [] => {
             let refs: Vec<&str> = declared
                 .iter()
-                .map(|(_, reference, _)| reference.as_str())
+                .map(|reading| reading.ref_.as_str())
                 .collect();
             json!({
                 "state": "mismatch", "ref": refs[0], "declared_refs": refs, "expected_ref": expected, "source": source,
@@ -632,7 +695,10 @@ fn here_action(
             Some(WORLD_HERE_ACTION),
             ResultStatus::InvalidCentralStructure,
             error.to_string(),
-            None,
+            Some(json!({"effects":"none", "io_error":{
+                "kind":format!("{:?}", error.kind()), "raw_os_error":error.raw_os_error(),
+                "message":error.to_string()
+            }})),
         ),
     }
 }

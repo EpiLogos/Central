@@ -4,6 +4,15 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+[features]
+# Explicit native qualification only. Default workspace/test/lint selection
+# cannot build or invoke the physical inclusion-failure child.
+native-receiving-incomplete-child = []
+# Default-off native ordinary-file checkpoint qualification. The selected child
+# links central_ctrl normally and alone arms its exact owned-root admission.
+# The opted-in library contains the bridge; default builds contain no hooks.
+native-ordinary-interruption-child = []
+
 [lib]
 name = "central_ctrl"
 path = "src/lib.rs"
@@ -11,6 +20,18 @@ path = "src/lib.rs"
 [[bin]]
 name = "ctrl"
 path = "src/main.rs"
+
+[[test]]
+name = "native_receiving_incomplete_child"
+path = "tests/native_receiving_incomplete_child.rs"
+harness = false
+required-features = ["native-receiving-incomplete-child"]
+
+[[test]]
+name = "native_ordinary_interruption_child"
+path = "tests/native_ordinary_interruption_child.rs"
+harness = false
+required-features = ["native-ordinary-interruption-child"]
 
 [dependencies]
 central-connector-sdk = { path = "../crates/connector-sdk" }

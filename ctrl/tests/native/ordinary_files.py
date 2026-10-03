@@ -1,20 +1,35 @@
 #!/usr/bin/env python3
 """Real CLI/filesystem acceptance; no backend substitutes. CTRL_BIN selects candidate."""
-import concurrent.futures, json, os, pathlib, subprocess, tempfile, sys, threading, time
+import concurrent.futures, hashlib, json, os, pathlib, select, shutil, signal, subprocess, tempfile, sys, threading, time
 BIN=os.environ['CTRL_BIN']
-root=pathlib.Path(tempfile.mkdtemp(prefix='central-file-native-')).resolve()
+scratch=pathlib.Path(__file__).resolve().parents[3]/'ProjectCentral'/'now'/'tmp'
+scratch.mkdir(parents=True,exist_ok=True)
+owned=pathlib.Path(tempfile.mkdtemp(prefix='central-file-native-',dir=scratch)).resolve()
+root=owned/'Central';root.mkdir()
+# Failed native activity retains its owned T fixture as evidence. Cleanup occurs
+# only after every real child is reaped and every original assertion succeeds.
 checks=[]
 def check(value,name):
     assert value,name
     checks.append(name)
-def run(op,data=None):
+def run(op,data=None,timeout=15,evidence=None):
     args=[BIN,'--root',str(root),'--json']
     args+=['action','run','central.files.'+op,json.dumps(data or {})] if op!='init' else ['init']
-    p=subprocess.run(args,capture_output=True,text=True)
+    try:p=subprocess.run(args,capture_output=True,timeout=timeout)
+    except subprocess.TimeoutExpired as failure:
+        if evidence is not None:
+            evidence.with_suffix(".stdout").write_bytes(failure.output or b'')
+            evidence.with_suffix(".stderr").write_bytes(failure.stderr or b'')
+            evidence.with_suffix(".account.json").write_text(json.dumps({"argv":args,"returncode":None,"capture_completed":False,"timeout":timeout,"Original_development_Run_credit":False},indent=2)+"\n")
+        raise
+    if evidence is not None:
+        evidence.with_suffix(".stdout").write_bytes(p.stdout)
+        evidence.with_suffix(".stderr").write_bytes(p.stderr)
+        evidence.with_suffix(".account.json").write_text(json.dumps({"argv":args,"returncode":p.returncode,"capture_completed":True,"Original_development_Run_credit":False},indent=2)+"\n")
     try:return json.loads(p.stdout)
     except Exception:raise RuntimeError((args,p.returncode,p.stdout,p.stderr))
-def good(op,data):
-    out=run(op,data);assert out['ok'],out
+def good(op,data,timeout=15,evidence=None):
+    out=run(op,data,timeout=timeout,evidence=evidence);assert out['ok'],out
     return out['data']
 run('init'); folder=root/'Work'/'Bare';folder.mkdir(parents=True)
 file=folder/'note.txt';file.write_text('before\n');file.chmod(0o640)
@@ -77,14 +92,14 @@ check(not good('read',{'location':ploc})['operations']['write']['available'],'na
 for kind in ['human','agent','system']:
     denied=run('write',dict(base,location=ploc,actor_kind=kind));check(not denied['ok'] and denied['error']['details']['outcome']=='refused',f'protected ground refuses {kind} ordinary bypass')
 # Unicode, spaces, and preserved extended metadata exercise actual OS paths.
-u=folder/'space — %.txt';u.write_text('unicode');subprocess.run(['/usr/bin/xattr','-w','org.central.test','preserved',str(u)],check=True) if sys.platform=='darwin' else os.setxattr(u,b'user.central-test',b'preserved')
+u=folder/'space — %.txt';u.write_text('unicode');subprocess.run(['/usr/bin/xattr','-w','org.central.test','preserved',str(u)],check=True,timeout=5) if sys.platform=='darwin' else os.setxattr(u,b'user.central-test',b'preserved')
 uloc=next(e['location'] for e in good('list',{'path':'Work/Bare'})['entries'] if e['name']==u.name)
 ur=good('read',{'location':uloc});good('write',dict(base,location=uloc,expected_revision=ur['revision']))
 check(u.read_text()=='after\n','unicode delimiter path commits exact target')
-if sys.platform=='darwin':check(subprocess.check_output(['/usr/bin/xattr','-p','org.central.test',str(u)]).strip()==b'preserved','macOS atomic write preserves extended attributes')
+if sys.platform=='darwin':check(subprocess.check_output(['/usr/bin/xattr','-p','org.central.test',str(u)],timeout=5).strip()==b'preserved','macOS atomic write preserves extended attributes')
 # Real participating-source initialization proves identity cannot be demoted.
 (folder/'README.md').write_text('participating source')
-p=subprocess.run([BIN,'--root',str(root),'--json','action','run','projectcentral.init',json.dumps({'project':'Bare','project_id':'ordinary-files-acceptance'})],capture_output=True,text=True)
+p=subprocess.run([BIN,'--root',str(root),'--json','action','run','projectcentral.init',json.dumps({'project':'Bare','project_id':'ordinary-files-acceptance'})],capture_output=True,text=True,timeout=15)
 assert json.loads(p.stdout)['ok'],p.stdout
 source=folder/'ProjectCentral/user/authored.md';source.write_text('participating source')
 sloc=next(e['location'] for e in good('list',{'path':'Work/Bare/ProjectCentral/user'})['entries'] if e['name']=='authored.md')
@@ -98,7 +113,7 @@ check(not run('write',dict(base,expected_revision=good('read',{'location':loc})[
 manifest.write_bytes(saved)
 # Actual parent symlink churn while separate CLI processes attempt commits.
 race=root/'race';race.mkdir();(race/'note').write_text('basis')
-external=pathlib.Path(tempfile.mkdtemp(prefix='central-outside-')).resolve();(external/'note').write_text('basis')
+external=owned/'unselected-outside';external.mkdir();(external/'note').write_text('basis')
 rloc=good('list',{'path':'race'})['entries'][0]['location'];rread=good('read',{'location':rloc})
 stop=threading.Event()
 def churn():
@@ -113,25 +128,123 @@ def churn():
 t=threading.Thread(target=churn);t.start()
 try:
     for _ in range(30):run('write',dict(base,location=rloc,expected_revision=rread['revision'],content='inside'))
-finally:stop.set();t.join()
+finally:
+    stop.set();t.join(timeout=5)
+    assert not t.is_alive(),'actual owned churn worker failed to quiesce; fixture retained'
 check((external/'note').read_text()=='basis','ancestor symlink churn never mutates external sentinel')
-# Kill an actual native writer after its durable prepare record appears. The
-# next owner history read reconciles committed vs not-committed bytes.
-k=root/'kill-test';k.mkdir();(k/'note').write_text('kill basis')
-kloc=good('list',{'path':'kill-test'})['entries'][0]['location'];kr=good('read',{'location':kloc})
-request=dict(base,location=kloc,expected_revision=kr['revision'],content='z'*60000)
-proc=subprocess.Popen([BIN,'--root',str(root),'--json','action','run','central.files.write',json.dumps(request)],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-saw=False
-while proc.poll() is None:
-    pending=list((root/'.central/file-history').glob('*/pending.json'))
-    if pending:
-        saw=True;proc.kill();break
-proc.communicate()
-check(saw,'observed durable prepare before terminating actual native process')
-kh=good('history',{'location':kloc})
-if (k/'note').read_text()==request['content']:
-    check(any(e['previous_revision']==kr['revision'] for e in kh['entries']),'committed process interruption preserves recovery receipt')
-else:
-    check((k/'note').read_text()=='kill basis','interrupted precommit preserves original bytes')
+# Deterministic actual-native interruption. The explicitly selected test child
+# includes the same CLI/owner Source; the production/default binary has no arm.
+# Only the native owner publishes pending/events. An inherited one-byte pipe
+# observes its exact bounded physical checkpoint without polling a short window.
+INTERRUPTION_BIN=os.environ['CTRL_ORDINARY_INTERRUPTION_BIN']
+checkpoint_evidence=pathlib.Path(os.environ['CTRL_NATIVE_EVIDENCE_DIR']).resolve(strict=True)/owned.name
+checkpoint_evidence.mkdir(exist_ok=False)
+interruption_cases=[];failed_arms=[]
+control=root/'.ordinary-interruption-admission.json'
+def native_interruption(name,after_rename,changed_source=False):
+    k=root/name;k.mkdir();source=k/'note';source.write_text('kill basis')
+    kloc=good('list',{'path':name})['entries'][0]['location'];kr=good('read',{'location':kloc})
+    request=dict(base,location=kloc,expected_revision=kr['revision'],content='z'*60000)
+    request_bytes=json.dumps(request).encode();rm=root.stat();sm=source.stat()
+    admission={'schema':'central.native-ordinary-interruption-admission/v1','after_rename':after_rename,
+        'root_device':rm.st_dev,'root_inode':rm.st_ino,'source_device':sm.st_dev,'source_inode':sm.st_ino,
+        'request_sha256':hashlib.sha256(request_bytes).hexdigest()}
+    control.write_text(json.dumps(admission))
+    reader,writer=os.pipe();os.set_blocking(reader,False)
+    env=os.environ.copy();env['CENTRAL_NATIVE_INTERRUPTION_NOTIFY_FD']=str(writer)
+    argv=[INTERRUPTION_BIN,'--root',str(root),'--json','action','run','central.files.write',request_bytes.decode()]
+    proc=None;marker=b'';pending=None;raw_pending=None;stdout=b'';stderr=b'';observed=False;drained=False;cleanup_error=None
+    start=time.monotonic();deadline=start+5
+    try:
+        proc=subprocess.Popen(argv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,pass_fds=(writer,))
+        os.close(writer);writer=None
+        while time.monotonic()<deadline:
+            if proc.poll() is not None:break
+            ready,_,_=select.select([reader],[],[],min(.02,max(0,deadline-time.monotonic())))
+            if ready:
+                marker=os.read(reader,2)
+                if marker:break
+        if marker:
+            check(marker==(b'C' if after_rename else b'P'),'native checkpoint identifies actual selected publication phase')
+            check(proc.poll() is None,'native checkpoint retains the actual live direct writer')
+            identities=[identity for identity in (root/'.central/file-history').glob('*/identity.json') if json.loads(identity.read_text())==kloc]
+            check(len(identities)==1,'interrupted native identity names exactly the selected ordinary file')
+            pending=identities[0].parent/'pending.json';raw_pending=pending.read_bytes();event=json.loads(raw_pending)
+            check(event['previous_revision']==kr['revision'],'durable interrupted pending retains exact original basis')
+            remaining=deadline-time.monotonic()
+            check(remaining>0,'native phase read begins within original five-second deadline')
+            current=good('read',{'location':kloc},timeout=remaining,evidence=checkpoint_evidence/(name+'-phase-read'))
+            check(current['revision']==(event['revision'] if after_rename else kr['revision']),'native source revision agrees with actual checkpoint phase')
+            check(source.read_text()==(request['content'] if after_rename else 'kill basis'),'actual checkpoint preserves complete selected source bytes')
+            check(time.monotonic()<deadline and proc.poll() is None,'native checkpoint observations retain live writer within original five-second deadline')
+            observed=True
+        if proc.poll() is None:proc.kill()
+        stdout,stderr=proc.communicate(timeout=5);drained=True
+        check(len(stdout)+len(stderr)<=1024*1024,'interrupted native output fits measured one-MiB profile')
+    finally:
+        if writer is not None:os.close(writer)
+        os.close(reader)
+        if proc is not None:
+            if not drained:
+                if proc.poll() is None:proc.kill()
+                try:stdout,stderr=proc.communicate(timeout=2);drained=True
+                except subprocess.TimeoutExpired as failure:
+                    stdout=failure.output or stdout;stderr=failure.stderr or stderr;cleanup_error=str(failure)
+            (checkpoint_evidence/(name+'.stdout')).write_bytes(stdout)
+            (checkpoint_evidence/(name+'.stderr')).write_bytes(stderr)
+            if raw_pending is not None:(checkpoint_evidence/(name+'.pending.json')).write_bytes(raw_pending)
+            (checkpoint_evidence/(name+'.account.json')).write_text(json.dumps({'argv':argv,
+                'returncode':proc.returncode,'direct_child_reaped':proc.poll() is not None,
+                'stdout_eof':drained,'stderr_eof':drained,'cleanup_error':cleanup_error,'checkpoint_observed':observed,
+                'checkpoint_byte_hex':marker.hex(),'elapsed_seconds':time.monotonic()-start,
+                'Original_development_Run_credit':False},indent=2)+'\n')
+            assert proc.poll() is not None and drained,'owned native writer must be reaped and both streams drained before fixture cleanup'
+    check(observed,'observed durable prepare before terminating actual native process')
+    check(proc.returncode==-signal.SIGKILL,'actual owned writer was killed rather than completing or reporting fixture timeout')
+    if changed_source:
+        source.write_text('later independent external bytes')
+        refusal=run('history',{'location':kloc},evidence=checkpoint_evidence/(name+'-unresolved-recovery'))
+        check(not refusal['ok'] and refusal['action']=='central.files.history'
+            and refusal['status']=='internal_failure' and refusal['error']['code']=='internal_failure'
+            and refusal['error']['details']['outcome']=='error'
+            and refusal['error']['message']=='File commit has an unresolved interrupted receipt; current bytes match neither journal basis nor target. Owner recovery is required; do not resend.',
+            'changed-neither interrupted receipt remains the exact native recovery failure')
+        check(pending.read_bytes()==raw_pending and source.read_text()=='later independent external bytes','failed owner recovery retains exact pending and later source bytes')
+        check(not list(pending.parent.glob('event-*.json')),'changed-neither failure cannot invent a committed event')
+        source.write_text('kill basis') # explicit external fixture restoration of recorded basis
+    kh=good('history',{'location':kloc},evidence=checkpoint_evidence/(name+'-owner-recovery'))
+    if after_rename:
+        check(source.read_text()==request['content'] and len(kh['entries'])==1 and kh['entries'][0]==event,
+            'committed process interruption preserves recovery receipt')
+    else:
+        check(source.read_text()=='kill basis','interrupted precommit preserves original bytes')
+        check(kh['entries']==[],'precommit interruption does not create a successful event')
+    check(not pending.exists(),'native history reconciles interrupted pending receipt')
+    check(good('history',{'location':kloc},evidence=checkpoint_evidence/(name+'-owner-replay'))==kh,'repeated owner recovery retains exact outcome without duplicate event')
+    control.unlink()
+    interruption_cases.append(name)
+    return argv
+# Missing/mismatched admission must fail before any owner mutation or checkpoint.
+k=root/'interruption-refusal';k.mkdir();(k/'note').write_text('admission basis')
+kloc=good('list',{'path':'interruption-refusal'})['entries'][0]['location'];kr=good('read',{'location':kloc})
+request=dict(base,location=kloc,expected_revision=kr['revision'],content='refused target')
+for admitted in (False,True):
+    if admitted:control.write_text(json.dumps({'schema':'central.native-ordinary-interruption-admission/v1','after_rename':False,'root_device':root.stat().st_dev,'root_inode':root.stat().st_ino,'source_device':(k/'note').stat().st_dev,'source_inode':(k/'note').stat().st_ino,'request_sha256':'different request'}))
+    refusal=subprocess.run([INTERRUPTION_BIN,'--root',str(root),'--json','action','run','central.files.write',json.dumps(request)],capture_output=True,timeout=5)
+    arm_name='changed-admission' if admitted else 'missing-admission'
+    (checkpoint_evidence/(arm_name+'.stdout')).write_bytes(refusal.stdout)
+    (checkpoint_evidence/(arm_name+'.stderr')).write_bytes(refusal.stderr)
+    (checkpoint_evidence/(arm_name+'.account.json')).write_text(json.dumps({'argv':refusal.args,'returncode':refusal.returncode,'capture_completed':True,'Original_development_Run_credit':False},indent=2)+'\n')
+    check(refusal.returncode==78 and b'admission refused' in refusal.stderr and not refusal.stdout,'missing or changed admission refuses native test child before dispatch')
+    check((k/'note').read_text()=='admission basis' and good('history',{'location':kloc})['entries']==[],'failed interruption arm leaves actual source and owner history unchanged')
+    if admitted:control.unlink()
+    failed_arms.append(arm_name)
+native_interruption('kill-test',False)
+native_interruption('kill-test-committed',True)
+native_interruption('kill-test-changed',False,True)
 check(not list((root/'.central/file-history').glob('*/pending.json')),'native history reconciles interrupted pending receipt')
+check(interruption_cases==['kill-test','kill-test-committed','kill-test-changed'] and failed_arms==['missing-admission','changed-admission'],'every required actual checkpoint and failed-arm case completed')
+(checkpoint_evidence/'completed-cases.json').write_text(json.dumps({'actual_completed_cases':interruption_cases,'actual_failed_arm_checks':failed_arms,'native_capture_and_recovery_artifacts_retained':True,'Original_development_Run_credit':False},indent=2)+'\n')
+shutil.rmtree(owned)
+check(not owned.exists(),'successful actual fixture removes only its owned outer')
 print(json.dumps({'ok':True,'checks':checks,'count':len(checks),'root':str(root),'binary':BIN},indent=2))

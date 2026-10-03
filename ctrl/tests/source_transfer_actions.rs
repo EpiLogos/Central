@@ -22,11 +22,13 @@ impl TempRoot {
             .unwrap()
             .as_nanos();
         let sequence = NEXT_TEMP_ROOT.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
+        let scratch = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ProjectCentral/now/tmp");
+        fs::create_dir_all(&scratch).unwrap();
+        let path = scratch.join(format!(
             "central-source-transfer-{label}-{}-{nonce}-{sequence}",
             std::process::id()
         ));
-        fs::create_dir_all(&path).unwrap();
+        fs::create_dir(&path).unwrap();
         Self(path)
     }
 
@@ -1733,4 +1735,108 @@ fn root_bundle_carries_no_paths_credentials_machine_identities_or_generated_stat
         "central.source_transfer.natively_owned"
     );
     assert_eq!(snapshot(&central_b), untouched);
+}
+
+
+#[test]
+fn actual_creation_aperture_keeps_root_and_recursive_masks_distinct_from_missing_descendants() {
+    for (index, ancestor) in ["", "Control", "Control/agents", "Control/agents/expressions"].iter().enumerate() {
+        let (_origin, central_a, paths) = agent_ground_origin(&format!("aperture-origin-{index}"));
+        let (_receiver, central_b) = bootstrap_root(&format!("aperture-receiver-{index}"));
+        let selected = paths[2].clone();
+        let reference = root_ref(&selected);
+        let exported = root_export(&central_a, std::slice::from_ref(&reference), "agent", None);
+        assert_eq!(exported.status, ResultStatus::Success, "{exported:?}");
+        let bundle_file = write_bundle_file(central_b.parent().unwrap(), &exported.data.unwrap());
+        let directory = central_b.join(ancestor);
+        fs::create_dir_all(&directory).unwrap();
+        let marker = directory.join(".no-agent-retrieval");
+        fs::write(&marker, b"").unwrap();
+        let retained = central_b.join("Control/user/unselected.txt");
+        fs::write(&retained, b"unselected owner source").unwrap();
+        let before = fs::read(&retained).unwrap();
+        let refused = root_apply(&central_b, &bundle_file, "agent", json!({
+            "accept_unestablished_identity":true,"accept_unestablished_lineage":[reference]
+        }));
+        assert_eq!(refused.status, ResultStatus::UnavailableCapability, "{refused:?}");
+        let error = refused.error.unwrap();
+        let details = error.details.unwrap();
+        assert_eq!(details["failure_stage"], "source_creation_aperture");
+        assert_eq!(details["marker_present"], true);
+        assert_eq!(details["failed_source_effect"], "none");
+        assert!(details["io_error"].is_null());
+        assert!(!central_b.join("Control/agents/expressions/x-guardian").exists());
+        assert_eq!(fs::read(&retained).unwrap(), before);
+        assert_eq!(fs::read(&marker).unwrap(), b"");
+        if *ancestor == "Control/agents/expressions" {
+            let sibling = root_ref(&paths[0]);
+            let exported = root_export(&central_a, std::slice::from_ref(&sibling), "agent", None);
+            assert_eq!(exported.status, ResultStatus::Success, "{exported:?}");
+            let sibling_bundle = write_bundle_file(central_b.parent().unwrap(), &exported.data.unwrap());
+            let applied = root_apply(&central_b, &sibling_bundle, "agent", json!({
+                "accept_unestablished_identity":true,"accept_unestablished_lineage":[sibling]
+            }));
+            assert_eq!(applied.status, ResultStatus::Success, "{applied:?}");
+            assert_eq!(applied.data.unwrap()["applied_count"], 1);
+            assert_eq!(fs::read(central_b.join(&paths[0])).unwrap(), fs::read(central_a.join(&paths[0])).unwrap());
+            // Restore the original selected native bundle; the native marker
+            // remains in place during the independent sibling operation.
+            let exported = root_export(&central_a, std::slice::from_ref(&reference), "agent", None);
+            assert_eq!(exported.status, ResultStatus::Success, "{exported:?}");
+            write_bundle_file(central_b.parent().unwrap(), &exported.data.unwrap());
+        }
+        fs::remove_file(marker).unwrap();
+        let reopened = root_apply(&central_b, &bundle_file, "agent", json!({
+            "accept_unestablished_identity":true,"accept_unestablished_lineage":[reference]
+        }));
+        assert_eq!(reopened.status, ResultStatus::Success, "{reopened:?}");
+        assert_eq!(reopened.data.unwrap()["applied_count"], 1);
+        assert_eq!(fs::read(central_b.join(&selected)).unwrap(), fs::read(central_a.join(&selected)).unwrap());
+        assert_eq!(fs::read(&retained).unwrap(), before);
+    }
+}
+
+#[test]
+fn actual_creation_aperture_refuses_redirected_parent_and_retains_unselected_source() {
+    use std::os::unix::fs::symlink;
+    let (_origin, central_a, paths) = agent_ground_origin("redirected-aperture-origin");
+    let (_receiver, central_b) = bootstrap_root("redirected-aperture-receiver");
+    let reference = root_ref(&paths[2]);
+    let exported = root_export(&central_a, std::slice::from_ref(&reference), "agent", None);
+    assert_eq!(exported.status, ResultStatus::Success, "{exported:?}");
+    let bundle = write_bundle_file(central_b.parent().unwrap(), &exported.data.unwrap());
+    let target = central_b.join("Control/user/unselected");
+    fs::create_dir(&target).unwrap();
+    fs::write(target.join("retained.txt"), b"retained private fixture").unwrap();
+    symlink(&target, central_b.join("Control/agents/expressions")).unwrap();
+    let refused = root_apply(&central_b, &bundle, "agent", json!({
+        "accept_unestablished_identity":true,"accept_unestablished_lineage":[reference]
+    }));
+    assert_eq!(refused.status, ResultStatus::UnavailableCapability, "{refused:?}");
+    let details = refused.error.unwrap().details.unwrap();
+    assert_eq!(details["failure_stage"], "source_creation_aperture");
+    assert_eq!(details["marker_present"], false);
+    assert_eq!(details["io_error"]["kind"], "PermissionDenied");
+    assert!(details["io_error"]["raw_os_error"].is_null());
+    assert!(!target.join("x-guardian").exists());
+    assert_eq!(fs::read(target.join("retained.txt")).unwrap(), b"retained private fixture");
+    assert_eq!(fs::read_link(central_b.join("Control/agents/expressions")).unwrap(), target);
+}
+
+#[test]
+fn actual_transfer_fixture_drop_retires_only_its_exclusive_native_scratch_root() {
+    let first = TempRoot::new("lifetime-first");
+    let sibling = TempRoot::new("lifetime-sibling");
+    let scratch = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ProjectCentral/now/tmp");
+    assert_eq!(first.path().parent().unwrap(), scratch);
+    let first_path = first.path().to_path_buf();
+    fs::create_dir(first.path().join("Central")).unwrap();
+    fs::write(first.path().join("Central/owned.txt"), b"owned fixture").unwrap();
+    let retained = sibling.path().join("unselected.txt");
+    fs::write(&retained, b"retained sibling fixture").unwrap();
+    drop(first);
+    assert!(!first_path.exists());
+    assert_eq!(fs::read(&retained).unwrap(), b"retained sibling fixture");
+    assert!(sibling.path().is_dir());
+    assert!(scratch.is_dir());
 }

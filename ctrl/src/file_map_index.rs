@@ -192,6 +192,10 @@ pub(crate) fn refresh(scope: &Scope, embeddings: bool) -> io::Result<Value> {
                 .as_ref()
                 .is_none_or(|b| b.revision != entry.revision || import_id.is_none())
         {
+            // The URI row may have been added above. Observe the actual native
+            // provider immediately before import so it is not misclassified as
+            // a second newly imported row.
+            records = backend.records()?;
             let before: BTreeSet<_> = records.iter().filter_map(|r| native::id(r).ok()).collect();
             let mut args = vec!["import-files".into(), "--update".into()];
             if !embeddings {

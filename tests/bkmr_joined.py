@@ -7,6 +7,7 @@ No mocks implement the owner operations. Missing binaries are errors, not skips.
 from __future__ import annotations
 import argparse
 import base64
+import errno
 import hashlib
 import json
 import os
@@ -32,7 +33,9 @@ class Joined(unittest.TestCase):
     aikit: str
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="central-bkmr-joined-")
+        scratch = Path(__file__).resolve().parents[1] / "ProjectCentral/now/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        self.temp = tempfile.TemporaryDirectory(prefix="central-bkmr-joined-", dir=scratch)
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name).resolve()
         self.root = self.base / "Central"
@@ -192,6 +195,7 @@ class Joined(unittest.TestCase):
         index = json.loads((self.root / ".central/bkmr/bindings.json").read_text())
         record = index["entries"][ref]
         self.assertIsNotNone(record.get("import_id"), record)
+        self.assertNotEqual(record["import_id"], record["id"], record)
         conn = sqlite3.connect(self.root / ".central/bkmr/index.db")
         try:
             columns = [x[1] for x in conn.execute("pragma table_info(bookmarks)")]
@@ -418,11 +422,44 @@ class Joined(unittest.TestCase):
         self.assertEqual(before, self.db_digest())
 
     def test_28_aikit_owner_disconnect_never_returns_cached_source(self):
-        self.write("Control/user/note.md"); self.action("refresh")
+        body = b"quartz native-owner disconnect must not deliver this retained body\n"
+        source = self.write("Control/user/note.md", body)
+        self.action("refresh")
         ref = self.locate("Control/user/note.md")["source"]["ref"]
-        self.ai("knowledge","search","quartz")
-        self.ai("knowledge","read","source="+ref, success=False,
-                env=dict(self.env,CENTRAL_CTRL_BIN=str(self.base / "missing-ctrl")))
+        search = self.ai("knowledge", "search", "quartz")
+        self.assertIn(ref, json.dumps(search))
+        warm = self.ai("knowledge", "read", "source=" + ref)
+        self.assertTrue(warm["ok"], warm)
+        self.assertIn(body.decode().strip(), json.dumps(warm))
+        basis = self.db_digest()
+        inode = source.stat().st_ino
+        missing_owner = self.base / "missing-ctrl"
+        self.assertFalse(missing_owner.exists())
+        disconnected = self.run_cmd(
+            [self.aikit, "--json", "-C", self.root, "knowledge", "read", "source=" + ref],
+            success=False, env=dict(self.env, CENTRAL_CTRL_BIN=str(missing_owner)))
+        failure = json.loads(disconnected.stdout)
+        self.assertEqual(failure["schema"], 1, failure)
+        self.assertIs(failure["ok"], False, failure)
+        # AIKit338 loses the unavailable-owner cause during attachment and
+        # reports source_missing. This assertion characterises that cut; it
+        # does not certify a truthful native unavailability classification.
+        self.assertEqual(failure["error"]["code"], "knowledge.source_missing", failure)
+        self.assertIn(ref, failure["error"]["message"])
+        self.assertIsInstance(failure["error"]["details"], dict)
+        self.assertNotIn("data", failure)
+        self.assertNotIn("context", failure)
+        self.assertNotIn(body.decode().strip(), disconnected.stdout)
+        self.assertNotIn(body.decode().strip(), disconnected.stderr)
+        self.assertEqual(source.read_bytes(), body)
+        self.assertEqual(source.stat().st_ino, inode)
+        self.assertEqual(self.db_digest(), basis)
+        reopened = self.ai("knowledge", "read", "source=" + ref)
+        self.assertTrue(reopened["ok"], reopened)
+        self.assertIn(body.decode().strip(), json.dumps(reopened))
+        self.assertEqual(source.read_bytes(), body)
+        self.assertEqual(source.stat().st_ino, inode)
+        self.assertEqual(self.db_digest(), basis)
 
     def test_29_aikit_root_search_works_with_only_a_project_database(self):
         self.project("alpha"); self.write("Work/alpha/ProjectCentral/user/note.md")
@@ -493,21 +530,35 @@ class Joined(unittest.TestCase):
         self.assertEqual(len(json.loads(self.native("search","--json","--np").stdout)),2)
         self.assertEqual(len(self.action("search",query="quartz")["hits"]),2)
 
-    def test_37_flow_source_move_uses_flow_owner_and_keeps_history(self):
+    def test_37_retired_flow_registry_stays_retained_through_current_source_moves(self):
         self.project("alpha")
-        self.write("Work/alpha/ProjectCentral/flows/.keep", b"")
-        def flow(op, **values):
-            values["project"] = "alpha"
-            result = self.run_cmd([self.ctrl,"--json","--root",self.root,"action","run",f"projectcentral.flow.{op}",json.dumps(values)])
-            return json.loads(result.stdout)["data"]
-        record = flow("create",path="ProjectCentral/flows/original.md",actor="fixture",actor_kind="human")["flow"]
-        plan = self.move(record["source_ref"], "ProjectCentral/flows/renamed.md")
-        reading = flow("read",flow_ref=record["flow_ref"],actor="fixture",actor_kind="human")
-        self.assertEqual(reading["flow"]["path"], "ProjectCentral/flows/renamed.md")
-        self.assertEqual(reading["flow"]["source_ref"], record["source_ref"])
-        self.assertEqual(reading["flow"]["revisions"], record["revisions"])
-        self.action("move-rollback",plan_id=plan["plan_id"],quiesced=True)
-        self.assertEqual(flow("read",flow_ref=record["flow_ref"],actor="fixture",actor_kind="human")["flow"]["path"], "ProjectCentral/flows/original.md")
+        legacy = self.write("Work/alpha/.central/flows.json", b"retained retired registry bytes\n")
+        history = self.write("Work/alpha/.central/flow-revisions/retained.bin", bytes([0, 255, 9]))
+        source = self.write("Work/alpha/ProjectCentral/user/flows/original.md", "current ordinary Flow source\n")
+        ref = self.action("locate", "alpha", path=str(source), binding_only=True)["source"]["ref"]
+        before = self.material_basis(legacy), self.material_basis(history)
+        source_before = self.material_basis(source)
+        unavailable = self.run_cmd([
+            self.ctrl, "--json", "--root", self.root, "action", "run", "projectcentral.flow.create",
+            json.dumps({"project":"alpha", "path":"ProjectCentral/flows/new.md", "actor":"fixture", "actor_kind":"human"})
+        ], success=False)
+        self.assertEqual(json.loads(unavailable.stdout)["error"]["code"], "invalid_input")
+        self.assertEqual(json.loads(unavailable.stdout)["error"]["message"], "Unknown Action: projectcentral.flow.create")
+        self.assertFalse((self.root / "Work/alpha/ProjectCentral/flows/new.md").exists())
+        self.action("move-plan", source_ref=ref, destination=".central/flows.json", success=False)
+        plan = self.move(ref, "ProjectCentral/user/flows/renamed.md")
+        moved = self.root / "Work/alpha/ProjectCentral/user/flows/renamed.md"
+        self.assertFalse(source.exists())
+        self.assertEqual(self.material_basis(moved), source_before)
+        self.assertEqual(self.action("resolve", "alpha", source_ref=ref, content=True)["content"], source_before[-1].decode())
+        self.assertEqual(self.action("locate", "alpha", path=str(moved), binding_only=True)["source"]["ref"], ref)
+        self.assertEqual((self.material_basis(legacy), self.material_basis(history)), before)
+        self.action("move-rollback", plan_id=plan["plan_id"], quiesced=True)
+        self.assertTrue(source.is_file())
+        self.assertFalse(moved.exists())
+        self.assertEqual(self.material_basis(source), source_before)
+        self.assertEqual(self.action("resolve", "alpha", source_ref=ref, content=True)["content"], source_before[-1].decode())
+        self.assertEqual((self.material_basis(legacy), self.material_basis(history)), before)
 
     def test_38_record_adoption_retains_authored_description_title_and_tags(self):
         path = self.write("ordinary/note.txt")
@@ -554,6 +605,452 @@ class Joined(unittest.TestCase):
         ref = self.promoted()
         self.ai("apply")
         self.assertEqual(self.action("projection-read",source_ref=ref)["records"],[])
+
+
+    def declared(self, rows, project=None, **extensions):
+        root = self.root if project is None else self.root / "Work" / project
+        path = root / ("Control/relations/source-relations.json" if project is None
+                       else "ProjectCentral/relations/source-relations.json")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        doc = {"schema": "central.control.ground-relations/v1" if project is None
+               else "central.project.ground-relations/v1",
+               "project_id": "control:root" if project is None else project,
+               "relations": rows, **extensions}
+        path.write_bytes(json.dumps(doc).encode())
+        return path
+
+    @staticmethod
+    def relation(reference, path, **extensions):
+        return {"ref": reference, "path": path, "roles": ["agent-governance-source"],
+                "provenance": "unresolved", "standing": "unspecified",
+                "treatment": "retain-native-in-place", **extensions}
+
+    @staticmethod
+    def material_basis(path):
+        metadata = path.stat()
+        return (metadata.st_dev, metadata.st_ino, metadata.st_size,
+                metadata.st_mtime_ns, metadata.st_mode, path.read_bytes())
+
+    def tree_basis(self):
+        return {str(path.relative_to(self.root)): self.material_basis(path)
+                for path in self.root.rglob("*") if path.is_file() and not path.is_symlink()}
+
+    def test_42_binding_only_keeps_opaque_owner_without_reading_unreadable_body(self):
+        self.assertNotEqual(os.geteuid(), 0, "Actual unreadable-body proof requires a nonroot execution owner")
+        path = self.write("Control/user/body.md", "retained unreadable actual body\n")
+        ref = "opaque:declared:actual-body"
+        declared = self.declared([self.relation(ref, "Control/user/body.md", retained={"inner": 7})],
+                                 extension={"retained": [3, 1]})
+        before = self.material_basis(path), self.material_basis(declared)
+        mode = path.stat().st_mode & 0o7777
+        try:
+            path.chmod(0)
+            with self.assertRaises(OSError) as observed:
+                path.read_bytes()
+            self.assertEqual(observed.exception.errno, errno.EACCES)
+            for op, request in [("resolve", {"source_ref": ref}), ("locate", {"path": str(path)})]:
+                result = self.action(op, binding_only=True, **request)
+                self.assertEqual(result["ownership"], "owned")
+                self.assertEqual(result["source"]["ref"], ref)
+                self.assertEqual(result["world_ref"], "control:root")
+                self.assertEqual(result["relation_revision"], fnv(declared.read_bytes()))
+                self.assertEqual(result["material_metadata_basis"]["inode"], path.stat().st_ino)
+                for name in ["revision", "content", "content_encoding", "projection", "skill_manifest"]:
+                    self.assertNotIn(name, result)
+            failure = self.action("resolve", source_ref=ref, content=False, success=False)
+            self.assertEqual(failure["error"]["details"]["ownership"], "known")
+            self.assertEqual(failure["error"]["details"]["io_error"]["raw_os_error"], observed.exception.errno)
+            self.assertEqual(failure["error"]["details"]["effects"], "none")
+        finally:
+            path.chmod(mode)
+        self.assertEqual((self.material_basis(path), self.material_basis(declared)), before)
+        self.assertFalse((self.root / ".central").exists())
+
+    def test_43_healthy_unregistered_is_not_minted_and_invalid_metadata_never_becomes_absence(self):
+        plain = self.write("ordinary.txt", "not accepted as a native Source\n")
+        unknown = "central:source:control:root:ordinary.txt"
+        result = self.action("resolve", source_ref=unknown, binding_only=True)
+        self.assertEqual(result, {"ownership": "unregistered", "binding_only": True, "source_ref": unknown})
+        result = self.action("locate", path=str(plain), binding_only=True)
+        self.assertEqual(result, {"ownership": "unregistered", "binding_only": True, "requested_path": str(plain)})
+        rows = [self.relation("opaque:first", "Control/user/note.md"),
+                self.relation("opaque:second", "Control/user//note.md")]
+        declaration = self.declared(rows)
+        before = declaration.read_bytes()
+        result = self.action("resolve", source_ref="opaque:absent", binding_only=True, success=False)
+        self.assertNotEqual(result["error"]["details"]["ownership"], "unregistered")
+        self.assertEqual(declaration.read_bytes(), before)
+        for invalid_document in [b"{malformed actual declaration", b"null"]:
+            declaration.write_bytes(invalid_document)
+            result = self.action("resolve", source_ref="opaque:absent", binding_only=True, success=False)
+            self.assertEqual(result["error"]["details"]["effects"], "none")
+
+    def test_44_known_absence_withdrawal_and_sibling_reopen_preserve_the_owner(self):
+        private = self.write("Control/user/private/body.md", "unselected-private-body\n")
+        sibling = self.write("Control/user/open.md", "selected sibling\n")
+        self.declared([self.relation("opaque:private", "Control/user/private/body.md"),
+                       self.relation("opaque:missing", "Control/user/missing.md"),
+                       self.relation("opaque:sibling", "Control/user/open.md")])
+        missing = self.action("resolve", source_ref="opaque:missing", binding_only=True, success=False)
+        self.assertEqual(missing["error"]["code"], "central.file_map_not_found")
+        self.assertEqual(missing["error"]["details"]["ownership"], "known")
+        before = self.material_basis(private), self.material_basis(sibling)
+        marker = private.parent / ".no-agent-retrieval"
+        marker.write_bytes(b"")
+        for op, request in [("resolve", {"source_ref": "opaque:private"}), ("locate", {"path": str(private)})]:
+            denied = self.action(op, binding_only=True, success=False, **request)
+            self.assertEqual(denied["error"]["code"], "central.file_map_denied")
+            self.assertEqual(denied["error"]["details"]["ownership"], "known")
+            self.assertEqual(denied["error"]["details"]["material_state"], "withheld")
+            self.assertIsNone(denied["error"]["details"]["io_error"])
+            self.assertNotIn("private/body.md", json.dumps(denied))
+            self.assertNotIn("unselected-private-body", json.dumps(denied))
+        self.assertEqual(self.action("resolve", source_ref="opaque:sibling", binding_only=True)["source"]["ref"], "opaque:sibling")
+        marker.unlink()
+        self.assertEqual(self.action("resolve", source_ref="opaque:private", binding_only=True)["source"]["ref"], "opaque:private")
+        self.assertEqual((self.material_basis(private), self.material_basis(sibling)), before)
+
+    def test_45_target_admission_precedes_payload_and_skill_projection_parsing(self):
+        self.project("alpha")
+        source = self.write("Control/user/skills/fixture/SKILL.md", "actual native skill body\n")
+        self.write("Control/user/skills/fixture/skill.json", "malformed actual projection metadata")
+        self.declared([self.relation("opaque:skill", "Control/user/skills/fixture/SKILL.md")])
+        # Existing accepted Source identity is useful without demanding a separate Skill projection.
+        self.assertEqual(self.action("resolve", source_ref="opaque:skill", binding_only=True)["source"]["ref"], "opaque:skill")
+        self.action("resolve", source_ref="opaque:skill", content=False, success=False)
+        denied = self.action("resolve", "alpha", source_ref="opaque:skill", content=False, success=False)
+        self.assertEqual(denied["error"]["details"]["failure_stage"], "project_admission")
+        self.assertEqual(denied["error"]["details"]["material_state"], "withheld")
+        marker = source.parent / ".no-agent-retrieval"
+        marker.write_bytes(b"")
+        denied = self.action("resolve", source_ref="opaque:skill", content=False, success=False)
+        self.assertEqual(denied["error"]["code"], "central.file_map_denied")
+        self.assertNotIn("skill.json", json.dumps(denied))
+        source.unlink()
+        os.mkfifo(source)
+        denied = self.action("resolve", source_ref="opaque:skill", content=False, success=False)
+        self.assertEqual(denied["error"]["code"], "central.file_map_denied")
+        source.unlink()
+        source.write_bytes(b"actual native skill body\n")
+
+    def test_46_enclosing_world_withdrawal_and_world_exclusion_precede_project_body_read(self):
+        project = self.project("alpha")
+        source = self.write("Work/alpha/ProjectCentral/user/body.md", "retained project body\n")
+        ref = "opaque:project:body"
+        self.declared([self.relation(ref, "ProjectCentral/user/body.md")], "alpha")
+        before = self.material_basis(source)
+        marker = self.root / "Work/.no-agent-retrieval"
+        marker.write_bytes(b"")
+        denied = self.action("resolve", "alpha", source_ref=ref, binding_only=True, success=False)
+        self.assertEqual(denied["error"]["details"]["failure_stage"], "world_source_admission")
+        marker.unlink()
+        self.assertEqual(self.action("resolve", "alpha", source_ref=ref, binding_only=True)["world_ref"], "project:alpha")
+        for scope, owner, record in [
+            ("root", None, {"schema":"central.world-relations/v1","ref":"control:root","revision":"r1","parent":None,"sources":[{"ref":ref,"revision":"r1","authority":"human-authored","treatment":"retain-native"}]}),
+            ("project", "alpha", {"schema":"central.world-relations/v1","ref":"alpha","revision":"r1","parent":"control:root","excluded_sources":[ref]})]:
+            self.run_cmd([self.ctrl, "--json", "--root", self.root, "action", "run", "central.world-relations.save",
+                          json.dumps({"scope":scope,"project":owner,"record":record})])
+        denied = self.action("resolve", "alpha", source_ref=ref, content=False, success=False)
+        self.assertEqual(denied["error"]["details"]["failure_stage"], "context_admission")
+        self.assertEqual(self.material_basis(source), before)
+        self.assertTrue(project.is_dir())
+
+    def test_47_declaration_capacity_is_eight_mebibytes_without_widening_source_delivery(self):
+        source = self.write("Control/user/body.md", "source body\n")
+        ref = "opaque:metadata-capacity"
+        declaration = self.declared([self.relation(ref, "Control/user/body.md")],
+                                    retained_padding="x" * (4 * 1024 * 1024 + 1))
+        self.assertLess(declaration.stat().st_size, 8 * 1024 * 1024)
+        before = self.material_basis(declaration), self.material_basis(source)
+        result = self.action("resolve", source_ref=ref, binding_only=True)
+        self.assertEqual(result["relation_revision"], fnv(declaration.read_bytes()))
+        self.assertNotIn("retained_padding", result)
+        self.assertEqual((self.material_basis(declaration), self.material_basis(source)), before)
+        self.declared([self.relation(ref, "Control/user/body.md")], retained_padding="x" * (8 * 1024 * 1024))
+        result = self.action("resolve", source_ref=ref, binding_only=True, success=False)
+        self.assertEqual(result["error"]["details"]["effects"], "none")
+        self.assertEqual(result["error"]["details"]["io_error"]["kind"], "InvalidData")
+        declaration = self.declared([self.relation(ref, "Control/user/body.md")])
+        source.write_bytes(b"x" * (4 * 1024 * 1024 + 1))
+        self.action("resolve", source_ref=ref, content=True, success=False)
+        self.assertEqual(source.stat().st_size, 4 * 1024 * 1024 + 1)
+
+    def test_48_actual_cli_binary_and_action_share_current_index_privacy_without_writes(self):
+        source = self.write("Control/agents/governance/open.md", "# Open native title\nselected-open-body\n")
+        private = self.write("Control/agents/governance/private/hidden.md", "# Hidden native title\nunselected-private-body\n")
+        self.write("Control/agents/governance/private/.no-agent-retrieval", b"")
+        before = self.tree_basis()
+        common = [self.ctrl, "--json", "--root", self.root]
+        cli = self.run_cmd([*common, "control", "index"])
+        owner = self.run_cmd([*common, "action", "run", "control.index", "{}"])
+        self.assertEqual(json.loads(cli.stdout), json.loads(owner.stdout))
+        for text in ["hidden.md", "Hidden native title", "unselected-private-body"]:
+            self.assertNotIn(text, cli.stdout)
+        self.assertIn("Open native title", cli.stdout)
+        self.assertEqual(self.tree_basis(), before)
+        self.assertEqual(source.read_bytes(), b"# Open native title\nselected-open-body\n")
+        self.assertEqual(private.read_bytes(), b"# Hidden native title\nunselected-private-body\n")
+
+    def test_49_binding_mode_optional_provider_standalone_alias_links_and_adopted_sources(self):
+        project = self.project("alpha")
+        source = self.write("Work/alpha/docs/wiki.json", '{"profile":"okf-wiki/v1","objects":[]}')
+        manifest = project / "ProjectCentral/project.json"
+        document = json.loads(manifest.read_bytes())
+        document["wiki"]["adopted_sources"] = ["docs/wiki.json"]
+        manifest.write_bytes(json.dumps(document).encode())
+        ref = "opaque:retained:wiki"
+        self.declared([self.relation(ref, "docs/wiki.json")], "alpha")
+        env = dict(self.env, CENTRAL_BKMR_BIN=str(self.base / "absent-bkmr"))
+        result = self.action("resolve", "alpha", source_ref=ref, binding_only=True, env=env)
+        self.assertEqual(result["source"]["ref"], ref)
+        self.assertEqual(result["world_ref"], "project:alpha")
+        self.link(ref, "Control/user/project-wiki.json")
+        result = self.action("locate", path="Control/user/project-wiki.json", binding_only=True, env=env)
+        self.assertEqual(result["source"]["ref"], ref)
+        self.assertEqual(result["encountered_link"]["world_ref"], "control:root")
+        alias = self.base / "project-alias"
+        alias.symlink_to(project, target_is_directory=True)
+        result = self.run_cmd([self.ctrl, "--json", "--root", alias, "action", "run", "central.file-map.resolve",
+                               json.dumps({"source_ref":ref,"binding_only":True})], env=env)
+        parsed = json.loads(result.stdout)["data"]["result"]
+        self.assertEqual(parsed["world_ref"], "project:alpha")
+        self.assertEqual(parsed["source"]["ref"], ref)
+        self.assertEqual(parsed["project"], None)
+        self.assertFalse((project / ".central/bkmr").exists())
+        self.assertEqual(source.read_bytes(), b'{"profile":"okf-wiki/v1","objects":[]}')
+
+    def test_50_binding_mode_validation_and_owner_metadata_eacces_are_not_no_owner(self):
+        self.assertNotEqual(os.geteuid(), 0, "Actual owner IO proof requires a nonroot execution owner")
+        body = self.write("Control/user/body.md", "actual body\n")
+        ref = "opaque:owner-io"
+        declaration = self.declared([self.relation(ref, "Control/user/body.md")])
+        for values in [{"binding_only": "true"}, {"binding_only": True, "content": True},
+                       {"binding_only": True, "expected_revision": "absent"}]:
+            self.action("resolve", source_ref=ref, success=False, **values)
+        mode = declaration.stat().st_mode & 0o7777
+        before = self.material_basis(declaration), self.material_basis(body)
+        try:
+            declaration.chmod(0)
+            with self.assertRaises(OSError) as observed:
+                declaration.read_bytes()
+            failed = self.action("resolve", source_ref=ref, binding_only=True, success=False)
+            self.assertNotEqual(failed["error"]["details"]["ownership"], "unregistered")
+            self.assertEqual(failed["error"]["details"]["io_error"]["raw_os_error"], observed.exception.errno)
+        finally:
+            declaration.chmod(mode)
+        self.assertEqual((self.material_basis(declaration), self.material_basis(body)), before)
+
+
+
+    def test_51_registered_external_owner_unavailability_never_becomes_standalone_or_no_owner(self):
+        self.assertNotEqual(os.geteuid(), 0, "Actual Project declaration IO requires a nonroot owner")
+        project = self.project("external")
+        body = self.write("Work/external/ProjectCentral/user/body.md", "retained external body\n")
+        self.declared([self.relation("opaque:external", "ProjectCentral/user/body.md")], "external")
+        outside = self.base / "NativeProject"
+        project.rename(outside)
+        body = outside / "ProjectCentral/user/body.md"
+        self.action("scope-register", name="external", path=str(outside), allow_external=True,
+                    expected_revision=self.action("inspect")["revision"])
+        self.assertEqual(self.action("resolve", "external", source_ref="opaque:external", binding_only=True)["world_ref"], "project:external")
+        manifest = outside / "ProjectCentral/project.json"
+        before = self.material_basis(manifest), self.material_basis(body)
+        mode = manifest.stat().st_mode & 0o7777
+        try:
+            manifest.chmod(0)
+            with self.assertRaises(OSError) as observed:
+                manifest.read_bytes()
+            failed = self.action("resolve", "external", source_ref="opaque:external", binding_only=True, success=False)
+            self.assertEqual(failed["error"]["details"]["ownership"], "known")
+            self.assertEqual(failed["error"]["details"]["io_error"]["raw_os_error"], observed.exception.errno)
+        finally:
+            manifest.chmod(mode)
+        self.assertEqual((self.material_basis(manifest), self.material_basis(body)), before)
+        absent = self.base / "RetainedProject"
+        outside.rename(absent)
+        failed = self.action("resolve", "external", source_ref="opaque:external", binding_only=True, success=False)
+        self.assertEqual(failed["error"]["details"]["ownership"], "known")
+        self.assertEqual(failed["error"]["details"]["failure_stage"], "owner_root")
+        absent.rename(outside)
+        self.assertEqual(self.action("resolve", "external", source_ref="opaque:external", binding_only=True)["source"]["ref"], "opaque:external")
+        self.assertEqual(self.material_basis(body), before[1])
+
+
+
+    def test_52_registered_native_files_and_skills_keep_existing_owner_semantics(self):
+        ordinary = self.write("Control/agents/governance/native-note.md", "native source metadata\n")
+        self.skill()
+        native = {entry["path"]: entry["source"] for entry in self.action("inspect")["resources"]}
+        selected = [ordinary, self.root / "Control/user/skills/astronomy/SKILL.md"]
+        before = [self.material_basis(path) for path in selected]
+        for path in selected:
+            binding = native[str(path)]
+            ref = self.register(path.relative_to(self.root))
+            self.assertEqual(ref, binding["ref"])
+            for op, request in [("resolve", {"source_ref":ref}), ("locate", {"path":str(path)})]:
+                reading = self.action(op, binding_only=True, **request)
+                self.assertEqual(reading["source"], binding)
+                self.assertNotIn("revision", reading)
+                self.assertNotIn("content", reading)
+            self.assertEqual(self.action("resolve", source_ref=ref)["source"], binding)
+        self.assertEqual([self.material_basis(path) for path in selected], before)
+        self.assertEqual(native[str(selected[1])]["provenance"], "human-authored")
+        self.assertEqual(native[str(selected[1])]["standing"], "active")
+        self.assertEqual(native[str(selected[1])]["roles"], ["skill-source"])
+
+    def test_53_foreign_explicit_ref_cannot_hide_a_native_fallback_owner(self):
+        self.project("alpha")
+        foreign = self.write("Work/alpha/ProjectCentral/user/native.md", "selected foreign owner\n")
+        root_body = self.write("Control/user/native.md", "selected root owner\n")
+        ref = self.action("locate", "alpha", path=str(foreign), binding_only=True)["source"]["ref"]
+        declaration = self.declared([self.relation(ref, "Control/user/native.md")])
+        before = [self.material_basis(path) for path in [foreign, root_body, declaration]]
+        failure = self.action("resolve", source_ref=ref, binding_only=True, success=False)
+        self.assertEqual(failure["error"]["code"], "central.file_map_conflict")
+        self.assertEqual(failure["error"]["details"]["ownership"], "known")
+        self.assertNotIn("selected foreign owner", json.dumps(failure))
+        self.assertNotIn("selected root owner", json.dumps(failure))
+        self.assertEqual([self.material_basis(path) for path in [foreign, root_body, declaration]], before)
+
+    def test_54_prior_resource_location_cannot_hide_a_new_native_project_owner(self):
+        source = self.write("Work/alpha/ProjectCentral/user/native.md", "retained same physical source\n")
+        prior = self.register(source, allow_external=True)
+        # Genuine later authored Project declaration; the retained root resource
+        # is historical native state, not an injected fake owner result.
+        manifest = self.write("Work/alpha/ProjectCentral/project.json", json.dumps({
+            "schema":"central.project/v1", "project_id":"alpha", "human_source":"ProjectCentral/user",
+            "wiki":{"profile":"okf-wiki/v1", "source":"ProjectCentral/agents/wiki/wiki.json"}}))
+        before = self.material_basis(source), self.material_basis(manifest)
+        failure = self.action("locate", path=str(source), binding_only=True, success=False)
+        self.assertEqual(failure["error"]["code"], "central.file_map_conflict")
+        self.assertEqual(failure["error"]["details"]["ownership"], "known")
+        retained = self.action("inspect")["resources"]
+        self.assertTrue(any(item["source"]["ref"] == prior and item["path"] == str(source) for item in retained))
+        self.assertEqual((self.material_basis(source), self.material_basis(manifest)), before)
+
+    def native_inherited_exclusion(self, source_ref):
+        project = self.project("alpha")
+        self.link(source_ref, "ProjectCentral/user/root-note.md", "alpha")
+        prior = self.action("resolve", "alpha", source_ref=source_ref, binding_only=True)
+        self.assertEqual(prior["source"]["ref"], source_ref)
+        self.assertEqual(prior["world_ref"], "control:root")
+        paths = []
+        for scope, name, owner, record in [
+            ("root", None, self.root, {"schema":"central.world-relations/v1", "ref":"control:root", "revision":"r1", "parent":None,
+                "sources":[{"ref":source_ref, "revision":"r1", "authority":"human-authored", "treatment":"retain-native"}],
+                "retained_extension":{"actual":True}}),
+            ("project", "alpha", project, {"schema":"central.world-relations/v1", "ref":"alpha", "revision":"r1", "parent":"control:root",
+                "excluded_sources":[source_ref]})
+        ]:
+            output = self.run_cmd([self.ctrl, "--json", "--root", self.root, "action", "run", "central.world-relations.save",
+                                  json.dumps({"scope":scope, "project":name, "record":record})])
+            receipt = json.loads(output.stdout)
+            self.assertTrue(receipt["ok"], receipt)
+            paths.append(owner / receipt["data"]["source_path"])
+        self.assert_native_inherited_exclusion(source_ref)
+        return paths
+
+    def assert_native_inherited_exclusion(self, source_ref):
+        result = self.run_cmd([self.ctrl, "--json", "--root", self.root, "action", "run", "central.world.effective-sources",
+                              json.dumps({"scope":"project", "project":"alpha", "world_ref":"alpha"})])
+        sources = json.loads(result.stdout)["data"]["sources"]
+        selected = [row for row in sources if row["ref"] == source_ref]
+        self.assertEqual(len(selected), 1, sources)
+        self.assertEqual(selected[0]["state"], "excluded", selected)
+        self.assertEqual(selected[0]["propagation_path"], ["control:root", "alpha"], selected)
+
+    def test_55_native_world_store_broken_links_fail_current_context_and_reopen_without_writes(self):
+        source = self.write("Control/user/excluded.md", "actual native excluded body\n")
+        ref = self.action("locate", path=str(source), binding_only=True)["source"]["ref"]
+        record_paths = self.native_inherited_exclusion(ref)
+        container = record_paths[0].parent
+        before = [self.material_basis(path) for path in [source, *record_paths]]
+        self.action("resolve", "alpha", source_ref=ref, binding_only=True, success=False)
+        retained = self.base / "retained-worlds"
+        container.rename(retained)
+        container.symlink_to(self.base / "actual-absent-container", target_is_directory=True)
+        link_inode = container.lstat().st_ino
+        try:
+            for metadata_only in [True, False]:
+                failure = self.action("resolve", "alpha", source_ref=ref, binding_only=metadata_only, success=False)
+                self.assertEqual(failure["error"]["details"]["material_state"], "unavailable")
+                self.assertEqual(failure["error"]["details"]["effects"], "none")
+                self.assertNotIn("actual native excluded body", json.dumps(failure))
+            self.assertEqual(container.lstat().st_ino, link_inode)
+        finally:
+            container.unlink()
+            retained.rename(container)
+        self.assert_native_inherited_exclusion(ref)
+        failure = self.action("resolve", "alpha", source_ref=ref, binding_only=True, success=False)
+        self.assertEqual(failure["error"]["details"]["material_state"], "withheld")
+        self.assertEqual([self.material_basis(path) for path in [source, *record_paths]], before)
+
+    def test_56_native_world_store_eacces_preserves_actual_cause_and_exclusion(self):
+        self.assertNotEqual(os.geteuid(), 0, "Actual native World store EACCES proof requires a nonroot execution owner")
+        source = self.write("Control/user/excluded.md", "retained excluded body\n")
+        ref = self.action("locate", path=str(source), binding_only=True)["source"]["ref"]
+        record_paths = self.native_inherited_exclusion(ref)
+        container = record_paths[0].parent
+        before = [self.material_basis(path) for path in [source, *record_paths]]
+        mode = container.stat().st_mode & 0o7777
+        try:
+            container.chmod(0)
+            with self.assertRaises(OSError) as actual:
+                list(container.iterdir())
+            self.assertEqual(actual.exception.errno, errno.EACCES)
+            failure = self.action("resolve", "alpha", source_ref=ref, binding_only=True, success=False)
+            self.assertEqual(failure["error"]["details"]["material_state"], "unavailable")
+            self.assertEqual(failure["error"]["details"]["io_error"]["kind"], "PermissionDenied")
+            self.assertEqual(failure["error"]["details"]["io_error"]["raw_os_error"], actual.exception.errno)
+            self.assertNotIn("retained excluded body", json.dumps(failure))
+        finally:
+            container.chmod(mode)
+        self.assert_native_inherited_exclusion(ref)
+        failure = self.action("resolve", "alpha", source_ref=ref, binding_only=True, success=False)
+        self.assertEqual(failure["error"]["details"]["material_state"], "withheld")
+        self.assertEqual([self.material_basis(path) for path in [source, *record_paths]], before)
+
+
+    def test_57_selected_project_skill_source_keeps_literal_accepted_identity_without_bulk_fallback(self):
+        project = self.project("alpha")
+        body = self.write("Work/alpha/ProjectCentral/user/skills/selected/SKILL.md", "actual selected Project body\n")
+        metadata = self.write("Work/alpha/ProjectCentral/user/skills/selected/skill.json", "actual malformed unoverridden metadata")
+        ref = "opaque:accepted-project-skill"
+        declaration = self.declared([self.relation(ref, "ProjectCentral/user/skills/selected/SKILL.md")], "alpha")
+        before = [self.material_basis(path) for path in [body, metadata, declaration]]
+        result = self.action("resolve", "alpha", source_ref=ref, binding_only=True)
+        self.assertEqual(result["source"]["ref"], ref)
+        self.assertEqual(result["world_ref"], "project:alpha")
+        self.assertNotIn("revision", result)
+        self.assertNotIn("content", result)
+        self.action("resolve", "alpha", source_ref=ref, content=False, success=False)
+        self.action("inspect", "alpha", success=False)
+        self.assertEqual([self.material_basis(path) for path in [body, metadata, declaration]], before)
+        self.assertTrue(project.is_dir())
+
+    def test_58_selected_native_skill_metadata_eacces_is_unavailable_and_reopens_exact_source(self):
+        self.assertNotEqual(os.geteuid(), 0, "Actual selected Skill metadata EACCES requires a nonroot owner")
+        self.skill()
+        body = self.root / "Control/user/skills/astronomy/SKILL.md"
+        metadata = body.parent / "skill.json"
+        ref = self.action("locate", path=str(body), binding_only=True)["source"]["ref"]
+        before = self.material_basis(body), self.material_basis(metadata)
+        mode = metadata.stat().st_mode & 0o7777
+        try:
+            metadata.chmod(0)
+            with self.assertRaises(OSError) as actual:
+                metadata.read_bytes()
+            failure = self.action("resolve", source_ref=ref, binding_only=True, success=False)
+            self.assertEqual(failure["error"]["details"]["ownership"], "known")
+            self.assertEqual(failure["error"]["details"]["material_state"], "unavailable")
+            self.assertEqual(failure["error"]["details"]["io_error"]["raw_os_error"], actual.exception.errno)
+        finally:
+            metadata.chmod(mode)
+        reading = self.action("resolve", source_ref=ref, binding_only=True)
+        self.assertEqual(reading["source"]["provenance"], "human-authored")
+        self.assertEqual(reading["source"]["standing"], "active")
+        self.assertEqual((self.material_basis(body), self.material_basis(metadata)), before)
+
 
 
 def main():

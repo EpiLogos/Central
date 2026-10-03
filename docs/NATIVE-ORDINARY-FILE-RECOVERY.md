@@ -85,11 +85,92 @@ Run the actual candidate CLI against independent temporary Central ground:
 ```sh
 CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 cargo test -p ctrl --locked
 CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 cargo build -p ctrl --bin ctrl --locked
-CTRL_BIN="$PWD/target/debug/ctrl" python3 ctrl/tests/native/ordinary_files.py
+mkdir -p ProjectCentral/now/tmp/ordinary-file-native-evidence
+export CTRL_NATIVE_EVIDENCE_DIR="$PWD/ProjectCentral/now/tmp/ordinary-file-native-evidence"
+# Retain and select the default CLI before an opt-in build can replace its path.
+export CTRL_BIN="$CTRL_NATIVE_EVIDENCE_DIR/ctrl-default"
+cp -p "$PWD/target/debug/ctrl" "$CTRL_BIN"
+cargo test --locked -p ctrl --test native_ordinary_interruption_child --features native-ordinary-interruption-child --no-run --message-format=json
+# Export CTRL_ORDINARY_INTERRUPTION_BIN from the exact returned compiler-artifact executable.
+python3 ctrl/tests/native/ordinary_files.py
 ```
 
 The executable acceptance exercises real read/write/history/restore operations,
 eight simultaneous CLI writers, source identity and protected-route refusal,
 external parent symlink churn, Unicode paths, native macOS metadata, and SIGKILL
-of an actual writer after durable prepare followed by owner recovery. This
+of an actual writer at acknowledged durable prepare and after source rename,
+followed by owner recovery. The required `CTRL_ORDINARY_INTERRUPTION_BIN` names
+the exact compiler-reported opt-in test executable, built with
+`native-ordinary-interruption-child`. The child links the existing `central_ctrl`
+library and invokes its actual CLI API, without including the library unit-test
+tree. The default-off feature compiles the checkpoint bridge and two hooks in
+that opted-in library; only the selected child calls the arming API. Default
+library and binary builds omit both bridge and hooks. An explicitly feature-
+enabled ordinary CLI leaves the thread-local fixture unarmed and does not read
+fixture admission or notification environment. A bounded root-local test admission
+binds the actual request, root and source identities. A held inherited pipe reports the actual pending
+checkpoint; the direct writer holds it for at most five seconds, refuses parent
+loss/late observation, and cannot return a successful write. The parent retains
+its original five-second checkpoint deadline, kills and reaps the actual writer,
+then asks the production CLI to reconcile. Missing/changed admission and source
+bytes matching neither recorded revision must remain failures. No fixture writes
+a pending record or invents a receipt. Actual compiler/binary identities and all
+Linux/Mac results are retained by the normal verification workflow. Raw phase
+notifications/capture, admission refusals and production recovery replies remain
+in the required caller evidence directory after disposable fixture cleanup.
+This
 establishes the owner candidate; consumer/native-desktop acceptance is separate.
+
+## Supporting material publication and acknowledgement
+
+The existing native `file_mutation::atomic_record` publishes owner-supplied bytes
+under an explicit native root and normal relative member. Each existing owner
+retains its own lock, identity, revision/CAS, lifecycle and recovery. First
+identity/snapshot/proposal publication is exclusive; mutable pending/cursor/intent
+updates replace an admitted current record, or exclusively create an absent one.
+A shared physical routine does not make its bytes human Source or acceptance.
+
+Publication holds the admitted root and parent descriptors, requalifies the
+original supplied-root route, refuses symlink/nonregular/multiple-link targets,
+and allocates a unique create-new same-directory stage. `record-staging` is no
+longer opened, truncated, renamed, consumed or swept. Existing remnants remain
+unselected evidence. Before candidate bytes, an immutable UID/GID/mode/ACL/xattr
+expectation is captured from the admitted source or actual new stage defaults.
+Supported retained metadata is copied and checked; unsupported retention refuses
+before publication. Operational read-only records remain owner-replaceable with
+their mode retained; this does not change Source read-only or write authority.
+
+Stage bytes/fsync, held-directory rename, directory fsync and actual named/held
+readback establish distinct observations. Failures after rename retain typed
+`published:true`, actual target and original IO cause: publication may have
+committed although durability/current acknowledgement is unconfirmed. Native
+Action errors use `partial_completion` / `central.publication_uncertain` when
+this physical uncertainty or actual prior owner progress exists, with body-free
+`record_publication` and `prior_owner_observation`. Source publication and
+semantic acceptance are never inferred from a supporting material publication.
+Use the existing native read/recovery and original input, without automatic
+resend. Failure before rename retains its exact unique stage; no failed-stage
+check-then-unlink can remove another actor's replacement.
+
+Readback streams at most the admitted candidate length plus one byte. It does
+not import a Wiki body limit or truncate legitimate serialized records above
+8 MiB; each caller's existing admission/read capacity remains its own contract.
+Metadata observation retains the existing finite Wiki mechanical metadata
+profile, separately from body capacity. Original IO objects survive typed error
+sources; new diagnostic observations are body-free, at most 8 KiB each, with
+explicit optional text omission rather than identity truncation. These are
+mechanical profiles, not new domain meaning or human acceptance.
+
+Owner-cooperating serialization does not exclude arbitrary external writers in
+a final check/rename interval. `source_safety` source-stage cleanup, SourceTransfer
+conflict serialization, hardware power-loss guarantees and installed acceptance
+remain separate obligations. The added real filesystem/native Action and CLI
+regressions require qualification on the published composed Source cut; their
+Source definitions alone do not establish execution.
+
+An interrupted first save may already have acknowledged its native creation
+request while the Source is still absent. The existing owner compares the full
+retained request before resuming; only that exact request may update its own
+creation record. A different operation/request remains refused. This does not
+create a new identity, acknowledge a Source that is still absent, or turn a
+failed pending-record write into an instruction to resend another request.

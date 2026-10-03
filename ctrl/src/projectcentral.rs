@@ -124,7 +124,11 @@ pub fn projectcentral_paths(
 pub fn read_project_manifest(project_root: &Path) -> io::Result<ProjectCentralManifest> {
     let path = project_root.join(PROJECTCENTRAL_DIR).join(PROJECT_MANIFEST);
     let bytes = fs::read(&path)?;
-    serde_json::from_slice(&bytes).map_err(|error| {
+    parse_project_manifest(&bytes, &path)
+}
+
+pub(crate) fn parse_project_manifest(bytes: &[u8], path: &Path) -> io::Result<ProjectCentralManifest> {
+    serde_json::from_slice(bytes).map_err(|error| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!(

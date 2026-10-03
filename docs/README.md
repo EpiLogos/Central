@@ -133,6 +133,10 @@ resembles the product checkout (`mixed_root` in the structured health report).
 
 ## Supporting product understanding
 
+- [AGENT-PROFILE-SOURCE-ALLOCATION.md](AGENT-PROFILE-SOURCE-ALLOCATION.md) —
+  Source-only account of profile proposal allocation and its separate Agent,
+  Agency and runtime admission boundaries; architecture interpretation with
+  agent-inference standing.
 - [VISUAL-PRODUCT-UNDERSTANDING.md](VISUAL-PRODUCT-UNDERSTANDING.md) — the
   canonical visual understanding of the product.
 

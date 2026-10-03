@@ -29,10 +29,333 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2.9.2
         with:
           cache-on-failure: true
-      - run: cargo test --workspace --locked
+      - name: Preserve exact atomic native source and host prerequisites
+        id: atomic-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/atomic-native"
+          mkdir -p "$out"
+          test "$(id -u)" -ne 0
+          {
+            git rev-parse HEAD
+            git rev-parse 'HEAD^{tree}'
+            git rev-parse --verify HEAD^ || true
+            rustc -vV
+            cargo --version
+            uname -a
+            id
+          } > "$out/source-toolchain.txt"
+          git ls-tree -r HEAD > "$out/source-manifest.txt"
+          git archive --format=tar.gz --output="$out/source.tar.gz" HEAD
+          python3 - "$out" <<'PY_NATIVE_SOURCE'
+          import hashlib, json, pathlib, sys
+          out=pathlib.Path(sys.argv[1])
+          paths=[pathlib.Path('Cargo.lock'), pathlib.Path('ctrl/Cargo.toml'),
+                 pathlib.Path('.github/workflows/verify.yml'), out/'source.tar.gz']
+          facts=[]
+          for path in paths:
+              digest=hashlib.sha256()
+              with path.open('rb') as stream:
+                  for part in iter(lambda:stream.read(1024*1024), b''): digest.update(part)
+              facts.append({'path':str(path),'sha256':digest.hexdigest(),'bytes':path.stat().st_size})
+          (out/'source-file-hashes.json').write_text(json.dumps(facts,indent=2)+'\n')
+          PY_NATIVE_SOURCE
+      - name: Retain the full default native workspace regression
+        id: atomic-workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --workspace --locked 2>&1 | tee "$RUNNER_TEMP/atomic-native/full-workspace.log"
+      - name: Validate every compiled atomic native test name
+        id: atomic-roster
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/atomic-native"
+          cargo test --locked -p ctrl --lib file_mutation::record_publication_tests -- --list 2>&1 | tee "$out/atomic-roster.log"
+          python3 - "$out" <<'PY_NATIVE_ROSTER'
+          import json, pathlib, sys
+          out=pathlib.Path(sys.argv[1])
+          expected=[
+              "file_mutation::record_publication_tests::legacy_hardlink_and_symlink_stage_are_retained_without_touching_sentinels",
+              "file_mutation::record_publication_tests::replacement_preserves_operational_readonly_mode_owner_and_bootstrap_privacy",
+              "file_mutation::record_publication_tests::admitted_stage_privacy_cannot_change_before_candidate_bytes",
+              "file_mutation::record_publication_tests::actual_stage_replacement_survives_owner_error_and_drop",
+              "file_mutation::record_publication_tests::parent_replacement_before_publication_cannot_redirect_effect",
+              "file_mutation::record_publication_tests::unchanged_root_alias_is_useful_and_retargeted_alias_refuses_before_effect",
+              "file_mutation::record_publication_tests::first_publication_never_overwrites_a_target_created_at_commit_checkpoint",
+              "file_mutation::record_publication_tests::late_owner_parent_loss_retains_actual_publication_and_original_enoent",
+              "file_mutation::record_publication_tests::actual_postpublication_eacces_retains_errno_and_material_without_retry",
+              "file_mutation::record_publication_tests::immutable_postpublication_privacy_rejects_current_inode_self_comparison",
+              "file_mutation::record_publication_tests::native_record_capture_refuses_final_fifo_symlink_and_hardlink_without_effect",
+              "file_mutation::record_publication_tests::cooperating_concurrent_disjoint_records_keep_exact_bytes_and_single_link",
+              "file_mutation::record_publication_tests::admitted_escaped_owner_material_above_eight_mib_is_not_truncated",
+              "file_mutation::record_publication_tests::every_actual_held_record_authority_descriptor_is_cloexec",
+              "file_mutation::record_publication_tests::actual_readonly_operational_record_retains_xattrs_without_new_readonly_policy",
+              "file_mutation::record_publication_tests::fixture_cleanup_removes_only_its_owned_outer_and_preserves_neighbour",
+              "file_mutation::record_publication_tests::actual_native_self_sources_converge_through_existing_owner_lock_and_keep_provenance",
+              "file_mutation::record_publication_tests::actual_native_self_first_publication_failure_retains_material_without_inventing_binding",
+              "file_mutation::record_publication_tests::actual_first_save_interruption_replays_only_same_native_request_and_keeps_creation_identity",
+              "file_mutation::record_publication_tests::actual_native_database_backup_retains_prior_material_when_receipt_readback_fails",
+              "file_mutation::record_publication_tests::actual_native_source_return_roundtrips_escaped_record_above_eight_mib",
+              "file_mutation::record_publication_tests::actual_accepted_return_record_readback_fault_preserves_source_receipt_and_same_return",
+              "file_mutation::record_publication_tests::actual_record_xattrs_survive_update_and_changed_stage_privacy_refuses_before_bytes"
+          ]
+          actual=[line.removesuffix(': test') for line in (out/'atomic-roster.log').read_text().splitlines()
+                  if line.startswith('file_mutation::record_publication_tests::') and line.endswith(': test')]
+          assert len(actual)==23 and len(set(actual))==23,actual
+          assert set(actual)==set(expected),{'missing':sorted(set(expected)-set(actual)), 'unexpected':sorted(set(actual)-set(expected))}
+          (out/'compiled-atomic-roster.json').write_text(json.dumps({'standing':'compiled roster only',
+              'total':len(actual),'default_required':22,'explicit_ignored_required':1,'names':actual},indent=2)+'\n')
+          PY_NATIVE_ROSTER
+      - name: Execute all 22 default atomic native owner cases
+        id: atomic-default
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/atomic-native"
+          cargo test --locked -p ctrl --lib file_mutation::record_publication_tests -- --nocapture 2>&1 | tee "$out/atomic-default.log"
+          python3 - "$out" <<'PY_NATIVE_DEFAULT'
+          import json, pathlib, re, sys
+          out=pathlib.Path(sys.argv[1])
+          summary=re.findall(r'^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored;',
+                             (out/'atomic-default.log').read_text(),re.MULTILINE)
+          assert summary==[('22','0','1')],summary
+          (out/'atomic-default-counts.json').write_text(json.dumps({'passed':22,'failed':0,'ignored':1,
+              'ignored_is_not_execution':True,'source':'actual successful Cargo/libtest log'},indent=2)+'\n')
+          PY_NATIVE_DEFAULT
+      - name: Prepare and identify the real pinned native bkmr provider
+        id: atomic-provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/atomic-native"
+          python3 -m venv "$RUNNER_TEMP/atomic-bkmr"
+          "$RUNNER_TEMP/atomic-bkmr/bin/pip" install --report "$out/bkmr-install-report.json" bkmr==7.6.7 2>&1 | tee "$out/bkmr-install.log"
+          "$RUNNER_TEMP/atomic-bkmr/bin/pip" freeze > "$out/bkmr-python-dependencies.txt"
+          "$RUNNER_TEMP/atomic-bkmr/bin/pip" show --files bkmr > "$out/bkmr-package-files.txt"
+          "$RUNNER_TEMP/atomic-bkmr/bin/bkmr" --version | tee "$out/bkmr-version.txt"
+          python3 - "$out" "$RUNNER_TEMP/atomic-bkmr/bin/bkmr" <<'PY_NATIVE_PROVIDER'
+          import hashlib, json, pathlib, shutil, sys
+          out=pathlib.Path(sys.argv[1]); binary=pathlib.Path(sys.argv[2]).resolve(strict=True)
+          assert (out/'bkmr-version.txt').read_text().strip()=='bkmr 7.6.7'
+          with binary.open('rb') as stream: header=stream.read(4)
+          assert header in (b'\x7fELF',b'\xcf\xfa\xed\xfe',b'\xfe\xed\xfa\xcf',b'\xca\xfe\xba\xbe',b'\xbe\xba\xfe\xca'),header.hex()
+          digest=hashlib.sha256()
+          with binary.open('rb') as stream:
+              for part in iter(lambda:stream.read(1024*1024), b''): digest.update(part)
+          facts={'path':str(binary),'sha256':digest.hexdigest(),'bytes':binary.stat().st_size,
+                 'native_header':header.hex(),'version':'bkmr 7.6.7','route':'actual hosted pip bkmr==7.6.7; package report retained'}
+          (out/'bkmr-binary.json').write_text(json.dumps(facts,indent=2)+'\n')
+          shutil.copyfile(binary,out/'bkmr')
+          PY_NATIVE_PROVIDER
+      - name: Execute the mandatory real bkmr backup and adoption case
+        id: atomic-bkmr
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/atomic-native"
+          export CENTRAL_BKMR_BIN="$RUNNER_TEMP/atomic-bkmr/bin/bkmr"
+          cargo test --locked -p ctrl --lib file_mutation::record_publication_tests::actual_native_database_backup_retains_prior_material_when_receipt_readback_fails -- --ignored --exact --list 2>&1 | tee "$out/atomic-bkmr-roster.log"
+          python3 - "$out" <<'PY_NATIVE_IGNORED_ROSTER'
+          import pathlib, sys
+          out=pathlib.Path(sys.argv[1])
+          actual=[line.removesuffix(': test') for line in (out/'atomic-bkmr-roster.log').read_text().splitlines()
+                  if line.startswith('file_mutation::record_publication_tests::') and line.endswith(': test')]
+          assert actual==['file_mutation::record_publication_tests::actual_native_database_backup_retains_prior_material_when_receipt_readback_fails'],actual
+          PY_NATIVE_IGNORED_ROSTER
+          cargo test --locked -p ctrl --lib file_mutation::record_publication_tests::actual_native_database_backup_retains_prior_material_when_receipt_readback_fails -- --ignored --exact --nocapture 2>&1 | tee "$out/atomic-bkmr-native.log"
+          python3 - "$out" <<'PY_NATIVE_IGNORED_COUNT'
+          import json, pathlib, re, sys
+          out=pathlib.Path(sys.argv[1])
+          summary=re.findall(r'^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored;',
+                             (out/'atomic-bkmr-native.log').read_text(),re.MULTILINE)
+          assert summary==[('1','0','0')],summary
+          (out/'atomic-bkmr-counts.json').write_text(json.dumps({'passed':1,'failed':0,'ignored':0,
+              'case':'file_mutation::record_publication_tests::actual_native_database_backup_retains_prior_material_when_receipt_readback_fails','source':'actual successful Cargo/libtest log'},indent=2)+'\n')
+          PY_NATIVE_IGNORED_COUNT
+      - name: Exercise the actual ordinary-file and source-Return CLI routes
+        id: atomic-cli
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/atomic-native"
+          test ! -e "$out/binary-provenance.py"
+          test ! -L "$out/binary-provenance.py"
+          cat > "$out/binary-provenance.py" <<'PY_NATIVE_IMAGE'
+          import hashlib, json, os, pathlib, shutil, stat, sys
+
+          mode, out_arg, *args = sys.argv[1:]
+          out = pathlib.Path(out_arg).resolve(strict=True)
+          specs = {
+              'ctrl': ('ctrl', ['bin'], [], False, 'ctrl-build.jsonl', 'ctrl-binary.json', 'ctrl-path.txt', 'ctrl'),
+              'ordinary-child': ('native_ordinary_interruption_child', ['test'], ['native-ordinary-interruption-child'], True,
+                                 'ordinary-child-build.jsonl', 'ordinary-child-binary.json', 'ordinary-child-path.txt', 'ordinary-interruption-child'),
+          }
+          helper_sha = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()
+
+          def observe(path):
+              before = path.lstat()
+              assert stat.S_ISREG(before.st_mode) and before.st_uid == os.geteuid(), path
+              assert stat.S_IMODE(before.st_mode) & 0o111 and os.access(path, os.X_OK), path
+              fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+              digest, header, count = hashlib.sha256(), b'', 0
+              with os.fdopen(fd, 'rb') as stream:
+                  initial = os.fstat(stream.fileno())
+                  assert (before.st_dev, before.st_ino) == (initial.st_dev, initial.st_ino), path
+                  for part in iter(lambda: stream.read(1024 * 1024), b''):
+                      if not header:
+                          header = part[:16]
+                      digest.update(part)
+                      count += len(part)
+                  final = os.fstat(stream.fileno())
+              after = path.lstat()
+              fields = ('st_dev', 'st_ino', 'st_uid', 'st_mode', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+              assert tuple(getattr(before, key) for key in fields) == tuple(getattr(initial, key) for key in fields), path
+              assert tuple(getattr(initial, key) for key in fields) == tuple(getattr(final, key) for key in fields), path
+              assert tuple(getattr(final, key) for key in fields) == tuple(getattr(after, key) for key in fields), path
+              assert count == initial.st_size and count > 0, path
+              if sys.platform == 'linux':
+                  assert header[:4] == b'\x7fELF', (path, header.hex())
+                  native_format = 'ELF'
+              else:
+                  assert sys.platform == 'darwin', sys.platform
+                  assert header[:4].hex() in {'feedface', 'cefaedfe', 'feedfacf', 'cffaedfe', 'cafebabe', 'bebafeca', 'cafebabf', 'bfbafeca'}, (path, header.hex())
+                  native_format = 'Mach-O'
+              return {'sha256': digest.hexdigest(), 'bytes': count, 'mode': stat.S_IMODE(initial.st_mode),
+                      'device': initial.st_dev, 'inode': initial.st_ino, 'uid': initial.st_uid,
+                      'mtime_ns': initial.st_mtime_ns, 'ctime_ns': initial.st_ctime_ns,
+                      'header_hex': header.hex(), 'native_format': native_format}
+
+          if mode == 'capture':
+              assert len(args) == 1, args
+              name = args[0]
+              target, kind, features, is_test, log, record_name, path_name, copy_name = specs[name]
+              artifacts = []
+              for line in (out / log).read_text().splitlines():
+                  value = json.loads(line)
+                  if (value.get('reason') == 'compiler-artifact' and value.get('target', {}).get('name') == target
+                          and value['target'].get('kind') == kind and value.get('executable')):
+                      artifacts.append(value)
+              assert len(artifacts) == 1, artifacts
+              artifact = artifacts[0]
+              assert artifact['features'] == features and artifact['profile']['test'] is is_test, artifact
+              build_path = pathlib.Path(artifact['executable']).resolve(strict=True)
+              built_before = observe(build_path)
+              captured_path = out / copy_name
+              assert not os.path.lexists(captured_path), captured_path
+              shutil.copy2(build_path, captured_path)
+              built_after, captured = observe(build_path), observe(captured_path)
+              content_fields = ('sha256', 'bytes', 'mode', 'uid', 'mtime_ns', 'header_hex', 'native_format')
+              capture_matches = built_before == built_after and all(built_before[key] == captured[key] for key in content_fields)
+              record = {'path': str(captured_path), 'executed_path': str(captured_path), 'build_path': str(build_path),
+                        'sha256': captured['sha256'], 'bytes': captured['bytes'], 'mode': captured['mode'],
+                        'native_format': captured['native_format'], 'header_hex': captured['header_hex'],
+                        'compiler_artifact': artifact, 'features': features, 'profile_test': is_test,
+                        'build_image_before': built_before, 'build_image_after': built_after, 'captured_image': captured,
+                        'capture_helper_sha256': helper_sha, 'capture_matches': capture_matches,
+                        'standing': 'actual executable copy2 capture; this physical copy is selected for execution'}
+              (out / record_name).write_text(json.dumps(record, indent=2) + '\n')
+              assert capture_matches, record
+              (out / path_name).write_text(str(captured_path) + '\n')
+          elif mode == 'check':
+              stage, *names = args
+              assert stage and all(char.isalnum() or char == '-' for char in stage) and names, args
+              facts, failures = [], []
+              for name in names:
+                  target, kind, features, is_test, _, record_name, path_name, copy_name = specs[name]
+                  expected_path = out / copy_name
+                  try:
+                      record = json.loads((out / record_name).read_text())
+                      actual = observe(expected_path)
+                      artifact = record['compiler_artifact']
+                      matches = (record['path'] == record['executed_path'] == str(expected_path)
+                                 and (out / path_name).read_text() == str(expected_path) + '\n'
+                                 and artifact['target']['name'] == target and artifact['target']['kind'] == kind
+                                 and artifact['features'] == features and artifact['profile']['test'] is is_test
+                                 and record['features'] == features and record['profile_test'] is is_test
+                                 and record['capture_helper_sha256'] == helper_sha and record['capture_matches'] is True
+                                 and actual == record['captured_image']
+                                 and record['sha256'] == actual['sha256'] and record['bytes'] == actual['bytes']
+                                 and record['mode'] == actual['mode'] and record['header_hex'] == actual['header_hex']
+                                 and record['native_format'] == actual['native_format'])
+                      facts.append({'name': name, 'executed_path': str(expected_path), 'actual_image': actual,
+                                    'expected_image': record['captured_image'], 'matches': matches})
+                      if not matches:
+                          failures.append(name)
+                  except Exception as error:
+                      facts.append({'name': name, 'executed_path': str(expected_path), 'inspection_error': repr(error), 'matches': False})
+                      failures.append(name)
+              account = {'stage': stage, 'helper_sha256': helper_sha, 'images': facts,
+                         'standing': 'actual image observations at this stage; no universal immutability claim'}
+              (out / ('binary-images-' + stage + '.json')).write_text(json.dumps(account, indent=2) + '\n')
+              assert not failures, failures
+          else:
+              raise AssertionError(mode)
+          PY_NATIVE_IMAGE
+          cargo build --locked -p ctrl --bin ctrl --message-format=json 2> "$out/ctrl-build.stderr" | tee "$out/ctrl-build.jsonl"
+          python3 "$out/binary-provenance.py" capture "$out" ctrl
+          python3 "$out/binary-provenance.py" check "$out" before-opt-in-build ctrl
+          cargo test --locked -p ctrl --test native_ordinary_interruption_child --features native-ordinary-interruption-child --no-run --message-format=json 2> "$out/ordinary-child-build.stderr" | tee "$out/ordinary-child-build.jsonl"
+          python3 "$out/binary-provenance.py" capture "$out" ordinary-child
+          python3 "$out/binary-provenance.py" check "$out" after-opt-in-build ctrl ordinary-child
+          finish_atomic_cli() {
+            local status=$?
+            trap - EXIT
+            if ! python3 "$out/binary-provenance.py" check "$out" final-execution ctrl ordinary-child; then
+              if test "$status" -eq 0; then status=1; fi
+            fi
+            exit "$status"
+          }
+          trap finish_atomic_cli EXIT
+          cargo clippy --locked -p ctrl --test native_ordinary_interruption_child --features native-ordinary-interruption-child -- -D warnings 2>&1 | tee "$out/ordinary-child-clippy.log"
+          python3 "$out/binary-provenance.py" check "$out" after-clippy ctrl ordinary-child
+          ctrl=$(cat "$out/ctrl-path.txt")
+          ordinary_child=$(cat "$out/ordinary-child-path.txt")
+          python3 "$out/binary-provenance.py" check "$out" before-ordinary ctrl ordinary-child
+          CTRL_BIN="$ctrl" CTRL_ORDINARY_INTERRUPTION_BIN="$ordinary_child" CTRL_NATIVE_EVIDENCE_DIR="$out" python3 ctrl/tests/native/ordinary_files.py 2>&1 | tee "$out/ordinary-files-native.log"
+          python3 "$out/binary-provenance.py" check "$out" after-ordinary ctrl ordinary-child
+          python3 "$out/binary-provenance.py" check "$out" before-source-return ctrl ordinary-child
+          CTRL_BIN="$ctrl" python3 ctrl/tests/native/source_returns.py 2>&1 | tee "$out/source-returns-native.log"
+          python3 "$out/binary-provenance.py" check "$out" after-source-return ctrl ordinary-child
+          git diff --exit-code
+      - name: Retain actual atomic native step outcomes
+        if: always()
+        shell: bash
+        env:
+          ATOMIC_SOURCE_OUTCOME: ${{ steps['atomic-source'].outcome }}
+          ATOMIC_FULL_OUTCOME: ${{ steps['atomic-workspace'].outcome }}
+          ATOMIC_ROSTER_OUTCOME: ${{ steps['atomic-roster'].outcome }}
+          ATOMIC_DEFAULT_OUTCOME: ${{ steps['atomic-default'].outcome }}
+          ATOMIC_PROVIDER_OUTCOME: ${{ steps['atomic-provider'].outcome }}
+          ATOMIC_BKMR_OUTCOME: ${{ steps['atomic-bkmr'].outcome }}
+          ATOMIC_CLI_OUTCOME: ${{ steps['atomic-cli'].outcome }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/atomic-native"
+          python3 - "$RUNNER_TEMP/atomic-native" <<'PY_NATIVE_OUTCOMES'
+          import json, os, pathlib, sys
+          names=['SOURCE','FULL','ROSTER','DEFAULT','PROVIDER','BKMR','CLI']
+          outcomes={name.lower():os.environ['ATOMIC_'+name+'_OUTCOME'] for name in names}
+          facts={'standing':'actual GitHub step outcomes, not synthetic native receipts',
+                 'run_id':os.environ.get('GITHUB_RUN_ID'),'run_attempt':os.environ.get('GITHUB_RUN_ATTEMPT'),
+                 'job':os.environ.get('GITHUB_JOB'),'github_sha':os.environ.get('GITHUB_SHA'),
+                 'platform':'linux','outcomes':outcomes}
+          (pathlib.Path(sys.argv[1])/'github-native-outcomes.json').write_text(json.dumps(facts,indent=2)+'\n')
+          PY_NATIVE_OUTCOMES
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: central-atomic-native-linux-${{ github.sha }}
+          path: ${{ runner.temp }}/atomic-native
+          if-no-files-found: error
+          retention-days: 14
       - name: Core keeps its dependency boundaries
         shell: bash
         run: |
@@ -47,6 +370,44 @@ jobs:
             exit 1
           fi
 
+      - name: Strict native owner lint
+        id: receiving-lint
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/receiving-quality"
+          cargo clippy --locked -p ctrl --lib -- -D warnings 2>&1 | tee "$RUNNER_TEMP/receiving-quality/clippy.log"
+      - name: Qualify formatting without changing tested source
+        id: receiving-format
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/receiving-quality"
+          git rev-parse HEAD > "$RUNNER_TEMP/receiving-quality/source-revision.txt"
+          cp ctrl/src/continuous_work/receiving.rs "$RUNNER_TEMP/receiving-quality/receiving.rs"
+          cp ctrl/tests/continuous_documents_receiving.rs "$RUNNER_TEMP/receiving-quality/continuous_documents_receiving.rs"
+          rustfmt --edition 2021 "$RUNNER_TEMP/receiving-quality/receiving.rs" "$RUNNER_TEMP/receiving-quality/continuous_documents_receiving.rs"
+          status=0
+          diff -u ctrl/src/continuous_work/receiving.rs "$RUNNER_TEMP/receiving-quality/receiving.rs" > "$RUNNER_TEMP/receiving-quality/receiving-format.diff" || status=$?
+          diff -u ctrl/tests/continuous_documents_receiving.rs "$RUNNER_TEMP/receiving-quality/continuous_documents_receiving.rs" > "$RUNNER_TEMP/receiving-quality/integration-format.diff" || status=$?
+          cat "$RUNNER_TEMP/receiving-quality/receiving-format.diff" "$RUNNER_TEMP/receiving-quality/integration-format.diff"
+          git diff --exit-code
+          exit "$status"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: receiving-owner-quality-${{ github.sha }}
+          path: ${{ runner.temp }}/receiving-quality
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain every failed native owner quality gate
+        if: always() && (steps.receiving-lint.outcome != 'success' || steps.receiving-format.outcome != 'success')
+        run: exit 1
+
   macos-native:
     runs-on: macos-latest
     timeout-minutes: 20
@@ -56,8 +417,352 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.2
         with:
           cache-on-failure: true
+      - name: Preserve exact atomic native source and host prerequisites
+        id: atomic-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/atomic-native"
+          mkdir -p "$out"
+          test "$(id -u)" -ne 0
+          {
+            git rev-parse HEAD
+            git rev-parse 'HEAD^{tree}'
+            git rev-parse --verify HEAD^ || true
+            rustc -vV
+            cargo --version
+            uname -a
+            id
+          } > "$out/source-toolchain.txt"
+          git ls-tree -r HEAD > "$out/source-manifest.txt"
+          git archive --format=tar.gz --output="$out/source.tar.gz" HEAD
+          python3 - "$out" <<'PY_NATIVE_SOURCE'
+          import hashlib, json, pathlib, sys
+          out=pathlib.Path(sys.argv[1])
+          paths=[pathlib.Path('Cargo.lock'), pathlib.Path('ctrl/Cargo.toml'),
+                 pathlib.Path('.github/workflows/verify.yml'), out/'source.tar.gz']
+          facts=[]
+          for path in paths:
+              digest=hashlib.sha256()
+              with path.open('rb') as stream:
+                  for part in iter(lambda:stream.read(1024*1024), b''): digest.update(part)
+              facts.append({'path':str(path),'sha256':digest.hexdigest(),'bytes':path.stat().st_size})
+          (out/'source-file-hashes.json').write_text(json.dumps(facts,indent=2)+'\n')
+          PY_NATIVE_SOURCE
       - name: Native source publication and compatibility on macOS
-        run: cargo test -p ctrl --locked
+        id: atomic-package
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p ctrl --locked 2>&1 | tee "$RUNNER_TEMP/atomic-native/full-ctrl-macos.log"
+      - name: Validate every compiled atomic native test name
+        id: atomic-roster
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/atomic-native"
+          cargo test --locked -p ctrl --lib file_mutation::record_publication_tests -- --list 2>&1 | tee "$out/atomic-roster.log"
+          python3 - "$out" <<'PY_NATIVE_ROSTER'
+          import json, pathlib, sys
+          out=pathlib.Path(sys.argv[1])
+          expected=[
+              "file_mutation::record_publication_tests::legacy_hardlink_and_symlink_stage_are_retained_without_touching_sentinels",
+              "file_mutation::record_publication_tests::replacement_preserves_operational_readonly_mode_owner_and_bootstrap_privacy",
+              "file_mutation::record_publication_tests::admitted_stage_privacy_cannot_change_before_candidate_bytes",
+              "file_mutation::record_publication_tests::actual_stage_replacement_survives_owner_error_and_drop",
+              "file_mutation::record_publication_tests::parent_replacement_before_publication_cannot_redirect_effect",
+              "file_mutation::record_publication_tests::unchanged_root_alias_is_useful_and_retargeted_alias_refuses_before_effect",
+              "file_mutation::record_publication_tests::first_publication_never_overwrites_a_target_created_at_commit_checkpoint",
+              "file_mutation::record_publication_tests::late_owner_parent_loss_retains_actual_publication_and_original_enoent",
+              "file_mutation::record_publication_tests::actual_postpublication_eacces_retains_errno_and_material_without_retry",
+              "file_mutation::record_publication_tests::immutable_postpublication_privacy_rejects_current_inode_self_comparison",
+              "file_mutation::record_publication_tests::native_record_capture_refuses_final_fifo_symlink_and_hardlink_without_effect",
+              "file_mutation::record_publication_tests::cooperating_concurrent_disjoint_records_keep_exact_bytes_and_single_link",
+              "file_mutation::record_publication_tests::admitted_escaped_owner_material_above_eight_mib_is_not_truncated",
+              "file_mutation::record_publication_tests::every_actual_held_record_authority_descriptor_is_cloexec",
+              "file_mutation::record_publication_tests::actual_readonly_operational_record_retains_xattrs_without_new_readonly_policy",
+              "file_mutation::record_publication_tests::fixture_cleanup_removes_only_its_owned_outer_and_preserves_neighbour",
+              "file_mutation::record_publication_tests::actual_native_self_sources_converge_through_existing_owner_lock_and_keep_provenance",
+              "file_mutation::record_publication_tests::actual_native_self_first_publication_failure_retains_material_without_inventing_binding",
+              "file_mutation::record_publication_tests::actual_first_save_interruption_replays_only_same_native_request_and_keeps_creation_identity",
+              "file_mutation::record_publication_tests::actual_native_database_backup_retains_prior_material_when_receipt_readback_fails",
+              "file_mutation::record_publication_tests::actual_native_source_return_roundtrips_escaped_record_above_eight_mib",
+              "file_mutation::record_publication_tests::actual_accepted_return_record_readback_fault_preserves_source_receipt_and_same_return",
+              "file_mutation::record_publication_tests::actual_record_xattrs_survive_update_and_changed_stage_privacy_refuses_before_bytes"
+          ]
+          actual=[line.removesuffix(': test') for line in (out/'atomic-roster.log').read_text().splitlines()
+                  if line.startswith('file_mutation::record_publication_tests::') and line.endswith(': test')]
+          assert len(actual)==23 and len(set(actual))==23,actual
+          assert set(actual)==set(expected),{'missing':sorted(set(expected)-set(actual)), 'unexpected':sorted(set(actual)-set(expected))}
+          (out/'compiled-atomic-roster.json').write_text(json.dumps({'standing':'compiled roster only',
+              'total':len(actual),'default_required':22,'explicit_ignored_required':1,'names':actual},indent=2)+'\n')
+          PY_NATIVE_ROSTER
+      - name: Execute all 22 default atomic native owner cases
+        id: atomic-default
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/atomic-native"
+          cargo test --locked -p ctrl --lib file_mutation::record_publication_tests -- --nocapture 2>&1 | tee "$out/atomic-default.log"
+          python3 - "$out" <<'PY_NATIVE_DEFAULT'
+          import json, pathlib, re, sys
+          out=pathlib.Path(sys.argv[1])
+          summary=re.findall(r'^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored;',
+                             (out/'atomic-default.log').read_text(),re.MULTILINE)
+          assert summary==[('22','0','1')],summary
+          (out/'atomic-default-counts.json').write_text(json.dumps({'passed':22,'failed':0,'ignored':1,
+              'ignored_is_not_execution':True,'source':'actual successful Cargo/libtest log'},indent=2)+'\n')
+          PY_NATIVE_DEFAULT
+      - name: Prepare and identify the real pinned native bkmr provider
+        id: atomic-provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/atomic-native"
+          python3 -m venv "$RUNNER_TEMP/atomic-bkmr"
+          "$RUNNER_TEMP/atomic-bkmr/bin/pip" install --report "$out/bkmr-install-report.json" bkmr==7.6.7 2>&1 | tee "$out/bkmr-install.log"
+          "$RUNNER_TEMP/atomic-bkmr/bin/pip" freeze > "$out/bkmr-python-dependencies.txt"
+          "$RUNNER_TEMP/atomic-bkmr/bin/pip" show --files bkmr > "$out/bkmr-package-files.txt"
+          "$RUNNER_TEMP/atomic-bkmr/bin/bkmr" --version | tee "$out/bkmr-version.txt"
+          python3 - "$out" "$RUNNER_TEMP/atomic-bkmr/bin/bkmr" <<'PY_NATIVE_PROVIDER'
+          import hashlib, json, pathlib, shutil, sys
+          out=pathlib.Path(sys.argv[1]); binary=pathlib.Path(sys.argv[2]).resolve(strict=True)
+          assert (out/'bkmr-version.txt').read_text().strip()=='bkmr 7.6.7'
+          with binary.open('rb') as stream: header=stream.read(4)
+          assert header in (b'\x7fELF',b'\xcf\xfa\xed\xfe',b'\xfe\xed\xfa\xcf',b'\xca\xfe\xba\xbe',b'\xbe\xba\xfe\xca'),header.hex()
+          digest=hashlib.sha256()
+          with binary.open('rb') as stream:
+              for part in iter(lambda:stream.read(1024*1024), b''): digest.update(part)
+          facts={'path':str(binary),'sha256':digest.hexdigest(),'bytes':binary.stat().st_size,
+                 'native_header':header.hex(),'version':'bkmr 7.6.7','route':'actual hosted pip bkmr==7.6.7; package report retained'}
+          (out/'bkmr-binary.json').write_text(json.dumps(facts,indent=2)+'\n')
+          shutil.copyfile(binary,out/'bkmr')
+          PY_NATIVE_PROVIDER
+      - name: Execute the mandatory real bkmr backup and adoption case
+        id: atomic-bkmr
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/atomic-native"
+          export CENTRAL_BKMR_BIN="$RUNNER_TEMP/atomic-bkmr/bin/bkmr"
+          cargo test --locked -p ctrl --lib file_mutation::record_publication_tests::actual_native_database_backup_retains_prior_material_when_receipt_readback_fails -- --ignored --exact --list 2>&1 | tee "$out/atomic-bkmr-roster.log"
+          python3 - "$out" <<'PY_NATIVE_IGNORED_ROSTER'
+          import pathlib, sys
+          out=pathlib.Path(sys.argv[1])
+          actual=[line.removesuffix(': test') for line in (out/'atomic-bkmr-roster.log').read_text().splitlines()
+                  if line.startswith('file_mutation::record_publication_tests::') and line.endswith(': test')]
+          assert actual==['file_mutation::record_publication_tests::actual_native_database_backup_retains_prior_material_when_receipt_readback_fails'],actual
+          PY_NATIVE_IGNORED_ROSTER
+          cargo test --locked -p ctrl --lib file_mutation::record_publication_tests::actual_native_database_backup_retains_prior_material_when_receipt_readback_fails -- --ignored --exact --nocapture 2>&1 | tee "$out/atomic-bkmr-native.log"
+          python3 - "$out" <<'PY_NATIVE_IGNORED_COUNT'
+          import json, pathlib, re, sys
+          out=pathlib.Path(sys.argv[1])
+          summary=re.findall(r'^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored;',
+                             (out/'atomic-bkmr-native.log').read_text(),re.MULTILINE)
+          assert summary==[('1','0','0')],summary
+          (out/'atomic-bkmr-counts.json').write_text(json.dumps({'passed':1,'failed':0,'ignored':0,
+              'case':'file_mutation::record_publication_tests::actual_native_database_backup_retains_prior_material_when_receipt_readback_fails','source':'actual successful Cargo/libtest log'},indent=2)+'\n')
+          PY_NATIVE_IGNORED_COUNT
+      - name: Exercise the actual ordinary-file and source-Return CLI routes
+        id: atomic-cli
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/atomic-native"
+          test ! -e "$out/binary-provenance.py"
+          test ! -L "$out/binary-provenance.py"
+          cat > "$out/binary-provenance.py" <<'PY_NATIVE_IMAGE'
+          import hashlib, json, os, pathlib, shutil, stat, sys
+
+          mode, out_arg, *args = sys.argv[1:]
+          out = pathlib.Path(out_arg).resolve(strict=True)
+          specs = {
+              'ctrl': ('ctrl', ['bin'], [], False, 'ctrl-build.jsonl', 'ctrl-binary.json', 'ctrl-path.txt', 'ctrl'),
+              'ordinary-child': ('native_ordinary_interruption_child', ['test'], ['native-ordinary-interruption-child'], True,
+                                 'ordinary-child-build.jsonl', 'ordinary-child-binary.json', 'ordinary-child-path.txt', 'ordinary-interruption-child'),
+          }
+          helper_sha = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()
+
+          def observe(path):
+              before = path.lstat()
+              assert stat.S_ISREG(before.st_mode) and before.st_uid == os.geteuid(), path
+              assert stat.S_IMODE(before.st_mode) & 0o111 and os.access(path, os.X_OK), path
+              fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+              digest, header, count = hashlib.sha256(), b'', 0
+              with os.fdopen(fd, 'rb') as stream:
+                  initial = os.fstat(stream.fileno())
+                  assert (before.st_dev, before.st_ino) == (initial.st_dev, initial.st_ino), path
+                  for part in iter(lambda: stream.read(1024 * 1024), b''):
+                      if not header:
+                          header = part[:16]
+                      digest.update(part)
+                      count += len(part)
+                  final = os.fstat(stream.fileno())
+              after = path.lstat()
+              fields = ('st_dev', 'st_ino', 'st_uid', 'st_mode', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+              assert tuple(getattr(before, key) for key in fields) == tuple(getattr(initial, key) for key in fields), path
+              assert tuple(getattr(initial, key) for key in fields) == tuple(getattr(final, key) for key in fields), path
+              assert tuple(getattr(final, key) for key in fields) == tuple(getattr(after, key) for key in fields), path
+              assert count == initial.st_size and count > 0, path
+              if sys.platform == 'linux':
+                  assert header[:4] == b'\x7fELF', (path, header.hex())
+                  native_format = 'ELF'
+              else:
+                  assert sys.platform == 'darwin', sys.platform
+                  assert header[:4].hex() in {'feedface', 'cefaedfe', 'feedfacf', 'cffaedfe', 'cafebabe', 'bebafeca', 'cafebabf', 'bfbafeca'}, (path, header.hex())
+                  native_format = 'Mach-O'
+              return {'sha256': digest.hexdigest(), 'bytes': count, 'mode': stat.S_IMODE(initial.st_mode),
+                      'device': initial.st_dev, 'inode': initial.st_ino, 'uid': initial.st_uid,
+                      'mtime_ns': initial.st_mtime_ns, 'ctime_ns': initial.st_ctime_ns,
+                      'header_hex': header.hex(), 'native_format': native_format}
+
+          if mode == 'capture':
+              assert len(args) == 1, args
+              name = args[0]
+              target, kind, features, is_test, log, record_name, path_name, copy_name = specs[name]
+              artifacts = []
+              for line in (out / log).read_text().splitlines():
+                  value = json.loads(line)
+                  if (value.get('reason') == 'compiler-artifact' and value.get('target', {}).get('name') == target
+                          and value['target'].get('kind') == kind and value.get('executable')):
+                      artifacts.append(value)
+              assert len(artifacts) == 1, artifacts
+              artifact = artifacts[0]
+              assert artifact['features'] == features and artifact['profile']['test'] is is_test, artifact
+              build_path = pathlib.Path(artifact['executable']).resolve(strict=True)
+              built_before = observe(build_path)
+              captured_path = out / copy_name
+              assert not os.path.lexists(captured_path), captured_path
+              shutil.copy2(build_path, captured_path)
+              built_after, captured = observe(build_path), observe(captured_path)
+              content_fields = ('sha256', 'bytes', 'mode', 'uid', 'mtime_ns', 'header_hex', 'native_format')
+              capture_matches = built_before == built_after and all(built_before[key] == captured[key] for key in content_fields)
+              record = {'path': str(captured_path), 'executed_path': str(captured_path), 'build_path': str(build_path),
+                        'sha256': captured['sha256'], 'bytes': captured['bytes'], 'mode': captured['mode'],
+                        'native_format': captured['native_format'], 'header_hex': captured['header_hex'],
+                        'compiler_artifact': artifact, 'features': features, 'profile_test': is_test,
+                        'build_image_before': built_before, 'build_image_after': built_after, 'captured_image': captured,
+                        'capture_helper_sha256': helper_sha, 'capture_matches': capture_matches,
+                        'standing': 'actual executable copy2 capture; this physical copy is selected for execution'}
+              (out / record_name).write_text(json.dumps(record, indent=2) + '\n')
+              assert capture_matches, record
+              (out / path_name).write_text(str(captured_path) + '\n')
+          elif mode == 'check':
+              stage, *names = args
+              assert stage and all(char.isalnum() or char == '-' for char in stage) and names, args
+              facts, failures = [], []
+              for name in names:
+                  target, kind, features, is_test, _, record_name, path_name, copy_name = specs[name]
+                  expected_path = out / copy_name
+                  try:
+                      record = json.loads((out / record_name).read_text())
+                      actual = observe(expected_path)
+                      artifact = record['compiler_artifact']
+                      matches = (record['path'] == record['executed_path'] == str(expected_path)
+                                 and (out / path_name).read_text() == str(expected_path) + '\n'
+                                 and artifact['target']['name'] == target and artifact['target']['kind'] == kind
+                                 and artifact['features'] == features and artifact['profile']['test'] is is_test
+                                 and record['features'] == features and record['profile_test'] is is_test
+                                 and record['capture_helper_sha256'] == helper_sha and record['capture_matches'] is True
+                                 and actual == record['captured_image']
+                                 and record['sha256'] == actual['sha256'] and record['bytes'] == actual['bytes']
+                                 and record['mode'] == actual['mode'] and record['header_hex'] == actual['header_hex']
+                                 and record['native_format'] == actual['native_format'])
+                      facts.append({'name': name, 'executed_path': str(expected_path), 'actual_image': actual,
+                                    'expected_image': record['captured_image'], 'matches': matches})
+                      if not matches:
+                          failures.append(name)
+                  except Exception as error:
+                      facts.append({'name': name, 'executed_path': str(expected_path), 'inspection_error': repr(error), 'matches': False})
+                      failures.append(name)
+              account = {'stage': stage, 'helper_sha256': helper_sha, 'images': facts,
+                         'standing': 'actual image observations at this stage; no universal immutability claim'}
+              (out / ('binary-images-' + stage + '.json')).write_text(json.dumps(account, indent=2) + '\n')
+              assert not failures, failures
+          else:
+              raise AssertionError(mode)
+          PY_NATIVE_IMAGE
+          cargo build --locked -p ctrl --bin ctrl --message-format=json 2> "$out/ctrl-build.stderr" | tee "$out/ctrl-build.jsonl"
+          python3 "$out/binary-provenance.py" capture "$out" ctrl
+          python3 "$out/binary-provenance.py" check "$out" before-opt-in-build ctrl
+          cargo test --locked -p ctrl --test native_ordinary_interruption_child --features native-ordinary-interruption-child --no-run --message-format=json 2> "$out/ordinary-child-build.stderr" | tee "$out/ordinary-child-build.jsonl"
+          python3 "$out/binary-provenance.py" capture "$out" ordinary-child
+          python3 "$out/binary-provenance.py" check "$out" after-opt-in-build ctrl ordinary-child
+          finish_atomic_cli() {
+            local status=$?
+            trap - EXIT
+            if ! python3 "$out/binary-provenance.py" check "$out" final-execution ctrl ordinary-child; then
+              if test "$status" -eq 0; then status=1; fi
+            fi
+            exit "$status"
+          }
+          trap finish_atomic_cli EXIT
+          cargo clippy --locked -p ctrl --test native_ordinary_interruption_child --features native-ordinary-interruption-child -- -D warnings 2>&1 | tee "$out/ordinary-child-clippy.log"
+          python3 "$out/binary-provenance.py" check "$out" after-clippy ctrl ordinary-child
+          ctrl=$(cat "$out/ctrl-path.txt")
+          ordinary_child=$(cat "$out/ordinary-child-path.txt")
+          python3 "$out/binary-provenance.py" check "$out" before-ordinary ctrl ordinary-child
+          CTRL_BIN="$ctrl" CTRL_ORDINARY_INTERRUPTION_BIN="$ordinary_child" CTRL_NATIVE_EVIDENCE_DIR="$out" python3 ctrl/tests/native/ordinary_files.py 2>&1 | tee "$out/ordinary-files-native.log"
+          python3 "$out/binary-provenance.py" check "$out" after-ordinary ctrl ordinary-child
+          python3 "$out/binary-provenance.py" check "$out" before-source-return ctrl ordinary-child
+          CTRL_BIN="$ctrl" python3 ctrl/tests/native/source_returns.py 2>&1 | tee "$out/source-returns-native.log"
+          python3 "$out/binary-provenance.py" check "$out" after-source-return ctrl ordinary-child
+          git diff --exit-code
+      - name: Retain actual atomic native step outcomes
+        if: always()
+        shell: bash
+        env:
+          ATOMIC_SOURCE_OUTCOME: ${{ steps['atomic-source'].outcome }}
+          ATOMIC_FULL_OUTCOME: ${{ steps['atomic-package'].outcome }}
+          ATOMIC_ROSTER_OUTCOME: ${{ steps['atomic-roster'].outcome }}
+          ATOMIC_DEFAULT_OUTCOME: ${{ steps['atomic-default'].outcome }}
+          ATOMIC_PROVIDER_OUTCOME: ${{ steps['atomic-provider'].outcome }}
+          ATOMIC_BKMR_OUTCOME: ${{ steps['atomic-bkmr'].outcome }}
+          ATOMIC_CLI_OUTCOME: ${{ steps['atomic-cli'].outcome }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/atomic-native"
+          python3 - "$RUNNER_TEMP/atomic-native" <<'PY_NATIVE_OUTCOMES'
+          import json, os, pathlib, sys
+          names=['SOURCE','FULL','ROSTER','DEFAULT','PROVIDER','BKMR','CLI']
+          outcomes={name.lower():os.environ['ATOMIC_'+name+'_OUTCOME'] for name in names}
+          facts={'standing':'actual GitHub step outcomes, not synthetic native receipts',
+                 'run_id':os.environ.get('GITHUB_RUN_ID'),'run_attempt':os.environ.get('GITHUB_RUN_ATTEMPT'),
+                 'job':os.environ.get('GITHUB_JOB'),'github_sha':os.environ.get('GITHUB_SHA'),
+                 'platform':'macos','outcomes':outcomes}
+          (pathlib.Path(sys.argv[1])/'github-native-outcomes.json').write_text(json.dumps(facts,indent=2)+'\n')
+          PY_NATIVE_OUTCOMES
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: central-atomic-native-macos-${{ github.sha }}
+          path: ${{ runner.temp }}/atomic-native
+          if-no-files-found: error
+          retention-days: 14
+      - name: Recover an actual native Return after lost stdout on macOS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build -p ctrl --locked
+          git rev-parse HEAD
+          shasum -a256 target/debug/ctrl
+          python3 ctrl/tests/native/receiving_lookup.py --ctrl "$PWD/target/debug/ctrl"
+      - name: Preserve actual native inclusion causes on macOS
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD > "$RUNNER_TEMP/receiving-inclusion-source.txt"
+          shasum -a256 target/debug/ctrl > "$RUNNER_TEMP/receiving-inclusion-binary.txt"
+          python3 ctrl/tests/native/receiving_inclusion_errors.py --ctrl "$PWD/target/debug/ctrl" | tee "$RUNNER_TEMP/receiving-inclusion-errors.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: receiving-inclusion-macos-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/receiving-inclusion-source.txt
+            ${{ runner.temp }}/receiving-inclusion-binary.txt
+            ${{ runner.temp }}/receiving-inclusion-errors.json
+          retention-days: 7
       - name: Explicit macOS extension acceptance
         run: cargo test -p central-macos-connectors -p central-shortcuts-connector --locked
 

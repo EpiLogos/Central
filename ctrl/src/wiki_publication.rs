@@ -468,12 +468,18 @@ fn verify_ownership_mode(source: &Metadata, stage: &Metadata) -> io::Result<()> 
     Ok(())
 }
 fn preserve_metadata(source: &Snapshot, stage: &File) -> io::Result<()> {
+    preserve_file_metadata(&source.file, &source.metadata, stage)
+}
+
+// Shared physical retention only: no Wiki lock, CAS, payload limit or readonly
+// mutation policy is introduced into another native owner's record writer.
+pub(crate) fn preserve_file_metadata(source_file: &File, source_metadata: &Metadata, stage: &File) -> io::Result<()> {
     #[cfg(target_os = "macos")]
     {
         // Bound retained metadata before the native copy, as well as checking
         // parity after writing. Failed staging must remain bounded evidence.
-        extended_attributes(&source.file)?;
-        native_acl(&source.file)?;
+        extended_attributes(source_file)?;
+        native_acl(source_file)?;
         unsafe extern "C" {
             fn fcopyfile(
                 from: libc::c_int,
@@ -487,7 +493,7 @@ fn preserve_metadata(source: &Snapshot, stage: &File) -> io::Result<()> {
         // Copy before writing so the mutation receives a fresh mtime.
         if unsafe {
             fcopyfile(
-                source.file.as_raw_fd(),
+                source_file.as_raw_fd(),
                 stage.as_raw_fd(),
                 std::ptr::null_mut(),
                 7,
@@ -499,29 +505,29 @@ fn preserve_metadata(source: &Snapshot, stage: &File) -> io::Result<()> {
     }
     #[cfg(target_os = "linux")]
     {
-        preserve_linux_metadata(source, stage)?;
+        preserve_linux_metadata(source_file, source_metadata, stage)?;
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         return Err(io::Error::new(io::ErrorKind::Unsupported,
             "Metadata-preserving Wiki replacement is unsupported on this platform; source unchanged"));
     }
-    stage.set_permissions(fs::Permissions::from_mode(source.metadata.mode() & 0o7777))?;
-    verify_ownership_mode(&source.metadata, &stage.metadata()?)
+    stage.set_permissions(fs::Permissions::from_mode(source_metadata.mode() & 0o7777))?;
+    verify_ownership_mode(source_metadata, &stage.metadata()?)
 }
 
 // This is an invocation-local physical expectation, not another source or
 // semantic registry. Freeze it before writing: kernels may clear security
 // xattrs on data mutation, and a foreign actor may change the published inode.
 // Linux POSIX ACLs are included in xattrs; macOS has a separate native ACL.
-struct Privacy {
+pub(crate) struct Privacy {
     metadata: Metadata,
     attributes: std::collections::BTreeMap<Vec<u8>, Vec<u8>>,
     #[cfg(target_os = "macos")]
     acl: Option<Vec<u8>>,
 }
 impl Privacy {
-    fn read(file: &File) -> io::Result<Self> {
+    pub(crate) fn read(file: &File) -> io::Result<Self> {
         let metadata = file.metadata()?;
         ordinary(&metadata)?;
         let attributes = extended_attributes(file)?;
@@ -544,7 +550,7 @@ impl Privacy {
         })
     }
 
-    fn verify(&self, file: &File) -> io::Result<()> {
+    pub(crate) fn verify(&self, file: &File) -> io::Result<()> {
         let reading = Self::read(file)?;
         verify_ownership_mode(&self.metadata, &reading.metadata)?;
         if self.attributes != reading.attributes {
@@ -690,21 +696,23 @@ fn native_acl(file: &File) -> io::Result<Option<Vec<u8>>> {
 }
 
 #[cfg(target_os = "linux")]
-fn preserve_linux_metadata(source: &Snapshot, stage: &File) -> io::Result<()> {
+fn preserve_linux_metadata(source_file: &File, source_metadata: &Metadata, stage: &File) -> io::Result<()> {
     let stage_meta = stage.metadata()?;
-    if (source.metadata.uid(), source.metadata.gid()) != (stage_meta.uid(), stage_meta.gid())
+    if (source_metadata.uid(), source_metadata.gid()) != (stage_meta.uid(), stage_meta.gid())
         && unsafe {
             libc::fchown(
                 stage.as_raw_fd(),
-                source.metadata.uid(),
-                source.metadata.gid(),
+                source_metadata.uid(),
+                source_metadata.gid(),
             )
         } != 0
     {
         return Err(io::Error::last_os_error());
     }
-    stage.set_permissions(fs::Permissions::from_mode(source.metadata.mode() & 0o7777))?;
-    let attributes = extended_attributes(&source.file)?;
+    // Copy extended metadata while the exclusively created stage is writable;
+    // the enclosing native metadata routine restores the admitted source mode.
+    // Operational records may legitimately be read-only yet owner-replaceable.
+    let attributes = extended_attributes(source_file)?;
     for name_bytes in extended_attributes(stage)?.keys() {
         if !attributes.contains_key(name_bytes) {
             let name = CString::new(name_bytes.clone()).map_err(io::Error::other)?;
@@ -734,7 +742,7 @@ fn preserve_linux_metadata(source: &Snapshot, stage: &File) -> io::Result<()> {
 // Exclusive rename has one publication effect. A link+unlink implementation
 // would expose two links and strand a committed source if the process died
 // before unlink, contradicting the single-link restart contract.
-fn rename_new(parent: &File, stage: &CString, target: &CString) -> io::Result<()> {
+pub(crate) fn rename_new(parent: &File, stage: &CString, target: &CString) -> io::Result<()> {
     #[cfg(target_os = "macos")]
     let result = {
         unsafe extern "C" {

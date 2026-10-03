@@ -232,7 +232,11 @@ pub fn read_skill_manifest(skill_dir: &Path) -> io::Result<Option<SkillManifest>
     if !path.is_file() {
         return Ok(None);
     }
-    let manifest: SkillManifest = serde_json::from_slice(&fs::read(&path)?).map_err(|error| {
+    Ok(Some(parse_skill_manifest(&fs::read(&path)?, &path)?))
+}
+
+pub(crate) fn parse_skill_manifest(bytes: &[u8], path: &Path) -> io::Result<SkillManifest> {
+    let manifest: SkillManifest = serde_json::from_slice(bytes).map_err(|error| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("{} is not a valid skill manifest: {error}", path.display()),
@@ -247,7 +251,69 @@ pub fn read_skill_manifest(skill_dir: &Path) -> io::Result<Option<SkillManifest>
             ),
         ));
     }
-    Ok(Some(manifest))
+    Ok(manifest)
+}
+
+fn manifest_horizon_metadata(manifest: Option<&SkillManifest>) -> (String, String) {
+    match manifest {
+        Some(manifest) => (
+            manifest.provenance.horizon_str().to_owned(),
+            manifest.standing.as_str().to_owned(),
+        ),
+        None => ("unresolved".to_owned(), "unspecified".to_owned()),
+    }
+}
+
+/// Select only this source's enclosing native Control Skill manifest. This
+/// does not discover other Skills or infer their standing from directory names.
+pub(crate) fn control_skill_manifest_path(path: &str) -> io::Result<Option<String>> {
+    crate::source_safety::relative_member(path)?;
+    let parts: Vec<_> = path.split('/').collect();
+    let count = if parts.len() >= 5 && parts[..3] == ["Control", "user", "skills"] {
+        4
+    } else if parts.len() >= 6 && parts[0] == "Control" && parts[1] == "machines" && parts[3] == "skills" {
+        5
+    } else {
+        return Ok(None);
+    };
+    Ok(Some(format!("{}/{}", parts[..count].join("/"), SKILL_MANIFEST)))
+}
+
+pub(crate) fn control_skill_binding(
+    path: &str,
+    manifest: Option<&SkillManifest>,
+    agent_retrieval_allowed: bool,
+) -> io::Result<Option<SourceBinding>> {
+    if control_skill_manifest_path(path)?.is_none() { return Ok(None); }
+    let (provenance, standing) = manifest_horizon_metadata(manifest);
+    Ok(Some(skill_binding_from_metadata("control:root", path, &provenance, &standing, agent_retrieval_allowed)))
+}
+
+/// Selected Project Skill metadata uses the same manifest/standing and Source
+/// construction as bulk Skill participation. This only nominates metadata;
+/// callers still observe the actual member and its native disclosure aperture.
+pub(crate) fn project_skill_manifest_path(human_source: &str, path: &str) -> io::Result<Option<String>> {
+    let member = crate::source_safety::normal_member_key(path)?;
+    let skills = crate::source_safety::normal_member_key(human_source)?.join(SKILLS_SEGMENT);
+    let Ok(suffix) = member.strip_prefix(&skills) else { return Ok(None); };
+    let mut parts = suffix.components();
+    let Some(Component::Normal(name)) = parts.next() else { return Ok(None); };
+    if parts.next().is_none() { return Ok(None); }
+    let manifest = skills.join(name).join(SKILL_MANIFEST);
+    manifest.to_str().map(|value| Some(value.to_owned())).ok_or_else(||
+        io::Error::new(io::ErrorKind::InvalidInput, "Native Skill metadata member is not UTF-8"))
+}
+pub(crate) fn project_skill_binding(world_ref: &str, human_source: &str, path: &str,
+    manifest: Option<&SkillManifest>, agent_retrieval_allowed: bool) -> io::Result<Option<SourceBinding>> {
+    if project_skill_manifest_path(human_source, path)?.is_none() { return Ok(None); }
+    let (provenance, standing) = manifest_horizon_metadata(manifest);
+    Ok(Some(skill_binding_from_metadata(world_ref, path, &provenance, &standing, agent_retrieval_allowed)))
+}
+fn skill_binding_from_metadata(world_ref: &str, path: &str, provenance: &str,
+    standing: &str, agent_retrieval_allowed: bool) -> SourceBinding {
+    SourceBinding { source_ref:source_ref(world_ref,path), path:path.to_owned(),
+        roles:vec!["skill-source".to_owned()], provenance:provenance.to_owned(),
+        standing:standing.to_owned(), treatment:CONTROL_SKILL_TREATMENT.to_owned(), agent_retrieval_allowed }
 }
 
 fn write_skill_manifest(skill_dir: &Path, manifest: &SkillManifest) -> io::Result<()> {
@@ -740,35 +806,34 @@ pub(crate) fn insert_skill_bindings(
     skills_root: &Path,
     world_ref: &str,
     bindings: &mut BTreeMap<String, SourceBinding>,
+    explicit_members: &std::collections::BTreeSet<PathBuf>,
 ) -> io::Result<()> {
     for name in child_directories(skills_root)? {
         let skill_dir = skills_root.join(&name);
-        let manifest = read_skill_manifest(&skill_dir)?;
-        let (provenance, standing) = match &manifest {
-            Some(manifest) => (
-                manifest.provenance.horizon_str().to_owned(),
-                manifest.standing.as_str().to_owned(),
-            ),
-            None => ("unresolved".to_owned(), "unspecified".to_owned()),
-        };
+        let mut metadata = None;
         let mut files = Vec::new();
         collect_files(&skill_dir, world_root, 0, &mut files)?;
         for file in files {
             let relative = normalize_relative(file.strip_prefix(world_root).map_err(|_| {
                 io::Error::new(io::ErrorKind::InvalidData, "source escaped its world root")
             })?);
+            if explicit_members.contains(&crate::source_safety::normal_member_key(&relative)?) {
+                continue;
+            }
+            // Explicit accepted Source metadata supersedes this manifest for
+            // that member. A remaining Skill fallback still needs the same
+            // native parser and standing; malformed input is never swallowed.
+            if metadata.is_none() {
+                let manifest = read_skill_manifest(&skill_dir)?;
+                metadata = Some(manifest_horizon_metadata(manifest.as_ref()));
+            }
+            let (provenance, standing) = metadata.as_ref()
+                .expect("remaining Skill member initialized its native metadata");
             let reference = source_ref(world_ref, &relative);
             bindings.insert(
                 reference.clone(),
-                SourceBinding {
-                    source_ref: reference,
-                    path: relative,
-                    roles: vec!["skill-source".to_owned()],
-                    provenance: provenance.clone(),
-                    standing: standing.clone(),
-                    treatment: CONTROL_SKILL_TREATMENT.to_owned(),
-                    agent_retrieval_allowed: retrieval_allowed(world_root, &file),
-                },
+                skill_binding_from_metadata(world_ref, &relative, provenance, standing,
+                    retrieval_allowed(world_root, &file)),
             );
         }
     }

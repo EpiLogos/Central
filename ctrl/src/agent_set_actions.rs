@@ -315,18 +315,43 @@ fn resolve_store(
                 ));
             }
             let project_root = root.path.join("Work").join(&project);
-            if !project_root.is_dir() {
-                return Err(invalid(
-                    action,
-                    format!("project directory is absent: Work/{project}"),
-                ));
-            }
-            let manifest = read_project_manifest(&project_root).map_err(|error| {
-                invalid(
-                    action,
-                    format!("Project does not expose a valid ProjectCentral source: {error}"),
-                )
-            })?;
+            let manifest = if matches!(kind, RelationRecordKind::World) {
+                let observed = (|| -> std::io::Result<crate::projectcentral::ProjectCentralManifest> {
+                    use std::os::unix::fs::MetadataExt;
+                    let directory = crate::file_mutation::directory(
+                        &root.path, &std::path::Path::new("Work").join(&project))?;
+                    let metadata = directory.metadata()?;
+                    let mut reading = crate::file_mutation::NativeFileRead::open(
+                        &project_root, (metadata.dev(), metadata.ino()),
+                        std::path::Path::new("ProjectCentral/project.json"))?;
+                    let bytes = reading.read_bytes(4 * 1024 * 1024)?;
+                    let manifest = crate::projectcentral::parse_project_manifest(
+                        &bytes, &project_root.join("ProjectCentral/project.json"))?;
+                    reading.validate()?;
+                    Ok(manifest)
+                })();
+                observed.map_err(|error| ActionResult::failure_coded(
+                    Some(action), ResultStatus::UnavailableCapability,
+                    "central.world_project_source_unavailable", error.to_string(),
+                    Some(json!({"state":"unavailable", "project":project,
+                        "source":format!("Work/{project}/ProjectCentral/project.json"), "effects":"none",
+                        "io_error":{"kind":format!("{:?}", error.kind()),
+                            "raw_os_error":error.raw_os_error(), "message":error.to_string()}})),
+                ))?
+            } else {
+                if !project_root.is_dir() {
+                    return Err(invalid(
+                        action,
+                        format!("project directory is absent: Work/{project}"),
+                    ));
+                }
+                read_project_manifest(&project_root).map_err(|error| {
+                    invalid(
+                        action,
+                        format!("Project does not expose a valid ProjectCentral source: {error}"),
+                    )
+                })?
+            };
             let validation = manifest.validate();
             if !validation.valid {
                 return Err(invalid(
@@ -798,20 +823,51 @@ fn world_effective_sources(
         // own, and the answer to it is to apply the root lineage by convention.
         // Naming it in the error code lets a consumer tell that apart from a
         // declaration it could not read, which must never widen what a turn
-        // receives. Both share the `invalid_input` status, so without the code
-        // the difference would live only in the message text.
-        Err(error @ WorldError::MissingWorld(_)) => ActionResult::failure_coded(
-            Some(action),
-            ResultStatus::InvalidInput,
-            WORLD_DECLARATION_ABSENT_CODE,
-            error.to_string(),
-            Some(json!({ "state": "absent", "world_ref": world_ref })),
-        ),
-        Err(error) => invalid(action, error.to_string()),
+        // receives. Requested absence carries its existing `invalid_input`
+        // status; broken ancestry is unavailable and never permits fallback.
+        Err(error) => match &error {
+            WorldError::MissingWorld(missing)
+                if missing == &target && graph.get(&target).is_none() =>
+            {
+                ActionResult::failure_coded(
+                    Some(action),
+                    ResultStatus::InvalidInput,
+                    WORLD_DECLARATION_ABSENT_CODE,
+                    error.to_string(),
+                    Some(json!({ "state": "absent", "world_ref": world_ref })),
+                )
+            }
+            // The requested declaration exists. Its broken ancestry cannot
+            // turn into permission to discard its exclusions and use root.
+            WorldError::MissingWorld(missing) => ActionResult::failure_coded(
+                Some(action),
+                ResultStatus::UnavailableCapability,
+                "central.world_ancestry_unavailable",
+                error.to_string(),
+                Some(json!({
+                    "state": "unavailable", "world_ref": world_ref,
+                    "missing_world_ref": missing, "requested_declaration_present": true,
+                    "automatic_root_inheritance": false, "effects": "none"
+                })),
+            ),
+            _ => invalid(action, error.to_string()),
+        },
     }
 }
 
 fn store_failure(action: &str, error: RelationRecordStoreError) -> ActionResult {
+    let read_only = matches!(action, AGENT_SET_LIST_ACTION | AGENT_SET_READ_ACTION
+        | AGENT_SET_RESOLVE_ACTION | WORLD_RELATIONS_LIST_ACTION
+        | WORLD_RELATIONS_READ_ACTION | WORLD_EFFECTIVE_SOURCES_ACTION);
+    if read_only {
+        if let RelationRecordStoreError::RecordBudget { byte_len, limit } = &error {
+            return ActionResult::failure_coded(Some(action), ResultStatus::UnavailableCapability,
+                "central.relation_record_budget", error.to_string(), Some(json!({
+                    "effects":"none", "io_error":Value::Null,
+                    "capacity":{"byte_len":byte_len,"limit":limit,"profile":"eager-relation-metadata"},
+                })));
+        }
+    }
     let status = match &error {
         RelationRecordStoreError::NotFound(_)
         | RelationRecordStoreError::MissingForUpdate { .. } => ResultStatus::VerificationFailure,
@@ -823,10 +879,23 @@ fn store_failure(action: &str, error: RelationRecordStoreError) -> ActionResult 
         | RelationRecordStoreError::RefMismatch { .. }
         | RelationRecordStoreError::SourcePathMismatch { .. }
         | RelationRecordStoreError::UnsafeRoot(_)
-        | RelationRecordStoreError::UnsafeSource(_) => ResultStatus::InvalidInput,
+        | RelationRecordStoreError::UnsafeSource(_)
+        | RelationRecordStoreError::RecordBudget { .. } => ResultStatus::InvalidInput,
         RelationRecordStoreError::Io(_) => ResultStatus::InternalFailure,
     };
-    ActionResult::failure(Some(action), status, error.to_string(), None)
+    // Only these existing owner reads can assert effects:none. The shared
+    // writer/error path must not turn an uncertain mutation into a refusal.
+    let details = if read_only
+    {
+        Some(json!({
+            "effects": "none",
+            "io_error": error.io_error().map(|cause| json!({
+                "kind": format!("{:?}", cause.kind()),
+                "raw_os_error": cause.raw_os_error(), "message": cause.to_string(),
+            })),
+        }))
+    } else { None };
+    ActionResult::failure(Some(action), status, error.to_string(), details)
 }
 
 #[cfg(test)]

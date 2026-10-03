@@ -79,3 +79,30 @@ persistence, conflict, explicit collaborative application and native provenance,
 rejection, paging and protected human-source refusal. Existing source authority
 and Control tests remain required. Desktop/native-human acceptance remains
 separate from this owner candidate.
+
+## Durable proposal publication failures
+
+The existing Return owner uses rooted native physical publication for its
+proposal records: a new native Return identity is exclusive, existing status
+updates preserve admitted operational metadata, and the legacy `record-staging`
+name is untouched. ReturnRef, basis/proposed content, SourceRef, attribution,
+schema and the target/basis/third-revision recovery rules remain unchanged.
+No receipt lookup or inclusion recovery is overloaded onto this legacy vehicle.
+
+A record failure after actual rename preserves typed `published:true` and the
+original IO cause. A successful native Source write followed by accepted-record
+failure preserves its actual SourceRef/revision and existing ReturnRef as scalar
+invocation observations, never a copied source result/body or fabricated current
+receipt. Recovery that observes the intended target likewise retains that actual
+observation if recording it fails. A failed Source write followed by failed
+current read/status recording retains both actual original and supplemental
+errors rather than replacing the original failure.
+
+The native Action reports `partial_completion` / `central.publication_uncertain`
+for these observed incomplete owner phases. Read the same native Return/current
+Source after restoring the physical route; do not automatically issue another
+proposal or acceptance. Existing human-source authority refusal remains intact.
+JSON-escaped proposals above 8 MiB remain readable within the owner's existing
+reader allowance; no Wiki body budget is applied to this record format. Added
+real owner/CLI/OS definitions need composed Source qualification and do not
+constitute installed or human acceptance.

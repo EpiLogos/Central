@@ -59,7 +59,7 @@ impl Backend {
         // bkmr 7.6.7's importer reloads default settings instead of the supplied
         // --config. Isolate HOME as well so BOTH code paths see this scope.
         if fs::read_to_string(&path).ok().as_deref() != Some(&config) {
-            super::file_map::write_atomic(&path, config.as_bytes())?;
+            super::file_map::write_atomic(&self.root, &path, config.as_bytes(), crate::file_mutation::RecordDisposition::ReplaceOrCreate)?;
         }
         if !self.present() {
             self.run(&["create-db".into(), self.db().to_string_lossy().into()])?;

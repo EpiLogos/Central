@@ -28,7 +28,9 @@ impl Drop for World {
 }
 
 fn unique(prefix: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
+    let scratch = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ProjectCentral/now/tmp");
+    fs::create_dir_all(&scratch).unwrap();
+    scratch.join(format!(
         "{prefix}-{}-{}-{}",
         std::process::id(),
         SystemTime::now()
@@ -46,6 +48,7 @@ impl World {
     /// binding `workcell:local`.
     fn new(worktree_grants: &[&str]) -> Self {
         let path = unique("central-world-inhabitation");
+        fs::create_dir(&path).unwrap();
         central_ctrl::initialize_central(&path).unwrap();
         let world = World(fs::canonicalize(&path).unwrap());
         for name in ["one", "two"] {
@@ -317,10 +320,11 @@ fn world_here_places_a_path_in_the_local_and_project_world() {
     // outside Central and a path that does not exist are all results.
     let bare = world.here(&world.root().join("Work/bare/src"));
     assert_eq!(bare["project_world"]["state"], "absent");
-    assert!(bare["project_world"]["reason"]
-        .as_str()
-        .unwrap()
-        .contains("has no ProjectCentral"));
+    assert_eq!(bare["project_world"]["absence_kind"], "projectcentral-manifest-absent");
+    assert_eq!(bare["project_world"]["work_member_present"], true);
+    assert_eq!(bare["project_world"]["name"], "bare");
+    assert_eq!(bare["project_world"]["source"], "Work/bare/ProjectCentral/project.json");
+    assert!(!bare["project_world"]["reason"].as_str().unwrap().is_empty());
     for cwd in [
         world.root().to_path_buf(),
         world.root().join("Control/user"),
@@ -854,4 +858,392 @@ fn repository_projectcentral_world_record_matches_its_manifest_identity() {
     for record in records {
         assert_eq!(record.ref_, format!("project:{}", manifest.project_id));
     }
+}
+
+#[test]
+fn native_world_ref_preserves_bare_prefixed_and_slash_project_ids_verbatim() {
+    for (name, id) in [("bare-id","alpha-native"), ("prefixed-id","project:alpha-native"),
+                       ("slash-id","domain/alpha-native")] {
+        let world = World::new(&[]);
+        fs::create_dir(world.root().join("Work").join(name)).unwrap();
+        let initialized = world.invoke("projectcentral.init", json!({"project":name,"project_id":id}));
+        assert_eq!(initialized["ok"], true, "{initialized}");
+        let scope = Scope::resolve(world.root(), Some(name)).unwrap();
+        let here = world.invoke("central.world.here", json!({"project":name}));
+        assert_eq!(here["ok"], true, "{here}");
+        assert_eq!(here["data"]["project_world"]["state"], "present");
+        assert_eq!(here["data"]["project_world"]["ref"], scope.world_ref);
+        assert_eq!(scope.world_ref, format!("project:{id}"));
+        let manifest = world.root().join("Work").join(name).join("ProjectCentral/project.json");
+        let before = fs::read(&manifest).unwrap();
+        let absent = world.invoke("central.world.effective-sources",
+            json!({"scope":"project","project":name,"world_ref":scope.world_ref}));
+        assert_eq!(absent["error"]["code"], "central.world_declaration_absent");
+        assert_eq!(absent["error"]["details"]["world_ref"], scope.world_ref);
+        assert_eq!(fs::read(manifest).unwrap(), before);
+    }
+}
+
+#[test]
+fn native_existing_project_missing_ancestor_never_becomes_target_absence_or_loses_exclusions() {
+    let world = World::new(&[]);
+    let root = world.invoke("central.world-relations.save", json!({
+        "scope":"root","record":{"schema":"central.world-relations/v1","ref":"control:root",
+            "revision":"root-r1","parent":null,"sources":[{
+                "ref":"central:source:control:root:sealed","revision":"source-r1",
+                "authority":"human-authored","treatment":"canonical"
+            }],"excluded_sources":[]}
+    }));
+    assert_eq!(root["ok"], true, "{root}");
+    let record = json!({"schema":"central.world-relations/v1","ref":"project:test/one",
+        "revision":"child-r1","parent":"control:root","sources":[],
+        "excluded_sources":["central:source:control:root:sealed"]});
+    let saved = world.invoke("central.world-relations.save",
+        json!({"scope":"project","project":"one","record":record}));
+    assert_eq!(saved["ok"], true, "{saved}");
+    let valid = world.invoke("central.world.effective-sources",
+        json!({"scope":"project","project":"one","world_ref":"project:test/one"}));
+    assert_eq!(valid["ok"], true, "{valid}");
+    assert_eq!(valid["data"]["sources"][0]["state"], "excluded");
+    assert_eq!(valid["data"]["sources"][0]["provenance"][0]["world"], "control:root");
+    assert_eq!(valid["data"]["sources"][0]["authority"], "human-authored");
+    let broken = world.invoke("central.world-relations.save", json!({
+        "scope":"project","project":"one","expected_revision":"child-r1","record":{
+            "schema":"central.world-relations/v1","ref":"project:test/one",
+            "revision":"child-r2","parent":"project:missing-parent","sources":[],
+            "excluded_sources":["central:source:control:root:sealed"]
+        }
+    }));
+    assert_eq!(broken["ok"], true, "{broken}");
+    let store = RelationRecordStore::worlds_in_project(world.root().join("Work/one"));
+    let path = store.source_path("project:test/one").unwrap();
+    let before = fs::read(&path).unwrap();
+    let missing = world.invoke("central.world.effective-sources",
+        json!({"scope":"project","project":"one","world_ref":"project:test/one"}));
+    assert_eq!(missing["ok"], false);
+    assert_eq!(missing["error"]["code"], "central.world_ancestry_unavailable");
+    assert_eq!(missing["error"]["details"]["world_ref"], "project:test/one");
+    assert_eq!(missing["error"]["details"]["missing_world_ref"], "project:missing-parent");
+    assert_eq!(missing["error"]["details"]["requested_declaration_present"], true);
+    assert_eq!(missing["error"]["details"]["automatic_root_inheritance"], false);
+    assert_eq!(fs::read(&path).unwrap(), before);
+    let absent = world.invoke("central.world.effective-sources",
+        json!({"scope":"project","project":"two","world_ref":"project:test/two"}));
+    assert_eq!(absent["error"]["code"], "central.world_declaration_absent");
+    assert_eq!(absent["error"]["details"]["world_ref"], "project:test/two");
+    let retained_root = world.invoke("central.world.effective-sources",
+        json!({"scope":"root","world_ref":"control:root"}));
+    assert_eq!(retained_root["ok"], true);
+}
+
+#[test]
+fn native_project_facet_distinguishes_manifestless_member_from_missing_member_and_bad_form() {
+    use std::os::unix::fs::symlink;
+    let world = World::new(&[]);
+    let bare = world.invoke("central.world.here", json!({"project":"bare"}));
+    assert_eq!(bare["data"]["project_world"]["state"], "absent");
+    assert_eq!(bare["data"]["project_world"]["absence_kind"], "projectcentral-manifest-absent");
+    assert_eq!(bare["data"]["project_world"]["work_member_present"], true);
+    let missing = world.invoke("central.world.here", json!({"project":"missing-member"}));
+    assert_eq!(missing["data"]["project_world"]["state"], "absent");
+    assert_eq!(missing["data"]["project_world"]["absence_kind"], "work-member-absent");
+    assert_eq!(missing["data"]["project_world"]["work_member_present"], false);
+    let manifest = world.root().join("Work/one/ProjectCentral/project.json");
+    let before = fs::read(&manifest).unwrap();
+    fs::remove_file(&manifest).unwrap();
+    let manifest_absent = world.invoke("central.world.here", json!({"project":"one"}));
+    assert_eq!(manifest_absent["data"]["project_world"]["state"], "absent");
+    assert_eq!(manifest_absent["data"]["project_world"]["absence_kind"], "projectcentral-manifest-absent");
+    assert_eq!(manifest_absent["data"]["project_world"]["work_member_present"], true);
+    fs::write(&manifest, &before).unwrap();
+    fs::write(&manifest, b"{malformed").unwrap();
+    let malformed = world.invoke("central.world.here", json!({"project":"one"}));
+    assert_eq!(malformed["data"]["project_world"]["state"], "unavailable");
+    assert_eq!(malformed["data"]["project_world"]["io_error"]["kind"], "InvalidData");
+    assert_eq!(fs::read(&manifest).unwrap(), b"{malformed");
+    let mut bad_schema: Value = serde_json::from_slice(&before).unwrap();
+    bad_schema["schema"] = json!("unrecognised-source-schema");
+    fs::write(&manifest, serde_json::to_vec(&bad_schema).unwrap()).unwrap();
+    let invalid_semantic_source = world.invoke("central.world.here", json!({"project":"one"}));
+    assert_eq!(invalid_semantic_source["data"]["project_world"]["state"], "unavailable");
+    assert_eq!(invalid_semantic_source["data"]["project_world"]["io_error"]["kind"], "InvalidInput");
+    fs::write(&manifest, &before).unwrap();
+    fs::remove_file(&manifest).unwrap();
+    fs::create_dir(&manifest).unwrap();
+    let wrong = world.invoke("central.world.here", json!({"project":"one"}));
+    assert_eq!(wrong["data"]["project_world"]["state"], "unavailable");
+    fs::remove_dir(&manifest).unwrap();
+    let retained = world.root().join("retained-project-manifest.json");
+    fs::write(&retained, &before).unwrap();
+    symlink(&retained, &manifest).unwrap();
+    let redirected = world.invoke("central.world.here", json!({"project":"one"}));
+    assert_eq!(redirected["data"]["project_world"]["state"], "unavailable");
+    assert_eq!(fs::read(&retained).unwrap(), before);
+    fs::remove_file(&manifest).unwrap();
+    fs::write(&manifest, &before).unwrap();
+    let reopened = world.invoke("central.world.here", json!({"project":"one"}));
+    assert_eq!(reopened["data"]["project_world"]["ref"], "project:test/one");
+}
+
+#[test]
+fn native_project_manifest_eacces_is_unavailable_with_actual_errno_not_absence() {
+    use std::os::unix::fs::PermissionsExt;
+    assert_ne!(unsafe { libc::geteuid() }, 0,
+        "Actual World manifest EACCES qualification requires a nonroot OS user");
+    let world = World::new(&[]);
+    let manifest = world.root().join("Work/one/ProjectCentral/project.json");
+    let before = fs::read(&manifest).unwrap();
+    struct Restore(PathBuf);
+    impl Drop for Restore { fn drop(&mut self) { let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o600)); } }
+    let _restore = Restore(manifest.clone());
+    fs::set_permissions(&manifest, fs::Permissions::from_mode(0o000)).unwrap();
+    let actual = fs::read(&manifest).unwrap_err();
+    let unavailable = world.invoke("central.world.here", json!({"project":"one"}));
+    let facet = &unavailable["data"]["project_world"];
+    assert_eq!(facet["state"], "unavailable");
+    assert_eq!(facet["io_error"]["kind"], format!("{:?}", actual.kind()));
+    assert_eq!(facet["io_error"]["raw_os_error"], actual.raw_os_error().unwrap());
+    let unavailable_store = world.invoke("central.world.effective-sources",
+        json!({"scope":"project","project":"one","world_ref":"project:test/one"}));
+    assert_eq!(unavailable_store["error"]["code"], "central.world_project_source_unavailable");
+    assert_eq!(unavailable_store["error"]["details"]["io_error"]["kind"], format!("{:?}", actual.kind()));
+    assert_eq!(unavailable_store["error"]["details"]["io_error"]["raw_os_error"], actual.raw_os_error().unwrap());
+    fs::set_permissions(&manifest, fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(fs::read(&manifest).unwrap(), before);
+    assert_eq!(world.invoke("central.world.here", json!({"project":"one"}))["data"]["project_world"]["state"], "present");
+}
+
+#[test]
+fn native_scope_and_world_store_refuse_fifo_symlink_and_oversize_manifest_without_reopen() {
+    use std::ffi::CString;
+    use std::os::unix::fs::symlink;
+    let world = World::new(&[]);
+    let manifest = world.root().join("Work/one/ProjectCentral/project.json");
+    let before = fs::read(&manifest).unwrap();
+    let store_read = |world: &World| world.invoke("central.world.effective-sources",
+        json!({"scope":"project","project":"one","world_ref":"project:test/one"}));
+    fs::remove_file(&manifest).unwrap();
+    let name = CString::new(manifest.as_os_str().as_encoded_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    assert_eq!(Scope::resolve(world.root(), Some("one")).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+    let fifo = store_read(&world);
+    assert_eq!(fifo["error"]["code"], "central.world_project_source_unavailable", "{fifo}");
+    assert_eq!(fifo["error"]["details"]["io_error"]["kind"], "InvalidInput");
+    assert_eq!(world.invoke("central.world.here", json!({"project":"one"}))["data"]["project_world"]["state"], "unavailable");
+    fs::remove_file(&manifest).unwrap();
+    let retained = world.root().join("manifest-source-retained.json");
+    fs::write(&retained, &before).unwrap();
+    symlink(&retained, &manifest).unwrap();
+    assert!(Scope::resolve(world.root(), Some("one")).is_err());
+    let redirected = store_read(&world);
+    assert_eq!(redirected["error"]["code"], "central.world_project_source_unavailable");
+    assert_eq!(redirected["error"]["details"]["effects"], "none");
+    assert_eq!(fs::read(&retained).unwrap(), before);
+    fs::remove_file(&manifest).unwrap();
+    let mut oversized = before.clone();
+    oversized.resize(4 * 1024 * 1024 + 1, b' ');
+    fs::write(&manifest, &oversized).unwrap();
+    assert_eq!(Scope::resolve(world.root(), Some("one")).unwrap_err().kind(), io::ErrorKind::InvalidData);
+    let budget = store_read(&world);
+    assert_eq!(budget["error"]["code"], "central.world_project_source_unavailable");
+    assert_eq!(budget["error"]["details"]["io_error"]["kind"], "InvalidData");
+    assert_eq!(fs::read(&manifest).unwrap(), oversized);
+    fs::write(&manifest, &before).unwrap();
+    assert_eq!(Scope::resolve(world.root(), Some("one")).unwrap().world_ref, "project:test/one");
+    assert_eq!(store_read(&world)["error"]["code"], "central.world_declaration_absent");
+    assert_eq!(fs::read(&manifest).unwrap(), before);
+}
+
+#[test]
+fn native_scope_preserves_unchanged_root_alias_and_opaque_manifest_identity() {
+    use std::os::unix::fs::{symlink, MetadataExt};
+    let world = World::new(&[]);
+    let alias = world.root().join("same-native-root-alias");
+    symlink(world.root(), &alias).unwrap();
+    let manifest = world.root().join("Work/one/ProjectCentral/project.json");
+    let before = fs::read(&manifest).unwrap();
+    let inode = fs::metadata(&manifest).unwrap().ino();
+    let native = Scope::resolve(world.root(), Some("one")).unwrap();
+    let aliased = Scope::resolve(&alias, Some("one")).unwrap();
+    assert_eq!(aliased.world_ref, native.world_ref);
+    assert_eq!(aliased.root, native.root);
+    let here = central_ctrl::world_here::world_here(&alias, &alias, Some("one"), 1).unwrap();
+    assert_eq!(here["project_world"]["ref"], native.world_ref);
+    assert_eq!(fs::read(&manifest).unwrap(), before);
+    assert_eq!(fs::metadata(&manifest).unwrap().ino(), inode);
+}
+
+/// These tests deliberately expose nonregular native records. Bound the real
+/// reader process so the old blocking FIFO path cannot hang the test runner.
+fn bounded_world_record(world: &World) -> Value {
+    bounded_world_record_at(world, world.root())
+}
+
+fn bounded_world_record_at(world: &World, cwd: &Path) -> Value {
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    struct OwnedChild(std::process::Child);
+    impl Drop for OwnedChild {
+        fn drop(&mut self) {
+            if matches!(self.0.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    let stdout_path = world.root().join(".world-record-check.stdout");
+    let stderr_path = world.root().join(".world-record-check.stderr");
+    let input = json!({"cwd":cwd}).to_string();
+    let mut child = OwnedChild(
+        Command::new(env!("CARGO_BIN_EXE_ctrl"))
+            .arg("--json")
+            .arg("--root")
+            .arg(world.root())
+            .args(["action", "run", "central.world.here", &input])
+            .env_remove("CENTRAL_NATIVE_TOKEN")
+            .stdin(Stdio::null())
+            .stdout(fs::File::create(&stdout_path).unwrap())
+            .stderr(fs::File::create(&stderr_path).unwrap())
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = child.0.try_wait().unwrap() {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "native World disclosure exceeded its test deadline");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let bytes = fs::read(&stdout_path).unwrap();
+    let stderr = fs::read_to_string(&stderr_path).unwrap();
+    assert!(status.success(), "actual ctrl failed: {status}; {stderr}");
+    let reading: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(reading["ok"], true, "{reading}; {stderr}");
+    reading["data"]["world_record"].clone()
+}
+
+fn controlled_root_world_record() -> Value {
+    json!({"schema":"central.world-relations/v1", "ref":"control:root", "revision":"w1",
+        "parent":null, "sources":[], "retained_extension":{"qualification":"owned native fixture"}})
+}
+
+#[test]
+#[cfg(unix)]
+fn world_disclosure_uses_native_optional_absence_and_refuses_redirected_container() {
+    use std::os::unix::fs::symlink;
+    let world = World::new(&[]);
+    let store = RelationRecordStore::worlds_at_root(world.root());
+    let dir = store.source_dir();
+    assert!(store.list().unwrap().is_empty());
+    assert_eq!(bounded_world_record(&world)["state"], "absent");
+    fs::create_dir_all(dir.parent().unwrap()).unwrap();
+    symlink(world.root().join("unavailable-owned-world-container"), &dir).unwrap();
+    assert!(store.list().is_err());
+    let refused = bounded_world_record(&world);
+    assert_eq!(refused["state"], "unavailable", "{refused}");
+    assert_eq!(refused["native_error"]["owner"], "Central/RelationRecordStore");
+    assert!(fs::symlink_metadata(&dir).unwrap().file_type().is_symlink());
+    fs::remove_file(&dir).unwrap();
+    assert_eq!(bounded_world_record(&world)["state"], "absent");
+}
+
+#[test]
+fn world_disclosure_does_not_acknowledge_invalid_schema_or_incomplete_native_list() {
+    let world = World::new(&[]);
+    let store = RelationRecordStore::worlds_at_root(world.root());
+    store.save(&controlled_root_world_record(), None).unwrap();
+    let path = store.source_path("control:root").unwrap();
+    let original = fs::read(&path).unwrap();
+    assert_eq!(bounded_world_record(&world)["state"], "present");
+    let mut wrong: Value = serde_json::from_slice(&original).unwrap();
+    wrong["schema"] = json!("unowned.world-record/v1");
+    let wrong_bytes = serde_json::to_vec(&wrong).unwrap();
+    fs::write(&path, &wrong_bytes).unwrap();
+    assert!(store.list().is_err());
+    assert_eq!(bounded_world_record(&world)["state"], "unavailable");
+    assert_eq!(fs::read(&path).unwrap(), wrong_bytes);
+    fs::write(&path, &original).unwrap();
+    let unreadable = store.source_dir().join("unreadable-owned-world.json");
+    fs::write(&unreadable, b"not JSON").unwrap();
+    assert!(store.list().is_err());
+    assert_eq!(bounded_world_record(&world)["state"], "unavailable");
+    assert_eq!(fs::read(&path).unwrap(), original);
+    assert_eq!(fs::read(&unreadable).unwrap(), b"not JSON");
+    fs::remove_file(&unreadable).unwrap();
+    let restored = bounded_world_record(&world);
+    assert_eq!(restored["state"], "present");
+    assert_eq!(restored["ref"], "control:root");
+    assert_eq!(restored["revision"], "w1");
+    assert_eq!(fs::read(&path).unwrap(), original);
+}
+
+#[test]
+#[cfg(unix)]
+fn world_disclosure_refuses_native_record_symlink_and_fifo_without_following_them() {
+    use std::ffi::CString;
+    use std::os::unix::fs::{symlink, FileTypeExt};
+    let world = World::new(&[]);
+    let store = RelationRecordStore::worlds_at_root(world.root());
+    store.save(&controlled_root_world_record(), None).unwrap();
+    let path = store.source_path("control:root").unwrap();
+    let original = fs::read(&path).unwrap();
+    let retained = world.root().join("retained-owned-world-record.json");
+    fs::rename(&path, &retained).unwrap();
+    symlink(&retained, &path).unwrap();
+    assert_eq!(bounded_world_record(&world)["state"], "unavailable");
+    assert_eq!(fs::read(&retained).unwrap(), original);
+    fs::remove_file(&path).unwrap();
+    let fifo = CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    assert_eq!(bounded_world_record(&world)["state"], "unavailable");
+    assert!(fs::symlink_metadata(&path).unwrap().file_type().is_fifo());
+    assert_eq!(fs::read(&retained).unwrap(), original);
+    fs::remove_file(&path).unwrap();
+    fs::rename(&retained, &path).unwrap();
+    assert_eq!(bounded_world_record(&world)["state"], "present");
+    assert_eq!(fs::read(&path).unwrap(), original);
+}
+
+#[test]
+fn world_disclosure_preserves_over_budget_native_record_as_unavailable() {
+    let world = World::new(&[]);
+    let store = RelationRecordStore::worlds_at_root(world.root());
+    store.save(&controlled_root_world_record(), None).unwrap();
+    let path = store.source_path("control:root").unwrap();
+    let original = fs::read(&path).unwrap();
+    let mut retained = original.clone();
+    retained.resize(8 * 1024 * 1024 + 1, b' ');
+    fs::write(&path, &retained).unwrap();
+    let refused = bounded_world_record(&world);
+    assert_eq!(refused["state"], "unavailable", "{refused}");
+    assert_eq!(refused["native_error"]["capacity"]["byte_len"], retained.len());
+    assert_eq!(refused["native_error"]["capacity"]["limit"], 8 * 1024 * 1024);
+    assert_eq!(fs::read(&path).unwrap(), retained);
+    fs::write(&path, &original).unwrap();
+    assert_eq!(bounded_world_record(&world)["state"], "present");
+    assert_eq!(fs::read(&path).unwrap(), original);
+}
+
+#[test]
+fn world_disclosure_preserves_native_project_owner_source_location() {
+    let world = World::new(&[]);
+    let project_root = world.root().join("Work/one");
+    let store = RelationRecordStore::worlds_in_project(&project_root);
+    store.save(&json!({"schema":"central.world-relations/v1", "ref":"project:test/one",
+        "revision":"project-world-r1", "parent":"control:root", "sources":[]}), None).unwrap();
+    let path = store.source_path("project:test/one").unwrap();
+    let retained = fs::read(&path).unwrap();
+    let native = store.read("project:test/one").unwrap();
+    let expected_source = path.strip_prefix(world.root()).unwrap().to_string_lossy();
+    assert_eq!(project_root.join(&native.source_path), path);
+    let reading = bounded_world_record_at(&world, &project_root.join("src"));
+    assert_eq!(reading["state"], "present", "{reading}");
+    assert_eq!(reading["ref"], "project:test/one");
+    assert_eq!(reading["revision"], "project-world-r1");
+    assert_eq!(reading["source"], expected_source.as_ref());
+    assert_eq!(fs::read(&path).unwrap(), retained);
 }

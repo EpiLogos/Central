@@ -1,3 +1,10 @@
+---
+role: architecture
+standing: agent-inference
+scope: Central persistent file maps, native Source ownership and AIKit consumption
+design_refs: []
+updated: 2026-10-02
+---
 # Persistent file maps and the AIKit consumer
 
 Central #154 / Central #159 / AIKit #287.
@@ -11,7 +18,7 @@ contextual selection and target materialisation.
 
 ## Native contract
 
-Use the existing native Action surface. All sixteen operations below return the
+Use the existing native Action surface. The operations below return the
 normal ActionResult envelope. Its `data` is:
 
 ```json
@@ -98,8 +105,10 @@ live cwd but does not claim to discover every external process. Destinations
 are never overwritten. Source identity, source-relations bases and managed link
 inodes are rechecked. Interrupted publication can be replayed; newer source bytes
 or foreign link replacement cause conflicts rather than destructive repair.
-The native Flow owner prepares current-location updates in the same journal;
-Flow identity and historical source paths/receipts remain intact.
+The retired Flow registry has no relocation planning. Any leftover registry
+stays in place and is refused as a move target. Dated Flow source files use
+[ordinary file CAS and native history](../SOURCE-RETURN.md#flow-disclosure-seam-retired);
+the [historical Flow contract](../PROJECTCENTRAL-FLOW.md#flow) remains retained.
 
 A containing root can relocate with its ordinary files. Reconnect with the new
 root path and refresh the maps; SourceRefs and relative links are unchanged.
@@ -163,10 +172,123 @@ binaries are failures, not skipped green tests. Run:
 python3 tests/bkmr_joined.py --ctrl /built/ctrl --aikit /built/aikit --bkmr /installed/bkmr
 ```
 
-The suite covers persistence, two-Project federation, owner database read-only
-consumption, native imports, metadata preservation, private/stale source refusal,
-managed links, interrupted/replayed/rolled-back moves, whole-Project/root moves,
-Flow continuity, live skill companions/retirement, selected generation reporting,
-explicit record adoption and WAL-consistent backup. Hosted verification records
-both exact source revisions. Personal installation, real embedding inference and
-loaded commercial harness behaviour remain distinct observations.
+Verification must cover persistence, two-Project federation, owner database
+read-only consumption, native imports, metadata preservation, private/stale
+source refusal, managed links, interrupted/replayed/rolled-back moves,
+whole-Project/root moves, ordinary file CAS/history and retired-registry
+retention, live skill companions/retirement, selected generation reporting,
+explicit record adoption and WAL-consistent backup. A test of the retired
+FlowRef registry does not verify the current ordinary file route. Hosted results must name
+both exact source revisions and actual cases executed. Personal installation,
+real embedding inference and loaded commercial harness behaviour remain
+separate observations.
+
+## Binding ownership metadata — source candidate
+
+This metadata mode is implemented on the qualified Source cuts below. It adds optional
+Boolean `binding_only:true` to existing `central.file-map.resolve` and
+`central.file-map.locate`, retaining their `central.file-map/v1` envelope and
+default Entry/payload shapes. True is invalid with `content:true` or any
+`expected_revision` key. Default resolution still computes an admitted payload
+revision with `content:false`; suppressing content is not a body-free probe.
+
+Ownership comes from native declarations across participating owners, before
+material filtering. Accepted Source roles, provenance and standing take
+precedence over registered acceleration metadata. Complete owner collisions
+refuse rather than selecting the first scope. A generated address only nominates
+a normal member after round trip; a prefix does not establish ownership. Only
+matching Skill metadata is read through its existing native parser. A malformed
+unselected fallback remains a genuine bulk-horizon failure, while an explicit
+selected Source does not depend on that unrelated fallback.
+
+| Native disposition | Native result and consumer consequence |
+| --- | --- |
+| Eligible owned source | `ownership:"owned"`, `binding_only:true`, exact existing `source`, `world_ref`, `project`, admitted `path`/`kind`, existing title/tags/native-import fields, `relation_revision` and `material_metadata_basis`. Select the intended source family and target privacy before a body read through the same owner. |
+| Healthy complete metadata establishes no owner | Success containing only `ownership:"unregistered"`, `binding_only:true` and the exact requested `source_ref` (resolve) or `requested_path` (locate). A consumer may decline. |
+| Known missing or withdrawn source | Native coded failure with `ownership:"known"`, actual `failure_stage` and `material_state`; retain the owner failure rather than substituting a copied source. |
+| Unsupported, invalid, incomplete, unavailable or changed metadata | Native failure; it cannot certify healthy nonownership or broaden retrieval. |
+
+`relation_revision` is the full declaration-byte FNV revision or literal
+`absent` for genuine optional declaration absence. `material_metadata_basis`
+contains integer `device`, `inode`, `byte_len`, `mtime_seconds` and
+`mtime_nanoseconds`. Owned metadata results omit top-level payload `revision`,
+`content`, `content_encoding`, projection and Skill-manifest fields. These
+bases prove neither payload freshness nor body permission. A managed-link
+locate retains `encountered_link:{path,world_ref}` while keeping the target's
+actual SourceRef and owning World. An ordinary physical FileRef read with a
+null Source binding does not establish `ownership:"unregistered"`.
+
+A known missing final source is `central.file_map_not_found` with
+`failure_stage:"source_metadata"` and `material_state:"missing"`; missing owner
+or parent is unavailable. Native marker, World, Project-link or context
+exclusion is `central.file_map_denied` with the actual admission stage and
+`material_state:"withheld"`. Semantic denial has `io_error:null` and discloses
+no private descriptor, member path, title, standing, body or hash. Real IO
+preserves its original kind, errno and message; finite native Store capacity
+remains separately typed. `effects:"none"` applies to these read-only
+resolve/locate failures; mutation failures retain their existing contract.
+
+Project/link/effective-context admission precedes body/hash/projection in
+default resolution too. The selected native metadata basis is reobserved after
+operation checkpoints. Current World exclusions use the
+[native Store's material and complete-list qualification](../NATIVE-FILESYSTEM-READING.md#native-relation-records--source-candidate).
+This is observation evidence, not a new registry, read registration, cache
+authority, permission lease or atomic snapshot. Optional bkmr absence and
+supported reduced composition retain their existing explicit routes.
+
+Central's producer repair does not establish AIKit's current-owner routing or
+external-provider egress acceptance. Ordinary NOW Return registration and root
+lifecycle also remain separate joins; no broad root Return/T/archive corpus is
+admitted by this mode.
+
+Source basis: Central `7a0e2c21505ad7cf6590db8701fc473102fd399b` preimages,
+native owner v4 packet SHA-256
+`390656e902c866959304094a9b92c46f52434ba04140e17fe10a683bb8f7ca79` and
+unchanged response handover
+`15ebcf6037f3e0f5cf43b896ff97cdc0a5460d0363d13aa35dec96f35a0568c8`.
+Hosted qualification is now recorded by [joined run 37061204754](https://github.com/EpiLogos/Central/actions/runs/37061204754):
+all 58 unique selected cases executed and passed, with no skips, in 9.267 seconds
+on Ubuntu 24.04.5. The cut was Central
+`452525d45fce20c2c667b87ee9590e7f5a3883c6`, AIKit
+`338232e5fca8d1df81ac81a37fd9d610278e2e43`, bkmr 7.6.7 and Rust 1.98.1.
+Both real owner and consumer binaries were built with `--locked`. Their SHA-256
+values were ctrl
+`7627827bcbf35dd8c03f241aff9b2a83b01fadd1b39b389fc9176c5b993a7bc8`
+and aikit
+`82edd6bb5c912dad0e402c70913decfa8155c644233c974dfba7201e50702583`.
+The complete joined log has SHA-256
+`842e7281ccff711c72b307a94862de52e1cf40c7ff69116e5af8f021e40d86d6`.
+
+[Normal run 37061163439](https://github.com/EpiLogos/Central/actions/runs/37061163439)
+also passed Linux workspace and native macOS checks at merge
+`cadc4942a5aa64dd1e00216b5203dea2ff7052d7`. Its complete source tree
+`4ffb02d0f04684c1b974ebd50a5d014d45043cfe` equals the joined Central tree;
+normal checks used Rust 1.99.0. Their ephemeral Linux source-install smoke
+omitted `--locked`, resolved 121 highest-compatible dependencies and published
+no installed binary SHA-256. That reduced-install proof has a separate dependency
+cut from the locked joined binaries.
+
+The original joined case 28 only required a nonzero disconnect exit and parseable
+JSON. Its stronger successor now checks a successful current read, the actual
+failure envelope, absence of the unique retained body, unchanged source/database
+and a current read after reconnection. Those stronger assertions executed in
+[joined run 37066338855](https://github.com/EpiLogos/Central/actions/runs/37066338855)
+at Central `5eb41c635f2978f5adb34f0c947f774eda498827` with the same
+AIKit338 composition: all 58 unique cases passed with zero failures/skips in
+9.380 seconds. The full raw log SHA-256 is
+`7050ee8dc5c3085555f5c0d5d790d7168ff45716aa539e3fd58c751ed3993a2d`;
+the locked ctrl binary is
+`b30f6240ca7e047f8d8587323b2d7a6c3646bca88d73e86ffbe9b8579a107aeb`. AIKit338 turns failed known-owner attachment into
+`knowledge.source_missing`; this existing loss of the native unavailable-owner
+cause is unresolved on that consumer cut. The stronger case does not certify
+truthful owner-error propagation.
+
+These receipts qualify the stated hosted source and joined boundaries, not the
+personal installed/running World, later Source revisions, human acceptance or
+newer prepared AIKit R4 consumers. Preserve the original failed and unqualified
+predecessor receipts. See [architecture navigation](../ARCHITECTURE-NAVIGATION.md#native-ownership-and-world-disclosure--pending-source-cut).
+
+See [the scoped qualification account](../ARCHITECTURE-NAVIGATION.md#scoped-native-qualification--2-october-2026)
+for the exact earlier four failures, the 16-path source union, retired Flow
+fixture classification and separate receiving-recovery result. A no-body
+disconnect pass does not repair the lost native cause or qualify newer R4.

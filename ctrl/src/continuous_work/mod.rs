@@ -11,6 +11,15 @@ pub mod source;
 pub mod temporal;
 pub mod thoughts;
 
+// The opt-in test child includes this same crate Source. No production feature
+// can arm the checkpoint: both cfg(test) and the target feature are required.
+#[cfg(all(test, unix, feature = "native-receiving-incomplete-child"))]
+pub fn arm_native_inclusion_fixture(
+    args: &[String],
+) -> std::io::Result<receiving::native_inclusion_fixture::NativeInclusionFixture> {
+    receiving::native_inclusion_fixture::arm(args)
+}
+
 use crate::action::{
     ActionAvailability, ActionDescriptor, ActionExecutionContext, ActionInputDefinition,
     ActionOutputDefinition, ActionRegistry, MutationClass,
@@ -166,6 +175,12 @@ fn execute(
         }
         Ok(value) => ActionResult::success(action, value),
         Err(error) => {
+            if let Some(result) = receiving::inclusion_failure_result(action, &error) {
+                return result;
+            }
+            if let Some(result) = crate::file_mutation::record_failure_result(action, &error) {
+                return result;
+            }
             let (status, code) = match error.kind() {
                 io::ErrorKind::AlreadyExists => (
                     ResultStatus::VerificationFailure,
