@@ -85,13 +85,33 @@ Run the actual candidate CLI against independent temporary Central ground:
 ```sh
 CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 cargo test -p ctrl --locked
 CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 cargo build -p ctrl --bin ctrl --locked
+cargo test --locked -p ctrl --test native_ordinary_interruption_child --features native-ordinary-interruption-child --no-run --message-format=json
+# Export CTRL_ORDINARY_INTERRUPTION_BIN from the exact returned compiler-artifact executable.
+mkdir -p ProjectCentral/now/tmp/ordinary-file-native-evidence
+export CTRL_NATIVE_EVIDENCE_DIR="$PWD/ProjectCentral/now/tmp/ordinary-file-native-evidence"
 CTRL_BIN="$PWD/target/debug/ctrl" python3 ctrl/tests/native/ordinary_files.py
 ```
 
 The executable acceptance exercises real read/write/history/restore operations,
 eight simultaneous CLI writers, source identity and protected-route refusal,
 external parent symlink churn, Unicode paths, native macOS metadata, and SIGKILL
-of an actual writer after durable prepare followed by owner recovery. This
+of an actual writer at acknowledged durable prepare and after source rename,
+followed by owner recovery. The required `CTRL_ORDINARY_INTERRUPTION_BIN` names
+the exact compiler-reported opt-in test executable, built with
+`native-ordinary-interruption-child`. It includes the same crate Source and
+actual CLI, with a `cfg(test)` checkpoint bridge absent from default library and
+binary builds. A bounded root-local test admission binds the actual request,
+root and source identities. A held inherited pipe reports the actual pending
+checkpoint; the direct writer holds it for at most five seconds, refuses parent
+loss/late observation, and cannot return a successful write. The parent retains
+its original five-second checkpoint deadline, kills and reaps the actual writer,
+then asks the production CLI to reconcile. Missing/changed admission and source
+bytes matching neither recorded revision must remain failures. No fixture writes
+a pending record or invents a receipt. Actual compiler/binary identities and all
+Linux/Mac results are retained by the normal verification workflow. Raw phase
+notifications/capture, admission refusals and production recovery replies remain
+in the required caller evidence directory after disposable fixture cleanup.
+This
 establishes the owner candidate; consumer/native-desktop acceptance is separate.
 
 ## Supporting material publication and acknowledgement

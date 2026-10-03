@@ -1134,6 +1134,8 @@ fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
             return Err(conflict("Parent directory changed during commit"));
         }
         atomic_record(&root, pending.strip_prefix(&root).map_err(io::Error::other)?, &serde_json::to_vec(&event)?, RecordDisposition::ReplaceOrCreate)?;
+        #[cfg(all(test, unix, feature = "native-ordinary-interruption-child"))]
+        native_interruption_fixture::checkpoint(&root, &loc, &pending, &meta, false)?;
         // The journal fsync can yield to an external editor. Re-read after it
         // before publishing the staged file; owner writers are already locked.
         let final_meta = open_native_file(&root, &loc.path)?.metadata()?;
@@ -1154,6 +1156,8 @@ fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
         )?;
         committed = true;
         parent.sync_all()?;
+        #[cfg(all(test, unix, feature = "native-ordinary-interruption-child"))]
+        native_interruption_fixture::checkpoint(&root, &loc, &pending, &staged.metadata()?, true)?;
         fs::rename(&pending, area.join(format!("event-{cursor}.json")))?;
         File::open(&area)?.sync_all()?;
         Ok(
@@ -2136,5 +2140,179 @@ mod record_publication_tests {
         let retained: Vec<_> = fs::read_dir(fixture.root.join("records")).unwrap().map(|entry| entry.unwrap().path())
             .filter(|path| path.file_name().unwrap().as_encoded_bytes().starts_with(b".central-record-")).collect();
         assert_eq!(retained.len(), 1); assert!(fs::read(&retained[0]).unwrap().is_empty());
+    }
+}
+
+
+// Only the explicitly selected native test executable includes this bridge.
+// Default library/binary builds cannot install, read or reach a fixture.
+#[cfg(all(test, unix, feature = "native-ordinary-interruption-child"))]
+pub mod native_interruption_fixture {
+    use super::*;
+    use sha2::{Digest, Sha256};
+    use std::cell::RefCell;
+    use std::os::fd::OwnedFd;
+    use std::os::unix::fs::FileTypeExt;
+    use std::time::{Duration, Instant};
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Admission {
+        schema: String,
+        after_rename: bool,
+        root_device: u64,
+        root_inode: u64,
+        source_device: u64,
+        source_inode: u64,
+        request_sha256: String,
+    }
+    struct Fixture {
+        root: PathBuf,
+        held_root: File,
+        held_source: File,
+        location: CentralPathRef,
+        basis: String,
+        target: String,
+        after_rename: bool,
+        actor: String,
+        actor_kind: String,
+        agent_session_ref: Option<String>,
+        parent: libc::pid_t,
+        notify: File,
+        deadline: Instant,
+    }
+    thread_local! {
+        static FIXTURE: RefCell<Option<Fixture>> = const { RefCell::new(None) };
+    }
+    pub fn arm(args: &[String]) -> io::Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        if args.len() != 7 || args[0] != "--root" || args[2] != "--json"
+            || args[3] != "action" || args[4] != "run" || args[5] != "central.files.write"
+        {
+            return Err(invalid("native interruption fixture requires one exact ordinary write CLI"));
+        }
+        let root = PathBuf::from(&args[1]);
+        let scratch = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../ProjectCentral/now/tmp").canonicalize()?;
+        if root.canonicalize()? != root || root.file_name().and_then(|v| v.to_str()) != Some("Central")
+            || root.parent().and_then(Path::parent) != Some(scratch.as_path())
+            || !root.parent().and_then(Path::file_name).and_then(|v| v.to_str())
+                .is_some_and(|v| v.starts_with("central-file-native-"))
+        {
+            return Err(invalid("native interruption fixture is outside its owned test ground"));
+        }
+        let held_root = directory(&root, Path::new(""))?;
+        let metadata = held_root.metadata()?;
+        let control = open(&root.join(".ordinary-interruption-admission.json"), false)?;
+        let control_metadata = control.metadata()?;
+        if metadata.uid() != unsafe { libc::geteuid() } || !control_metadata.is_file()
+            || control_metadata.nlink() != 1 || control_metadata.uid() != metadata.uid()
+            || control_metadata.len() > 8192
+        {
+            return Err(invalid("native interruption admission must be bounded owned regular material"));
+        }
+        let admission: Admission = serde_json::from_reader(control.take(8193))?;
+        if admission.schema != "central.native-ordinary-interruption-admission/v1"
+            || admission.root_device != metadata.dev() || admission.root_inode != metadata.ino()
+            || admission.request_sha256 != format!("{:x}", Sha256::digest(args[6].as_bytes()))
+        {
+            return Err(invalid("native interruption admission differs from actual root/request"));
+        }
+        let request: Value = serde_json::from_str(&args[6])?;
+        let location: CentralPathRef = serde_json::from_value(request.get("location").cloned().unwrap_or(Value::Null))?;
+        let path = ordinary(&root, &location)?;
+        let held_source = open_native_file(&root, &location.path)?;
+        let source = held_source.metadata()?;
+        if source.dev() != admission.source_device || source.ino() != admission.source_inode
+            || source.uid() != metadata.uid() || path != root.join(&location.path)
+        {
+            return Err(invalid("native interruption source differs from admitted actual file"));
+        }
+        let (actor, actor_kind, agent_session_ref) = attribution(&request)?;
+        let basis = text(&request, "expected_revision")?.to_owned();
+        if recovery_read(&root, &location)?.revision != basis {
+            return Err(conflict("native interruption basis is no longer current"));
+        }
+        let target = content_revision_bytes(text(&request, "content")?.as_bytes());
+        if target == basis { return Err(invalid("native interruption requires actual changed bytes")); }
+        let raw = std::env::var("CENTRAL_NATIVE_INTERRUPTION_NOTIFY_FD")
+            .map_err(|_| invalid("native interruption requires its owned notification descriptor"))?
+            .parse::<libc::c_int>().map_err(io::Error::other)?;
+        if raw <= 2 { return Err(invalid("native interruption notification cannot be stdio")); }
+        // Duplicate the already inherited descriptor; never open a caller path.
+        let duplicate = unsafe { libc::fcntl(raw, libc::F_DUPFD_CLOEXEC, 3) };
+        if duplicate < 0 { return Err(io::Error::last_os_error()); }
+        let notify = File::from(unsafe { OwnedFd::from_raw_fd(duplicate) });
+        let pipe = notify.metadata()?;
+        if !pipe.file_type().is_fifo() || pipe.uid() != metadata.uid() {
+            return Err(invalid("native interruption notification is not an owned pipe"));
+        }
+        let flags = unsafe { libc::fcntl(notify.as_raw_fd(), libc::F_GETFL) };
+        if flags < 0 { return Err(io::Error::last_os_error()); }
+        if flags & libc::O_ACCMODE != libc::O_WRONLY {
+            return Err(invalid("native interruption requires the actual write end of its pipe"));
+        }
+        if unsafe { libc::fcntl(notify.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let parent = unsafe { libc::getppid() };
+        if parent <= 1 { return Err(invalid("native interruption parent is already absent")); }
+        FIXTURE.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if slot.is_some() { return Err(invalid("native interruption fixture is already armed")); }
+            *slot = Some(Fixture { root, held_root, held_source, location, basis, target,
+                after_rename: admission.after_rename, actor, actor_kind, agent_session_ref,
+                parent, notify, deadline });
+            Ok(())
+        })
+    }
+    pub(super) fn checkpoint(root: &Path, location: &CentralPathRef, pending: &Path, expected_source: &fs::Metadata, after_rename: bool) -> io::Result<()> {
+        FIXTURE.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            let Some(fixture) = slot.as_mut() else { return Ok(()); };
+            if root != fixture.root || location != &fixture.location {
+                return Err(invalid("native interruption reached another root/source"));
+            }
+            let named = directory(root, Path::new(""))?.metadata()?;
+            let held = fixture.held_root.metadata()?;
+            let admitted_source = fixture.held_source.metadata()?;
+            if !after_rename && (expected_source.dev() != admitted_source.dev()
+                || expected_source.ino() != admitted_source.ino())
+            {
+                return Err(invalid("native interruption original admitted source was replaced"));
+            }
+            if named.dev() != held.dev() || named.ino() != held.ino() {
+                return Err(invalid("native interruption root was replaced"));
+            }
+            let record = open(pending, false)?;
+            let metadata = record.metadata()?;
+            if !metadata.is_file() || metadata.nlink() != 1 || metadata.uid() != held.uid() {
+                return Err(invalid("native interruption pending is not the actual owned regular record"));
+            }
+            let event: Change = serde_json::from_reader(record.take(65537))?;
+            let identity: CentralPathRef = serde_json::from_reader(open(&pending.parent().ok_or_else(|| invalid("pending has no parent"))?.join("identity.json"), false)?.take(65537))?;
+            let actual_source = open_native_file(root, &location.path)?.metadata()?;
+            let expected = if after_rename { fixture.target.as_str() } else { fixture.basis.as_str() };
+            if identity != fixture.location || event.previous_revision != fixture.basis
+                || event.revision != fixture.target || event.actor != fixture.actor
+                || event.actor_kind != fixture.actor_kind || event.agent_session_ref != fixture.agent_session_ref
+                || event.restored_from.is_some() || event.cursor != 1
+                || actual_source.dev() != expected_source.dev() || actual_source.ino() != expected_source.ino()
+                || recovery_read(root, location)?.revision != expected
+            {
+                return Err(invalid("native interruption pending/source differs from actual request"));
+            }
+            if fixture.after_rename != after_rename { return Ok(()); }
+            if Instant::now() >= fixture.deadline || unsafe { libc::getppid() } != fixture.parent {
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "native interruption owner expired before checkpoint"));
+            }
+            fixture.notify.write_all(if after_rename { b"C" } else { b"P" })?;
+            // A finite hold in this direct child, without waiter, helper process,
+            // artificial pending, reconstructed result or production switch.
+            while Instant::now() < fixture.deadline && unsafe { libc::getppid() } == fixture.parent {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(io::Error::new(io::ErrorKind::TimedOut, "native interruption was not terminated by its owned parent within five seconds"))
+        })
     }
 }

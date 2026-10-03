@@ -186,26 +186,144 @@ jobs:
         run: |
           set -euo pipefail
           out="$RUNNER_TEMP/atomic-native"
+          test ! -e "$out/binary-provenance.py"
+          test ! -L "$out/binary-provenance.py"
+          cat > "$out/binary-provenance.py" <<'PY_NATIVE_IMAGE'
+          import hashlib, json, os, pathlib, shutil, stat, sys
+
+          mode, out_arg, *args = sys.argv[1:]
+          out = pathlib.Path(out_arg).resolve(strict=True)
+          specs = {
+              'ctrl': ('ctrl', ['bin'], [], False, 'ctrl-build.jsonl', 'ctrl-binary.json', 'ctrl-path.txt', 'ctrl'),
+              'ordinary-child': ('native_ordinary_interruption_child', ['test'], ['native-ordinary-interruption-child'], True,
+                                 'ordinary-child-build.jsonl', 'ordinary-child-binary.json', 'ordinary-child-path.txt', 'ordinary-interruption-child'),
+          }
+          helper_sha = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()
+
+          def observe(path):
+              before = path.lstat()
+              assert stat.S_ISREG(before.st_mode) and before.st_uid == os.geteuid(), path
+              assert stat.S_IMODE(before.st_mode) & 0o111 and os.access(path, os.X_OK), path
+              fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+              digest, header, count = hashlib.sha256(), b'', 0
+              with os.fdopen(fd, 'rb') as stream:
+                  initial = os.fstat(stream.fileno())
+                  assert (before.st_dev, before.st_ino) == (initial.st_dev, initial.st_ino), path
+                  for part in iter(lambda: stream.read(1024 * 1024), b''):
+                      if not header:
+                          header = part[:16]
+                      digest.update(part)
+                      count += len(part)
+                  final = os.fstat(stream.fileno())
+              after = path.lstat()
+              fields = ('st_dev', 'st_ino', 'st_uid', 'st_mode', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+              assert tuple(getattr(before, key) for key in fields) == tuple(getattr(initial, key) for key in fields), path
+              assert tuple(getattr(initial, key) for key in fields) == tuple(getattr(final, key) for key in fields), path
+              assert tuple(getattr(final, key) for key in fields) == tuple(getattr(after, key) for key in fields), path
+              assert count == initial.st_size and count > 0, path
+              if sys.platform == 'linux':
+                  assert header[:4] == b'\x7fELF', (path, header.hex())
+                  native_format = 'ELF'
+              else:
+                  assert sys.platform == 'darwin', sys.platform
+                  assert header[:4].hex() in {'feedface', 'cefaedfe', 'feedfacf', 'cffaedfe', 'cafebabe', 'bebafeca', 'cafebabf', 'bfbafeca'}, (path, header.hex())
+                  native_format = 'Mach-O'
+              return {'sha256': digest.hexdigest(), 'bytes': count, 'mode': stat.S_IMODE(initial.st_mode),
+                      'device': initial.st_dev, 'inode': initial.st_ino, 'uid': initial.st_uid,
+                      'mtime_ns': initial.st_mtime_ns, 'ctime_ns': initial.st_ctime_ns,
+                      'header_hex': header.hex(), 'native_format': native_format}
+
+          if mode == 'capture':
+              assert len(args) == 1, args
+              name = args[0]
+              target, kind, features, is_test, log, record_name, path_name, copy_name = specs[name]
+              artifacts = []
+              for line in (out / log).read_text().splitlines():
+                  value = json.loads(line)
+                  if (value.get('reason') == 'compiler-artifact' and value.get('target', {}).get('name') == target
+                          and value['target'].get('kind') == kind and value.get('executable')):
+                      artifacts.append(value)
+              assert len(artifacts) == 1, artifacts
+              artifact = artifacts[0]
+              assert artifact['features'] == features and artifact['profile']['test'] is is_test, artifact
+              build_path = pathlib.Path(artifact['executable']).resolve(strict=True)
+              built_before = observe(build_path)
+              captured_path = out / copy_name
+              assert not os.path.lexists(captured_path), captured_path
+              shutil.copy2(build_path, captured_path)
+              built_after, captured = observe(build_path), observe(captured_path)
+              content_fields = ('sha256', 'bytes', 'mode', 'uid', 'mtime_ns', 'header_hex', 'native_format')
+              capture_matches = built_before == built_after and all(built_before[key] == captured[key] for key in content_fields)
+              record = {'path': str(captured_path), 'executed_path': str(captured_path), 'build_path': str(build_path),
+                        'sha256': captured['sha256'], 'bytes': captured['bytes'], 'mode': captured['mode'],
+                        'native_format': captured['native_format'], 'header_hex': captured['header_hex'],
+                        'compiler_artifact': artifact, 'features': features, 'profile_test': is_test,
+                        'build_image_before': built_before, 'build_image_after': built_after, 'captured_image': captured,
+                        'capture_helper_sha256': helper_sha, 'capture_matches': capture_matches,
+                        'standing': 'actual executable copy2 capture; this physical copy is selected for execution'}
+              (out / record_name).write_text(json.dumps(record, indent=2) + '\n')
+              assert capture_matches, record
+              (out / path_name).write_text(str(captured_path) + '\n')
+          elif mode == 'check':
+              stage, *names = args
+              assert stage and all(char.isalnum() or char == '-' for char in stage) and names, args
+              facts, failures = [], []
+              for name in names:
+                  target, kind, features, is_test, _, record_name, path_name, copy_name = specs[name]
+                  expected_path = out / copy_name
+                  try:
+                      record = json.loads((out / record_name).read_text())
+                      actual = observe(expected_path)
+                      artifact = record['compiler_artifact']
+                      matches = (record['path'] == record['executed_path'] == str(expected_path)
+                                 and (out / path_name).read_text() == str(expected_path) + '\n'
+                                 and artifact['target']['name'] == target and artifact['target']['kind'] == kind
+                                 and artifact['features'] == features and artifact['profile']['test'] is is_test
+                                 and record['features'] == features and record['profile_test'] is is_test
+                                 and record['capture_helper_sha256'] == helper_sha and record['capture_matches'] is True
+                                 and actual == record['captured_image']
+                                 and record['sha256'] == actual['sha256'] and record['bytes'] == actual['bytes']
+                                 and record['mode'] == actual['mode'] and record['header_hex'] == actual['header_hex']
+                                 and record['native_format'] == actual['native_format'])
+                      facts.append({'name': name, 'executed_path': str(expected_path), 'actual_image': actual,
+                                    'expected_image': record['captured_image'], 'matches': matches})
+                      if not matches:
+                          failures.append(name)
+                  except Exception as error:
+                      facts.append({'name': name, 'executed_path': str(expected_path), 'inspection_error': repr(error), 'matches': False})
+                      failures.append(name)
+              account = {'stage': stage, 'helper_sha256': helper_sha, 'images': facts,
+                         'standing': 'actual image observations at this stage; no universal immutability claim'}
+              (out / ('binary-images-' + stage + '.json')).write_text(json.dumps(account, indent=2) + '\n')
+              assert not failures, failures
+          else:
+              raise AssertionError(mode)
+          PY_NATIVE_IMAGE
           cargo build --locked -p ctrl --bin ctrl --message-format=json 2> "$out/ctrl-build.stderr" | tee "$out/ctrl-build.jsonl"
-          python3 - "$out" <<'PY_NATIVE_BINARY'
-          import hashlib, json, pathlib, shutil, sys
-          out=pathlib.Path(sys.argv[1]); artifacts=[]
-          for line in (out/'ctrl-build.jsonl').read_text().splitlines():
-              value=json.loads(line)
-              if value.get('reason')=='compiler-artifact' and value.get('target',{}).get('name')=='ctrl' and value['target'].get('kind')==['bin'] and value.get('executable'):
-                  artifacts.append(value)
-          assert len(artifacts)==1,artifacts
-          binary=pathlib.Path(artifacts[0]['executable']).resolve(strict=True)
-          digest=hashlib.sha256()
-          with binary.open('rb') as stream:
-              for part in iter(lambda:stream.read(1024*1024), b''): digest.update(part)
-          (out/'ctrl-binary.json').write_text(json.dumps({'path':str(binary),'sha256':digest.hexdigest(),
-              'bytes':binary.stat().st_size,'compiler_artifact':artifacts[0],'features':'actual default cargo build; no FCI opt-in'},indent=2)+'\n')
-          (out/'ctrl-path.txt').write_text(str(binary)+'\n');shutil.copyfile(binary,out/'ctrl')
-          PY_NATIVE_BINARY
+          python3 "$out/binary-provenance.py" capture "$out" ctrl
+          python3 "$out/binary-provenance.py" check "$out" before-opt-in-build ctrl
+          cargo test --locked -p ctrl --test native_ordinary_interruption_child --features native-ordinary-interruption-child --no-run --message-format=json 2> "$out/ordinary-child-build.stderr" | tee "$out/ordinary-child-build.jsonl"
+          python3 "$out/binary-provenance.py" capture "$out" ordinary-child
+          python3 "$out/binary-provenance.py" check "$out" after-opt-in-build ctrl ordinary-child
+          finish_atomic_cli() {
+            local status=$?
+            trap - EXIT
+            if ! python3 "$out/binary-provenance.py" check "$out" final-execution ctrl ordinary-child; then
+              if test "$status" -eq 0; then status=1; fi
+            fi
+            exit "$status"
+          }
+          trap finish_atomic_cli EXIT
+          cargo clippy --locked -p ctrl --test native_ordinary_interruption_child --features native-ordinary-interruption-child -- -D warnings 2>&1 | tee "$out/ordinary-child-clippy.log"
+          python3 "$out/binary-provenance.py" check "$out" after-clippy ctrl ordinary-child
           ctrl=$(cat "$out/ctrl-path.txt")
-          CTRL_BIN="$ctrl" python3 ctrl/tests/native/ordinary_files.py 2>&1 | tee "$out/ordinary-files-native.log"
+          ordinary_child=$(cat "$out/ordinary-child-path.txt")
+          python3 "$out/binary-provenance.py" check "$out" before-ordinary ctrl ordinary-child
+          CTRL_BIN="$ctrl" CTRL_ORDINARY_INTERRUPTION_BIN="$ordinary_child" CTRL_NATIVE_EVIDENCE_DIR="$out" python3 ctrl/tests/native/ordinary_files.py 2>&1 | tee "$out/ordinary-files-native.log"
+          python3 "$out/binary-provenance.py" check "$out" after-ordinary ctrl ordinary-child
+          python3 "$out/binary-provenance.py" check "$out" before-source-return ctrl ordinary-child
           CTRL_BIN="$ctrl" python3 ctrl/tests/native/source_returns.py 2>&1 | tee "$out/source-returns-native.log"
+          python3 "$out/binary-provenance.py" check "$out" after-source-return ctrl ordinary-child
           git diff --exit-code
       - name: Retain actual atomic native step outcomes
         if: always()
@@ -451,26 +569,144 @@ jobs:
         run: |
           set -euo pipefail
           out="$RUNNER_TEMP/atomic-native"
+          test ! -e "$out/binary-provenance.py"
+          test ! -L "$out/binary-provenance.py"
+          cat > "$out/binary-provenance.py" <<'PY_NATIVE_IMAGE'
+          import hashlib, json, os, pathlib, shutil, stat, sys
+
+          mode, out_arg, *args = sys.argv[1:]
+          out = pathlib.Path(out_arg).resolve(strict=True)
+          specs = {
+              'ctrl': ('ctrl', ['bin'], [], False, 'ctrl-build.jsonl', 'ctrl-binary.json', 'ctrl-path.txt', 'ctrl'),
+              'ordinary-child': ('native_ordinary_interruption_child', ['test'], ['native-ordinary-interruption-child'], True,
+                                 'ordinary-child-build.jsonl', 'ordinary-child-binary.json', 'ordinary-child-path.txt', 'ordinary-interruption-child'),
+          }
+          helper_sha = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()
+
+          def observe(path):
+              before = path.lstat()
+              assert stat.S_ISREG(before.st_mode) and before.st_uid == os.geteuid(), path
+              assert stat.S_IMODE(before.st_mode) & 0o111 and os.access(path, os.X_OK), path
+              fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+              digest, header, count = hashlib.sha256(), b'', 0
+              with os.fdopen(fd, 'rb') as stream:
+                  initial = os.fstat(stream.fileno())
+                  assert (before.st_dev, before.st_ino) == (initial.st_dev, initial.st_ino), path
+                  for part in iter(lambda: stream.read(1024 * 1024), b''):
+                      if not header:
+                          header = part[:16]
+                      digest.update(part)
+                      count += len(part)
+                  final = os.fstat(stream.fileno())
+              after = path.lstat()
+              fields = ('st_dev', 'st_ino', 'st_uid', 'st_mode', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+              assert tuple(getattr(before, key) for key in fields) == tuple(getattr(initial, key) for key in fields), path
+              assert tuple(getattr(initial, key) for key in fields) == tuple(getattr(final, key) for key in fields), path
+              assert tuple(getattr(final, key) for key in fields) == tuple(getattr(after, key) for key in fields), path
+              assert count == initial.st_size and count > 0, path
+              if sys.platform == 'linux':
+                  assert header[:4] == b'\x7fELF', (path, header.hex())
+                  native_format = 'ELF'
+              else:
+                  assert sys.platform == 'darwin', sys.platform
+                  assert header[:4].hex() in {'feedface', 'cefaedfe', 'feedfacf', 'cffaedfe', 'cafebabe', 'bebafeca', 'cafebabf', 'bfbafeca'}, (path, header.hex())
+                  native_format = 'Mach-O'
+              return {'sha256': digest.hexdigest(), 'bytes': count, 'mode': stat.S_IMODE(initial.st_mode),
+                      'device': initial.st_dev, 'inode': initial.st_ino, 'uid': initial.st_uid,
+                      'mtime_ns': initial.st_mtime_ns, 'ctime_ns': initial.st_ctime_ns,
+                      'header_hex': header.hex(), 'native_format': native_format}
+
+          if mode == 'capture':
+              assert len(args) == 1, args
+              name = args[0]
+              target, kind, features, is_test, log, record_name, path_name, copy_name = specs[name]
+              artifacts = []
+              for line in (out / log).read_text().splitlines():
+                  value = json.loads(line)
+                  if (value.get('reason') == 'compiler-artifact' and value.get('target', {}).get('name') == target
+                          and value['target'].get('kind') == kind and value.get('executable')):
+                      artifacts.append(value)
+              assert len(artifacts) == 1, artifacts
+              artifact = artifacts[0]
+              assert artifact['features'] == features and artifact['profile']['test'] is is_test, artifact
+              build_path = pathlib.Path(artifact['executable']).resolve(strict=True)
+              built_before = observe(build_path)
+              captured_path = out / copy_name
+              assert not os.path.lexists(captured_path), captured_path
+              shutil.copy2(build_path, captured_path)
+              built_after, captured = observe(build_path), observe(captured_path)
+              content_fields = ('sha256', 'bytes', 'mode', 'uid', 'mtime_ns', 'header_hex', 'native_format')
+              capture_matches = built_before == built_after and all(built_before[key] == captured[key] for key in content_fields)
+              record = {'path': str(captured_path), 'executed_path': str(captured_path), 'build_path': str(build_path),
+                        'sha256': captured['sha256'], 'bytes': captured['bytes'], 'mode': captured['mode'],
+                        'native_format': captured['native_format'], 'header_hex': captured['header_hex'],
+                        'compiler_artifact': artifact, 'features': features, 'profile_test': is_test,
+                        'build_image_before': built_before, 'build_image_after': built_after, 'captured_image': captured,
+                        'capture_helper_sha256': helper_sha, 'capture_matches': capture_matches,
+                        'standing': 'actual executable copy2 capture; this physical copy is selected for execution'}
+              (out / record_name).write_text(json.dumps(record, indent=2) + '\n')
+              assert capture_matches, record
+              (out / path_name).write_text(str(captured_path) + '\n')
+          elif mode == 'check':
+              stage, *names = args
+              assert stage and all(char.isalnum() or char == '-' for char in stage) and names, args
+              facts, failures = [], []
+              for name in names:
+                  target, kind, features, is_test, _, record_name, path_name, copy_name = specs[name]
+                  expected_path = out / copy_name
+                  try:
+                      record = json.loads((out / record_name).read_text())
+                      actual = observe(expected_path)
+                      artifact = record['compiler_artifact']
+                      matches = (record['path'] == record['executed_path'] == str(expected_path)
+                                 and (out / path_name).read_text() == str(expected_path) + '\n'
+                                 and artifact['target']['name'] == target and artifact['target']['kind'] == kind
+                                 and artifact['features'] == features and artifact['profile']['test'] is is_test
+                                 and record['features'] == features and record['profile_test'] is is_test
+                                 and record['capture_helper_sha256'] == helper_sha and record['capture_matches'] is True
+                                 and actual == record['captured_image']
+                                 and record['sha256'] == actual['sha256'] and record['bytes'] == actual['bytes']
+                                 and record['mode'] == actual['mode'] and record['header_hex'] == actual['header_hex']
+                                 and record['native_format'] == actual['native_format'])
+                      facts.append({'name': name, 'executed_path': str(expected_path), 'actual_image': actual,
+                                    'expected_image': record['captured_image'], 'matches': matches})
+                      if not matches:
+                          failures.append(name)
+                  except Exception as error:
+                      facts.append({'name': name, 'executed_path': str(expected_path), 'inspection_error': repr(error), 'matches': False})
+                      failures.append(name)
+              account = {'stage': stage, 'helper_sha256': helper_sha, 'images': facts,
+                         'standing': 'actual image observations at this stage; no universal immutability claim'}
+              (out / ('binary-images-' + stage + '.json')).write_text(json.dumps(account, indent=2) + '\n')
+              assert not failures, failures
+          else:
+              raise AssertionError(mode)
+          PY_NATIVE_IMAGE
           cargo build --locked -p ctrl --bin ctrl --message-format=json 2> "$out/ctrl-build.stderr" | tee "$out/ctrl-build.jsonl"
-          python3 - "$out" <<'PY_NATIVE_BINARY'
-          import hashlib, json, pathlib, shutil, sys
-          out=pathlib.Path(sys.argv[1]); artifacts=[]
-          for line in (out/'ctrl-build.jsonl').read_text().splitlines():
-              value=json.loads(line)
-              if value.get('reason')=='compiler-artifact' and value.get('target',{}).get('name')=='ctrl' and value['target'].get('kind')==['bin'] and value.get('executable'):
-                  artifacts.append(value)
-          assert len(artifacts)==1,artifacts
-          binary=pathlib.Path(artifacts[0]['executable']).resolve(strict=True)
-          digest=hashlib.sha256()
-          with binary.open('rb') as stream:
-              for part in iter(lambda:stream.read(1024*1024), b''): digest.update(part)
-          (out/'ctrl-binary.json').write_text(json.dumps({'path':str(binary),'sha256':digest.hexdigest(),
-              'bytes':binary.stat().st_size,'compiler_artifact':artifacts[0],'features':'actual default cargo build; no FCI opt-in'},indent=2)+'\n')
-          (out/'ctrl-path.txt').write_text(str(binary)+'\n');shutil.copyfile(binary,out/'ctrl')
-          PY_NATIVE_BINARY
+          python3 "$out/binary-provenance.py" capture "$out" ctrl
+          python3 "$out/binary-provenance.py" check "$out" before-opt-in-build ctrl
+          cargo test --locked -p ctrl --test native_ordinary_interruption_child --features native-ordinary-interruption-child --no-run --message-format=json 2> "$out/ordinary-child-build.stderr" | tee "$out/ordinary-child-build.jsonl"
+          python3 "$out/binary-provenance.py" capture "$out" ordinary-child
+          python3 "$out/binary-provenance.py" check "$out" after-opt-in-build ctrl ordinary-child
+          finish_atomic_cli() {
+            local status=$?
+            trap - EXIT
+            if ! python3 "$out/binary-provenance.py" check "$out" final-execution ctrl ordinary-child; then
+              if test "$status" -eq 0; then status=1; fi
+            fi
+            exit "$status"
+          }
+          trap finish_atomic_cli EXIT
+          cargo clippy --locked -p ctrl --test native_ordinary_interruption_child --features native-ordinary-interruption-child -- -D warnings 2>&1 | tee "$out/ordinary-child-clippy.log"
+          python3 "$out/binary-provenance.py" check "$out" after-clippy ctrl ordinary-child
           ctrl=$(cat "$out/ctrl-path.txt")
-          CTRL_BIN="$ctrl" python3 ctrl/tests/native/ordinary_files.py 2>&1 | tee "$out/ordinary-files-native.log"
+          ordinary_child=$(cat "$out/ordinary-child-path.txt")
+          python3 "$out/binary-provenance.py" check "$out" before-ordinary ctrl ordinary-child
+          CTRL_BIN="$ctrl" CTRL_ORDINARY_INTERRUPTION_BIN="$ordinary_child" CTRL_NATIVE_EVIDENCE_DIR="$out" python3 ctrl/tests/native/ordinary_files.py 2>&1 | tee "$out/ordinary-files-native.log"
+          python3 "$out/binary-provenance.py" check "$out" after-ordinary ctrl ordinary-child
+          python3 "$out/binary-provenance.py" check "$out" before-source-return ctrl ordinary-child
           CTRL_BIN="$ctrl" python3 ctrl/tests/native/source_returns.py 2>&1 | tee "$out/source-returns-native.log"
+          python3 "$out/binary-provenance.py" check "$out" after-source-return ctrl ordinary-child
           git diff --exit-code
       - name: Retain actual atomic native step outcomes
         if: always()

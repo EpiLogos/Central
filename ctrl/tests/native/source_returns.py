@@ -79,7 +79,9 @@ for kind in ('hardlink','symlink','fifo','regular'):
  check(json.loads(record.read_text())['source_ref']==request['source_ref'],'published proposal retains exact native SourceRef')
  if kind=='regular':
   attribute=b'org.central.native-record-proof' if sys.platform=='darwin' else b'user.central-native-record-proof'
-  os.setxattr(record,attribute,b'native extension metadata')
+  if sys.platform=='darwin':
+   subprocess.run(['/usr/bin/xattr','-wx',attribute.decode('ascii'),b'native extension metadata'.hex(),str(record)],check=True,timeout=5)
+  else:os.setxattr(record,attribute,b'native extension metadata')
   acl_before=None
   if sys.platform=='darwin':
    subprocess.run(['/bin/chmod','+a','everyone allow read',str(record)],check=True,timeout=5)
@@ -90,7 +92,10 @@ for kind in ('hardlink','symlink','fifo','regular'):
   check(rejected['proposal']['status']=='rejected','owner replaces operational readonly proposal without changing Source authority')
   after_owner=record.stat()
   check((after_owner.st_uid,after_owner.st_gid,stat.S_IMODE(after_owner.st_mode))==(before_owner.st_uid,before_owner.st_gid,0o440),'actual proposal update retains UID/GID/readonly mode')
-  check(os.getxattr(record,attribute)==b'native extension metadata','actual proposal update retains xattr bytes')
+  if sys.platform=='darwin':
+   actual_attribute=bytes.fromhex(subprocess.check_output(['/usr/bin/xattr','-px',attribute.decode('ascii'),str(record)],text=True,timeout=5))
+  else:actual_attribute=os.getxattr(record,attribute)
+  check(actual_attribute==b'native extension metadata','actual proposal update retains xattr bytes')
   if acl_before is not None:
    acl_after=[line.strip() for line in subprocess.check_output(['/bin/ls','-lde',str(record)],text=True,timeout=5).splitlines()[1:] if line.strip()]
    check(acl_after==acl_before,'actual Mac native proposal ACL survives replacement')

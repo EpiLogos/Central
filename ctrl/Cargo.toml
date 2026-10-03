@@ -8,6 +8,8 @@ publish = false
 # Explicit native qualification only. Default workspace/test/lint selection
 # cannot build or invoke the physical inclusion-failure child.
 native-receiving-incomplete-child = []
+# Real ordinary-file checkpoint qualification; absent from default selection.
+native-ordinary-interruption-child = []
 
 [lib]
 name = "central_ctrl"
@@ -22,6 +24,12 @@ name = "native_receiving_incomplete_child"
 path = "tests/native_receiving_incomplete_child.rs"
 harness = false
 required-features = ["native-receiving-incomplete-child"]
+
+[[test]]
+name = "native_ordinary_interruption_child"
+path = "tests/native_ordinary_interruption_child.rs"
+harness = false
+required-features = ["native-ordinary-interruption-child"]
 
 [dependencies]
 central-connector-sdk = { path = "../crates/connector-sdk" }
