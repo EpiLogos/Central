@@ -281,8 +281,8 @@ pub(crate) fn safe_directory(root: &Path, path: &Path) -> io::Result<()> {
     }
     Ok(())
 }
-pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    crate::file_mutation::atomic_record(path, bytes)
+pub(crate) fn write_atomic(root: &Path, path: &Path, bytes: &[u8], disposition: crate::file_mutation::RecordDisposition) -> io::Result<()> {
+    crate::file_mutation::atomic_record(root, path.strip_prefix(root).map_err(io::Error::other)?, bytes, disposition)
 }
 pub(crate) fn read_json(path: &Path) -> io::Result<Value> {
     if fs::metadata(path)?.len() > 8 * 1024 * 1024 {
@@ -358,7 +358,7 @@ impl Scope {
         doc["file_map"] = serde_json::to_value(ground)?;
         let path = Path::new(self.relations_path());
         safe_directory(&self.root, path.parent().unwrap())?;
-        write_atomic(&self.root.join(path), &serde_json::to_vec_pretty(&doc)?)
+        write_atomic(&self.root, &self.root.join(path), &serde_json::to_vec_pretty(&doc)?, crate::file_mutation::RecordDisposition::ReplaceOrCreate)
     }
     pub fn index(&self) -> io::Result<Index> {
         let path = safe_member(&self.root, INDEX, false)?;
@@ -377,7 +377,7 @@ impl Scope {
         Ok(index)
     }
     pub fn save_index(&self, index: &Index) -> io::Result<()> {
-        write_atomic(&self.root.join(INDEX), &serde_json::to_vec_pretty(index)?)
+        write_atomic(&self.root, &self.root.join(INDEX), &serde_json::to_vec_pretty(index)?, crate::file_mutation::RecordDisposition::ReplaceOrCreate)
     }
 }
 pub(crate) fn scopes(root: &Path) -> io::Result<Vec<Scope>> {

@@ -119,3 +119,22 @@ O:I install receipt    what software is actually installed (external to Central)
 ## Deliberate deferrals
 
 S1 does not bulk move existing docs or capability matrices, create Development Field Skills/Methods, implement AIKit intelligence traversal, implement Factory Run/Recognition semantics, or make Central a suite/version manager. S7 or a later intelligence tranche can reconcile existing carriers against these accepted source relations without inventing provenance during cleanup.
+
+## Serialization of native Self mutations
+
+Native root/Project Self source creation and tier/UX/EX/retain-tier mutation
+entrances hold the existing native Source-mutation locks across their original
+read/modify/write and completion paths. The owner resolves the actual Scope,
+checks material root affiliation, and retains the established root-before-Project
+lock order. This is the existing Source owner relation, not another lock/registry
+or a physical publication lock standing in for semantic serialization.
+
+Distinct concurrent native source creations keep their own bytes and both
+accepted provenance/standing relations; unique staging alone is insufficient
+for that relation. First Self material publication is exclusive, using the same
+rooted physical helper. Creation may succeed materially while later source
+binding/tier/final reading is unconfirmed; the native result retains that actual
+phase without minting a SourceRef or adopting human authorship from the file.
+No native six-tier meanings, Source roles, authored ground or optional composition
+are rewritten. Added real concurrent/native Source regressions remain unexecuted
+until qualification of the composed Source cut.

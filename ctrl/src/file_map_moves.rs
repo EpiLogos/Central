@@ -65,8 +65,8 @@ fn path(root: &Path, id: &str) -> io::Result<PathBuf> {
     }
     Ok(root.join(".central/bkmr/moves").join(format!("{id}.json")))
 }
-fn save(root: &Path, plan: &Plan) -> io::Result<()> {
-    write_atomic(&path(root, &plan.id)?, &serde_json::to_vec_pretty(plan)?)
+fn save(root: &Path, plan: &Plan, disposition: crate::file_mutation::RecordDisposition) -> io::Result<()> {
+    write_atomic(root, &path(root, &plan.id)?, &serde_json::to_vec_pretty(plan)?, disposition)
 }
 fn document_text(scope: &Scope) -> io::Result<Option<String>> {
     document_at(scope, scope.relations_path())
@@ -325,7 +325,7 @@ pub(crate) fn plan(root: &Path, all: &[Scope], input: &Value) -> io::Result<Valu
     // The retired Flow registry needs no relocation planning: a leftover
     // registry file, if any, simply stays where it is and stays refused as a
     // move target.
-    save(root, &plan)?;
+    save(root, &plan, crate::file_mutation::RecordDisposition::CreateNew)?;
     Ok(
         json!({"plan_id":id,"source_ref":entry.source.source_ref,"from":from,"destination":to,"state":"prepared","links":plan.links.len(),"requires_quiesced":true,"source_bytes_changed":false}),
     )
@@ -455,10 +455,11 @@ pub(crate) fn apply(
     } else if rollback && at_to {
         move_exclusive(&to, &from)?;
     }
+    let completion = (|| {
     let moved_scopes = resume_scopes(root, input)?;
     let all = moved_scopes.as_slice();
     plan.state = if rollback { "rolling-back" } else { "renamed" }.into();
-    save(root, &plan)?;
+    save(root, &plan, crate::file_mutation::RecordDisposition::ReplaceOrCreate)?;
     // This environment variable is confined to deterministic interruption tests.
     if std::env::var_os("CENTRAL_FILE_MAP_TEST_INTERRUPT_AFTER_RENAME").is_some() {
         return Err(io::Error::new(
@@ -501,17 +502,17 @@ pub(crate) fn apply(
         let target = safe_member(&world.root, relative, false)?;
         if rollback {
             if let Some(before) = &doc.before {
-                write_atomic(&target, before.as_bytes())?;
+                write_atomic(&world.root, &target, before.as_bytes(), crate::file_mutation::RecordDisposition::ReplaceOrCreate)?;
             } else if target.exists() {
                 fs::remove_file(target)?;
             }
         } else {
             safe_directory(&world.root, Path::new(relative).parent().unwrap())?;
-            write_atomic(&target, doc.after.as_bytes())?;
+            write_atomic(&world.root, &target, doc.after.as_bytes(), crate::file_mutation::RecordDisposition::ReplaceOrCreate)?;
         }
     }
     plan.state = if rollback { "rolled-back" } else { "applied" }.into();
-    save(root, &plan)?;
+    save(root, &plan, crate::file_mutation::RecordDisposition::ReplaceOrCreate)?;
     let mut indexes = Vec::new();
     let mut refresh: std::collections::BTreeSet<_> = plan.refresh_worlds.iter().cloned().collect();
     refresh.extend(plan.documents.iter().map(|d| d.world.clone()));
@@ -524,4 +525,8 @@ pub(crate) fn apply(
     Ok(
         json!({"plan_id":id,"source_ref":plan.source_ref,"state":plan.state,"indexes":indexes,"source_bytes_changed":false}),
     )
+    })();
+    completion.map_err(|error| crate::file_mutation::record_owner_error(error,
+        "file_map.move_after_path_observation", Some(&plan.source_ref), Some(&plan.revision),
+        "path_move_observed_relation_steps_may_be_partial"))
 }

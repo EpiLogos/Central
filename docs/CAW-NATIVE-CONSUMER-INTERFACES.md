@@ -223,3 +223,45 @@ The Python proof creates and deletes its own controlled World and prints complet
 The ten initial Rust policy/NOW tests also passed in that run. The workspace subsequently stopped at an existing fixed Action-count assertion; that assertion was corrected to verify the retained baseline plus exact new descriptors. Follow PR checks for the latest full workspace result. Tests added later are not covered by the earlier binary proof.
 
 This is a repository implementation boundary, not installed-world or independent full-feature acceptance. Personal governance adoption, real-machine enforcement, actual original-template fidelity and the independent full-feature journey retain their separate acceptance duties.
+
+## Physical publication beneath native owner results
+
+Document intents, Receiving records/cursors, history snapshots/events and
+migration journals delegate exact bytes to the existing rooted native physical
+publisher. Native locks, authenticated principal/scope, request digest, SourceRef,
+ReturnRef, schema, revisions and recovery remain with their current owners.
+No new journal, identity, writer or automatic retry route is introduced.
+
+An actual post-rename supporting-record failure retains publication uncertainty;
+it cannot certify that no native state changed. If Source publication or an
+acknowledged/observed owner phase preceded later reconciliation/recording failure,
+the error also retains scalar `prior_owner_observation`. An observed revision
+is evidence for that phase, not current-state authority. Native owner reads and
+existing recovery determine current state after restoration. Physical publication
+never proves semantic Source acceptance.
+
+Receiving's existing `central.receiving.inclusion_incomplete` envelope remains
+the outer owner for inclusion/recovery failures. Its typed original/supplemental
+causes now also expose bounded physical publication/prior-owner observations
+where those actually occurred. A failed first `including` record publication
+has no invented acknowledged including revision; it reports physical uncertainty
+through `central.publication_uncertain`. Original producer input, digest, ReturnRef,
+current guarded/by-ref read, successful include/replay and generic unrelated
+IO mappings remain unchanged. Document and migration failures likewise preserve
+actual prior owner progress and original cause instead of treating a failed
+final journal write as undoing already performed work.
+
+Added physical facts retain no source body, request or token, and cannot grant
+retrieval or mutation permission. Each `record_publication` and `prior_owner_observation` is at most 8 KiB with
+explicit diagnostic text omission; Receiving retains its existing 64 KiB aggregate
+added-details profile. Receiving's existing incomplete-inclusion displayed context
+and all serialized persistent record schemas are preserved. Native qualification, installed experience and
+human acceptance remain separate.
+
+A Receiving submit can acknowledge its existing sequence cursor before its
+first Return record fails. The actual cursor observation remains separate from
+Return-record acknowledgement; no Return receipt is manufactured. File-map
+database adoption likewise distinguishes actual backup-link visibility, backup
+file sync and complete observed backup bytes from a final adoption receipt and
+containing-directory durability. Later failures retain only those actual prior
+observations, with existing inspection/recovery as current-state authority.

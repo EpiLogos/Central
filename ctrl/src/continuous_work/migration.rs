@@ -82,8 +82,8 @@ fn save(scope: &Scope, journal: &Journal) -> io::Result<()> {
         ));
     }
     crate::file_mutation::atomic_record(
-        &scope.root.join(journal_path(&journal.plan.plan_ref)),
-        &bytes,
+        &scope.root, Path::new(&journal_path(&journal.plan.plan_ref)),
+        &bytes, crate::file_mutation::RecordDisposition::ReplaceOrCreate,
     )
 }
 fn load(scope: &Scope, reference: &str) -> io::Result<Journal> {
@@ -483,14 +483,12 @@ pub fn transition(
         Ok::<(), io::Error>(())
     })();
     if let Err(error) = result {
-        return Err(io::Error::new(
-            error.kind(),
-            format!(
-                "{error}; recovery intent retained at {} (phase {})",
-                journal.plan.plan_ref, journal.phase
-            ),
-        ));
+        // Keep the actual original error and already acknowledged applying
+        // intent. The existing journal remains the recovery authority.
+        return Err(crate::file_mutation::record_owner_error_with_ref(error,
+            "temporal_migration.after_applying_intent", &journal.plan.plan_ref, None, None, "physical_steps_may_be_partial"));
     }
+    let completion = (|| {
     scope.reconcile(
         Some((&principal.principal_ref, &principal.actor_kind, None)),
         &journal
@@ -503,6 +501,9 @@ pub fn transition(
     journal.phase = if reverse { "rolled-back" } else { "applied" }.into();
     save(scope, &journal)?;
     report(&journal)
+    })();
+    completion.map_err(|error| crate::file_mutation::record_owner_error_with_ref(error,
+        "temporal_migration.final_recording", &journal.plan.plan_ref, None, None, "physical_steps_completed"))
 }
 
 #[cfg(test)]

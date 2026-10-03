@@ -235,3 +235,27 @@ root projection relations; they do not certify every inherited mutation path.
 [The scoped qualification account](ARCHITECTURE-NAVIGATION.md#scoped-native-qualification--2-october-2026)
 keeps the joined composition, source-install dependency cut, prior failures and
 remaining consumer/installed boundaries distinct. See [architecture navigation](ARCHITECTURE-NAVIGATION.md#native-ownership-and-world-disclosure--pending-source-cut).
+
+## Native material publication boundary
+
+The existing `file_mutation::atomic_record(root, relative, bytes, disposition)`
+is the physical publication seam for its current native callers, including
+owner records and explicitly admitted Self material. Its root/parent/device/inode
+observations preserve material affiliation, not World/Project/Source identity.
+The semantic owner supplies `CreateNew` or `ReplaceOrCreate`, permission,
+serialization, lifecycle and recovery; successful bytes are not adoption.
+
+The publisher uses held no-follow/nonblocking/close-on-exec descriptors, unique
+exclusive staging and descriptor-relative atomic publication. Immutable admitted
+privacy precedes candidate bytes; retained mode/ownership/ACL/xattrs must be
+confirmed before and after publication. Native exclusive creation never replaces
+a concurrently appearing target. Existing-target replacement retains the admitted
+basis and acknowledges only exact published inode/bytes/metadata plus held
+owner-route readback. Unsuccessful stages and unselected legacy remnants remain
+in place; no unowned cleanup or new background sweeper is implied.
+
+Actual failure after rename is typed uncertainty with the original cause and
+`published:true`; lack of acknowledgement cannot be restated as absence of effect.
+No universal exclusion of noncooperating filesystem writers or power-loss proof
+is claimed. Source-class, retrieval policy, writes into protected human ground,
+Source CAS and other owners' capacities remain separate and unchanged.

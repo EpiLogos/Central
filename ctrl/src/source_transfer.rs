@@ -701,6 +701,9 @@ fn attribution(action: &str, input: &Value) -> Result<TransferAttribution, Actio
 }
 
 fn io_failure(action: &str, error: io::Error) -> ActionResult {
+    if let Some(result) = crate::file_mutation::record_failure_result(action, &error) {
+        return result;
+    }
     let status = match error.kind() {
         io::ErrorKind::InvalidInput | io::ErrorKind::NotFound | io::ErrorKind::AlreadyExists => {
             ResultStatus::InvalidInput
@@ -764,6 +767,12 @@ fn before_creation_admission(root: &Path) {
     if let Some(checkpoint) = checkpoint { checkpoint(root); }
 }
 
+fn transfer_publication_observation(error: &io::Error) -> Option<Value> {
+    let publication = crate::file_mutation::record_publication_observation(error);
+    let prior = crate::file_mutation::record_owner_progress(error);
+    if publication.is_none() && prior.is_none() { return None; }
+    Some(json!({"record_publication":publication,"prior_owner_observation":prior,"automatic_retry":false}))
+}
 fn write_record_file(root: &Path, relative: &str, value: &Value) -> io::Result<()> {
     if let Some(parent) = Path::new(relative).parent() {
         fs::create_dir_all(root.join(parent))?;
@@ -771,7 +780,7 @@ fn write_record_file(root: &Path, relative: &str, value: &Value) -> io::Result<(
     let mut bytes = serde_json::to_vec_pretty(value)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     bytes.push(b'\n');
-    crate::file_mutation::atomic_record(&root.join(relative), &bytes)
+    crate::file_mutation::atomic_record(root, Path::new(relative), &bytes, crate::file_mutation::RecordDisposition::ReplaceOrCreate)
 }
 
 fn read_record_value(root: &Path, relative: &str) -> io::Result<Value> {
@@ -1585,6 +1594,7 @@ fn apply_action(
     let mut status = "applied".to_owned();
     let mut last_error = None;
     let mut creation_admission_failure = None;
+    let mut publication_failures = Vec::new();
     for (entry, local_revision) in &prepared {
         if status == "uncertain" {
             break;
@@ -1621,6 +1631,7 @@ fn apply_action(
                     },
                     Err(error) => {
                         status = "uncertain".to_owned();
+                        if let Some(observation) = transfer_publication_observation(&error) { publication_failures.push(observation); }
                         last_error = Some(error.to_string());
                         break;
                     }
@@ -1637,6 +1648,7 @@ fn apply_action(
                     Ok(value) => Some(value),
                     Err(error) => {
                         status = "uncertain".to_owned();
+                        if let Some(observation) = transfer_publication_observation(&error) { publication_failures.push(observation); }
                         last_error = Some(error.to_string());
                         break;
                     }
@@ -1659,6 +1671,7 @@ fn apply_action(
                     // The source now exists here, so any earlier recorded
                     // unestablished-lineage conflict for it is settled.
                     if let Err(error) = settle_unestablished_conflicts(&root, entry, &actor, now) {
+                        if let Some(observation) = transfer_publication_observation(&error) { publication_failures.push(observation); }
                         last_error = Some(format!(
                             "{} was created, but settling its earlier unestablished conflict records failed: {error}",
                             entry.source_ref
@@ -1682,6 +1695,7 @@ fn apply_action(
                         details["source_ref"] = json!(entry.source_ref);
                         details
                     });
+                    if let Some(observation) = transfer_publication_observation(&error) { publication_failures.push(observation); }
                     last_error = Some(error.to_string());
                     break;
                 }
@@ -1694,6 +1708,7 @@ fn apply_action(
                 Ok(value) => Some(value),
                 Err(error) => {
                     status = "uncertain".to_owned();
+                    if let Some(observation) = transfer_publication_observation(&error) { publication_failures.push(observation); }
                     last_error = Some(error.to_string());
                     break;
                 }
@@ -1756,7 +1771,11 @@ fn apply_action(
         // The mutations already happened; the receipt is returned and its
         // recording failure is named instead of hidden.
         receipt_value["record_write_error"] = json!(error.to_string());
+        receipt_value["record_publication"] = crate::file_mutation::record_publication_observation(&error).unwrap_or(Value::Null);
+        if let Some(observation) = transfer_publication_observation(&error) { publication_failures.push(observation); }
     }
+    // These are actual invocation observations, not another persisted ledger.
+    if !publication_failures.is_empty() { receipt_value["record_publication_failures"] = json!(publication_failures); }
     ActionResult::success(action, receipt_value)
 }
 
@@ -2130,7 +2149,8 @@ fn resolve_action(
     resolution["resolved_revision"] = json!(receipt.revision.revision);
     record["resolution"] = resolution;
     if let Err(error) = write_record_file(&root, &relative, &record) {
-        return io_failure(action, error);
+        return io_failure(action, crate::file_mutation::record_owner_error(error,
+            "source_transfer.accepted_source_recording", Some(&source_ref), Some(&receipt.revision.revision), "acknowledged"));
     }
     ActionResult::success(
         action,

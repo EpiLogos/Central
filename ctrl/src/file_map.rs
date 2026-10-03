@@ -438,7 +438,11 @@ fn link(all: &[Scope], input: &Value) -> io::Result<Value> {
             inode: metadata.ino(),
         },
     );
-    if let Err(error) = scope.save(&ground, scope.document()?) {
+    if let Err(error) = scope.document().and_then(|document| scope.save(&ground, document)) {
+        if crate::file_mutation::record_publication_observation(&error).is_some() {
+            return Err(crate::file_mutation::record_owner_error(error,
+                "file_map.link_relation_published", Some(&target.source.source_ref), None, "source_not_changed_link_created"));
+        }
         // Undo only the inode just created; never remove a foreign replacement.
         if fs::symlink_metadata(&dest)
             .is_ok_and(|m| m.dev() == metadata.dev() && m.ino() == metadata.ino())
@@ -615,6 +619,8 @@ fn action(op: &str, input: &Value, context: &ActionExecutionContext<'_>) -> Acti
         .and_then(|r| execute(&r.path, op, input));
     match result {
         Ok(data) => ActionResult::success(&id, data),
+        Err(e) if crate::file_mutation::record_failure_result(&id, &e).is_some() =>
+            crate::file_mutation::record_failure_result(&id, &e).expect("matched native record failure"),
         Err(e) => ActionResult::failure_coded(
             Some(&id),
             ResultStatus::InvalidInput,

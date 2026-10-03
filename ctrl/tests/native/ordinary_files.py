@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """Real CLI/filesystem acceptance; no backend substitutes. CTRL_BIN selects candidate."""
-import concurrent.futures, json, os, pathlib, subprocess, tempfile, sys, threading, time
+import concurrent.futures, json, os, pathlib, shutil, subprocess, tempfile, sys, threading, time
 BIN=os.environ['CTRL_BIN']
-root=pathlib.Path(tempfile.mkdtemp(prefix='central-file-native-')).resolve()
+scratch=pathlib.Path(__file__).resolve().parents[3]/'ProjectCentral'/'now'/'tmp'
+scratch.mkdir(parents=True,exist_ok=True)
+owned=pathlib.Path(tempfile.mkdtemp(prefix='central-file-native-',dir=scratch)).resolve()
+root=owned/'Central';root.mkdir()
+# Failed native activity retains its owned T fixture as evidence. Cleanup occurs
+# only after every real child is reaped and every original assertion succeeds.
 checks=[]
 def check(value,name):
     assert value,name
@@ -10,7 +15,7 @@ def check(value,name):
 def run(op,data=None):
     args=[BIN,'--root',str(root),'--json']
     args+=['action','run','central.files.'+op,json.dumps(data or {})] if op!='init' else ['init']
-    p=subprocess.run(args,capture_output=True,text=True)
+    p=subprocess.run(args,capture_output=True,text=True,timeout=15)
     try:return json.loads(p.stdout)
     except Exception:raise RuntimeError((args,p.returncode,p.stdout,p.stderr))
 def good(op,data):
@@ -77,14 +82,14 @@ check(not good('read',{'location':ploc})['operations']['write']['available'],'na
 for kind in ['human','agent','system']:
     denied=run('write',dict(base,location=ploc,actor_kind=kind));check(not denied['ok'] and denied['error']['details']['outcome']=='refused',f'protected ground refuses {kind} ordinary bypass')
 # Unicode, spaces, and preserved extended metadata exercise actual OS paths.
-u=folder/'space — %.txt';u.write_text('unicode');subprocess.run(['/usr/bin/xattr','-w','org.central.test','preserved',str(u)],check=True) if sys.platform=='darwin' else os.setxattr(u,b'user.central-test',b'preserved')
+u=folder/'space — %.txt';u.write_text('unicode');subprocess.run(['/usr/bin/xattr','-w','org.central.test','preserved',str(u)],check=True,timeout=5) if sys.platform=='darwin' else os.setxattr(u,b'user.central-test',b'preserved')
 uloc=next(e['location'] for e in good('list',{'path':'Work/Bare'})['entries'] if e['name']==u.name)
 ur=good('read',{'location':uloc});good('write',dict(base,location=uloc,expected_revision=ur['revision']))
 check(u.read_text()=='after\n','unicode delimiter path commits exact target')
-if sys.platform=='darwin':check(subprocess.check_output(['/usr/bin/xattr','-p','org.central.test',str(u)]).strip()==b'preserved','macOS atomic write preserves extended attributes')
+if sys.platform=='darwin':check(subprocess.check_output(['/usr/bin/xattr','-p','org.central.test',str(u)],timeout=5).strip()==b'preserved','macOS atomic write preserves extended attributes')
 # Real participating-source initialization proves identity cannot be demoted.
 (folder/'README.md').write_text('participating source')
-p=subprocess.run([BIN,'--root',str(root),'--json','action','run','projectcentral.init',json.dumps({'project':'Bare','project_id':'ordinary-files-acceptance'})],capture_output=True,text=True)
+p=subprocess.run([BIN,'--root',str(root),'--json','action','run','projectcentral.init',json.dumps({'project':'Bare','project_id':'ordinary-files-acceptance'})],capture_output=True,text=True,timeout=15)
 assert json.loads(p.stdout)['ok'],p.stdout
 source=folder/'ProjectCentral/user/authored.md';source.write_text('participating source')
 sloc=next(e['location'] for e in good('list',{'path':'Work/Bare/ProjectCentral/user'})['entries'] if e['name']=='authored.md')
@@ -98,7 +103,7 @@ check(not run('write',dict(base,expected_revision=good('read',{'location':loc})[
 manifest.write_bytes(saved)
 # Actual parent symlink churn while separate CLI processes attempt commits.
 race=root/'race';race.mkdir();(race/'note').write_text('basis')
-external=pathlib.Path(tempfile.mkdtemp(prefix='central-outside-')).resolve();(external/'note').write_text('basis')
+external=owned/'unselected-outside';external.mkdir();(external/'note').write_text('basis')
 rloc=good('list',{'path':'race'})['entries'][0]['location'];rread=good('read',{'location':rloc})
 stop=threading.Event()
 def churn():
@@ -113,7 +118,9 @@ def churn():
 t=threading.Thread(target=churn);t.start()
 try:
     for _ in range(30):run('write',dict(base,location=rloc,expected_revision=rread['revision'],content='inside'))
-finally:stop.set();t.join()
+finally:
+    stop.set();t.join(timeout=5)
+    assert not t.is_alive(),'actual owned churn worker failed to quiesce; fixture retained'
 check((external/'note').read_text()=='basis','ancestor symlink churn never mutates external sentinel')
 # Kill an actual native writer after its durable prepare record appears. The
 # next owner history read reconciles committed vs not-committed bytes.
@@ -121,12 +128,26 @@ k=root/'kill-test';k.mkdir();(k/'note').write_text('kill basis')
 kloc=good('list',{'path':'kill-test'})['entries'][0]['location'];kr=good('read',{'location':kloc})
 request=dict(base,location=kloc,expected_revision=kr['revision'],content='z'*60000)
 proc=subprocess.Popen([BIN,'--root',str(root),'--json','action','run','central.files.write',json.dumps(request)],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-saw=False
-while proc.poll() is None:
-    pending=list((root/'.central/file-history').glob('*/pending.json'))
-    if pending:
-        saw=True;proc.kill();break
-proc.communicate()
+saw=False;deadline=time.monotonic()+5
+try:
+    while proc.poll() is None and time.monotonic()<deadline:
+        # Use the actual owner-produced identity, not a duplicate address hash
+        # or a pending record belonging to a different ordinary file.
+        pending=[]
+        for identity in (root/'.central/file-history').glob('*/identity.json'):
+            if json.loads(identity.read_text())==kloc:
+                candidate=identity.parent/'pending.json'
+                if candidate.is_file():pending.append(candidate)
+        if pending:
+            saw=True;proc.kill();break
+        time.sleep(.001)
+    if proc.poll() is None:proc.kill()
+    stdout,stderr=proc.communicate(timeout=5)
+    check(len(stdout)+len(stderr)<=1024*1024,'interrupted native output fits measured one-MiB profile')
+finally:
+    if proc.poll() is None:
+        proc.kill();proc.wait(timeout=2) # no resend; unreaped failure retains T evidence
+    assert proc.poll() is not None,'owned native writer must be reaped before fixture cleanup'
 check(saw,'observed durable prepare before terminating actual native process')
 kh=good('history',{'location':kloc})
 if (k/'note').read_text()==request['content']:
@@ -134,4 +155,6 @@ if (k/'note').read_text()==request['content']:
 else:
     check((k/'note').read_text()=='kill basis','interrupted precommit preserves original bytes')
 check(not list((root/'.central/file-history').glob('*/pending.json')),'native history reconciles interrupted pending receipt')
+shutil.rmtree(owned)
+check(not owned.exists(),'successful actual fixture removes only its owned outer')
 print(json.dumps({'ok':True,'checks':checks,'count':len(checks),'root':str(root),'binary':BIN},indent=2))

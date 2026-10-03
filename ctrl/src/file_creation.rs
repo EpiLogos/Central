@@ -74,7 +74,7 @@ fn create_ordinary(root: &Path, input: &Value) -> io::Result<Value> {
     let revision = content_revision_bytes(&content_bytes);
     let request = json!({"operation_ref":operation,"location":loc,"revision":revision,"actor":actor,"actor_kind":actor_kind,"agent_session_ref":agent_session_ref});
     let (dir, _lock) = state(&root)?;
-    let area = area(&dir, &loc)?;
+    let area = area(&root, &dir, &loc)?;
     let record = area.join("creation.json");
     let pending = area.join("pending.json");
     // Revalidate the selected parent and native authority after acquiring the
@@ -89,7 +89,8 @@ fn create_ordinary(root: &Path, input: &Value) -> io::Result<Value> {
     if parent.metadata()?.permissions().readonly() {
         return Err(denied("The native directory is read-only"));
     }
-    if record.exists() {
+    let resuming_creation = record.exists();
+    if resuming_creation {
         let previous: Value = serde_json::from_reader(open(&record, false)?.take(65536))?;
         if previous != request {
             return Err(conflict(
@@ -139,6 +140,7 @@ fn create_ordinary(root: &Path, input: &Value) -> io::Result<Value> {
     let c_staging = std::ffi::CString::new(staging).map_err(io::Error::other)?;
     let c_name = std::ffi::CString::new(name).map_err(io::Error::other)?;
     let mut committed = false;
+    let mut creation_intent_acknowledged = false;
     let result = (|| {
         file.write_all(&content_bytes)?;
         file.sync_all()?;
@@ -157,9 +159,10 @@ fn create_ordinary(root: &Path, input: &Value) -> io::Result<Value> {
             agent_session_ref,
             restored_from: None,
         };
-        snapshot_bytes(&area, &content_bytes)?;
-        atomic_record(&record, &serde_json::to_vec(&request)?)?;
-        atomic_record(&pending, &serde_json::to_vec(&event)?)?;
+        snapshot_bytes(&root, &area, &content_bytes)?;
+        atomic_record(&root, record.strip_prefix(&root).map_err(io::Error::other)?, &serde_json::to_vec(&request)?, if resuming_creation { RecordDisposition::ReplaceOrCreate } else { RecordDisposition::CreateNew })?;
+        creation_intent_acknowledged = true;
+        atomic_record(&root, pending.strip_prefix(&root).map_err(io::Error::other)?, &serde_json::to_vec(&event)?, RecordDisposition::ReplaceOrCreate)?;
         File::open(&area)?.sync_all()?;
         let current_parent = directory(&root, Path::new(&parent_loc.path))?.metadata()?;
         let held_parent = parent.metadata()?;
@@ -207,7 +210,10 @@ fn create_ordinary(root: &Path, input: &Value) -> io::Result<Value> {
         libc::unlinkat(parent.as_raw_fd(), c_staging.as_ptr(), 0);
     }
     if committed {
-        result.map_err(|e: io::Error| io::Error::other(format!("File creation committed but readback or recovery finalization failed: {e}; retry the same operation identity, never overwrite or mint another identity automatically")))
+        result.map_err(|error| record_owner_error(error, "ordinary_file.source_creation", Some(&loc.ref_id), Some(&revision), "published"))
+    } else if creation_intent_acknowledged {
+        result.map_err(|error| record_owner_error_with_ref(error, "ordinary_file.after_creation_intent", operation,
+            Some(&loc.ref_id), Some(&revision), "source_not_created_creation_intent_acknowledged"))
     } else {
         result
     }
@@ -235,6 +241,7 @@ fn register_create(registry: &mut ActionRegistry) {
         let result=resolve_central_root(context.root_options).map_err(io::Error::other).and_then(|root|create_ordinary(&root.path,input));
         match result {
             Ok(data)=>ActionResult::success("central.files.create",data),
+            Err(e) if record_failure_result("central.files.create", &e).is_some()=>record_failure_result("central.files.create", &e).expect("matched native record failure"),
             Err(e)=>ActionResult::failure(Some("central.files.create"),match e.kind(){
                 io::ErrorKind::PermissionDenied=>ResultStatus::UnavailableCapability,
                 io::ErrorKind::InvalidInput|io::ErrorKind::NotFound=>ResultStatus::InvalidInput,

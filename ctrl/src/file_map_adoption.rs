@@ -49,6 +49,9 @@ pub(crate) fn adopt(scope: &Scope, input: &Value) -> io::Result<Value> {
         .open(&stage)?;
     file.set_permissions(fs::Permissions::from_mode(0o600))?;
     drop(file);
+    let mut backup_linked = false;
+    let mut backup_file_synced = false;
+    let mut backup_read_observed = false;
     let result = (|| {
         let src = Connection::open_with_flags(&source, OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(io::Error::other)?;
@@ -61,14 +64,17 @@ pub(crate) fn adopt(scope: &Scope, input: &Value) -> io::Result<Value> {
         drop(src);
         // Retain an untouched, complete snapshot, including any committed WAL.
         fs::hard_link(&stage, &backup)?;
+        backup_linked = true;
         fs::OpenOptions::new()
             .read(true)
             .open(&backup)?
             .sync_all()?;
+        backup_file_synced = true;
         let receipt = json!({"schema":"central.bkmr-adoption/v1","source_database":source,"source_main_revision":content_revision_bytes(&before),"backup":".central/bkmr/adopted-original.db","backup_revision":content_revision_bytes(&fs::read(&backup)?),"status":"backed-up"});
+        backup_read_observed = true;
         write_atomic(
-            &scope.root.join(".central/bkmr/adoption.json"),
-            &serde_json::to_vec_pretty(&receipt)?,
+            &scope.root, &scope.root.join(".central/bkmr/adoption.json"),
+            &serde_json::to_vec_pretty(&receipt)?, crate::file_mutation::RecordDisposition::CreateNew,
         )?;
         // A distinct inode: future native bkmr writes must never change backup.
         let target = fs::OpenOptions::new()
@@ -88,13 +94,21 @@ pub(crate) fn adopt(scope: &Scope, input: &Value) -> io::Result<Value> {
         receipt["status"] = json!("adopted");
         receipt["retained_records"] = json!(records.len());
         write_atomic(
-            &scope.root.join(".central/bkmr/adoption.json"),
-            &serde_json::to_vec_pretty(&receipt)?,
+            &scope.root, &scope.root.join(".central/bkmr/adoption.json"),
+            &serde_json::to_vec_pretty(&receipt)?, crate::file_mutation::RecordDisposition::ReplaceOrCreate,
         )?;
         Ok(receipt)
     })();
     let _ = fs::remove_file(stage);
-    result
+    result.map_err(|error| if backup_linked {
+        // Link visibility, file sync and observed complete backup bytes are
+        // distinct actual facts. None is a fabricated final adoption receipt
+        // or a guarantee that the containing directory was made durable.
+        let phase = if backup_read_observed { "backup_read_observed_adoption_steps_may_be_partial" }
+            else if backup_file_synced { "backup_file_synced_link_durability_unconfirmed" }
+            else { "backup_link_visible_sync_and_adoption_unconfirmed" };
+        crate::file_mutation::record_owner_error(error, "file_map.database_adoption", None, None, phase)
+    } else { error })
 }
 
 pub(crate) fn record_adopt(scope: &Scope, input: &Value) -> io::Result<Value> {
