@@ -285,14 +285,21 @@ fn scope_aware_set_inspect_collision_and_suggest_across_interfaces() {
     assert_eq!(refused.exit_code, 2, "{}", refused.output);
     drop(blocker);
 
+    // Releasing the listener does not reserve its ephemeral port: another
+    // native process can claim it before the owner observes the interfaces.
+    // Keep the held single-port refusal above; require an actual free port
+    // from a bounded range here, as in the preceding suggestion regression.
+    let start = blocked_port.saturating_sub(31).max(1);
+    let end = blocked_port.saturating_add(32);
     let free = run(
         &root,
         "central.local-endpoints.suggest",
-        json!({ "start": blocked_port, "end": blocked_port }),
+        json!({ "start": start, "end": end }),
     );
     assert_eq!(free.exit_code, 0, "{}", free.output);
     let free_value: Value = serde_json::from_str(&free.output).unwrap();
-    assert_eq!(free_value["data"]["port"], blocked_port);
+    let free_port = free_value["data"]["port"].as_u64().expect("free port") as u16;
+    assert!((start..=end).contains(&free_port));
     assert_eq!(free_value["data"]["scope"], "localhost");
     let free_scopes = free_value["data"]["free_in"]
         .as_array()
