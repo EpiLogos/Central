@@ -215,8 +215,10 @@ mod tests {
         }
     }
 
+    type OwnerReturnObserver = Box<dyn FnOnce(&ActionResult)>;
+
     std::thread_local! {
-        static AFTER_OWNER_RETURN: std::cell::RefCell<Option<Box<dyn FnOnce(&ActionResult)>>> =
+        static AFTER_OWNER_RETURN: std::cell::RefCell<Option<OwnerReturnObserver>> =
             const { std::cell::RefCell::new(None) };
     }
     pub(super) fn owner_returned(result: &ActionResult) {

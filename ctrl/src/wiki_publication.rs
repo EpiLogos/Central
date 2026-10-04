@@ -812,10 +812,12 @@ pub(crate) mod tests {
         }
     }
 
+    type PublicationObserver = Box<dyn FnOnce(&Path)>;
+
     std::thread_local! {
-        static ON_STAGE_CREATED: std::cell::RefCell<Option<Box<dyn FnOnce(&Path)>>> =
+        static ON_STAGE_CREATED: std::cell::RefCell<Option<PublicationObserver>> =
             const { std::cell::RefCell::new(None) };
-        static ON_PUBLISHED: std::cell::RefCell<Option<Box<dyn FnOnce(&Path)>>> =
+        static ON_PUBLISHED: std::cell::RefCell<Option<PublicationObserver>> =
             const { std::cell::RefCell::new(None) };
     }
 
@@ -856,7 +858,15 @@ pub(crate) mod tests {
             return false;
         }
         let metadata = unsafe { metadata.assume_init() };
-        metadata.st_dev as u64 == dev && metadata.st_ino as u64 == ino
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let observed_dev = metadata.st_dev;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let observed_dev = metadata.st_dev as u64;
+        #[cfg(any(all(target_os = "linux", target_pointer_width = "64"), target_os = "macos"))]
+        let observed_ino = metadata.st_ino;
+        #[cfg(not(any(all(target_os = "linux", target_pointer_width = "64"), target_os = "macos")))]
+        let observed_ino = metadata.st_ino as u64;
+        observed_dev == dev && observed_ino == ino
     }
 
     #[test]

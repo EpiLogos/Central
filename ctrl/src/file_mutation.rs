@@ -1494,7 +1494,15 @@ mod read_tests {
                 assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::EBADF));
             } else {
                 let observed = unsafe { observed.assume_init() };
-                assert_ne!((observed.st_dev as u64, observed.st_ino as u64), (dev, ino), "actual native read descriptor survived exec");
+                #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                let observed_dev = observed.st_dev;
+                #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+                let observed_dev = observed.st_dev as u64;
+                #[cfg(any(all(target_os = "linux", target_pointer_width = "64"), target_os = "macos"))]
+                let observed_ino = observed.st_ino;
+                #[cfg(not(any(all(target_os = "linux", target_pointer_width = "64"), target_os = "macos")))]
+                let observed_ino = observed.st_ino as u64;
+                assert_ne!((observed_dev, observed_ino), (dev, ino), "actual native read descriptor survived exec");
             }
         }
     }
@@ -1744,7 +1752,7 @@ mod record_publication_tests {
         let restored = Arc::new(std::sync::Mutex::new(None)); let slot = restored.clone();
         at(RecordCheckpoint::AfterPublish, move |target| {
             let restore = RestoreMode::new(target.to_path_buf());
-            fs::set_permissions(target, fs::Permissions::from_mode(0)).unwrap();
+            fs::set_permissions(target, fs::Permissions::from_mode(0o000)).unwrap();
             *slot.lock().unwrap() = Some(restore);
         });
         let error = fixture.publish(b"retained material", RecordDisposition::CreateNew).unwrap_err();
@@ -1996,7 +2004,7 @@ mod record_publication_tests {
         at(RecordCheckpoint::AfterPublish, move |target| {
             assert_eq!(target.file_name().unwrap(), "adoption.json");
             let restore = RestoreMode::new(target.to_path_buf());
-            fs::set_permissions(target, fs::Permissions::from_mode(0)).unwrap();
+            fs::set_permissions(target, fs::Permissions::from_mode(0o000)).unwrap();
             *slot.lock().unwrap() = Some(restore);
         });
         let failure = native_action(&fixture.root, "central.file-map.adopt-db", json!({
@@ -2066,7 +2074,7 @@ mod record_publication_tests {
             } else { false };
             if accepted {
                 let restore = RestoreMode::new(target.to_path_buf());
-                fs::set_permissions(target, fs::Permissions::from_mode(0)).unwrap();
+                fs::set_permissions(target, fs::Permissions::from_mode(0o000)).unwrap();
                 *restored.lock().unwrap() = Some(restore);
             } else { fail_actual_accepted_return(root, reference, source, restored); }
         });
