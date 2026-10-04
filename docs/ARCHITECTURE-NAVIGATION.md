@@ -216,3 +216,125 @@ or governed named-revision successors and actual QL-root availability, then
 replay the workspace check and unfamiliar-feature navigation. Preserve history;
 no fabricated mirrors, Source aliases or matrix standing upgrade closes R6.
 Source inventories and untouched bodies remain explicit uninspected coverage.
+
+## Native documentation advisory — 3 October 2026
+
+The [documentation workflow](https://github.com/EpiLogos/Central/actions/runs/37117129149)
+at Source `e17465ea159fc0b12cd8c8c476555edd3e66ab2d` has a successful workflow
+badge and an actual advisory **exit 1**. The workflow deliberately continues
+on that error. Its tested merge `50b1ba2339b34d94e2eb1afa72eedc954c753047`
+has the same full tree `a6786600ba80eb1149f1bab7aeb649670f323769`.
+The retained JSON contains 141 errors: 49 stale code-basis entries, 73 unmapped
+native Actions and 19 changed runtime files lacking capability mappings. The
+maintenance test run reports eleven cases, nine passes and two explicit
+suite-workspace skips. The separate reconciliation suite passes eight cases:
+seventeen actual tooling passes and two skips overall. These are tool checks,
+not eleven native passes or live coverage acceptance.
+
+The 188 discovered identities are native Action IDs, not 188 independent shell
+spellings. The 115 mapped identities all occur in that discovery; no
+undiscoverable-matrix/alias diagnostic occurs here. Friendly CLI forms delegate
+to their canonical Actions. Legitimate adapters and shared publication helpers
+still need capability relations; a missing relation alone proves no competing
+semantic authority. `exposure_gaps: []` means no row declared that exposure kind,
+not that all native operations have complete coverage.
+
+The documentation-only `01af4e53` → `e17465ea` delta changed no runtime,
+registry or checker Source. All 49 basis mismatches and 19 changed-file mapping
+predicates are already present at `01af4e53` against the actual workflow base
+`5e4510a6`. Native registry and mapped-command Sources are likewise unchanged.
+This proves inherited Source predicates, not a newly executed preimage discovery.
+Historical digests remain retained until their own semantic evidence is reconciled;
+updating every hash would conceal the required review.
+
+The bounded companion correction relates nineteen Actions to existing purposes:
+
+| Existing capability | Actual operation and native owner | Why the boundary exists |
+| --- | --- | --- |
+| `cap.central.now` | Thirteen `central.now.*` / `central.work.*` identities in [`continuous_work::register_actions` and dispatch](../ctrl/src/continuous_work/mod.rs); allocation/placement in `placement.rs`, lifecycle in `temporal.rs`, raw/distilled continuation in `thoughts.rs`. | NOW owns Agent continuity and source-bound placement. Allocation neither runs an Agent nor reserves OS authority; archive does not stop processes. |
+| `cap.central.day-rollover` | `central.day.read/ensure/lifecycle` and `central.time.policy/occurrences`; the same dispatcher delegates to `temporal.rs`. | Human writing, recognised civil time and NOW lifecycle remain independent. Schedule instants do not advance a Day. Lifecycle uses current source/relation/credential bases. |
+| `cap.central.source-history` | `central.temporal.source-history` delegates to [`history::read`](../ctrl/src/continuous_work/history.rs), reading the existing `.central/file-history` store. | Recovery material retains source identity, current eligibility and paging; it supplies no competing source database or adoption. |
+
+Use [the native consumer interfaces](CAW-NATIVE-CONSUMER-INTERFACES.md)
+for exact request/reply and credentials. The files capability separately exposes
+read-only list/read/resolve and the ordinary owner mutation/history/recovery
+operations; first-save remains its own capability. Source bindings, physical
+publication and human acceptance retain their existing owners.
+
+Other 54 Actions and 17 runtime-file mappings still need exact native relations:
+configuration, contribution documents, Receiving, material File-map/backends,
+ordinary Flow, Git census/diff, endpoints, migration, position readers, Control
+index and Source transfer, plus their shared Source/publication helpers. Receiving
+must not be folded into NOW or Day merely to reduce a count. The same applies to
+File-map identity versus ordinary files and to Flow contributions versus actual
+participant invocation. The 49 historical code-basis mismatches also remain open.
+This bounded Source proposal is not a freshly green advisory or a semantic grade.
+At that `e17465ea` cut, the unscoped learning reader checked only `NOW_SCHEMA`
+while `scan_now` admitted that and `NOW_SCHEMA_V2`; valid-schema acceptance was
+an exact Source question with native replay unrun. The dated Source question
+is addressed by the 4 October successor below. No learning-loop completion or
+Epi numerical/domain mapping follows from registration.
+
+Provenance: artifact `11271498014`, original JSON SHA-256
+`eefe4d3ea1d564868ba0208335f1c7fd00d43adba0c5c47789f027f797c47d4d`;
+ZIP `0c73746c86c881821f04a684c4ab8ab3c298f00c76633d668b788e6ec721d7a1`.
+The advisory Source diagnosis is separate from Central Verify's scoped native
+recovery passes, installed experience, the 135 dated workspace navigation
+failures, deep whole-system inspection and human acceptance. No new renderer,
+build, native producer or installed proof was executed for this correction.
+
+## Native learning reader successor — 4 October 2026
+
+Source `a3bd680619de0743d4faa313aa1932c8375abc95` includes the
+`b9986aa31e0784f6dd2c8b867a71029ad8dfee46` reader repair. The
+[`learnings_read` native handler](../ctrl/src/continuous_work/thoughts.rs) accepts
+`central.now-clearing/v1` and `/v2` for the unscoped path and still rejects a
+wrong schema, World scope or bound Source identity. A supplied `now_ref` uses
+the existing source-bound NOW reader. Omitted and null references enumerate
+that register's bound clearings; they do not combine private registers.
+
+The same Source contains native regression cases that allocate both versions
+in root and two Project scopes, append actual attributed raw fixtures, distil
+learnings, compare scoped and unscoped metadata/content, and reobserve original
+Source bytes unchanged. Negative cases retain schema and identity refusal.
+The [hosted continuous-work proof](https://github.com/EpiLogos/Central/actions/runs/37171081536)
+records both `native_v1_and_v2_learnings_are_readable_across_each_scope_without_rewriting_sources`
+and `unscoped_learning_read_keeps_schema_and_bound_identity_refusals` passing
+on 4 October at 02:28:04 UTC. Its tested merge `33029775c5a96001e4a39b64726e9744f261b92d`
+has the same tree `4cd58be5f5650ca54f040aab21a18bbf6705e5c8` as the named Source.
+Retained raw log SHA-256: `43718c11e55392e508808717b5ab4b5a42ee5963f8fd150f60e316c5d9ac2627`.
+This receipt covers those native reader regressions; it supplies no installed
+acceptance. The reader tests were executed by the hosted producer; no local
+product build was run for this correction.
+
+For the root register, the exact read request is:
+
+```sh
+ctrl --json action run central.now.learnings.read '{"include_content":true,"limit":64}'
+```
+
+Omitted `project` selects `control:root`; a validated Project selects its own
+World. The limit applies per clearing; metadata is the default when
+`include_content` is absent. The [native Scope owner](../ctrl/src/continuous_work/source.rs)
+resolves that World and its eligible Source bindings before reading. This
+read returns attributed distilled material, not a publication or invocation.
+
+The [NOW lifecycle companion](PROJECTCENTRAL-NOW.md) keeps ordinary attributable
+Return, source-bound read and legacy retention distinct. Learning availability
+does not invoke an Agent, promote authored ground, publish a Wiki entry or
+complete the learning loop. The historical documentation advisory above stays
+failed at its actual cut; a fresh advisory is a separate check.
+
+At this same Source, the [fresh documentation advisory](https://github.com/EpiLogos/Central/actions/runs/37171081477)
+also has a successful workflow badge and actual advisory **exit 1**. Against
+base `1dbca8bc456c35c3de4cd368120982c8fab4aafa`, its retained JSON contains
+124 errors: the same 49 historical code bases and 73 unmapped Actions, plus
+two newly changed unmapped Sources (`thoughts.rs` and `flow_append.rs`). The
+19 old changed-file diagnostics are outside this newer comparison range;
+their missing relations remain retained, not closed by the smaller count.
+The preimage still maps 115 of 188 native Action identities. Before publication, this bounded correction mapped nineteen more and related
+the actual learning reader and its regressions; a native advisory on the
+candidate had not yet run.
+Artifact `11291312329`, JSON SHA-256
+`5fda9dd3ac9fe76b23e1e928c8801961695bb038f1a4f44866525ab49196a6a7`;
+archive SHA-256 `fbf5514d7692003ffc6c1e03c19f9a0ce6a084d7af78a02671cd7f6fbe75ddc8`.
