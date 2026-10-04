@@ -35,7 +35,11 @@ fn main() {
         if let Err(error) = &publication {
             eprintln!("native inclusion fixture stdout publication failed: {error}");
         }
-        std::process::exit(if restoration.is_ok() && publication.is_ok() { execution.exit_code } else { 78 });
+        std::process::exit(if restoration.is_ok() && publication.is_ok() {
+            execution.exit_code
+        } else {
+            78
+        });
     }
     #[cfg(not(unix))]
     {

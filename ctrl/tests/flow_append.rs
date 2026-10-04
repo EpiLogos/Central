@@ -850,3 +850,306 @@ fn a_reading_is_plain_bounded_text_and_never_carries_private_collections() {
         .iter()
         .any(|p| p["key"] == "p-ann" && p["kind"] == "person"));
 }
+
+#[test]
+fn document_pin_is_declared_and_honoured_by_the_native_action() {
+    let registry = create_core_action_registry();
+    let descriptor = registry.get("central.flow.append").unwrap();
+    let input = descriptor
+        .inputs
+        .iter()
+        .find(|input| input.name == "expected_document_id")
+        .unwrap();
+    assert_eq!(input.input_type, "string");
+    assert!(!input.required);
+    let w = world();
+    let mut doc = doc_of(&base_case());
+    doc["meta"]["documentId"] = json!("4016cfd7-0492-42c4-84aa-87b473ee2879");
+    let loc = place(&w.0, "pinned-action.html", &doc);
+    let mut caller = ada();
+    caller["authenticated"] = json!(false);
+    let (mut input, _) = input_for(
+        &loc,
+        &caller,
+        &req("pin-public-action", "p-ada", "<p>pinned</p>"),
+    );
+    input["expected_document_id"] = doc["meta"]["documentId"].clone();
+    let result = call(&w.0, "central.flow.append", input);
+    assert_eq!(result.status, ResultStatus::Success, "{result:?}");
+    assert_eq!(
+        result.data.unwrap()["entry"]["request"]["documentId"],
+        doc["meta"]["documentId"]
+    );
+}
+
+#[test]
+fn pinned_append_replays_once_and_cannot_enter_a_replacement_even_with_copied_receipt() {
+    let w = world();
+    let mut a = doc_of(&base_case());
+    a["meta"]["documentId"] = json!("4016cfd7-0492-42c4-84aa-87b473ee2879");
+    let loc = place(&w.0, "pin-replacement.html", &a);
+    let (mut input, token) = input_for(
+        &loc,
+        &ada(),
+        &req("pin-original", "p-ada", "<p>original</p>"),
+    );
+    input["expected_document_id"] = a["meta"]["documentId"].clone();
+    let first = run(&w.0, &input, token).unwrap();
+    assert_eq!(
+        first["entry"]["request"]["documentId"],
+        a["meta"]["documentId"]
+    );
+    let pinned_bytes = fs::read(w.0.join("Control/user/flows/pin-replacement.html")).unwrap();
+    let again = run(&w.0, &input, token).unwrap();
+    assert_eq!(again["outcome"], "recovered");
+    assert_eq!(again["entry"], first["entry"]);
+    assert_eq!(
+        fs::read(w.0.join("Control/user/flows/pin-replacement.html")).unwrap(),
+        pinned_bytes
+    );
+    // A copied receipt must not let the replay fast path certify a replacement.
+    let mut b = read_doc(&w.0, &loc);
+    b["meta"]["documentId"] = json!("4adfe4a9-6605-419a-97ec-1f6f751a77de");
+    fs::write(
+        w.0.join("Control/user/flows/pin-replacement.html"),
+        flow_html(&b),
+    )
+    .unwrap();
+    let replaced_bytes = fs::read(w.0.join("Control/user/flows/pin-replacement.html")).unwrap();
+    assert_eq!(run(&w.0, &input, token).unwrap_err().0, "document-mismatch");
+    assert_eq!(
+        fs::read(w.0.join("Control/user/flows/pin-replacement.html")).unwrap(),
+        replaced_bytes
+    );
+    let (mut fresh, token) = input_for(
+        &loc,
+        &ada(),
+        &req("pin-new-on-replacement", "p-ada", "<p>blocked</p>"),
+    );
+    fresh["expected_document_id"] = a["meta"]["documentId"].clone();
+    assert_eq!(run(&w.0, &fresh, token).unwrap_err().0, "document-mismatch");
+    assert_eq!(
+        fs::read(w.0.join("Control/user/flows/pin-replacement.html")).unwrap(),
+        replaced_bytes
+    );
+}
+
+#[test]
+fn replay_cannot_add_or_drop_a_document_pin_and_legacy_replay_remains_unchanged() {
+    let w = world();
+    let mut doc = doc_of(&base_case());
+    doc["meta"]["documentId"] = json!("4016cfd7-0492-42c4-84aa-87b473ee2879");
+    let loc = place(&w.0, "pin-replay-basis.html", &doc);
+    let (legacy, token) = input_for(
+        &loc,
+        &ada(),
+        &req("legacy-pin-transition", "p-ada", "<p>legacy</p>"),
+    );
+    let old = run(&w.0, &legacy, token).unwrap();
+    assert!(old["entry"]["request"].get("documentId").is_none());
+    assert_eq!(run(&w.0, &legacy, token).unwrap()["outcome"], "recovered");
+    let mut changed = legacy.clone();
+    changed["expected_document_id"] = doc["meta"]["documentId"].clone();
+    let before = fs::read(w.0.join("Control/user/flows/pin-replay-basis.html")).unwrap();
+    assert_eq!(
+        run(&w.0, &changed, token).unwrap_err().0,
+        "request-conflict"
+    );
+    assert_eq!(
+        fs::read(w.0.join("Control/user/flows/pin-replay-basis.html")).unwrap(),
+        before
+    );
+    let (mut pinned, token) = input_for(
+        &loc,
+        &ada(),
+        &req("pinned-remove-transition", "p-ada", "<p>pinned</p>"),
+    );
+    pinned["expected_document_id"] = doc["meta"]["documentId"].clone();
+    run(&w.0, &pinned, token).unwrap();
+    let before = fs::read(w.0.join("Control/user/flows/pin-replay-basis.html")).unwrap();
+    pinned
+        .as_object_mut()
+        .unwrap()
+        .remove("expected_document_id");
+    assert_eq!(run(&w.0, &pinned, token).unwrap_err().0, "request-conflict");
+    assert_eq!(
+        fs::read(w.0.join("Control/user/flows/pin-replay-basis.html")).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn malformed_and_missing_document_pins_refuse_without_writes() {
+    let w = world();
+    let mut doc = doc_of(&base_case());
+    doc["meta"]["documentId"] = json!("4016cfd7-0492-42c4-84aa-87b473ee2879");
+    let loc = place(&w.0, "pin-invalid.html", &doc);
+    let (mut input, token) =
+        input_for(&loc, &ada(), &req("pin-invalid", "p-ada", "<p>blocked</p>"));
+    let before = fs::read(w.0.join("Control/user/flows/pin-invalid.html")).unwrap();
+    for pin in [
+        json!(""),
+        json!("not-a-uuid"),
+        json!(123),
+        json!(" 4016cfd7-0492-42c4-84aa-87b473ee2879"),
+    ] {
+        input["expected_document_id"] = pin;
+        assert_eq!(
+            run(&w.0, &input, token).unwrap_err().0,
+            "invalid-expected-document-id"
+        );
+        assert_eq!(
+            fs::read(w.0.join("Control/user/flows/pin-invalid.html")).unwrap(),
+            before
+        );
+    }
+    doc["meta"].as_object_mut().unwrap().remove("documentId");
+    fs::write(
+        w.0.join("Control/user/flows/pin-invalid.html"),
+        flow_html(&doc),
+    )
+    .unwrap();
+    let before = fs::read(w.0.join("Control/user/flows/pin-invalid.html")).unwrap();
+    input["expected_document_id"] = json!("4016cfd7-0492-42c4-84aa-87b473ee2879");
+    assert_eq!(run(&w.0, &input, token).unwrap_err().0, "document-mismatch");
+    assert_eq!(
+        fs::read(w.0.join("Control/user/flows/pin-invalid.html")).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn null_document_pin_keeps_the_legacy_request_basis() {
+    let w = world();
+    let loc = place(&w.0, "pin-null-legacy.html", &doc_of(&base_case()));
+    let (mut input, token) = input_for(
+        &loc,
+        &ada(),
+        &req("null-is-absent", "p-ada", "<p>legacy</p>"),
+    );
+    input["expected_document_id"] = Value::Null;
+    let done = run(&w.0, &input, token).unwrap();
+    assert!(done["entry"]["request"].get("documentId").is_none());
+    input
+        .as_object_mut()
+        .unwrap()
+        .remove("expected_document_id");
+    assert_eq!(run(&w.0, &input, token).unwrap()["outcome"], "recovered");
+}
+
+#[test]
+fn concurrent_pinned_contributions_retain_their_document_basis() {
+    let w = world();
+    let mut doc = doc_of(&base_case());
+    doc["meta"]["documentId"] = json!("4016cfd7-0492-42c4-84aa-87b473ee2879");
+    let loc = place(&w.0, "pin-concurrent.html", &doc);
+    let barrier = Arc::new(Barrier::new(6));
+    let mut workers = Vec::new();
+    for index in 0..6 {
+        let root = w.0.clone();
+        let loc = loc.clone();
+        let barrier = barrier.clone();
+        let expected = doc["meta"]["documentId"].clone();
+        workers.push(thread::spawn(move || {
+            let (mut input, token) = input_for(
+                &loc,
+                &ada(),
+                &req(
+                    &format!("concurrent-pin-{index}"),
+                    "p-ada",
+                    &format!("<p>worker {index}</p>"),
+                ),
+            );
+            input["expected_document_id"] = expected.clone();
+            barrier.wait();
+            let done = run(&root, &input, token).unwrap();
+            assert_eq!(done["entry"]["request"]["documentId"], expected);
+            done["entry"]["id"].clone()
+        }));
+    }
+    let ids: Vec<Value> = workers
+        .into_iter()
+        .map(|worker| worker.join().unwrap())
+        .collect();
+    let after = read_doc(&w.0, &loc);
+    for id in ids {
+        let entries = after["entries"].as_array().unwrap();
+        let matches: Vec<&Value> = entries.iter().filter(|entry| entry["id"] == id).collect();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0]["request"]["documentId"],
+            doc["meta"]["documentId"]
+        );
+    }
+    assert_eq!(
+        after["meta"]["revision"].as_u64().unwrap(),
+        doc["meta"]["revision"].as_u64().unwrap() + 6
+    );
+}
+
+#[test]
+fn native_uuid_spellings_are_validated_without_normalizing_the_document_basis() {
+    for (index, spelling) in [
+        "4016cfd7049242c484aa87b473ee2879",
+        "4016cfd7-0492-42c4-84aa-87b473ee2879",
+        "{4016cfd7-0492-42c4-84aa-87b473ee2879}",
+        "urn:uuid:4016cfd7-0492-42c4-84aa-87b473ee2879",
+        "4016CFD7049242C484AA87B473EE2879",
+        "{4016CFD7-0492-42C4-84AA-87B473EE2879}",
+        "urn:uuid:4016CFD7-0492-42C4-84AA-87B473EE2879",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let w = world();
+        let mut doc = doc_of(&base_case());
+        doc["meta"]["documentId"] = json!(spelling);
+        let loc = place(&w.0, "pin-spelling.html", &doc);
+        let (mut input, token) = input_for(
+            &loc,
+            &ada(),
+            &req(&format!("pin-spelling-{index}"), "p-ada", "<p>exact</p>"),
+        );
+        input["expected_document_id"] = json!(spelling);
+        let done = run(&w.0, &input, token).unwrap();
+        assert_eq!(done["entry"]["request"]["documentId"], json!(spelling));
+        assert_eq!(read_doc(&w.0, &loc)["meta"]["documentId"], json!(spelling));
+        assert_eq!(run(&w.0, &input, token).unwrap()["outcome"], "recovered");
+    }
+    let w = world();
+    let mut doc = doc_of(&base_case());
+    doc["meta"]["documentId"] = json!("4016cfd7-0492-42c4-84aa-87b473ee2879");
+    let loc = place(&w.0, "pin-opaque-spelling.html", &doc);
+    let (mut input, token) = input_for(
+        &loc,
+        &ada(),
+        &req(
+            "pin-equivalent-is-different-basis",
+            "p-ada",
+            "<p>refused</p>",
+        ),
+    );
+    input["expected_document_id"] = json!("4016cfd7049242c484aa87b473ee2879");
+    let before = fs::read(w.0.join("Control/user/flows/pin-opaque-spelling.html")).unwrap();
+    assert_eq!(run(&w.0, &input, token).unwrap_err().0, "document-mismatch");
+    assert_eq!(
+        fs::read(w.0.join("Control/user/flows/pin-opaque-spelling.html")).unwrap(),
+        before
+    );
+    for invalid in [
+        "URN:UUID:4016cfd7-0492-42c4-84aa-87b473ee2879",
+        "{4016cfd7049242c484aa87b473ee2879}",
+        "urn:uuid:4016cfd7049242c484aa87b473ee2879",
+        "4016cfd7-0492-42c4-84aa-87b473ee2879 ",
+    ] {
+        input["expected_document_id"] = json!(invalid);
+        assert_eq!(
+            run(&w.0, &input, token).unwrap_err().0,
+            "invalid-expected-document-id"
+        );
+        assert_eq!(
+            fs::read(w.0.join("Control/user/flows/pin-opaque-spelling.html")).unwrap(),
+            before
+        );
+    }
+}

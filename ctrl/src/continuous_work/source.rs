@@ -58,12 +58,16 @@ impl Scope {
     pub fn resolve(central: &Path, project: Option<&str>) -> io::Result<Self> {
         let requested_central = central.to_path_buf();
         let central = fs::canonicalize(central)?;
-        let admitted_central = crate::file_mutation::directory(&central, Path::new(""))?.metadata()?;
+        let admitted_central =
+            crate::file_mutation::directory(&central, Path::new(""))?.metadata()?;
         let require_requested_central = || -> io::Result<()> {
             let current = fs::canonicalize(&requested_central)?;
             let metadata = crate::file_mutation::directory(&current, Path::new(""))?.metadata()?;
-            if metadata.dev() != admitted_central.dev() || metadata.ino() != admitted_central.ino() {
-                return Err(io::Error::other("Requested Central root affiliation changed during scope resolution"));
+            if metadata.dev() != admitted_central.dev() || metadata.ino() != admitted_central.ino()
+            {
+                return Err(io::Error::other(
+                    "Requested Central root affiliation changed during scope resolution",
+                ));
             }
             Ok(())
         };
@@ -75,15 +79,20 @@ impl Scope {
             if member.components().count() != 1 {
                 return Err(invalid("project is one existing Central/Work member"));
             }
-            let project_directory = crate::file_mutation::directory(&central, &Path::new("Work").join(&member))?;
+            let project_directory =
+                crate::file_mutation::directory(&central, &Path::new("Work").join(&member))?;
             let admitted_project = project_directory.metadata()?;
             let root = central.join("Work").join(member);
             let mut reading = crate::file_mutation::NativeFileRead::open(
-                &root, (admitted_project.dev(), admitted_project.ino()),
-                Path::new("ProjectCentral/project.json"))?;
+                &root,
+                (admitted_project.dev(), admitted_project.ino()),
+                Path::new("ProjectCentral/project.json"),
+            )?;
             let bytes = reading.read_bytes(4 * 1024 * 1024)?;
             let manifest = crate::projectcentral::parse_project_manifest(
-                &bytes, &root.join("ProjectCentral/project.json"))?;
+                &bytes,
+                &root.join("ProjectCentral/project.json"),
+            )?;
             let validation = manifest.validate();
             if !validation.valid {
                 return Err(invalid(validation.errors.join("; ")));
@@ -136,7 +145,10 @@ impl Scope {
         };
         let value: Value = serde_json::from_str(&raw)?;
         crate::source_horizon::validate_relations_value(
-            &value, &self.relations_schema, &self.relations_id)?;
+            &value,
+            &self.relations_schema,
+            &self.relations_id,
+        )?;
         Ok((value, revision(&raw)))
     }
     pub fn bindings(&self) -> io::Result<Vec<SourceBinding>> {
@@ -212,7 +224,9 @@ impl Scope {
             .as_array_mut()
             .ok_or_else(|| invalid("invalid relations"))?;
         for old in entries.iter() {
-            let old_path = old["path"].as_str().ok_or_else(|| invalid("source relation path must be text"))?;
+            let old_path = old["path"]
+                .as_str()
+                .ok_or_else(|| invalid("source relation path must be text"))?;
             let same_member = crate::source_safety::normal_member_key(old_path)? == member_key;
             if old["ref"] == binding.source_ref || same_member {
                 if old["ref"] == binding.source_ref && same_member {

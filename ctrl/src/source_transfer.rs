@@ -715,44 +715,62 @@ fn io_failure(action: &str, error: io::Error) -> ActionResult {
     ActionResult::failure(Some(action), status, error.to_string(), None)
 }
 
-
-
 /// The pre-effect creation gate retains actual IO through the existing writer
 /// boundary; an observed marker has no fabricated errno or publication result.
 #[derive(Debug)]
-struct CreationAdmissionFailure { cause: Option<io::Error> }
+struct CreationAdmissionFailure {
+    cause: Option<io::Error>,
+}
 impl std::fmt::Display for CreationAdmissionFailure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.cause {
-            Some(cause) => write!(formatter, "Source creation aperture is unavailable: {cause}"),
-            None => formatter.write_str("Source creation is excluded by an observed .no-agent-retrieval treatment"),
+            Some(cause) => write!(
+                formatter,
+                "Source creation aperture is unavailable: {cause}"
+            ),
+            None => formatter.write_str(
+                "Source creation is excluded by an observed .no-agent-retrieval treatment",
+            ),
         }
     }
 }
 impl std::error::Error for CreationAdmissionFailure {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.cause.as_ref().map(|cause| cause as &(dyn std::error::Error + 'static))
+        self.cause
+            .as_ref()
+            .map(|cause| cause as &(dyn std::error::Error + 'static))
     }
 }
 fn creation_admission_details(error: &io::Error) -> Option<Value> {
-    let failure = error.get_ref()?.downcast_ref::<CreationAdmissionFailure>()?;
-    Some(json!({"failure_stage":"source_creation_aperture", "failed_source_effect":"none",
+    let failure = error
+        .get_ref()?
+        .downcast_ref::<CreationAdmissionFailure>()?;
+    Some(
+        json!({"failure_stage":"source_creation_aperture", "failed_source_effect":"none",
         "marker_present":failure.cause.is_none(),
         "io_error":failure.cause.as_ref().map(|cause| json!({"kind":format!("{:?}", cause.kind()),
-            "raw_os_error":cause.raw_os_error(), "message":cause.to_string()}))}))
+            "raw_os_error":cause.raw_os_error(), "message":cause.to_string()}))}),
+    )
 }
 fn require_creation_admission(root: &Path, destination: &Path) -> io::Result<()> {
     match crate::source_horizon::retrieval_creation_admission(root, destination) {
         Ok(true) => Ok(()),
-        Ok(false) => Err(io::Error::new(io::ErrorKind::PermissionDenied,
-            CreationAdmissionFailure { cause: None })),
-        Err(cause) => Err(io::Error::new(cause.kind(), CreationAdmissionFailure { cause: Some(cause) })),
+        Ok(false) => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            CreationAdmissionFailure { cause: None },
+        )),
+        Err(cause) => Err(io::Error::new(
+            cause.kind(),
+            CreationAdmissionFailure { cause: Some(cause) },
+        )),
     }
 }
 fn creation_admission_result(action: &str, error: io::Error) -> ActionResult {
     let details = creation_admission_details(&error);
     let mut result = io_failure(action, error);
-    if let Some(error) = result.error.as_mut() { error.details = details; }
+    if let Some(error) = result.error.as_mut() {
+        error.details = details;
+    }
     result
 }
 #[cfg(test)]
@@ -764,14 +782,20 @@ thread_local! {
 #[cfg(test)]
 fn before_creation_admission(root: &Path) {
     let checkpoint = BEFORE_CREATION_ADMISSION.with(|checkpoint| checkpoint.borrow_mut().take());
-    if let Some(checkpoint) = checkpoint { checkpoint(root); }
+    if let Some(checkpoint) = checkpoint {
+        checkpoint(root);
+    }
 }
 
 fn transfer_publication_observation(error: &io::Error) -> Option<Value> {
     let publication = crate::file_mutation::record_publication_observation(error);
     let prior = crate::file_mutation::record_owner_progress(error);
-    if publication.is_none() && prior.is_none() { return None; }
-    Some(json!({"record_publication":publication,"prior_owner_observation":prior,"automatic_retry":false}))
+    if publication.is_none() && prior.is_none() {
+        return None;
+    }
+    Some(
+        json!({"record_publication":publication,"prior_owner_observation":prior,"automatic_retry":false}),
+    )
 }
 fn write_record_file(root: &Path, relative: &str, value: &Value) -> io::Result<()> {
     if let Some(parent) = Path::new(relative).parent() {
@@ -780,7 +804,12 @@ fn write_record_file(root: &Path, relative: &str, value: &Value) -> io::Result<(
     let mut bytes = serde_json::to_vec_pretty(value)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     bytes.push(b'\n');
-    crate::file_mutation::atomic_record(root, Path::new(relative), &bytes, crate::file_mutation::RecordDisposition::ReplaceOrCreate)
+    crate::file_mutation::atomic_record(
+        root,
+        Path::new(relative),
+        &bytes,
+        crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+    )
 }
 
 fn read_record_value(root: &Path, relative: &str) -> io::Result<Value> {
@@ -1631,7 +1660,9 @@ fn apply_action(
                     },
                     Err(error) => {
                         status = "uncertain".to_owned();
-                        if let Some(observation) = transfer_publication_observation(&error) { publication_failures.push(observation); }
+                        if let Some(observation) = transfer_publication_observation(&error) {
+                            publication_failures.push(observation);
+                        }
                         last_error = Some(error.to_string());
                         break;
                     }
@@ -1648,7 +1679,9 @@ fn apply_action(
                     Ok(value) => Some(value),
                     Err(error) => {
                         status = "uncertain".to_owned();
-                        if let Some(observation) = transfer_publication_observation(&error) { publication_failures.push(observation); }
+                        if let Some(observation) = transfer_publication_observation(&error) {
+                            publication_failures.push(observation);
+                        }
                         last_error = Some(error.to_string());
                         break;
                     }
@@ -1671,7 +1704,9 @@ fn apply_action(
                     // The source now exists here, so any earlier recorded
                     // unestablished-lineage conflict for it is settled.
                     if let Err(error) = settle_unestablished_conflicts(&root, entry, &actor, now) {
-                        if let Some(observation) = transfer_publication_observation(&error) { publication_failures.push(observation); }
+                        if let Some(observation) = transfer_publication_observation(&error) {
+                            publication_failures.push(observation);
+                        }
                         last_error = Some(format!(
                             "{} was created, but settling its earlier unestablished conflict records failed: {error}",
                             entry.source_ref
@@ -1691,11 +1726,14 @@ fn apply_action(
                 }
                 Err(error) => {
                     status = "uncertain".to_owned();
-                    creation_admission_failure = creation_admission_details(&error).map(|mut details| {
-                        details["source_ref"] = json!(entry.source_ref);
-                        details
-                    });
-                    if let Some(observation) = transfer_publication_observation(&error) { publication_failures.push(observation); }
+                    creation_admission_failure =
+                        creation_admission_details(&error).map(|mut details| {
+                            details["source_ref"] = json!(entry.source_ref);
+                            details
+                        });
+                    if let Some(observation) = transfer_publication_observation(&error) {
+                        publication_failures.push(observation);
+                    }
                     last_error = Some(error.to_string());
                     break;
                 }
@@ -1708,7 +1746,9 @@ fn apply_action(
                 Ok(value) => Some(value),
                 Err(error) => {
                     status = "uncertain".to_owned();
-                    if let Some(observation) = transfer_publication_observation(&error) { publication_failures.push(observation); }
+                    if let Some(observation) = transfer_publication_observation(&error) {
+                        publication_failures.push(observation);
+                    }
                     last_error = Some(error.to_string());
                     break;
                 }
@@ -1771,11 +1811,16 @@ fn apply_action(
         // The mutations already happened; the receipt is returned and its
         // recording failure is named instead of hidden.
         receipt_value["record_write_error"] = json!(error.to_string());
-        receipt_value["record_publication"] = crate::file_mutation::record_publication_observation(&error).unwrap_or(Value::Null);
-        if let Some(observation) = transfer_publication_observation(&error) { publication_failures.push(observation); }
+        receipt_value["record_publication"] =
+            crate::file_mutation::record_publication_observation(&error).unwrap_or(Value::Null);
+        if let Some(observation) = transfer_publication_observation(&error) {
+            publication_failures.push(observation);
+        }
     }
     // These are actual invocation observations, not another persisted ledger.
-    if !publication_failures.is_empty() { receipt_value["record_publication_failures"] = json!(publication_failures); }
+    if !publication_failures.is_empty() {
+        receipt_value["record_publication_failures"] = json!(publication_failures);
+    }
     ActionResult::success(action, receipt_value)
 }
 
@@ -2149,8 +2194,16 @@ fn resolve_action(
     resolution["resolved_revision"] = json!(receipt.revision.revision);
     record["resolution"] = resolution;
     if let Err(error) = write_record_file(&root, &relative, &record) {
-        return io_failure(action, crate::file_mutation::record_owner_error(error,
-            "source_transfer.accepted_source_recording", Some(&source_ref), Some(&receipt.revision.revision), "acknowledged"));
+        return io_failure(
+            action,
+            crate::file_mutation::record_owner_error(
+                error,
+                "source_transfer.accepted_source_recording",
+                Some(&source_ref),
+                Some(&receipt.revision.revision),
+                "acknowledged",
+            ),
+        );
     }
     ActionResult::success(
         action,
@@ -2334,7 +2387,6 @@ fn build_descriptor(
     }
 }
 
-
 #[cfg(test)]
 mod creation_admission_tests {
     use super::*;
@@ -2346,7 +2398,12 @@ mod creation_admission_tests {
         fn new() -> Self {
             let scratch = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ProjectCentral/now/tmp");
             fs::create_dir_all(&scratch).unwrap();
-            let root = scratch.join(format!("source-transfer-aperture-{}-{}-{}", std::process::id(), unix_seconds(), NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)));
+            let root = scratch.join(format!(
+                "source-transfer-aperture-{}-{}-{}",
+                std::process::id(),
+                unix_seconds(),
+                NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
+            ));
             fs::create_dir(&root).unwrap();
             crate::initialize_central(&root).unwrap();
             Self(root)
@@ -2354,7 +2411,9 @@ mod creation_admission_tests {
     }
     impl Drop for Fixture {
         fn drop(&mut self) {
-            BEFORE_CREATION_ADMISSION.with(|checkpoint| { checkpoint.borrow_mut().take(); });
+            BEFORE_CREATION_ADMISSION.with(|checkpoint| {
+                checkpoint.borrow_mut().take();
+            });
             if let Err(error) = fs::remove_dir_all(&self.0) {
                 let failure = format!(
                     "Failed to retire owned SourceTransfer fixture {}: {error} (kind={:?}, errno={:?})",
@@ -2372,9 +2431,18 @@ mod creation_admission_tests {
         let mut registry = crate::create_core_action_registry();
         crate::projectcentral_ops::register_projectcentral_actions(&mut registry);
         let connectors = crate::ConnectorRegistry::default();
-        let connector_context = crate::ConnectorContext { platform: "actual-fixture-os".to_owned() };
-        let options = crate::RootOptions { explicit_root: Some(root.to_path_buf()), ..crate::RootOptions::default() };
-        let context = ActionExecutionContext { root_options: &options, connectors: &connectors, connector_context: &connector_context };
+        let connector_context = crate::ConnectorContext {
+            platform: "actual-fixture-os".to_owned(),
+        };
+        let options = crate::RootOptions {
+            explicit_root: Some(root.to_path_buf()),
+            ..crate::RootOptions::default()
+        };
+        let context = ActionExecutionContext {
+            root_options: &options,
+            connectors: &connectors,
+            connector_context: &connector_context,
+        };
         registry.execute(action, &input, &context)
     }
     fn bundle(root: &Path, paths: &[&str]) -> (Value, Vec<String>) {
@@ -2385,31 +2453,46 @@ mod creation_admission_tests {
             fs::write(file, format!("retained source {path}\n")).unwrap();
             refs.push(crate::source_horizon::source_ref(CONTROL_WORLD_REF, path));
         }
-        let result = native(root, "projectcentral.source.transfer.export", json!({
-            "source_refs":refs, "to_world_ref":CONTROL_WORLD_REF, "from_ground":"owned-origin", "to_ground":"owned-receiver",
-            "actor":"agent:fixture:transfer", "actor_kind":"agent"
-        }));
+        let result = native(
+            root,
+            "projectcentral.source.transfer.export",
+            json!({
+                "source_refs":refs, "to_world_ref":CONTROL_WORLD_REF, "from_ground":"owned-origin", "to_ground":"owned-receiver",
+                "actor":"agent:fixture:transfer", "actor_kind":"agent"
+            }),
+        );
         assert_eq!(result.status, ResultStatus::Success, "{result:?}");
         (result.data.unwrap(), refs)
     }
     fn apply(root: &Path, bundle: Value, refs: Vec<String>) -> ActionResult {
-        native(root, "projectcentral.source.transfer.apply", json!({
-            "bundle":bundle,"actor":"agent:fixture:transfer","actor_kind":"agent",
-            "accept_unestablished_identity":true,"accept_unestablished_lineage":refs
-        }))
+        native(
+            root,
+            "projectcentral.source.transfer.apply",
+            json!({
+                "bundle":bundle,"actor":"agent:fixture:transfer","actor_kind":"agent",
+                "accept_unestablished_identity":true,"accept_unestablished_lineage":refs
+            }),
+        )
     }
 
     #[test]
     fn actual_late_marker_blocks_creation_and_preserves_earlier_native_outcome() {
         let origin = Fixture::new();
         let receiver = Fixture::new();
-        let paths = ["Control/agents/expressions/a/EXPRESSION.md", "Control/agents/expressions/b/EXPRESSION.md"];
+        let paths = [
+            "Control/agents/expressions/a/EXPRESSION.md",
+            "Control/agents/expressions/b/EXPRESSION.md",
+        ];
         let (exported, refs) = bundle(&origin.0, &paths);
-        BEFORE_CREATION_ADMISSION.with(|checkpoint| *checkpoint.borrow_mut() = Some(Box::new(|_| {
-            BEFORE_CREATION_ADMISSION.with(|next| *next.borrow_mut() = Some(Box::new(|root| {
-                fs::write(root.join("Control/agents/.no-agent-retrieval"), b"").unwrap();
-            })));
-        })));
+        BEFORE_CREATION_ADMISSION.with(|checkpoint| {
+            *checkpoint.borrow_mut() = Some(Box::new(|_| {
+                BEFORE_CREATION_ADMISSION.with(|next| {
+                    *next.borrow_mut() = Some(Box::new(|root| {
+                        fs::write(root.join("Control/agents/.no-agent-retrieval"), b"").unwrap();
+                    }))
+                });
+            }))
+        });
         let result = apply(&receiver.0, exported, refs.clone());
         assert_eq!(result.status, ResultStatus::Success, "{result:?}");
         let receipt = result.data.unwrap();
@@ -2419,21 +2502,43 @@ mod creation_admission_tests {
         assert_eq!(receipt["outcomes"][0]["source_ref"], refs[0]);
         assert_eq!(receipt["outcomes"][0]["outcome"], "established");
         assert_eq!(receipt["creation_admission_failure"]["source_ref"], refs[1]);
-        assert_eq!(receipt["creation_admission_failure"]["failed_source_effect"], "none");
-        assert_eq!(receipt["creation_admission_failure"]["failure_stage"], "source_creation_aperture");
-        assert_eq!(receipt["creation_admission_failure"]["marker_present"], true);
+        assert_eq!(
+            receipt["creation_admission_failure"]["failed_source_effect"],
+            "none"
+        );
+        assert_eq!(
+            receipt["creation_admission_failure"]["failure_stage"],
+            "source_creation_aperture"
+        );
+        assert_eq!(
+            receipt["creation_admission_failure"]["marker_present"],
+            true
+        );
         assert!(receipt["creation_admission_failure"]["io_error"].is_null());
-        assert_eq!(fs::read(receiver.0.join(paths[0])).unwrap(), fs::read(origin.0.join(paths[0])).unwrap());
+        assert_eq!(
+            fs::read(receiver.0.join(paths[0])).unwrap(),
+            fs::read(origin.0.join(paths[0])).unwrap()
+        );
         assert!(!receiver.0.join("Control/agents/expressions/b").exists());
-        let records = fs::read_dir(receiver.0.join(TRANSFER_RECORD_AREA)).unwrap().collect::<Result<Vec<_>,_>>().unwrap();
+        let records = fs::read_dir(receiver.0.join(TRANSFER_RECORD_AREA))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
         assert_eq!(records.len(), 1);
-        assert_eq!(serde_json::from_slice::<Value>(&fs::read(records[0].path()).unwrap()).unwrap(), receipt);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&fs::read(records[0].path()).unwrap()).unwrap(),
+            receipt
+        );
     }
 
     #[test]
     fn actual_late_creation_io_preserves_original_errno_and_restores_source_aperture() {
         use std::os::unix::fs::PermissionsExt;
-        assert_ne!(unsafe { libc::geteuid() }, 0, "actual source creation EACCES proof requires a nonroot OS user");
+        assert_ne!(
+            unsafe { libc::geteuid() },
+            0,
+            "actual source creation EACCES proof requires a nonroot OS user"
+        );
         let origin = Fixture::new();
         let receiver = Fixture::new();
         let path = "Control/agents/expressions/owned/EXPRESSION.md";
@@ -2444,15 +2549,24 @@ mod creation_admission_tests {
         impl Drop for Restore {
             fn drop(&mut self) {
                 if let Err(error) = fs::set_permissions(&self.0, self.1.clone()) {
-                    if std::thread::panicking() { eprintln!("actual fixture aperture restore failed: {error}"); }
-                    else { panic!("actual fixture aperture restore failed: {error}"); }
+                    if std::thread::panicking() {
+                        eprintln!("actual fixture aperture restore failed: {error}");
+                    } else {
+                        panic!("actual fixture aperture restore failed: {error}");
+                    }
                 }
             }
         }
         let restore = Restore(blocked.clone(), permissions.clone());
-        BEFORE_CREATION_ADMISSION.with(|checkpoint| *checkpoint.borrow_mut() = Some(Box::new(|root| {
-            fs::set_permissions(root.join("Control/agents"), fs::Permissions::from_mode(0o000)).unwrap();
-        })));
+        BEFORE_CREATION_ADMISSION.with(|checkpoint| {
+            *checkpoint.borrow_mut() = Some(Box::new(|root| {
+                fs::set_permissions(
+                    root.join("Control/agents"),
+                    fs::Permissions::from_mode(0o000),
+                )
+                .unwrap();
+            }))
+        });
         let result = apply(&receiver.0, exported.clone(), refs.clone());
         let actual = fs::symlink_metadata(blocked.join(".no-agent-retrieval")).unwrap_err();
         assert_eq!(actual.kind(), io::ErrorKind::PermissionDenied);
@@ -2460,16 +2574,34 @@ mod creation_admission_tests {
         let receipt = result.data.unwrap();
         assert_eq!(receipt["status"], "uncertain");
         assert_eq!(receipt["applied_count"], 0);
-        assert_eq!(receipt["creation_admission_failure"]["marker_present"], false);
-        assert_eq!(receipt["creation_admission_failure"]["io_error"]["kind"], format!("{:?}", actual.kind()));
-        assert_eq!(receipt["creation_admission_failure"]["io_error"]["raw_os_error"], json!(actual.raw_os_error()));
-        assert_eq!(receipt["creation_admission_failure"]["io_error"]["message"], actual.to_string());
+        assert_eq!(
+            receipt["creation_admission_failure"]["marker_present"],
+            false
+        );
+        assert_eq!(
+            receipt["creation_admission_failure"]["io_error"]["kind"],
+            format!("{:?}", actual.kind())
+        );
+        assert_eq!(
+            receipt["creation_admission_failure"]["io_error"]["raw_os_error"],
+            json!(actual.raw_os_error())
+        );
+        assert_eq!(
+            receipt["creation_admission_failure"]["io_error"]["message"],
+            actual.to_string()
+        );
         drop(restore);
-        assert_eq!(fs::metadata(&blocked).unwrap().permissions().mode(), permissions.mode());
+        assert_eq!(
+            fs::metadata(&blocked).unwrap().permissions().mode(),
+            permissions.mode()
+        );
         assert!(!receiver.0.join("Control/agents/expressions").exists());
         let reopened = apply(&receiver.0, exported, refs);
         assert_eq!(reopened.status, ResultStatus::Success, "{reopened:?}");
         assert_eq!(reopened.data.unwrap()["status"], "applied");
-        assert_eq!(fs::read(receiver.0.join(path)).unwrap(), fs::read(origin.0.join(path)).unwrap());
+        assert_eq!(
+            fs::read(receiver.0.join(path)).unwrap(),
+            fs::read(origin.0.join(path)).unwrap()
+        );
     }
 }

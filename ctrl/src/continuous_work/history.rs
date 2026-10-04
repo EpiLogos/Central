@@ -19,7 +19,12 @@ fn read_json(scope: &Scope, path: &str) -> io::Result<Value> {
     }
     Ok(serde_json::from_reader(file.take(bound))?)
 }
-fn write_json(scope: &Scope, path: &str, value: &Value, disposition: crate::file_mutation::RecordDisposition) -> io::Result<()> {
+fn write_json(
+    scope: &Scope,
+    path: &str,
+    value: &Value,
+    disposition: crate::file_mutation::RecordDisposition,
+) -> io::Result<()> {
     let relative = crate::source_safety::relative_member(path)?;
     source::directories(
         &scope.root,
@@ -27,7 +32,12 @@ fn write_json(scope: &Scope, path: &str, value: &Value, disposition: crate::file
             .parent()
             .ok_or_else(|| invalid("history parent missing"))?,
     )?;
-    crate::file_mutation::atomic_record(&scope.root, &relative, &serde_json::to_vec(value)?, disposition)
+    crate::file_mutation::atomic_record(
+        &scope.root,
+        &relative,
+        &serde_json::to_vec(value)?,
+        disposition,
+    )
 }
 fn area(scope: &Scope, source_ref: &str) -> io::Result<String> {
     let area = format!(".central/file-history/{}", key(source_ref));
@@ -37,7 +47,12 @@ fn area(scope: &Scope, source_ref: &str) -> io::Result<String> {
     match read_json(scope, &path) {
         Ok(old) if old == identity => {}
         Ok(_) => return Err(conflict("existing native history identity differs")),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => write_json(scope, &path, &identity, crate::file_mutation::RecordDisposition::CreateNew)?,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => write_json(
+            scope,
+            &path,
+            &identity,
+            crate::file_mutation::RecordDisposition::CreateNew,
+        )?,
         Err(e) => return Err(e),
     }
     Ok(area)
@@ -49,7 +64,12 @@ fn snapshot(scope: &Scope, area: &str, content: &str) -> io::Result<()> {
     match read_json(scope, &path) {
         Ok(old) if old == value => Ok(()),
         Ok(_) => Err(conflict("native history revision collision")),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => write_json(scope, &path, &value, crate::file_mutation::RecordDisposition::CreateNew),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => write_json(
+            scope,
+            &path,
+            &value,
+            crate::file_mutation::RecordDisposition::CreateNew,
+        ),
         Err(e) => Err(e),
     }
 }
@@ -85,7 +105,12 @@ fn reconcile_pending(scope: &Scope, source_ref: &str, area: &str) -> io::Result<
                 .as_u64()
                 .ok_or_else(|| invalid("invalid history cursor"))?
         );
-        write_json(scope, &event, &pending, crate::file_mutation::RecordDisposition::ReplaceOrCreate)?;
+        write_json(
+            scope,
+            &event,
+            &pending,
+            crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+        )?;
     } else if pending["previous_revision"] != current.revision.revision {
         return Err(conflict("source has unresolved interrupted history: bytes match neither exact basis nor intended result; explicit recovery required"));
     }
@@ -121,7 +146,12 @@ pub(crate) fn replace(
         .checked_add(1)
         .ok_or_else(|| invalid("history cursor exhausted"))?;
     let event = json!({"cursor":cursor,"previous_revision":reading.revision.revision,"revision":source::revision(content),"actor":actor,"actor_kind":kind,"agent_session_ref":null,"restored_from":null,"source_path":reading.source.path,"recorded_at_unix_seconds":now});
-    write_json(scope, &format!("{area}/pending.json"), &event, crate::file_mutation::RecordDisposition::ReplaceOrCreate)?;
+    write_json(
+        scope,
+        &format!("{area}/pending.json"),
+        &event,
+        crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+    )?;
     crate::source_safety::replace(
         &scope.root,
         &reading.source.path,
@@ -136,9 +166,15 @@ pub(crate) fn replace(
         )?;
         scope.read(&reading.source.source_ref)
     })();
-    completion.map_err(|error| crate::file_mutation::record_owner_error(error,
-        "source_history.after_source_write", Some(&reading.source.source_ref),
-        Some(&source::revision(content)), "acknowledged"))
+    completion.map_err(|error| {
+        crate::file_mutation::record_owner_error(
+            error,
+            "source_history.after_source_write",
+            Some(&reading.source.source_ref),
+            Some(&source::revision(content)),
+            "acknowledged",
+        )
+    })
 }
 pub(crate) fn read(scope: &Scope, input: &Value) -> io::Result<Value> {
     let source_ref = source::text(input, "source_ref")?;

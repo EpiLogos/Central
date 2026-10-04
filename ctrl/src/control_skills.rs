@@ -271,12 +271,20 @@ pub(crate) fn control_skill_manifest_path(path: &str) -> io::Result<Option<Strin
     let parts: Vec<_> = path.split('/').collect();
     let count = if parts.len() >= 5 && parts[..3] == ["Control", "user", "skills"] {
         4
-    } else if parts.len() >= 6 && parts[0] == "Control" && parts[1] == "machines" && parts[3] == "skills" {
+    } else if parts.len() >= 6
+        && parts[0] == "Control"
+        && parts[1] == "machines"
+        && parts[3] == "skills"
+    {
         5
     } else {
         return Ok(None);
     };
-    Ok(Some(format!("{}/{}", parts[..count].join("/"), SKILL_MANIFEST)))
+    Ok(Some(format!(
+        "{}/{}",
+        parts[..count].join("/"),
+        SKILL_MANIFEST
+    )))
 }
 
 pub(crate) fn control_skill_binding(
@@ -284,36 +292,84 @@ pub(crate) fn control_skill_binding(
     manifest: Option<&SkillManifest>,
     agent_retrieval_allowed: bool,
 ) -> io::Result<Option<SourceBinding>> {
-    if control_skill_manifest_path(path)?.is_none() { return Ok(None); }
+    if control_skill_manifest_path(path)?.is_none() {
+        return Ok(None);
+    }
     let (provenance, standing) = manifest_horizon_metadata(manifest);
-    Ok(Some(skill_binding_from_metadata("control:root", path, &provenance, &standing, agent_retrieval_allowed)))
+    Ok(Some(skill_binding_from_metadata(
+        "control:root",
+        path,
+        &provenance,
+        &standing,
+        agent_retrieval_allowed,
+    )))
 }
 
 /// Selected Project Skill metadata uses the same manifest/standing and Source
 /// construction as bulk Skill participation. This only nominates metadata;
 /// callers still observe the actual member and its native disclosure aperture.
-pub(crate) fn project_skill_manifest_path(human_source: &str, path: &str) -> io::Result<Option<String>> {
+pub(crate) fn project_skill_manifest_path(
+    human_source: &str,
+    path: &str,
+) -> io::Result<Option<String>> {
     let member = crate::source_safety::normal_member_key(path)?;
     let skills = crate::source_safety::normal_member_key(human_source)?.join(SKILLS_SEGMENT);
-    let Ok(suffix) = member.strip_prefix(&skills) else { return Ok(None); };
+    let Ok(suffix) = member.strip_prefix(&skills) else {
+        return Ok(None);
+    };
     let mut parts = suffix.components();
-    let Some(Component::Normal(name)) = parts.next() else { return Ok(None); };
-    if parts.next().is_none() { return Ok(None); }
+    let Some(Component::Normal(name)) = parts.next() else {
+        return Ok(None);
+    };
+    if parts.next().is_none() {
+        return Ok(None);
+    }
     let manifest = skills.join(name).join(SKILL_MANIFEST);
-    manifest.to_str().map(|value| Some(value.to_owned())).ok_or_else(||
-        io::Error::new(io::ErrorKind::InvalidInput, "Native Skill metadata member is not UTF-8"))
+    manifest
+        .to_str()
+        .map(|value| Some(value.to_owned()))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Native Skill metadata member is not UTF-8",
+            )
+        })
 }
-pub(crate) fn project_skill_binding(world_ref: &str, human_source: &str, path: &str,
-    manifest: Option<&SkillManifest>, agent_retrieval_allowed: bool) -> io::Result<Option<SourceBinding>> {
-    if project_skill_manifest_path(human_source, path)?.is_none() { return Ok(None); }
+pub(crate) fn project_skill_binding(
+    world_ref: &str,
+    human_source: &str,
+    path: &str,
+    manifest: Option<&SkillManifest>,
+    agent_retrieval_allowed: bool,
+) -> io::Result<Option<SourceBinding>> {
+    if project_skill_manifest_path(human_source, path)?.is_none() {
+        return Ok(None);
+    }
     let (provenance, standing) = manifest_horizon_metadata(manifest);
-    Ok(Some(skill_binding_from_metadata(world_ref, path, &provenance, &standing, agent_retrieval_allowed)))
+    Ok(Some(skill_binding_from_metadata(
+        world_ref,
+        path,
+        &provenance,
+        &standing,
+        agent_retrieval_allowed,
+    )))
 }
-fn skill_binding_from_metadata(world_ref: &str, path: &str, provenance: &str,
-    standing: &str, agent_retrieval_allowed: bool) -> SourceBinding {
-    SourceBinding { source_ref:source_ref(world_ref,path), path:path.to_owned(),
-        roles:vec!["skill-source".to_owned()], provenance:provenance.to_owned(),
-        standing:standing.to_owned(), treatment:CONTROL_SKILL_TREATMENT.to_owned(), agent_retrieval_allowed }
+fn skill_binding_from_metadata(
+    world_ref: &str,
+    path: &str,
+    provenance: &str,
+    standing: &str,
+    agent_retrieval_allowed: bool,
+) -> SourceBinding {
+    SourceBinding {
+        source_ref: source_ref(world_ref, path),
+        path: path.to_owned(),
+        roles: vec!["skill-source".to_owned()],
+        provenance: provenance.to_owned(),
+        standing: standing.to_owned(),
+        treatment: CONTROL_SKILL_TREATMENT.to_owned(),
+        agent_retrieval_allowed,
+    }
 }
 
 fn write_skill_manifest(skill_dir: &Path, manifest: &SkillManifest) -> io::Result<()> {
@@ -827,13 +883,19 @@ pub(crate) fn insert_skill_bindings(
                 let manifest = read_skill_manifest(&skill_dir)?;
                 metadata = Some(manifest_horizon_metadata(manifest.as_ref()));
             }
-            let (provenance, standing) = metadata.as_ref()
+            let (provenance, standing) = metadata
+                .as_ref()
                 .expect("remaining Skill member initialized its native metadata");
             let reference = source_ref(world_ref, &relative);
             bindings.insert(
                 reference.clone(),
-                skill_binding_from_metadata(world_ref, &relative, provenance, standing,
-                    retrieval_allowed(world_root, &file)),
+                skill_binding_from_metadata(
+                    world_ref,
+                    &relative,
+                    provenance,
+                    standing,
+                    retrieval_allowed(world_root, &file),
+                ),
             );
         }
     }

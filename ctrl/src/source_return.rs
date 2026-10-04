@@ -79,11 +79,19 @@ fn load(project: &Path, dir: &Path, reference: &str) -> io::Result<SourceReturn>
     }
     Ok(r)
 }
-fn save(project: &Path, dir: &Path, r: &SourceReturn, disposition: crate::file_mutation::RecordDisposition) -> io::Result<()> {
+fn save(
+    project: &Path,
+    dir: &Path,
+    r: &SourceReturn,
+    disposition: crate::file_mutation::RecordDisposition,
+) -> io::Result<()> {
     crate::file_mutation::atomic_record(
         project,
-        path(project, dir, &r.return_ref)?.strip_prefix(project).map_err(io::Error::other)?,
-        &serde_json::to_vec(r)?, disposition,
+        path(project, dir, &r.return_ref)?
+            .strip_prefix(project)
+            .map_err(io::Error::other)?,
+        &serde_json::to_vec(r)?,
+        disposition,
     )
 }
 fn reading(project: &Path, r: &SourceReturn) -> io::Result<Value> {
@@ -146,10 +154,22 @@ fn run(project: &Path, op: &str, input: &Value) -> io::Result<Value> {
             accepted_by_ref: None,
             result_revision: None,
         };
-        save(project, &dir, &r, crate::file_mutation::RecordDisposition::CreateNew)?;
-        return reading(project, &r).map_err(|error| crate::file_mutation::record_owner_error_with_ref(error,
-            "source_return.after_proposal_publication", &r.return_ref, Some(&r.source_ref), Some(&r.basis_revision),
-            "source_not_changed_proposal_published"));
+        save(
+            project,
+            &dir,
+            &r,
+            crate::file_mutation::RecordDisposition::CreateNew,
+        )?;
+        return reading(project, &r).map_err(|error| {
+            crate::file_mutation::record_owner_error_with_ref(
+                error,
+                "source_return.after_proposal_publication",
+                &r.return_ref,
+                Some(&r.source_ref),
+                Some(&r.basis_revision),
+                "source_not_changed_proposal_published",
+            )
+        });
     }
     if op == "returns" {
         let limit = input
@@ -205,34 +225,82 @@ fn run(project: &Path, op: &str, input: &Value) -> io::Result<Value> {
         if current.revision.revision == target {
             r.status = "accepted".into();
             r.result_revision = Some(target);
-            save(project, &dir, &r, crate::file_mutation::RecordDisposition::ReplaceOrCreate).map_err(|error|
-                crate::file_mutation::record_owner_error_with_ref(error, "source_return.recovery_target_observed",
-                    &r.return_ref, Some(&r.source_ref), r.result_revision.as_deref(), "target_observed"))?;
+            save(
+                project,
+                &dir,
+                &r,
+                crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+            )
+            .map_err(|error| {
+                crate::file_mutation::record_owner_error_with_ref(
+                    error,
+                    "source_return.recovery_target_observed",
+                    &r.return_ref,
+                    Some(&r.source_ref),
+                    r.result_revision.as_deref(),
+                    "target_observed",
+                )
+            })?;
         } else if current.revision.revision == r.basis_revision {
             r.status = "pending".into();
-            save(project, &dir, &r, crate::file_mutation::RecordDisposition::ReplaceOrCreate).map_err(|error|
-                crate::file_mutation::record_owner_error_with_ref(error, "source_return.recovery_basis_observed",
-                    &r.return_ref, Some(&r.source_ref), Some(&r.basis_revision), "basis_observed_unchanged"))?;
+            save(
+                project,
+                &dir,
+                &r,
+                crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+            )
+            .map_err(|error| {
+                crate::file_mutation::record_owner_error_with_ref(
+                    error,
+                    "source_return.recovery_basis_observed",
+                    &r.return_ref,
+                    Some(&r.source_ref),
+                    Some(&r.basis_revision),
+                    "basis_observed_unchanged",
+                )
+            })?;
         } else {
             return Err(io::Error::other("Interrupted return application is unresolved: current source matches neither basis nor proposed revision; do not automatically resend"));
         }
         recovered = true;
     }
     if op == "return_read" {
-        return reading(project, &r).map_err(|error| if recovered {
-            crate::file_mutation::record_owner_error_with_ref(error, "source_return.after_recovery_recording",
-                &r.return_ref, Some(&r.source_ref), r.result_revision.as_deref(), "recovery_record_acknowledged")
-        } else { error });
+        return reading(project, &r).map_err(|error| {
+            if recovered {
+                crate::file_mutation::record_owner_error_with_ref(
+                    error,
+                    "source_return.after_recovery_recording",
+                    &r.return_ref,
+                    Some(&r.source_ref),
+                    r.result_revision.as_deref(),
+                    "recovery_record_acknowledged",
+                )
+            } else {
+                error
+            }
+        });
     }
     if r.status != "pending" {
         return Err(invalid("Return is not pending"));
     }
     if op == "return_reject" {
         r.status = "rejected".into();
-        save(project, &dir, &r, crate::file_mutation::RecordDisposition::ReplaceOrCreate)?;
-        return reading(project, &r).map_err(|error| crate::file_mutation::record_owner_error_with_ref(error,
-            "source_return.after_rejection_recording", &r.return_ref, Some(&r.source_ref), Some(&r.basis_revision),
-            "source_not_changed_rejection_record_acknowledged"));
+        save(
+            project,
+            &dir,
+            &r,
+            crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+        )?;
+        return reading(project, &r).map_err(|error| {
+            crate::file_mutation::record_owner_error_with_ref(
+                error,
+                "source_return.after_rejection_recording",
+                &r.return_ref,
+                Some(&r.source_ref),
+                Some(&r.basis_revision),
+                "source_not_changed_rejection_record_acknowledged",
+            )
+        });
     }
     if text(input, "acceptance")? != "human-accepted" {
         return Err(invalid("Explicit acceptance is required"));
@@ -253,7 +321,12 @@ fn run(project: &Path, op: &str, input: &Value) -> io::Result<Value> {
     }
     r.accepted_by_ref = Some(accepted.into());
     r.status = "applying".into();
-    save(project, &dir, &r, crate::file_mutation::RecordDisposition::ReplaceOrCreate)?;
+    save(
+        project,
+        &dir,
+        &r,
+        crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+    )?;
     // The retired Flow registry played no authority here: every retained
     // source applies as the ordinary world source it always was.
     let applied = write_world_source(
@@ -275,9 +348,21 @@ fn run(project: &Path, op: &str, input: &Value) -> io::Result<Value> {
         Ok((revision, receipt)) => {
             r.status = "accepted".into();
             r.result_revision = Some(revision);
-            save(project, &dir, &r, crate::file_mutation::RecordDisposition::ReplaceOrCreate).map_err(|error| {
-                crate::file_mutation::record_owner_error_with_ref(error, "source_return.accepted_source_recording", &r.return_ref,
-                    Some(&r.source_ref), r.result_revision.as_deref(), "acknowledged")
+            save(
+                project,
+                &dir,
+                &r,
+                crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+            )
+            .map_err(|error| {
+                crate::file_mutation::record_owner_error_with_ref(
+                    error,
+                    "source_return.accepted_source_recording",
+                    &r.return_ref,
+                    Some(&r.source_ref),
+                    r.result_revision.as_deref(),
+                    "acknowledged",
+                )
             })?;
             Ok(
                 json!({"outcome":"accepted","proposal":r,"receipt":receipt,"authored_source_mutated":true}),
@@ -288,15 +373,33 @@ fn run(project: &Path, op: &str, input: &Value) -> io::Result<Value> {
             // source-write failure or imply that its effect was undone.
             let current = match read_world_source(project, &r.source_ref) {
                 Ok(current) => current,
-                Err(secondary) => return Err(crate::file_mutation::record_owner_errors(primary, secondary,
-                    "source_return.failed_write_observation", Some(&r.source_ref), None, "unconfirmed")),
+                Err(secondary) => {
+                    return Err(crate::file_mutation::record_owner_errors(
+                        primary,
+                        secondary,
+                        "source_return.failed_write_observation",
+                        Some(&r.source_ref),
+                        None,
+                        "unconfirmed",
+                    ))
+                }
             };
             if current.revision.revision == r.basis_revision {
                 r.status = "pending".into();
-                if let Err(secondary) = save(project, &dir, &r, crate::file_mutation::RecordDisposition::ReplaceOrCreate) {
-                    return Err(crate::file_mutation::record_owner_errors(primary, secondary,
-                        "source_return.failed_write_recording", Some(&r.source_ref), Some(&r.basis_revision),
-                        "basis_observed_unchanged"));
+                if let Err(secondary) = save(
+                    project,
+                    &dir,
+                    &r,
+                    crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+                ) {
+                    return Err(crate::file_mutation::record_owner_errors(
+                        primary,
+                        secondary,
+                        "source_return.failed_write_recording",
+                        Some(&r.source_ref),
+                        Some(&r.basis_revision),
+                        "basis_observed_unchanged",
+                    ));
                 }
             }
             Err(primary)
@@ -321,8 +424,10 @@ fn action(op: &str, input: &Value, context: &ActionExecutionContext<'_>) -> Acti
     })();
     match result {
         Ok(v) => ActionResult::success(&id, v),
-        Err(e) if crate::file_mutation::record_failure_result(&id, &e).is_some() =>
-            crate::file_mutation::record_failure_result(&id, &e).expect("matched native record failure"),
+        Err(e) if crate::file_mutation::record_failure_result(&id, &e).is_some() => {
+            crate::file_mutation::record_failure_result(&id, &e)
+                .expect("matched native record failure")
+        }
         Err(e) => ActionResult::failure(
             Some(&id),
             match e.kind() {

@@ -18,8 +18,8 @@ use std::ffi::OsString;
 use std::fmt;
 use std::fs;
 use std::os::unix::fs::MetadataExt;
-use std::sync::Arc;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use crate::world::{AgentSetRecord, WorldRecord, AGENT_SET_SCHEMA, WORLD_RELATION_SCHEMA};
 
@@ -233,7 +233,8 @@ impl RelationRecordStore {
         if current_membership != membership {
             return Err(std::io::Error::other(
                 "Native relation record membership changed before acknowledgement",
-            ).into());
+            )
+            .into());
         }
         readings.sort_by(|left, right| left.ref_.cmp(&right.ref_));
         Ok(readings)
@@ -281,7 +282,8 @@ impl RelationRecordStore {
         bytes.push(b'\n');
         if bytes.len() > RELATION_RECORD_METADATA_LIMIT {
             return Err(RelationRecordStoreError::RecordBudget {
-                byte_len: bytes.len() as u64, limit: RELATION_RECORD_METADATA_LIMIT as u64,
+                byte_len: bytes.len() as u64,
+                limit: RELATION_RECORD_METADATA_LIMIT as u64,
             });
         }
         let dir = self.source_dir();
@@ -401,7 +403,8 @@ impl RelationRecordStore {
         requested_ref: &str,
     ) -> Result<(RelationRecordReading, RecordBasis), RelationRecordStoreError> {
         let captured = self.capture_record(path)?;
-        let ref_ = captured.record
+        let ref_ = captured
+            .record
             .get("ref")
             .and_then(|value| value.as_str())
             .ok_or_else(|| {
@@ -413,7 +416,10 @@ impl RelationRecordStore {
                 actual: ref_.to_owned(),
             });
         }
-        Ok((self.reading(captured.record, requested_ref, path), captured.basis))
+        Ok((
+            self.reading(captured.record, requested_ref, path),
+            captured.basis,
+        ))
     }
 
     fn parse_record(&self, path: &Path) -> Result<serde_json::Value, RelationRecordStoreError> {
@@ -426,7 +432,8 @@ impl RelationRecordStore {
             directory.validate()?;
             return Err(RelationRecordStoreError::NotFound(path.to_path_buf()));
         }
-        let relative = path.strip_prefix(&self.owner_root)
+        let relative = path
+            .strip_prefix(&self.owner_root)
             .map_err(|_| RelationRecordStoreError::UnsafeSource(path.to_path_buf()))?;
         let admitted = match fs::symlink_metadata(path) {
             Ok(metadata) => metadata,
@@ -442,18 +449,25 @@ impl RelationRecordStore {
         record_open_checkpoint(path);
         let root_metadata = &directory.held[0].2;
         let mut reader = crate::file_mutation::NativeFileRead::open(
-            &self.owner_root, (root_metadata.dev(), root_metadata.ino()), relative)?;
+            &self.owner_root,
+            (root_metadata.dev(), root_metadata.ino()),
+            relative,
+        )?;
         // The opened native reader qualifies the same material before this
         // capacity observation. A changed path cannot masquerade as a budget.
         let opened = fs::symlink_metadata(path)?;
         reader.validate()?;
         directory.validate()?;
         if !opened.is_file() || physical_basis(&opened) != physical_basis(&admitted) {
-            return Err(std::io::Error::other("Native relation record changed before capacity observation").into());
+            return Err(std::io::Error::other(
+                "Native relation record changed before capacity observation",
+            )
+            .into());
         }
         if opened.len() > RELATION_RECORD_METADATA_LIMIT as u64 {
             return Err(RelationRecordStoreError::RecordBudget {
-                byte_len: opened.len(), limit: RELATION_RECORD_METADATA_LIMIT as u64,
+                byte_len: opened.len(),
+                limit: RELATION_RECORD_METADATA_LIMIT as u64,
             });
         }
         let bytes = reader.read_metadata_bytes(RELATION_RECORD_METADATA_LIMIT)?;
@@ -461,26 +475,41 @@ impl RelationRecordStore {
         directory.validate()?;
         let current = fs::symlink_metadata(path)?;
         if !current.is_file() || physical_basis(&current) != physical_basis(&admitted) {
-            return Err(std::io::Error::other("Native relation record changed during capture").into());
+            return Err(
+                std::io::Error::other("Native relation record changed during capture").into(),
+            );
         }
         let record: serde_json::Value = serde_json::from_slice(&bytes)
             .map_err(|error| RelationRecordStoreError::InvalidRecord(error.to_string()))?;
         if record.get("schema").and_then(|value| value.as_str()) != Some(self.kind.schema()) {
             return Err(RelationRecordStoreError::InvalidRecord(format!(
                 "unsupported schema {}",
-                record.get("schema").and_then(|value| value.as_str()).unwrap_or_default()
+                record
+                    .get("schema")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
             )));
         }
-        Ok(CapturedRecord { record, basis: RecordBasis {
-            physical: physical_basis(&current),
-            content_revision: crate::source_safety::content_revision_bytes(&bytes),
-        } })
+        Ok(CapturedRecord {
+            record,
+            basis: RecordBasis {
+                physical: physical_basis(&current),
+                content_revision: crate::source_safety::content_revision_bytes(&bytes),
+            },
+        })
     }
 
-    fn qualify_record(&self, path: &Path, basis: &RecordBasis) -> Result<(), RelationRecordStoreError> {
+    fn qualify_record(
+        &self,
+        path: &Path,
+        basis: &RecordBasis,
+    ) -> Result<(), RelationRecordStoreError> {
         let current = self.capture_record(path)?;
         if &current.basis != basis {
-            return Err(std::io::Error::other("Native relation record material basis changed before acknowledgement").into());
+            return Err(std::io::Error::other(
+                "Native relation record material basis changed before acknowledgement",
+            )
+            .into());
         }
         Ok(())
     }
@@ -522,8 +551,15 @@ struct CapturedRecord {
     basis: RecordBasis,
 }
 fn physical_basis(metadata: &fs::Metadata) -> (u64, u64, u64, i64, i64, i64, i64) {
-    (metadata.dev(), metadata.ino(), metadata.len(), metadata.mtime(),
-        metadata.mtime_nsec(), metadata.ctime(), metadata.ctime_nsec())
+    (
+        metadata.dev(),
+        metadata.ino(),
+        metadata.len(),
+        metadata.mtime(),
+        metadata.mtime_nsec(),
+        metadata.ctime(),
+        metadata.ctime_nsec(),
+    )
 }
 
 /// Observe the native record namespace through the same admission at initial
@@ -563,7 +599,9 @@ thread_local! {
 fn read_checkpoint(path: &Path) {
     #[cfg(test)]
     READ_CHECKPOINT.with(|checkpoint| {
-        if let Some(checkpoint) = checkpoint.borrow_mut().take() { checkpoint(path); }
+        if let Some(checkpoint) = checkpoint.borrow_mut().take() {
+            checkpoint(path);
+        }
     });
     #[cfg(not(test))]
     let _ = path;
@@ -572,7 +610,9 @@ fn read_checkpoint(path: &Path) {
 fn record_open_checkpoint(path: &Path) {
     #[cfg(test)]
     RECORD_OPEN_CHECKPOINT.with(|checkpoint| {
-        if let Some(checkpoint) = checkpoint.borrow_mut().take() { checkpoint(path); }
+        if let Some(checkpoint) = checkpoint.borrow_mut().take() {
+            checkpoint(path);
+        }
     });
     #[cfg(not(test))]
     let _ = path;
@@ -581,7 +621,9 @@ fn record_open_checkpoint(path: &Path) {
 fn material_checkpoint(path: &Path) {
     #[cfg(test)]
     MATERIAL_CHECKPOINT.with(|checkpoint| {
-        if let Some(checkpoint) = checkpoint.borrow_mut().take() { checkpoint(path); }
+        if let Some(checkpoint) = checkpoint.borrow_mut().take() {
+            checkpoint(path);
+        }
     });
     #[cfg(not(test))]
     let _ = path;
@@ -599,7 +641,8 @@ impl ReadDirectory {
     fn capture(store: &RelationRecordStore) -> Result<Self, RelationRecordStoreError> {
         let root = &store.owner_root;
         let directory = store.source_dir();
-        let relative = directory.strip_prefix(root)
+        let relative = directory
+            .strip_prefix(root)
             .map_err(|_| RelationRecordStoreError::UnsafeSource(directory.clone()))?;
         let root_metadata = fs::symlink_metadata(root)?;
         if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
@@ -607,7 +650,8 @@ impl ReadDirectory {
         }
         let root_file = crate::file_mutation::directory(root, Path::new(""))?;
         let mut reading = Self {
-            held: vec![(root.clone(), root_file, root_metadata)], missing: None,
+            held: vec![(root.clone(), root_file, root_metadata)],
+            missing: None,
         };
         let mut member = PathBuf::new();
         for component in relative.components() {
@@ -638,16 +682,20 @@ impl ReadDirectory {
         for (path, file, admitted) in &self.held {
             let named = fs::symlink_metadata(path)?;
             let held = file.metadata()?;
-            if named.file_type().is_symlink() || !named.is_dir()
-                || !held.is_dir() || named.dev() != admitted.dev() || named.ino() != admitted.ino()
-                || held.dev() != admitted.dev() || held.ino() != admitted.ino()
+            if named.file_type().is_symlink()
+                || !named.is_dir()
+                || !held.is_dir()
+                || named.dev() != admitted.dev()
+                || named.ino() != admitted.ino()
+                || held.dev() != admitted.dev()
+                || held.ino() != admitted.ino()
             {
                 return Err(RelationRecordStoreError::UnsafeSource(path.clone()));
             }
         }
         if let Some(path) = &self.missing {
             match fs::symlink_metadata(path) {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error.into()),
                 Ok(_) => return Err(RelationRecordStoreError::UnsafeSource(path.clone())),
             }
@@ -655,9 +703,12 @@ impl ReadDirectory {
             for (path, file, admitted) in &self.held {
                 let named = fs::symlink_metadata(path)?;
                 let held = file.metadata()?;
-                if named.file_type().is_symlink() || !named.is_dir()
-                    || named.dev() != admitted.dev() || named.ino() != admitted.ino()
-                    || held.dev() != admitted.dev() || held.ino() != admitted.ino()
+                if named.file_type().is_symlink()
+                    || !named.is_dir()
+                    || named.dev() != admitted.dev()
+                    || named.ino() != admitted.ino()
+                    || held.dev() != admitted.dev()
+                    || held.ino() != admitted.ino()
                 {
                     return Err(RelationRecordStoreError::UnsafeSource(path.clone()));
                 }
@@ -712,7 +763,9 @@ impl RelationRecordIoError {
 }
 impl From<std::io::Error> for RelationRecordIoError {
     fn from(error: std::io::Error) -> Self {
-        Self { source: Arc::new(error) }
+        Self {
+            source: Arc::new(error),
+        }
     }
 }
 impl fmt::Display for RelationRecordIoError {
@@ -738,7 +791,10 @@ impl Error for RelationRecordIoError {
 pub enum RelationRecordStoreError {
     Io(RelationRecordIoError),
     /// Mechanical eager-metadata capacity; no fabricated IO cause or absence.
-    RecordBudget { byte_len: u64, limit: u64 },
+    RecordBudget {
+        byte_len: u64,
+        limit: u64,
+    },
     UnsafeRoot(PathBuf),
     UnsafeSource(PathBuf),
     InvalidRecord(String),
@@ -1096,22 +1152,40 @@ mod tests {
             let scratch = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ProjectCentral/now/tmp");
             fs::create_dir_all(&scratch).unwrap();
             let sequence = NEXT.fetch_add(1, Ordering::Relaxed);
-            let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-            let root = scratch.join(format!("relation-store-read-{}-{nonce}-{sequence}", std::process::id()));
+            let nonce = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let root = scratch.join(format!(
+                "relation-store-read-{}-{nonce}-{sequence}",
+                std::process::id()
+            ));
             fs::create_dir(&root).unwrap();
             Self(root)
         }
     }
     impl Drop for ReadFixture {
         fn drop(&mut self) {
-            READ_CHECKPOINT.with(|checkpoint| { checkpoint.borrow_mut().take(); });
-            MATERIAL_CHECKPOINT.with(|checkpoint| { checkpoint.borrow_mut().take(); });
-            RECORD_OPEN_CHECKPOINT.with(|checkpoint| { checkpoint.borrow_mut().take(); });
+            READ_CHECKPOINT.with(|checkpoint| {
+                checkpoint.borrow_mut().take();
+            });
+            MATERIAL_CHECKPOINT.with(|checkpoint| {
+                checkpoint.borrow_mut().take();
+            });
+            RECORD_OPEN_CHECKPOINT.with(|checkpoint| {
+                checkpoint.borrow_mut().take();
+            });
             if let Err(error) = fs::remove_dir_all(&self.0) {
                 if std::thread::panicking() {
-                    eprintln!("Cannot remove owned relation-store fixture {}: {error}", self.0.display());
+                    eprintln!(
+                        "Cannot remove owned relation-store fixture {}: {error}",
+                        self.0.display()
+                    );
                 } else {
-                    panic!("Cannot remove owned relation-store fixture {}: {error}", self.0.display());
+                    panic!(
+                        "Cannot remove owned relation-store fixture {}: {error}",
+                        self.0.display()
+                    );
                 }
             }
         }
@@ -1121,8 +1195,16 @@ mod tests {
         fn drop(&mut self) {
             if let Err(error) = fs::set_permissions(&self.0, self.1.clone()) {
                 if std::thread::panicking() {
-                    eprintln!("Cannot restore owned relation-store permissions {}: {error}", self.0.display());
-                } else { panic!("Cannot restore owned relation-store permissions {}: {error}", self.0.display()); }
+                    eprintln!(
+                        "Cannot restore owned relation-store permissions {}: {error}",
+                        self.0.display()
+                    );
+                } else {
+                    panic!(
+                        "Cannot restore owned relation-store permissions {}: {error}",
+                        self.0.display()
+                    );
+                }
             }
         }
     }
@@ -1130,14 +1212,28 @@ mod tests {
         json!({"schema": WORLD_RELATION_SCHEMA, "ref": "control:root", "revision": "w1", "sources": [], "retained_extension": {"opaque": "preserve"}})
     }
     fn native_read_action(root: &Path, action: &str, input: &Value) -> crate::result::ActionResult {
-        use crate::action::{ActionExecutionContext, create_core_action_registry};
+        use crate::action::{create_core_action_registry, ActionExecutionContext};
         use central_connector_sdk::{ConnectorContext, ConnectorRegistry};
         let mut registry = create_core_action_registry();
         crate::agent_set_actions::register_agent_set_actions(&mut registry);
-        let options = crate::root::RootOptions { explicit_root: Some(root.into()), configured_root: None, home: None };
+        let options = crate::root::RootOptions {
+            explicit_root: Some(root.into()),
+            configured_root: None,
+            home: None,
+        };
         let connectors = ConnectorRegistry::default();
-        let connector_context = ConnectorContext { platform: "test".into() };
-        registry.execute(action, input, &ActionExecutionContext { root_options: &options, connectors: &connectors, connector_context: &connector_context })
+        let connector_context = ConnectorContext {
+            platform: "test".into(),
+        };
+        registry.execute(
+            action,
+            input,
+            &ActionExecutionContext {
+                root_options: &options,
+                connectors: &connectors,
+                connector_context: &connector_context,
+            },
+        )
     }
 
     #[test]
@@ -1145,9 +1241,17 @@ mod tests {
         let fixture = ReadFixture::new();
         let project = fixture.0.join("project");
         fs::create_dir(&project).unwrap();
-        for store in [RelationRecordStore::agent_sets_at_root(&fixture.0), RelationRecordStore::worlds_at_root(&fixture.0), RelationRecordStore::agent_sets_in_project(&project), RelationRecordStore::worlds_in_project(&project)] {
+        for store in [
+            RelationRecordStore::agent_sets_at_root(&fixture.0),
+            RelationRecordStore::worlds_at_root(&fixture.0),
+            RelationRecordStore::agent_sets_in_project(&project),
+            RelationRecordStore::worlds_in_project(&project),
+        ] {
             assert!(store.list().unwrap().is_empty());
-            assert!(matches!(store.read("not-authored"), Err(RelationRecordStoreError::NotFound(_))));
+            assert!(matches!(
+                store.read("not-authored"),
+                Err(RelationRecordStoreError::NotFound(_))
+            ));
             assert!(!store.source_dir().exists());
         }
         assert_eq!(fs::read_dir(&fixture.0).unwrap().count(), 1);
@@ -1168,9 +1272,18 @@ mod tests {
         fs::rename(&container, &retained).unwrap();
         symlink(fixture.0.join("actually-missing"), &container).unwrap();
         let link_inode = fs::symlink_metadata(&container).unwrap().ino();
-        assert!(matches!(store.list(), Err(RelationRecordStoreError::UnsafeSource(_))));
-        assert!(matches!(store.load_typed::<WorldRecord>(), Err(RelationRecordStoreError::UnsafeSource(_))));
-        assert!(matches!(store.read("control:root"), Err(RelationRecordStoreError::UnsafeSource(_))));
+        assert!(matches!(
+            store.list(),
+            Err(RelationRecordStoreError::UnsafeSource(_))
+        ));
+        assert!(matches!(
+            store.load_typed::<WorldRecord>(),
+            Err(RelationRecordStoreError::UnsafeSource(_))
+        ));
+        assert!(matches!(
+            store.read("control:root"),
+            Err(RelationRecordStoreError::UnsafeSource(_))
+        ));
         assert_eq!(fs::symlink_metadata(&container).unwrap().ino(), link_inode);
         fs::remove_file(&container).unwrap();
         fs::rename(&retained, &container).unwrap();
@@ -1178,8 +1291,14 @@ mod tests {
         let held_control = fixture.0.join("retained-Control");
         fs::rename(&control, &held_control).unwrap();
         symlink(&held_control, &control).unwrap();
-        assert!(matches!(store.list(), Err(RelationRecordStoreError::UnsafeSource(_))));
-        assert!(matches!(store.read("control:root"), Err(RelationRecordStoreError::UnsafeSource(_))));
+        assert!(matches!(
+            store.list(),
+            Err(RelationRecordStoreError::UnsafeSource(_))
+        ));
+        assert!(matches!(
+            store.read("control:root"),
+            Err(RelationRecordStoreError::UnsafeSource(_))
+        ));
         fs::remove_file(&control).unwrap();
         fs::rename(&held_control, &control).unwrap();
         let reading = store.read("control:root").unwrap();
@@ -1199,11 +1318,16 @@ mod tests {
         let before = fs::read(&record).unwrap();
         let retained = fixture.0.join("original-worlds");
         let moved = retained.clone();
-        READ_CHECKPOINT.with(|checkpoint| *checkpoint.borrow_mut() = Some(Box::new(move |container| {
-            fs::rename(container, &moved).unwrap();
-            fs::create_dir(container).unwrap();
-        })));
-        assert!(matches!(store.list(), Err(RelationRecordStoreError::UnsafeSource(_))));
+        READ_CHECKPOINT.with(|checkpoint| {
+            *checkpoint.borrow_mut() = Some(Box::new(move |container| {
+                fs::rename(container, &moved).unwrap();
+                fs::create_dir(container).unwrap();
+            }))
+        });
+        assert!(matches!(
+            store.list(),
+            Err(RelationRecordStoreError::UnsafeSource(_))
+        ));
         fs::remove_dir(store.source_dir()).unwrap();
         fs::rename(&retained, store.source_dir()).unwrap();
         assert_eq!(store.list().unwrap().len(), 1);
@@ -1222,7 +1346,10 @@ mod tests {
         let actual = fs::symlink_metadata(&owner).unwrap_err();
         let error = store.list().unwrap_err();
         assert_eq!(error.io_error().unwrap().kind(), actual.kind());
-        assert_eq!(error.io_error().unwrap().raw_os_error(), actual.raw_os_error());
+        assert_eq!(
+            error.io_error().unwrap().raw_os_error(),
+            actual.raw_os_error()
+        );
         fs::rename(&retained, &owner).unwrap();
         assert_eq!(store.read("control:root").unwrap().revision, "w1");
     }
@@ -1230,7 +1357,11 @@ mod tests {
     #[test]
     fn native_relation_read_eacces_retains_actual_cause_through_clone_action_and_reopen() {
         use std::os::unix::fs::PermissionsExt;
-        assert_ne!(unsafe { libc::geteuid() }, 0, "Actual EACCES proof requires a non-root process");
+        assert_ne!(
+            unsafe { libc::geteuid() },
+            0,
+            "Actual EACCES proof requires a non-root process"
+        );
         let fixture = ReadFixture::new();
         fs::create_dir(fixture.0.join("Work")).unwrap();
         let store = RelationRecordStore::worlds_at_root(&fixture.0);
@@ -1239,7 +1370,10 @@ mod tests {
         let bytes = fs::read(&record).unwrap();
         let inode = fs::metadata(&record).unwrap().ino();
         let container = store.source_dir();
-        let restore = ReadPermissionRestore(container.clone(), fs::metadata(&container).unwrap().permissions());
+        let restore = ReadPermissionRestore(
+            container.clone(),
+            fs::metadata(&container).unwrap().permissions(),
+        );
         fs::set_permissions(&container, fs::Permissions::from_mode(0o000)).unwrap();
         let actual = fs::read_dir(&container).unwrap_err();
         assert_eq!(actual.kind(), std::io::ErrorKind::PermissionDenied);
@@ -1249,22 +1383,43 @@ mod tests {
         assert_eq!(original.raw_os_error(), actual.raw_os_error());
         let cloned = error.clone();
         assert!(std::ptr::eq(original, cloned.io_error().unwrap()));
-        assert!(std::ptr::eq(original, std::error::Error::source(&error).unwrap().downcast_ref::<std::io::Error>().unwrap()));
+        assert!(std::ptr::eq(
+            original,
+            std::error::Error::source(&error)
+                .unwrap()
+                .downcast_ref::<std::io::Error>()
+                .unwrap()
+        ));
         for (action, input) in [
-            (crate::agent_set_actions::WORLD_RELATIONS_LIST_ACTION, json!({"scope":"root"})),
-            (crate::agent_set_actions::WORLD_RELATIONS_READ_ACTION, json!({"scope":"root", "ref":"control:root"})),
-            (crate::agent_set_actions::WORLD_EFFECTIVE_SOURCES_ACTION, json!({"scope":"root", "world_ref":"control:root"})),
+            (
+                crate::agent_set_actions::WORLD_RELATIONS_LIST_ACTION,
+                json!({"scope":"root"}),
+            ),
+            (
+                crate::agent_set_actions::WORLD_RELATIONS_READ_ACTION,
+                json!({"scope":"root", "ref":"control:root"}),
+            ),
+            (
+                crate::agent_set_actions::WORLD_EFFECTIVE_SOURCES_ACTION,
+                json!({"scope":"root", "world_ref":"control:root"}),
+            ),
         ] {
             let result = native_read_action(&fixture.0, action, &input);
             assert!(!result.ok, "{result:?}");
             let details = result.error.as_ref().unwrap().details.as_ref().unwrap();
             assert_eq!(details["effects"], "none");
             assert_eq!(details["io_error"]["kind"], "PermissionDenied");
-            assert_eq!(details["io_error"]["raw_os_error"], actual.raw_os_error().unwrap());
+            assert_eq!(
+                details["io_error"]["raw_os_error"],
+                actual.raw_os_error().unwrap()
+            );
         }
         // The same shared formatter must not assert effects:none for writers.
-        let failed_write = native_read_action(&fixture.0, crate::agent_set_actions::WORLD_RELATIONS_SAVE_ACTION,
-            &json!({"scope":"root", "record":native_world_record(), "expected_revision":"w1"}));
+        let failed_write = native_read_action(
+            &fixture.0,
+            crate::agent_set_actions::WORLD_RELATIONS_SAVE_ACTION,
+            &json!({"scope":"root", "record":native_world_record(), "expected_revision":"w1"}),
+        );
         assert!(!failed_write.ok, "{failed_write:?}");
         assert!(failed_write.error.as_ref().unwrap().details.is_none());
         drop(restore);
@@ -1274,7 +1429,8 @@ mod tests {
     }
 
     #[test]
-    fn actual_native_record_open_refuses_final_symlink_and_fifo_substitution_without_foreign_body() {
+    fn actual_native_record_open_refuses_final_symlink_and_fifo_substitution_without_foreign_body()
+    {
         use std::os::unix::fs::symlink;
         for list in [false, true] {
             for fifo in [false, true] {
@@ -1290,18 +1446,35 @@ mod tests {
                 let foreign_before = fs::read(&foreign).unwrap();
                 let moved = retained.clone();
                 let target = foreign.clone();
-                RECORD_OPEN_CHECKPOINT.with(|checkpoint| *checkpoint.borrow_mut() = Some(Box::new(move |member| {
-                    fs::rename(member, &moved).unwrap();
-                    if fifo {
-                        let name = std::ffi::CString::new(member.as_os_str().as_encoded_bytes()).unwrap();
-                        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0,
-                            "{}", std::io::Error::last_os_error());
-                    } else { symlink(&target, member).unwrap(); }
-                })));
+                RECORD_OPEN_CHECKPOINT.with(|checkpoint| {
+                    *checkpoint.borrow_mut() = Some(Box::new(move |member| {
+                        fs::rename(member, &moved).unwrap();
+                        if fifo {
+                            let name =
+                                std::ffi::CString::new(member.as_os_str().as_encoded_bytes())
+                                    .unwrap();
+                            assert_eq!(
+                                unsafe { libc::mkfifo(name.as_ptr(), 0o600) },
+                                0,
+                                "{}",
+                                std::io::Error::last_os_error()
+                            );
+                        } else {
+                            symlink(&target, member).unwrap();
+                        }
+                    }))
+                });
                 let started = std::time::Instant::now();
-                let result = if list { store.list().map(|_| ()) } else { store.read("control:root").map(|_| ()) };
+                let result = if list {
+                    store.list().map(|_| ())
+                } else {
+                    store.read("control:root").map(|_| ())
+                };
                 assert!(result.is_err(), "{result:?}");
-                assert!(started.elapsed() < std::time::Duration::from_secs(2), "Native record capture must refuse FIFO without blocking");
+                assert!(
+                    started.elapsed() < std::time::Duration::from_secs(2),
+                    "Native record capture must refuse FIFO without blocking"
+                );
                 assert_eq!(fs::read(&retained).unwrap(), before);
                 assert_eq!(fs::metadata(&retained).unwrap().ino(), original_inode);
                 assert_eq!(fs::read(&foreign).unwrap(), foreign_before);
@@ -1314,7 +1487,8 @@ mod tests {
     }
 
     #[test]
-    fn actual_native_record_final_acknowledgement_refuses_removal_replacement_and_same_inode_change() {
+    fn actual_native_record_final_acknowledgement_refuses_removal_replacement_and_same_inode_change(
+    ) {
         for list in [false, true] {
             for mode in 0..3 {
                 let fixture = ReadFixture::new();
@@ -1327,17 +1501,26 @@ mod tests {
                 let changed_path = path.clone();
                 let moved = retained.clone();
                 let replacement = before.clone();
-                MATERIAL_CHECKPOINT.with(|checkpoint| *checkpoint.borrow_mut() = Some(Box::new(move |_| {
-                    if mode == 2 {
-                        let mut changed: Value = serde_json::from_slice(&replacement).unwrap();
-                        changed["revision"] = json!("w2");
-                        fs::write(&changed_path, serde_json::to_vec(&changed).unwrap()).unwrap();
-                    } else {
-                        fs::rename(&changed_path, &moved).unwrap();
-                        if mode == 1 { fs::write(&changed_path, &replacement).unwrap(); }
-                    }
-                })));
-                let result = if list { store.list().map(|_| ()) } else { store.read("control:root").map(|_| ()) };
+                MATERIAL_CHECKPOINT.with(|checkpoint| {
+                    *checkpoint.borrow_mut() = Some(Box::new(move |_| {
+                        if mode == 2 {
+                            let mut changed: Value = serde_json::from_slice(&replacement).unwrap();
+                            changed["revision"] = json!("w2");
+                            fs::write(&changed_path, serde_json::to_vec(&changed).unwrap())
+                                .unwrap();
+                        } else {
+                            fs::rename(&changed_path, &moved).unwrap();
+                            if mode == 1 {
+                                fs::write(&changed_path, &replacement).unwrap();
+                            }
+                        }
+                    }))
+                });
+                let result = if list {
+                    store.list().map(|_| ())
+                } else {
+                    store.read("control:root").map(|_| ())
+                };
                 assert!(result.is_err(), "{result:?}");
                 if mode == 2 {
                     assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
@@ -1364,7 +1547,8 @@ mod tests {
     }
 
     #[test]
-    fn actual_native_relation_metadata_profile_preserves_exact_capacity_and_larger_retained_source() {
+    fn actual_native_relation_metadata_profile_preserves_exact_capacity_and_larger_retained_source()
+    {
         let fixture = ReadFixture::new();
         fs::create_dir(fixture.0.join("Work")).unwrap();
         let store = RelationRecordStore::worlds_at_root(&fixture.0);
@@ -1386,13 +1570,24 @@ mod tests {
         assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
         bytes.push(b'\n'); // Valid retained JSON, one byte over this eager profile.
         fs::write(&path, &bytes).unwrap();
-        for result in [store.read("control:root").map(|_| ()), store.list().map(|_| ())] {
-            assert!(matches!(result, Err(RelationRecordStoreError::RecordBudget { byte_len, limit })
-                if byte_len == bytes.len() as u64 && limit == RELATION_RECORD_METADATA_LIMIT as u64));
+        for result in [
+            store.read("control:root").map(|_| ()),
+            store.list().map(|_| ()),
+        ] {
+            assert!(
+                matches!(result, Err(RelationRecordStoreError::RecordBudget { byte_len, limit })
+                if byte_len == bytes.len() as u64 && limit == RELATION_RECORD_METADATA_LIMIT as u64)
+            );
         }
-        let result = native_read_action(&fixture.0, crate::agent_set_actions::WORLD_RELATIONS_READ_ACTION,
-            &json!({"scope":"root","ref":"control:root"}));
-        assert_eq!(result.status, crate::result::ResultStatus::UnavailableCapability);
+        let result = native_read_action(
+            &fixture.0,
+            crate::agent_set_actions::WORLD_RELATIONS_READ_ACTION,
+            &json!({"scope":"root","ref":"control:root"}),
+        );
+        assert_eq!(
+            result.status,
+            crate::result::ResultStatus::UnavailableCapability
+        );
         let error = result.error.unwrap();
         assert_eq!(error.code, "central.relation_record_budget");
         let details = error.details.unwrap();
@@ -1405,7 +1600,10 @@ mod tests {
         // Existing larger source is retained even when a candidate is within
         // the default profile: it cannot be silently parsed or rewritten.
         record["retained_padding"] = json!("");
-        assert!(matches!(store.save(&record, Some("w1")), Err(RelationRecordStoreError::RecordBudget { .. })));
+        assert!(matches!(
+            store.save(&record, Some("w1")),
+            Err(RelationRecordStoreError::RecordBudget { .. })
+        ));
         assert_eq!(fs::read(&path).unwrap(), bytes);
         assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
     }
@@ -1418,26 +1616,36 @@ mod tests {
         record["retained_padding"] = json!("x".repeat(RELATION_RECORD_METADATA_LIMIT));
         let mut serialized = serde_json::to_vec_pretty(&record).unwrap();
         serialized.push(b'\n');
-        assert!(matches!(store.save(&record, None), Err(RelationRecordStoreError::RecordBudget { byte_len, limit })
-            if byte_len == serialized.len() as u64 && limit == RELATION_RECORD_METADATA_LIMIT as u64));
+        assert!(
+            matches!(store.save(&record, None), Err(RelationRecordStoreError::RecordBudget { byte_len, limit })
+            if byte_len == serialized.len() as u64 && limit == RELATION_RECORD_METADATA_LIMIT as u64)
+        );
         assert_eq!(fs::read_dir(&fixture.0).unwrap().count(), 0);
         store.save(&native_world_record(), None).unwrap();
         let path = store.source_path("control:root").unwrap();
         let bytes = fs::read(&path).unwrap();
         let inode = fs::metadata(&path).unwrap().ino();
         record["revision"] = json!("w2");
-        assert!(matches!(store.save(&record, Some("w1")), Err(RelationRecordStoreError::RecordBudget { .. })));
+        assert!(matches!(
+            store.save(&record, Some("w1")),
+            Err(RelationRecordStoreError::RecordBudget { .. })
+        ));
         assert_eq!(fs::read(&path).unwrap(), bytes);
         assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
         fs::create_dir(fixture.0.join("Work")).unwrap();
-        let refused = native_read_action(&fixture.0, crate::agent_set_actions::WORLD_RELATIONS_SAVE_ACTION,
-            &json!({"scope":"root","record":record,"expected_revision":"w1"}));
+        let refused = native_read_action(
+            &fixture.0,
+            crate::agent_set_actions::WORLD_RELATIONS_SAVE_ACTION,
+            &json!({"scope":"root","record":record,"expected_revision":"w1"}),
+        );
         assert!(!refused.ok, "{refused:?}");
         assert_eq!(refused.status, crate::result::ResultStatus::InvalidInput);
-        assert!(refused.error.as_ref().unwrap().details.is_none(), "Shared mutation failures must not gain a blanket effects:none");
+        assert!(
+            refused.error.as_ref().unwrap().details.is_none(),
+            "Shared mutation failures must not gain a blanket effects:none"
+        );
         assert_eq!(fs::read(&path).unwrap(), bytes);
     }
-
 
     #[test]
     fn actual_native_complete_world_list_refuses_new_exclusion_and_fresh_owner_resolves_it() {
@@ -1458,12 +1666,17 @@ mod tests {
         child["excluded_sources"] = json!([sealed]);
         let child_path = store.source_path("project:sealed-garden").unwrap();
         let checkpoint_store = store.clone();
-        MATERIAL_CHECKPOINT.with(|checkpoint| *checkpoint.borrow_mut() = Some(Box::new(move |dir| {
-            assert_eq!(dir, checkpoint_store.source_dir());
-            checkpoint_store.save(&child, None).unwrap();
-        })));
-        let result = native_read_action(&fixture.0,
-            crate::agent_set_actions::WORLD_RELATIONS_LIST_ACTION, &json!({"scope":"root"}));
+        MATERIAL_CHECKPOINT.with(|checkpoint| {
+            *checkpoint.borrow_mut() = Some(Box::new(move |dir| {
+                assert_eq!(dir, checkpoint_store.source_dir());
+                checkpoint_store.save(&child, None).unwrap();
+            }))
+        });
+        let result = native_read_action(
+            &fixture.0,
+            crate::agent_set_actions::WORLD_RELATIONS_LIST_ACTION,
+            &json!({"scope":"root"}),
+        );
         assert!(!result.ok, "stale complete list acknowledged: {result:?}");
         assert_eq!(result.status, crate::result::ResultStatus::InternalFailure);
         let details = result.error.as_ref().unwrap().details.as_ref().unwrap();
@@ -1474,12 +1687,18 @@ mod tests {
         let child_bytes = fs::read(&child_path).unwrap();
         let child_inode = fs::metadata(&child_path).unwrap().ino();
         assert_eq!(store.list().unwrap().len(), 2);
-        let fresh = native_read_action(&fixture.0,
+        let fresh = native_read_action(
+            &fixture.0,
             crate::agent_set_actions::WORLD_EFFECTIVE_SOURCES_ACTION,
-            &json!({"scope":"root", "world_ref":"project:sealed-garden"}));
+            &json!({"scope":"root", "world_ref":"project:sealed-garden"}),
+        );
         assert!(fresh.ok, "{fresh:?}");
-        let actual = fresh.data.as_ref().unwrap()["sources"].as_array().unwrap()
-            .iter().find(|source| source["ref"] == sealed).unwrap();
+        let actual = fresh.data.as_ref().unwrap()["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|source| source["ref"] == sealed)
+            .unwrap();
         assert_eq!(actual["state"], "excluded");
         assert_eq!(actual["propagation_path"].as_array().unwrap().len(), 2);
         assert_eq!(fs::read(&root_path).unwrap(), root_bytes);
@@ -1499,11 +1718,15 @@ mod tests {
         let directory_inode = fs::metadata(&directory).unwrap().ino();
         assert!(store.list().unwrap().is_empty());
         let checkpoint_store = store.clone();
-        MATERIAL_CHECKPOINT.with(|checkpoint| *checkpoint.borrow_mut() = Some(Box::new(move |dir| {
-            assert_eq!(dir, checkpoint_store.source_dir());
-            checkpoint_store.save(&record, None).unwrap();
-        })));
-        let error = store.list().expect_err("new record cannot be acknowledged as empty");
+        MATERIAL_CHECKPOINT.with(|checkpoint| {
+            *checkpoint.borrow_mut() = Some(Box::new(move |dir| {
+                assert_eq!(dir, checkpoint_store.source_dir());
+                checkpoint_store.save(&record, None).unwrap();
+            }))
+        });
+        let error = store
+            .list()
+            .expect_err("new record cannot be acknowledged as empty");
         assert_eq!(error.io_error().unwrap().kind(), std::io::ErrorKind::Other);
         assert!(error.io_error().unwrap().raw_os_error().is_none());
         assert_eq!(fs::metadata(&directory).unwrap().ino(), directory_inode);
@@ -1521,7 +1744,8 @@ mod tests {
     }
 
     #[test]
-    fn actual_native_membership_final_pass_preserves_ignored_non_json_and_refuses_new_unsafe_entries() {
+    fn actual_native_membership_final_pass_preserves_ignored_non_json_and_refuses_new_unsafe_entries(
+    ) {
         use std::os::unix::fs::symlink;
         for unsafe_entry in [false, true] {
             for form in 0..3 {
@@ -1536,33 +1760,55 @@ mod tests {
                 let foreign_bytes = fs::read(&foreign).unwrap();
                 let foreign_inode = fs::metadata(&foreign).unwrap().ino();
                 let name = if unsafe_entry {
-                    if form == 0 { "unselected.link" } else { "added.json" }
+                    if form == 0 {
+                        "unselected.link"
+                    } else {
+                        "added.json"
+                    }
                 } else {
-                    match form { 0 => "README", 1 => "ordinary-directory", _ => "ordinary.fifo" }
+                    match form {
+                        0 => "README",
+                        1 => "ordinary-directory",
+                        _ => "ordinary.fifo",
+                    }
                 };
                 let entry = store.source_dir().join(name);
                 let changed_entry = entry.clone();
                 let target = foreign.clone();
-                MATERIAL_CHECKPOINT.with(|checkpoint| *checkpoint.borrow_mut() = Some(Box::new(move |_| {
-                    if unsafe_entry && form == 0 {
-                        symlink(&target, &changed_entry).unwrap();
-                    } else if (form == 2 && !unsafe_entry) || (form == 1 && unsafe_entry) {
-                        let name = std::ffi::CString::new(changed_entry.as_os_str().as_encoded_bytes()).unwrap();
-                        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0,
-                            "{}", std::io::Error::last_os_error());
-                    } else if (form == 1 && !unsafe_entry) || (form == 2 && unsafe_entry) {
-                        fs::create_dir(&changed_entry).unwrap();
-                    } else {
-                        fs::write(&changed_entry, b"ordinary non-JSON material").unwrap();
-                    }
-                })));
+                MATERIAL_CHECKPOINT.with(|checkpoint| {
+                    *checkpoint.borrow_mut() = Some(Box::new(move |_| {
+                        if unsafe_entry && form == 0 {
+                            symlink(&target, &changed_entry).unwrap();
+                        } else if (form == 2 && !unsafe_entry) || (form == 1 && unsafe_entry) {
+                            let name = std::ffi::CString::new(
+                                changed_entry.as_os_str().as_encoded_bytes(),
+                            )
+                            .unwrap();
+                            assert_eq!(
+                                unsafe { libc::mkfifo(name.as_ptr(), 0o600) },
+                                0,
+                                "{}",
+                                std::io::Error::last_os_error()
+                            );
+                        } else if (form == 1 && !unsafe_entry) || (form == 2 && unsafe_entry) {
+                            fs::create_dir(&changed_entry).unwrap();
+                        } else {
+                            fs::write(&changed_entry, b"ordinary non-JSON material").unwrap();
+                        }
+                    }))
+                });
                 let started = std::time::Instant::now();
                 let result = store.list();
-                assert!(started.elapsed() < std::time::Duration::from_secs(2),
-                    "new special entry must not block native membership observation");
+                assert!(
+                    started.elapsed() < std::time::Duration::from_secs(2),
+                    "new special entry must not block native membership observation"
+                );
                 if unsafe_entry {
-                    assert!(matches!(result, Err(RelationRecordStoreError::UnsafeSource(ref actual))
-                        if actual == &entry), "{result:?}");
+                    assert!(
+                        matches!(result, Err(RelationRecordStoreError::UnsafeSource(ref actual))
+                        if actual == &entry),
+                        "{result:?}"
+                    );
                 } else {
                     let readings = result.unwrap();
                     assert_eq!(readings.len(), 1);
@@ -1574,7 +1820,9 @@ mod tests {
                 assert_eq!(fs::metadata(&foreign).unwrap().ino(), foreign_inode);
                 if fs::symlink_metadata(&entry).unwrap().is_dir() {
                     fs::remove_dir(&entry).unwrap();
-                } else { fs::remove_file(&entry).unwrap(); }
+                } else {
+                    fs::remove_file(&entry).unwrap();
+                }
                 assert_eq!(store.list().unwrap().len(), 1);
                 assert_eq!(fs::read(&path).unwrap(), bytes);
             }
@@ -1584,8 +1832,11 @@ mod tests {
     #[test]
     fn actual_native_final_membership_enumeration_io_retains_original_permission_error() {
         use std::os::unix::fs::PermissionsExt;
-        assert_ne!(unsafe { libc::geteuid() }, 0,
-            "real native directory EACCES qualification requires a nonroot process");
+        assert_ne!(
+            unsafe { libc::geteuid() },
+            0,
+            "real native directory EACCES qualification requires a nonroot process"
+        );
         let fixture = ReadFixture::new();
         fs::create_dir(fixture.0.join("Work")).unwrap();
         let store = RelationRecordStore::worlds_at_root(&fixture.0);
@@ -1595,22 +1846,36 @@ mod tests {
         store.remove("control:root", "w1").unwrap();
         let directory = store.source_dir();
         let inode = fs::metadata(&directory).unwrap().ino();
-        let restore = ReadPermissionRestore(directory.clone(), fs::metadata(&directory).unwrap().permissions());
-        MATERIAL_CHECKPOINT.with(|checkpoint| *checkpoint.borrow_mut() = Some(Box::new(move |dir| {
-            fs::set_permissions(dir, fs::Permissions::from_mode(0o111)).unwrap();
-        })));
+        let restore = ReadPermissionRestore(
+            directory.clone(),
+            fs::metadata(&directory).unwrap().permissions(),
+        );
+        MATERIAL_CHECKPOINT.with(|checkpoint| {
+            *checkpoint.borrow_mut() = Some(Box::new(move |dir| {
+                fs::set_permissions(dir, fs::Permissions::from_mode(0o111)).unwrap();
+            }))
+        });
         let error = store.list().unwrap_err();
         let actual = fs::read_dir(&directory).unwrap_err();
         assert_eq!(actual.kind(), std::io::ErrorKind::PermissionDenied);
         assert_eq!(error.io_error().unwrap().kind(), actual.kind());
-        assert_eq!(error.io_error().unwrap().raw_os_error(), actual.raw_os_error());
-        let result = native_read_action(&fixture.0,
-            crate::agent_set_actions::WORLD_RELATIONS_LIST_ACTION, &json!({"scope":"root"}));
+        assert_eq!(
+            error.io_error().unwrap().raw_os_error(),
+            actual.raw_os_error()
+        );
+        let result = native_read_action(
+            &fixture.0,
+            crate::agent_set_actions::WORLD_RELATIONS_LIST_ACTION,
+            &json!({"scope":"root"}),
+        );
         assert!(!result.ok, "{result:?}");
         let details = result.error.as_ref().unwrap().details.as_ref().unwrap();
         assert_eq!(details["effects"], "none");
         assert_eq!(details["io_error"]["kind"], "PermissionDenied");
-        assert_eq!(details["io_error"]["raw_os_error"], actual.raw_os_error().unwrap());
+        assert_eq!(
+            details["io_error"]["raw_os_error"],
+            actual.raw_os_error().unwrap()
+        );
         assert_eq!(fs::metadata(&directory).unwrap().ino(), inode);
         drop(restore);
         assert!(store.list().unwrap().is_empty());
@@ -1621,8 +1886,11 @@ mod tests {
     #[test]
     fn actual_native_new_unreadable_json_is_not_false_absence_and_fresh_read_has_actual_errno() {
         use std::os::unix::fs::PermissionsExt;
-        assert_ne!(unsafe { libc::geteuid() }, 0,
-            "real native record EACCES qualification requires a nonroot process");
+        assert_ne!(
+            unsafe { libc::geteuid() },
+            0,
+            "real native record EACCES qualification requires a nonroot process"
+        );
         let fixture = ReadFixture::new();
         fs::create_dir(fixture.0.join("Work")).unwrap();
         let store = RelationRecordStore::worlds_at_root(&fixture.0);
@@ -1638,36 +1906,56 @@ mod tests {
         let checkpoint_permissions = original_permissions.clone();
         let checkpoint_store = store.clone();
         let checkpoint_path = path.clone();
-        MATERIAL_CHECKPOINT.with(|checkpoint| *checkpoint.borrow_mut() = Some(Box::new(move |_| {
-            checkpoint_store.save(&added, None).unwrap();
-            *checkpoint_permissions.borrow_mut() = Some(fs::metadata(&checkpoint_path).unwrap().permissions());
-            fs::set_permissions(&checkpoint_path, fs::Permissions::from_mode(0o000)).unwrap();
-        })));
+        MATERIAL_CHECKPOINT.with(|checkpoint| {
+            *checkpoint.borrow_mut() = Some(Box::new(move |_| {
+                checkpoint_store.save(&added, None).unwrap();
+                *checkpoint_permissions.borrow_mut() =
+                    Some(fs::metadata(&checkpoint_path).unwrap().permissions());
+                fs::set_permissions(&checkpoint_path, fs::Permissions::from_mode(0o000)).unwrap();
+            }))
+        });
         let result = store.list();
-        let restore = ReadPermissionRestore(path.clone(), original_permissions.borrow_mut().take().unwrap());
+        let restore = ReadPermissionRestore(
+            path.clone(),
+            original_permissions.borrow_mut().take().unwrap(),
+        );
         let error = result.unwrap_err();
-        assert_eq!(error.io_error().unwrap().kind(), std::io::ErrorKind::Other,
-            "observed membership change is not a fictional read of the new body");
+        assert_eq!(
+            error.io_error().unwrap().kind(),
+            std::io::ErrorKind::Other,
+            "observed membership change is not a fictional read of the new body"
+        );
         assert!(error.io_error().unwrap().raw_os_error().is_none());
         let actual = fs::File::open(&path).unwrap_err();
         assert_eq!(actual.kind(), std::io::ErrorKind::PermissionDenied);
         let fresh = store.list().unwrap_err();
         assert_eq!(fresh.io_error().unwrap().kind(), actual.kind());
-        assert_eq!(fresh.io_error().unwrap().raw_os_error(), actual.raw_os_error());
-        let action = native_read_action(&fixture.0,
+        assert_eq!(
+            fresh.io_error().unwrap().raw_os_error(),
+            actual.raw_os_error()
+        );
+        let action = native_read_action(
+            &fixture.0,
             crate::agent_set_actions::WORLD_RELATIONS_READ_ACTION,
-            &json!({"scope":"root", "ref":"project:unreadable-record"}));
+            &json!({"scope":"root", "ref":"project:unreadable-record"}),
+        );
         assert!(!action.ok, "{action:?}");
         let details = action.error.as_ref().unwrap().details.as_ref().unwrap();
         assert_eq!(details["effects"], "none");
-        assert_eq!(details["io_error"]["raw_os_error"], actual.raw_os_error().unwrap());
+        assert_eq!(
+            details["io_error"]["raw_os_error"],
+            actual.raw_os_error().unwrap()
+        );
         assert_eq!(fs::read(&root).unwrap(), root_bytes);
         assert_eq!(fs::metadata(&root).unwrap().ino(), root_inode);
         drop(restore);
         let bytes = fs::read(&path).unwrap();
         let inode = fs::metadata(&path).unwrap().ino();
         assert_eq!(store.list().unwrap().len(), 2);
-        assert_eq!(store.read("project:unreadable-record").unwrap().revision, "w1");
+        assert_eq!(
+            store.read("project:unreadable-record").unwrap().revision,
+            "w1"
+        );
         assert_eq!(fs::read(&path).unwrap(), bytes);
         assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
         assert_eq!(fs::read(&root).unwrap(), root_bytes);
@@ -1695,7 +1983,10 @@ mod tests {
         assert_eq!(first[0].ref_, "control:root");
         assert_eq!(first[1].ref_, "project:stable-garden");
         assert_eq!(first[0].record["retained_extension"]["opaque"], "preserve");
-        assert_eq!(first[1].record["retained_extension"]["inner"], json!([2,1]));
+        assert_eq!(
+            first[1].record["retained_extension"]["inner"],
+            json!([2, 1])
+        );
         assert_eq!(first[0], store.read("control:root").unwrap());
         assert_eq!(first[1], store.read("project:stable-garden").unwrap());
         assert_eq!(store.list().unwrap(), first);

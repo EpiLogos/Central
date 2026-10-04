@@ -316,20 +316,27 @@ fn resolve_store(
             }
             let project_root = root.path.join("Work").join(&project);
             let manifest = if matches!(kind, RelationRecordKind::World) {
-                let observed = (|| -> std::io::Result<crate::projectcentral::ProjectCentralManifest> {
-                    use std::os::unix::fs::MetadataExt;
-                    let directory = crate::file_mutation::directory(
-                        &root.path, &std::path::Path::new("Work").join(&project))?;
-                    let metadata = directory.metadata()?;
-                    let mut reading = crate::file_mutation::NativeFileRead::open(
-                        &project_root, (metadata.dev(), metadata.ino()),
-                        std::path::Path::new("ProjectCentral/project.json"))?;
-                    let bytes = reading.read_bytes(4 * 1024 * 1024)?;
-                    let manifest = crate::projectcentral::parse_project_manifest(
-                        &bytes, &project_root.join("ProjectCentral/project.json"))?;
-                    reading.validate()?;
-                    Ok(manifest)
-                })();
+                let observed =
+                    (|| -> std::io::Result<crate::projectcentral::ProjectCentralManifest> {
+                        use std::os::unix::fs::MetadataExt;
+                        let directory = crate::file_mutation::directory(
+                            &root.path,
+                            &std::path::Path::new("Work").join(&project),
+                        )?;
+                        let metadata = directory.metadata()?;
+                        let mut reading = crate::file_mutation::NativeFileRead::open(
+                            &project_root,
+                            (metadata.dev(), metadata.ino()),
+                            std::path::Path::new("ProjectCentral/project.json"),
+                        )?;
+                        let bytes = reading.read_bytes(4 * 1024 * 1024)?;
+                        let manifest = crate::projectcentral::parse_project_manifest(
+                            &bytes,
+                            &project_root.join("ProjectCentral/project.json"),
+                        )?;
+                        reading.validate()?;
+                        Ok(manifest)
+                    })();
                 observed.map_err(|error| ActionResult::failure_coded(
                     Some(action), ResultStatus::UnavailableCapability,
                     "central.world_project_source_unavailable", error.to_string(),
@@ -856,16 +863,27 @@ fn world_effective_sources(
 }
 
 fn store_failure(action: &str, error: RelationRecordStoreError) -> ActionResult {
-    let read_only = matches!(action, AGENT_SET_LIST_ACTION | AGENT_SET_READ_ACTION
-        | AGENT_SET_RESOLVE_ACTION | WORLD_RELATIONS_LIST_ACTION
-        | WORLD_RELATIONS_READ_ACTION | WORLD_EFFECTIVE_SOURCES_ACTION);
+    let read_only = matches!(
+        action,
+        AGENT_SET_LIST_ACTION
+            | AGENT_SET_READ_ACTION
+            | AGENT_SET_RESOLVE_ACTION
+            | WORLD_RELATIONS_LIST_ACTION
+            | WORLD_RELATIONS_READ_ACTION
+            | WORLD_EFFECTIVE_SOURCES_ACTION
+    );
     if read_only {
         if let RelationRecordStoreError::RecordBudget { byte_len, limit } = &error {
-            return ActionResult::failure_coded(Some(action), ResultStatus::UnavailableCapability,
-                "central.relation_record_budget", error.to_string(), Some(json!({
+            return ActionResult::failure_coded(
+                Some(action),
+                ResultStatus::UnavailableCapability,
+                "central.relation_record_budget",
+                error.to_string(),
+                Some(json!({
                     "effects":"none", "io_error":Value::Null,
                     "capacity":{"byte_len":byte_len,"limit":limit,"profile":"eager-relation-metadata"},
-                })));
+                })),
+            );
         }
     }
     let status = match &error {
@@ -885,8 +903,7 @@ fn store_failure(action: &str, error: RelationRecordStoreError) -> ActionResult 
     };
     // Only these existing owner reads can assert effects:none. The shared
     // writer/error path must not turn an uncertain mutation into a refusal.
-    let details = if read_only
-    {
+    let details = if read_only {
         Some(json!({
             "effects": "none",
             "io_error": error.io_error().map(|cause| json!({
@@ -894,7 +911,9 @@ fn store_failure(action: &str, error: RelationRecordStoreError) -> ActionResult 
                 "raw_os_error": cause.raw_os_error(), "message": cause.to_string(),
             })),
         }))
-    } else { None };
+    } else {
+        None
+    };
     ActionResult::failure(Some(action), status, error.to_string(), details)
 }
 

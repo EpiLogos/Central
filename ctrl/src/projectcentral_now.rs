@@ -1680,6 +1680,135 @@ fn strap_scaffolding(
     apply_reproject(&root.path, project).ok()
 }
 
+/// Optional selected read metadata. These are physical observation bases,
+/// never World/Project/Source identity or a grant to the unchanged writer.
+struct HandoffReadPath {
+    requested_root: PathBuf,
+    canonical_root: PathBuf,
+    member: PathBuf,
+    root: fs::File,
+    parents: Vec<(PathBuf, (u64, u64))>,
+    location: crate::files::CentralPathRef,
+}
+
+impl HandoffReadPath {
+    fn identity(metadata: &fs::Metadata) -> (u64, u64) {
+        use std::os::unix::fs::MetadataExt;
+        (metadata.dev(), metadata.ino())
+    }
+
+    fn changed(message: &str) -> io::Error {
+        io::Error::new(io::ErrorKind::InvalidInput, message)
+    }
+
+    fn capture(requested_root: &Path, publication: &Path) -> io::Result<Self> {
+        let member = publication
+            .strip_prefix(requested_root)
+            .map_err(|_| Self::changed("NOW publication is outside its supplied Central root"))?
+            .to_path_buf();
+        if member.as_os_str().is_empty()
+            || !member
+                .components()
+                .all(|part| matches!(part, Component::Normal(_)))
+        {
+            return Err(Self::changed(
+                "NOW read member must be an actual normal relative path",
+            ));
+        }
+        let requested_root = if requested_root.is_absolute() {
+            requested_root.to_path_buf()
+        } else {
+            std::env::current_dir()?.join(requested_root)
+        };
+        let canonical_root = requested_root.canonicalize()?;
+        let root = fs::File::open(&canonical_root)?;
+        if !root.metadata()?.is_dir() {
+            return Err(Self::changed("NOW read root must be an ordinary directory"));
+        }
+        crate::source_safety::reject_symlink_components(&canonical_root, &member)?;
+        let mut parents = Vec::new();
+        let mut parent = PathBuf::new();
+        let count = member.components().count();
+        for component in member.components().take(count - 1) {
+            parent.push(component.as_os_str());
+            match fs::symlink_metadata(canonical_root.join(&parent)) {
+                Ok(metadata) if metadata.file_type().is_dir() => {
+                    parents.push((parent.clone(), Self::identity(&metadata)));
+                }
+                Ok(_) => {
+                    return Err(Self::changed(
+                        "NOW read parent is not an ordinary directory",
+                    ))
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => break,
+                Err(error) => return Err(error),
+            }
+        }
+        let text = member
+            .to_str()
+            .ok_or_else(|| Self::changed("NOW native read member is not UTF-8"))?
+            .to_owned();
+        let location = crate::files::CentralPathRef::new(&canonical_root, text)?;
+        let observation = Self {
+            requested_root,
+            canonical_root,
+            member,
+            root,
+            parents,
+            location,
+        };
+        observation.validate(false)?;
+        Ok(observation)
+    }
+
+    fn validate(&self, published: bool) -> io::Result<()> {
+        let held = self.root.metadata()?;
+        let requested = fs::metadata(&self.requested_root)?;
+        let named = fs::symlink_metadata(&self.canonical_root)?;
+        if !requested.is_dir()
+            || !named.file_type().is_dir()
+            || Self::identity(&held) != Self::identity(&requested)
+            || Self::identity(&held) != Self::identity(&named)
+            || self.requested_root.canonicalize()? != self.canonical_root
+        {
+            return Err(Self::changed("NOW read root affiliation changed"));
+        }
+        crate::source_safety::reject_symlink_components(&self.canonical_root, &self.member)?;
+        for (parent, expected) in &self.parents {
+            let metadata = fs::symlink_metadata(self.canonical_root.join(parent))?;
+            if !metadata.file_type().is_dir() || Self::identity(&metadata) != *expected {
+                return Err(Self::changed("NOW read parent affiliation changed"));
+            }
+        }
+        if published {
+            let requested = self.requested_root.join(&self.member);
+            let metadata = fs::symlink_metadata(&requested)?;
+            if !metadata.file_type().is_file()
+                || requested.canonicalize()? != self.canonical_root.join(&self.member)
+            {
+                return Err(Self::changed(
+                    "NOW publication has no ordinary current read mapping",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn reading(&self) -> io::Result<Value> {
+        self.validate(true)?;
+        Ok(json!({"action":"central.files.read","input":{"location":self.location}}))
+    }
+}
+
+fn handoff_read_unavailable(stage: &str, error: &io::Error) -> Value {
+    json!({
+        "stage": stage,
+        "kind": format!("{:?}", error.kind()),
+        "raw_os_error": error.raw_os_error(),
+        "message": error.to_string(),
+    })
+}
+
 fn return_action(
     _: &ActionRegistry,
     input: &Value,
@@ -1730,11 +1859,34 @@ fn return_action(
         Err(result) => return result,
     };
     let path = agents_dir.join(format!("{}.json", handoff.id));
+    // Optional route observation must not change the legacy writer's admission
+    // or erase a successful publication. Capture the original mapping first;
+    // a post-write alias retarget is never a freshly selected read owner.
+    let read_path = resolve_central_root(context.root_options)
+        .map_err(io::Error::other)
+        .and_then(|root| HandoffReadPath::capture(&root.path, &path));
     match write_json(&path, &handoff, false) {
-        Ok(()) => ActionResult::success(
-            action,
-            json!({"source": relative(&field_root, &path), "handoff": handoff}),
-        ),
+        Ok(()) => {
+            #[cfg(test)]
+            root_scope_tests::after_return_write(&path);
+            let mut data = json!({"source": relative(&field_root, &path), "handoff": handoff});
+            match read_path {
+                Ok(observation) => match observation.reading() {
+                    Ok(route) => data["read_path"] = route,
+                    Err(error) => {
+                        data["read_path"] = Value::Null;
+                        data["read_path_unavailable"] =
+                            handoff_read_unavailable("after_publication", &error);
+                    }
+                },
+                Err(error) => {
+                    data["read_path"] = Value::Null;
+                    data["read_path_unavailable"] =
+                        handoff_read_unavailable("before_publication", &error);
+                }
+            }
+            ActionResult::success(action, data)
+        }
         Err(error) => io_failure(action, error),
     }
 }
@@ -2634,5 +2786,392 @@ mod root_scope_tests {
         assert!(!refused.ok);
         let central = temp.path().join("Central");
         assert!(!central.join(ROOT_NOW_AGENT_DIR).exists());
+    }
+
+    type ReturnCheckpoint = Option<Box<dyn FnOnce(&Path)>>;
+    thread_local! {
+        static RETURN_CHECKPOINT: std::cell::RefCell<ReturnCheckpoint> =
+            std::cell::RefCell::new(None);
+    }
+
+    pub(super) fn after_return_write(path: &Path) {
+        let callback = RETURN_CHECKPOINT.with(|slot| slot.borrow_mut().take());
+        if let Some(callback) = callback {
+            callback(path);
+        }
+    }
+
+    struct ClearReturnCheckpoint;
+    impl Drop for ClearReturnCheckpoint {
+        fn drop(&mut self) {
+            RETURN_CHECKPOINT.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
+
+    // Keep before operations; an assertion panic retains the actual fixture.
+    // These Actions are in-process, so normal disposal owns no child process.
+    struct NativeReadFixture {
+        base: PathBuf,
+        root: PathBuf,
+        identity: (u64, u64),
+    }
+    impl NativeReadFixture {
+        fn new() -> Self {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            // Actual 5e's private TempDir has no keep() and defaults to system
+            // temp. Create only this fixture in the native Project Run space.
+            let scratch =
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../ProjectCentral/now/tmp");
+            fs::create_dir_all(&scratch).unwrap();
+            let scratch = scratch.canonicalize().unwrap();
+            assert!(fs::symlink_metadata(&scratch).unwrap().file_type().is_dir());
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let base = scratch.join(format!(
+                "root-handoff-read-{}-{nonce}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&base).unwrap();
+            let identity = HandoffReadPath::identity(&fs::symlink_metadata(&base).unwrap());
+            let root = base.join("Central");
+            fs::create_dir_all(root.join("Control")).unwrap();
+            Self {
+                base,
+                root,
+                identity,
+            }
+        }
+
+        fn action(&self, root: &Path, action: &str, input: &Value) -> ActionResult {
+            let mut registry = create_core_action_registry();
+            register_projectcentral_now_actions(&mut registry);
+            let options = crate::root::RootOptions {
+                explicit_root: Some(root.to_path_buf()),
+                configured_root: None,
+                home: None,
+            };
+            let connectors = ConnectorRegistry::default();
+            let connector_context = ConnectorContext {
+                platform: "test".into(),
+            };
+            let context = ActionExecutionContext {
+                root_options: &options,
+                connectors: &connectors,
+                connector_context: &connector_context,
+            };
+            registry.execute(action, input, &context)
+        }
+
+        fn returned(&self, root: &Path, input: &Value) -> Value {
+            let result = self.action(root, "projectcentral.now.return", input);
+            assert!(result.ok, "{result:?}");
+            result.data.unwrap()
+        }
+
+        fn read(&self, root: &Path, route: &Value) -> Value {
+            assert_eq!(route["action"], "central.files.read");
+            let result = self.action(root, "central.files.read", &route["input"]);
+            assert!(result.ok, "{result:?}");
+            result.data.unwrap()
+        }
+
+        fn finish(self) {
+            let metadata = fs::symlink_metadata(&self.base).unwrap();
+            assert!(metadata.file_type().is_dir());
+            assert_eq!(HandoffReadPath::identity(&metadata), self.identity);
+            fs::remove_dir_all(&self.base).unwrap();
+        }
+    }
+
+    #[test]
+    fn root_native_read_path_roundtrips_source_bytes_and_identity() {
+        let fixture = NativeReadFixture::new();
+        let data = fixture.returned(&fixture.root, &verification_input());
+        let path = fixture.root.join(data["source"].as_str().unwrap());
+        let bytes = fs::read(&path).unwrap();
+        let identity = HandoffReadPath::identity(&fs::metadata(&path).unwrap());
+        let read = fixture.read(&fixture.root, &data["read_path"]);
+        assert_eq!(read["schema"], "central.file-reading/v1");
+        assert_eq!(read["location"], data["read_path"]["input"]["location"]);
+        assert_eq!(read["location"]["path"], data["source"]);
+        assert_eq!(read["byte_len"], bytes.len() as u64);
+        assert_eq!(read["automatic_agent_or_model_invocation"], false);
+        assert_eq!(
+            read["revision"],
+            crate::source_safety::content_revision_bytes(&bytes)
+        );
+        let handoff: Value = serde_json::from_str(read["content"].as_str().unwrap()).unwrap();
+        assert_eq!(handoff, data["handoff"]);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(
+            HandoffReadPath::identity(&fs::metadata(&path).unwrap()),
+            identity
+        );
+        assert!(!fixture.root.join("Control/agents/now/clearings").exists());
+        fixture.finish();
+    }
+
+    #[test]
+    fn project_native_read_path_uses_actual_work_member_not_project_id() {
+        let fixture = NativeReadFixture::new();
+        let project = fixture.root.join("Work/member");
+        fs::create_dir_all(&project).unwrap();
+        initialize_projectcentral(&fixture.root, &project, "opaque/different-id").unwrap();
+        initialize_now(&project).unwrap();
+        let mut input = verification_input();
+        input["project"] = json!("member");
+        let data = fixture.returned(&fixture.root, &input);
+        let read = fixture.read(&fixture.root, &data["read_path"]);
+        assert_eq!(
+            read["location"]["path"],
+            format!("Work/member/{}", data["source"].as_str().unwrap())
+        );
+        let handoff: Value = serde_json::from_str(read["content"].as_str().unwrap()).unwrap();
+        assert_eq!(handoff, data["handoff"]);
+        let inspected = fixture.action(
+            &fixture.root,
+            "projectcentral.now.inspect",
+            &json!({"project":"member"}),
+        );
+        assert!(inspected.ok, "{inspected:?}");
+        assert_eq!(inspected.data.unwrap()["active_items"][0], data["handoff"]);
+        assert!(!fixture.root.join(ROOT_NOW_AGENT_DIR).exists());
+        fixture.finish();
+    }
+
+    #[test]
+    fn unchanged_root_alias_returns_same_owner_read_path() {
+        let fixture = NativeReadFixture::new();
+        let alias = fixture.base.join("root-alias");
+        std::os::unix::fs::symlink(&fixture.root, &alias).unwrap();
+        let data = fixture.returned(&alias, &verification_input());
+        assert_eq!(
+            data["read_path"]["input"]["location"]["root"],
+            fixture.root.to_str().unwrap()
+        );
+        let read = fixture.read(&alias, &data["read_path"]);
+        assert_eq!(read["location"], data["read_path"]["input"]["location"]);
+        fixture.finish();
+    }
+
+    #[test]
+    fn retargeted_root_after_publication_retains_success_and_original_source() {
+        let fixture = NativeReadFixture::new();
+        let other = fixture.base.join("other");
+        fs::create_dir_all(other.join("Control")).unwrap();
+        let alias = fixture.base.join("root-alias");
+        std::os::unix::fs::symlink(&fixture.root, &alias).unwrap();
+        let changed_alias = alias.clone();
+        let changed_other = other.clone();
+        RETURN_CHECKPOINT.with(|slot| {
+            *slot.borrow_mut() = Some(Box::new(move |_| {
+                fs::remove_file(&changed_alias).unwrap();
+                std::os::unix::fs::symlink(&changed_other, &changed_alias).unwrap();
+            }));
+        });
+        let _clear = ClearReturnCheckpoint;
+        let data = fixture.returned(&alias, &verification_input());
+        assert!(data["read_path"].is_null());
+        assert_eq!(data["read_path_unavailable"]["stage"], "after_publication");
+        assert_eq!(data["read_path_unavailable"]["kind"], "InvalidInput");
+        assert!(data["read_path_unavailable"]["raw_os_error"].is_null());
+        let source = data["source"].as_str().unwrap();
+        let stored: Value =
+            serde_json::from_slice(&fs::read(fixture.root.join(source)).unwrap()).unwrap();
+        assert_eq!(stored, data["handoff"]);
+        assert!(!other.join(source).exists());
+        fixture.finish();
+    }
+
+    #[test]
+    fn replaced_parent_after_publication_does_not_disclose_a_fresh_route() {
+        let fixture = NativeReadFixture::new();
+        fs::create_dir_all(fixture.root.join(ROOT_NOW_AGENT_DIR)).unwrap();
+        let saved = fixture.base.join("saved-agents");
+        let saved_callback = saved.clone();
+        RETURN_CHECKPOINT.with(|slot| {
+            *slot.borrow_mut() = Some(Box::new(move |path| {
+                let parent = path.parent().unwrap();
+                fs::rename(parent, &saved_callback).unwrap();
+                fs::create_dir(parent).unwrap();
+            }));
+        });
+        let _clear = ClearReturnCheckpoint;
+        let data = fixture.returned(&fixture.root, &verification_input());
+        assert!(data["read_path"].is_null());
+        assert_eq!(data["read_path_unavailable"]["stage"], "after_publication");
+        let id = data["handoff"]["id"].as_str().unwrap();
+        let stored: Value =
+            serde_json::from_slice(&fs::read(saved.join(format!("{id}.json"))).unwrap()).unwrap();
+        assert_eq!(stored, data["handoff"]);
+        assert!(!fixture
+            .root
+            .join(ROOT_NOW_AGENT_DIR)
+            .join(format!("{id}.json"))
+            .exists());
+        fixture.finish();
+    }
+
+    #[test]
+    fn actual_final_symlink_directory_and_fifo_withhold_optional_route() {
+        for form in ["symlink", "directory", "fifo"] {
+            let fixture = NativeReadFixture::new();
+            let saved = fixture.base.join("saved-return.json");
+            let saved_callback = saved.clone();
+            RETURN_CHECKPOINT.with(|slot| {
+                *slot.borrow_mut() = Some(Box::new(move |path| {
+                    fs::rename(path, &saved_callback).unwrap();
+                    match form {
+                        "symlink" => std::os::unix::fs::symlink(&saved_callback, path).unwrap(),
+                        "directory" => fs::create_dir(path).unwrap(),
+                        "fifo" => {
+                            use std::os::unix::ffi::OsStrExt;
+                            let name = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+                            assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+                        }
+                        _ => unreachable!(),
+                    }
+                }));
+            });
+            let _clear = ClearReturnCheckpoint;
+            let data = fixture.returned(&fixture.root, &verification_input());
+            assert!(data["read_path"].is_null(), "{form}");
+            assert_eq!(data["read_path_unavailable"]["stage"], "after_publication");
+            let stored: Value = serde_json::from_slice(&fs::read(&saved).unwrap()).unwrap();
+            assert_eq!(stored, data["handoff"]);
+            fixture.finish();
+        }
+    }
+
+    struct RestoreRootPermissions {
+        path: PathBuf,
+        identity: (u64, u64),
+        permissions: fs::Permissions,
+    }
+    impl Drop for RestoreRootPermissions {
+        fn drop(&mut self) {
+            let restored = fs::symlink_metadata(&self.path).and_then(|metadata| {
+                if !metadata.file_type().is_dir()
+                    || HandoffReadPath::identity(&metadata) != self.identity
+                {
+                    return Err(HandoffReadPath::changed(
+                        "owned permission restoration affiliation changed",
+                    ));
+                }
+                fs::set_permissions(&self.path, self.permissions.clone())
+            });
+            if let Err(error) = restored {
+                if std::thread::panicking() {
+                    eprintln!(
+                        "native owned permission restoration failed at {:?}: {error}",
+                        self.path
+                    );
+                } else {
+                    panic!(
+                        "native owned permission restoration failed at {:?}: {error}",
+                        self.path
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn native_route_capture_eacces_keeps_legacy_publication_and_actual_cause() {
+        use std::os::unix::fs::PermissionsExt;
+        assert_ne!(
+            unsafe { libc::geteuid() },
+            0,
+            "actual EACCES requires nonroot"
+        );
+        let fixture = NativeReadFixture::new();
+        let metadata = fs::metadata(&fixture.root).unwrap();
+        let restore = RestoreRootPermissions {
+            path: fixture.root.clone(),
+            identity: HandoffReadPath::identity(&metadata),
+            permissions: metadata.permissions(),
+        };
+        fs::set_permissions(&fixture.root, fs::Permissions::from_mode(0o333)).unwrap();
+        let oracle = fs::File::open(&fixture.root).unwrap_err();
+        assert_eq!(oracle.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(oracle.raw_os_error(), Some(libc::EACCES));
+        let data = fixture.returned(&fixture.root, &verification_input());
+        assert!(data["read_path"].is_null());
+        assert_eq!(data["read_path_unavailable"]["stage"], "before_publication");
+        assert_eq!(
+            data["read_path_unavailable"]["kind"],
+            format!("{:?}", oracle.kind())
+        );
+        assert_eq!(
+            data["read_path_unavailable"]["raw_os_error"],
+            json!(oracle.raw_os_error())
+        );
+        assert_eq!(data["read_path_unavailable"]["message"], oracle.to_string());
+        drop(restore);
+        let stored: Value = serde_json::from_slice(
+            &fs::read(fixture.root.join(data["source"].as_str().unwrap())).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(stored, data["handoff"]);
+        fixture.finish();
+    }
+
+    #[test]
+    fn actual_non_utf8_root_has_no_fabricated_native_location() {
+        use std::os::unix::ffi::OsStringExt;
+        let fixture = NativeReadFixture::new();
+        let root = fixture
+            .base
+            .join(std::ffi::OsString::from_vec(b"root-\xff".to_vec()));
+        // APFS/macOS refuses the invalid filename before any owner publication.
+        // This is a physical prerequisite oracle, not a successful read route.
+        #[cfg(target_os = "macos")]
+        {
+            let entry_names = |directory: &Path| {
+                let mut names = fs::read_dir(directory)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().file_name())
+                    .collect::<Vec<_>>();
+                names.sort();
+                names
+            };
+            let before = entry_names(&fixture.base);
+            let root_identity =
+                HandoffReadPath::identity(&fs::symlink_metadata(&fixture.root).unwrap());
+            let error = fs::create_dir_all(root.join("Control"))
+                .expect_err("native macOS invalid filename must refuse before publication");
+            assert_eq!(error.raw_os_error(), Some(libc::EILSEQ));
+            assert_eq!(
+                HandoffReadPath::identity(&fs::symlink_metadata(&fixture.base).unwrap()),
+                fixture.identity,
+            );
+            assert_eq!(
+                HandoffReadPath::identity(&fs::symlink_metadata(&fixture.root).unwrap()),
+                root_identity,
+            );
+            assert_eq!(entry_names(&fixture.base), before);
+            assert!(entry_names(&fixture.root.join("Control")).is_empty());
+            fixture.finish();
+        }
+        // Linux admits these real bytes: retain the complete native Return,
+        // unavailable location and same persisted handoff identity oracle.
+        #[cfg(not(target_os = "macos"))]
+        {
+            fs::create_dir_all(root.join("Control")).unwrap();
+            let data = fixture.returned(&root, &verification_input());
+            assert!(data["read_path"].is_null());
+            assert_eq!(data["read_path_unavailable"]["stage"], "before_publication");
+            assert!(data["read_path_unavailable"]["raw_os_error"].is_null());
+            let stored: Value = serde_json::from_slice(
+                &fs::read(root.join(data["source"].as_str().unwrap())).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(stored, data["handoff"]);
+            fixture.finish();
+        }
     }
 }

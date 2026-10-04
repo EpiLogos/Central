@@ -1286,7 +1286,7 @@ fn receipt_lookup_actual_record_eacces_is_error_not_absence_or_resend() {
     assert_eq!(paths.len(), 1);
     let path = paths[0];
     let mode = fs::metadata(path).unwrap().permissions();
-    fs::set_permissions(path, fs::Permissions::from_mode(0)).unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o000)).unwrap();
     let error = call(
         world.path(),
         "receiving_read",

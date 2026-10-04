@@ -308,9 +308,15 @@ fn project_directory_identity(root: &Path, relative: &Path) -> io::Result<(u64, 
     Ok((metadata.dev(), metadata.ino()))
 }
 
-fn require_project_directory_identity(root: &Path, relative: &Path, expected: (u64, u64)) -> io::Result<()> {
+fn require_project_directory_identity(
+    root: &Path,
+    relative: &Path,
+    expected: (u64, u64),
+) -> io::Result<()> {
     if project_directory_identity(root, relative)? != expected {
-        return Err(io::Error::other("Project material parent affiliation changed during World reading"));
+        return Err(io::Error::other(
+            "Project material parent affiliation changed during World reading",
+        ));
     }
     Ok(())
 }
@@ -319,8 +325,10 @@ fn confirm_project_absence<T>(observation: io::Result<T>) -> io::Result<()> {
     match observation {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
-        Ok(_) => Err(io::Error::new(io::ErrorKind::AlreadyExists,
-            "Project material appeared during absence observation")),
+        Ok(_) => Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "Project material appeared during absence observation",
+        )),
     }
 }
 
@@ -383,12 +391,18 @@ fn project_world(root: &Path, resolution: Resolution) -> (Value, Option<Scope>) 
             if let Err(error) = require_project_directory_identity(root, work, work_identity) {
                 return unavailable(facet, "work_parent", error);
             }
-            if let Err(error) = confirm_project_absence(crate::file_mutation::directory(root, member))
-                .and_then(|()| require_project_directory_identity(root, work, work_identity))
+            if let Err(error) =
+                confirm_project_absence(crate::file_mutation::directory(root, member))
+                    .and_then(|()| require_project_directory_identity(root, work, work_identity))
             {
                 return unavailable(facet, "work_member_recheck", error);
             }
-            return absent(facet, "work-member-absent", false, format!("{path} does not exist"));
+            return absent(
+                facet,
+                "work-member-absent",
+                false,
+                format!("{path} does not exist"),
+            );
         }
         Err(error) => return unavailable(facet, "work_member", error),
     };
@@ -399,47 +413,80 @@ fn project_world(root: &Path, resolution: Resolution) -> (Value, Option<Scope>) 
             if let Err(error) = require_project_directory_identity(root, member, member_identity) {
                 return unavailable(facet, "work_member", error);
             }
-            if let Err(error) = confirm_project_absence(crate::file_mutation::directory(root, &projectcentral))
-                .and_then(|()| require_project_directory_identity(root, member, member_identity))
-                .and_then(|()| require_project_directory_identity(root, work, work_identity))
+            if let Err(error) =
+                confirm_project_absence(crate::file_mutation::directory(root, &projectcentral))
+                    .and_then(|()| {
+                        require_project_directory_identity(root, member, member_identity)
+                    })
+                    .and_then(|()| require_project_directory_identity(root, work, work_identity))
             {
                 return unavailable(facet, "projectcentral_parent_recheck", error);
             }
-            return absent(facet, "projectcentral-manifest-absent", true,
-                format!("{path} is an existing Work member without ProjectCentral"));
+            return absent(
+                facet,
+                "projectcentral-manifest-absent",
+                true,
+                format!("{path} is an existing Work member without ProjectCentral"),
+            );
         }
         Err(error) => return unavailable(facet, "projectcentral_parent", error),
     };
     let held_manifest = match crate::file_mutation::open_native_file(root, &manifest) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            if let Err(error) = require_project_directory_identity(root, &projectcentral, projectcentral_identity) {
+            if let Err(error) =
+                require_project_directory_identity(root, &projectcentral, projectcentral_identity)
+            {
                 return unavailable(facet, "projectcentral_parent", error);
             }
-            if let Err(error) = confirm_project_absence(crate::file_mutation::open_native_file(root, &manifest))
-                .and_then(|()| require_project_directory_identity(root, &projectcentral, projectcentral_identity))
-                .and_then(|()| require_project_directory_identity(root, member, member_identity))
-                .and_then(|()| require_project_directory_identity(root, work, work_identity))
+            if let Err(error) =
+                confirm_project_absence(crate::file_mutation::open_native_file(root, &manifest))
+                    .and_then(|()| {
+                        require_project_directory_identity(
+                            root,
+                            &projectcentral,
+                            projectcentral_identity,
+                        )
+                    })
+                    .and_then(|()| {
+                        require_project_directory_identity(root, member, member_identity)
+                    })
+                    .and_then(|()| require_project_directory_identity(root, work, work_identity))
             {
                 return unavailable(facet, "project_manifest_recheck", error);
             }
-            return absent(facet, "projectcentral-manifest-absent", true,
-                format!("{path} has no ProjectCentral manifest ({manifest} is absent)"));
+            return absent(
+                facet,
+                "projectcentral-manifest-absent",
+                true,
+                format!("{path} has no ProjectCentral manifest ({manifest} is absent)"),
+            );
         }
         Err(error) => return unavailable(facet, "project_manifest", error),
     };
     match held_manifest.metadata() {
-        Ok(metadata) if metadata.is_file() => {},
-        Ok(_) => return unavailable(facet, "project_manifest_form", io::Error::new(
-            io::ErrorKind::InvalidInput, "ProjectCentral manifest must be a regular file")),
+        Ok(metadata) if metadata.is_file() => {}
+        Ok(_) => {
+            return unavailable(
+                facet,
+                "project_manifest_form",
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "ProjectCentral manifest must be a regular file",
+                ),
+            )
+        }
         Err(error) => return unavailable(facet, "project_manifest_form", error),
     }
     let scope = match Scope::resolve(root, Some(&name)) {
         Ok(scope) => scope,
         Err(error) => return unavailable(facet, "project_scope", error),
     };
-    for (relative, expected) in [(work, work_identity), (member, member_identity),
-        (projectcentral.as_path(), projectcentral_identity)] {
+    for (relative, expected) in [
+        (work, work_identity),
+        (member, member_identity),
+        (projectcentral.as_path(), projectcentral_identity),
+    ] {
         if let Err(error) = require_project_directory_identity(root, relative, expected) {
             return unavailable(facet, "project_parent_recheck", error);
         }
@@ -569,7 +616,8 @@ fn world_record(root: &Path, project: Option<&Scope>) -> Value {
     let declared = match store.list() {
         Ok(readings) => readings,
         Err(error) => {
-            let mut native_error = json!({"owner":"Central/RelationRecordStore", "reason":error.to_string()});
+            let mut native_error =
+                json!({"owner":"Central/RelationRecordStore", "reason":error.to_string()});
             if let Some(cause) = error.io_error() {
                 native_error["io_error"] = json!({
                     "kind":format!("{:?}", cause.kind()), "raw_os_error":cause.raw_os_error(),
@@ -578,7 +626,12 @@ fn world_record(root: &Path, project: Option<&Scope>) -> Value {
             if let RelationRecordStoreError::RecordBudget { byte_len, limit } = &error {
                 native_error["capacity"] = json!({"byte_len":byte_len, "limit":limit});
             }
-            if let RelationRecordStoreError::SourcePathMismatch { ref_, expected: native_path, actual } = &error {
+            if let RelationRecordStoreError::SourcePathMismatch {
+                ref_,
+                expected: native_path,
+                actual,
+            } = &error
+            {
                 return json!({
                     "state":"mismatch", "ref":ref_, "expected_ref":expected, "source":relative(actual),
                     "detail":format!("the record for {ref_} is stored as {} but its ref derives {}",

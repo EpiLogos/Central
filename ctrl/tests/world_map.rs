@@ -1049,7 +1049,10 @@ fn native_wiki_publication_locks_stay_material_and_do_not_become_sources() {
     assert_eq!(map_before.control.agent_wiki.sources, 1);
     let projection_before = map_project_world(root, "garden").unwrap();
     assert_eq!(projection_before.sources.bindings, project_before.len());
-    assert_eq!(projection_before.project.projectcentral.agent_wiki.sources, 1);
+    assert_eq!(
+        projection_before.project.projectcentral.agent_wiki.sources,
+        1
+    );
 
     // Publication replay and both native reads preserve the actual source and
     // the stable physical lock. They neither recreate nor remove the lock.
@@ -1059,7 +1062,10 @@ fn native_wiki_publication_locks_stay_material_and_do_not_become_sources() {
     assert_eq!(control_source_bindings(root).unwrap(), control_before);
     assert_eq!(project_source_bindings(&project).unwrap(), project_before);
     assert_eq!(map_world(root).unwrap(), map_before);
-    assert_eq!(map_project_world(root, "garden").unwrap(), projection_before);
+    assert_eq!(
+        map_project_world(root, "garden").unwrap(),
+        projection_before
+    );
     assert_eq!(ground_fingerprint(root), before);
     assert_eq!(
         fs::metadata(&root_wiki).unwrap().modified().unwrap(),
@@ -1142,14 +1148,25 @@ fn fixture_drop_releases_outer_and_preserves_neighbouring_native_ground() {
     assert!(inner.is_dir());
     assert_ne!(outer, sibling_outer);
 
-    let unselected = sibling.path().join("Control/user/fixture-neighbour-source.md");
+    let unselected = sibling
+        .path()
+        .join("Control/user/fixture-neighbour-source.md");
     let bytes = b"neighbour fixture retains its exact authored source bytes\n";
     fs::write(&unselected, bytes).unwrap();
     let before = ground_fingerprint(sibling.path());
     drop(fixture);
-    assert!(!outer.exists(), "the admitted outer directory must be released");
-    assert!(!inner.exists(), "the native inner Central is inside that lifetime");
-    assert!(scratch.is_dir(), "shared ProjectCentral scratch remains owned by NOW");
+    assert!(
+        !outer.exists(),
+        "the admitted outer directory must be released"
+    );
+    assert!(
+        !inner.exists(),
+        "the native inner Central is inside that lifetime"
+    );
+    assert!(
+        scratch.is_dir(),
+        "shared ProjectCentral scratch remains owned by NOW"
+    );
     assert!(sibling_outer.is_dir());
     assert!(sibling_inner.is_dir());
     assert_eq!(fs::read(&unselected).unwrap(), bytes);

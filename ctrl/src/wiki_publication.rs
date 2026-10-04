@@ -306,9 +306,7 @@ impl Publication {
         use std::os::unix::fs::OpenOptionsExt;
         let parent = fs::OpenOptions::new()
             .read(true)
-            .custom_flags(
-                libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
-            )
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
             .open(&source_parent)?;
         let name = source.file_name().ok_or_else(|| {
             io::Error::new(
@@ -473,7 +471,11 @@ fn preserve_metadata(source: &Snapshot, stage: &File) -> io::Result<()> {
 
 // Shared physical retention only: no Wiki lock, CAS, payload limit or readonly
 // mutation policy is introduced into another native owner's record writer.
-pub(crate) fn preserve_file_metadata(source_file: &File, source_metadata: &Metadata, stage: &File) -> io::Result<()> {
+pub(crate) fn preserve_file_metadata(
+    source_file: &File,
+    source_metadata: &Metadata,
+    stage: &File,
+) -> io::Result<()> {
     #[cfg(target_os = "macos")]
     {
         // Bound retained metadata before the native copy, as well as checking
@@ -696,7 +698,11 @@ fn native_acl(file: &File) -> io::Result<Option<Vec<u8>>> {
 }
 
 #[cfg(target_os = "linux")]
-fn preserve_linux_metadata(source_file: &File, source_metadata: &Metadata, stage: &File) -> io::Result<()> {
+fn preserve_linux_metadata(
+    source_file: &File,
+    source_metadata: &Metadata,
+    stage: &File,
+) -> io::Result<()> {
     let stage_meta = stage.metadata()?;
     if (source_metadata.uid(), source_metadata.gid()) != (stage_meta.uid(), stage_meta.gid())
         && unsafe {
@@ -812,10 +818,12 @@ pub(crate) mod tests {
         }
     }
 
+    type PublicationObserver = Box<dyn FnOnce(&Path)>;
+
     std::thread_local! {
-        static ON_STAGE_CREATED: std::cell::RefCell<Option<Box<dyn FnOnce(&Path)>>> =
+        static ON_STAGE_CREATED: std::cell::RefCell<Option<PublicationObserver>> =
             const { std::cell::RefCell::new(None) };
-        static ON_PUBLISHED: std::cell::RefCell<Option<Box<dyn FnOnce(&Path)>>> =
+        static ON_PUBLISHED: std::cell::RefCell<Option<PublicationObserver>> =
             const { std::cell::RefCell::new(None) };
     }
 
@@ -856,7 +864,21 @@ pub(crate) mod tests {
             return false;
         }
         let metadata = unsafe { metadata.assume_init() };
-        metadata.st_dev as u64 == dev && metadata.st_ino as u64 == ino
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let observed_dev = metadata.st_dev;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let observed_dev = metadata.st_dev as u64;
+        #[cfg(any(
+            all(target_os = "linux", target_pointer_width = "64"),
+            target_os = "macos"
+        ))]
+        let observed_ino = metadata.st_ino;
+        #[cfg(not(any(
+            all(target_os = "linux", target_pointer_width = "64"),
+            target_os = "macos"
+        )))]
+        let observed_ino = metadata.st_ino as u64;
+        observed_dev == dev && observed_ino == ino
     }
 
     #[test]
@@ -1130,8 +1152,8 @@ pub(crate) mod tests {
         });
         let owner = Publication::acquire(&target).unwrap();
         let error = owner.copy_new(&source).unwrap_err();
-        let failure = uncertainty(&error)
-            .expect("the real destination rename must remain attributable");
+        let failure =
+            uncertainty(&error).expect("the real destination rename must remain attributable");
         assert!(failure.published);
         assert_eq!(
             failure.source_path,
