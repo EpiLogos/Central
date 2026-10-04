@@ -1707,9 +1707,13 @@ impl HandoffReadPath {
             .map_err(|_| Self::changed("NOW publication is outside its supplied Central root"))?
             .to_path_buf();
         if member.as_os_str().is_empty()
-            || !member.components().all(|part| matches!(part, Component::Normal(_)))
+            || !member
+                .components()
+                .all(|part| matches!(part, Component::Normal(_)))
         {
-            return Err(Self::changed("NOW read member must be an actual normal relative path"));
+            return Err(Self::changed(
+                "NOW read member must be an actual normal relative path",
+            ));
         }
         let requested_root = if requested_root.is_absolute() {
             requested_root.to_path_buf()
@@ -1731,7 +1735,11 @@ impl HandoffReadPath {
                 Ok(metadata) if metadata.file_type().is_dir() => {
                     parents.push((parent.clone(), Self::identity(&metadata)));
                 }
-                Ok(_) => return Err(Self::changed("NOW read parent is not an ordinary directory")),
+                Ok(_) => {
+                    return Err(Self::changed(
+                        "NOW read parent is not an ordinary directory",
+                    ))
+                }
                 Err(error) if error.kind() == io::ErrorKind::NotFound => break,
                 Err(error) => return Err(error),
             }
@@ -1778,7 +1786,9 @@ impl HandoffReadPath {
             if !metadata.file_type().is_file()
                 || requested.canonicalize()? != self.canonical_root.join(&self.member)
             {
-                return Err(Self::changed("NOW publication has no ordinary current read mapping"));
+                return Err(Self::changed(
+                    "NOW publication has no ordinary current read mapping",
+                ));
             }
         }
         Ok(())
@@ -2811,21 +2821,29 @@ mod root_scope_tests {
             static NEXT: AtomicU64 = AtomicU64::new(0);
             // Actual 5e's private TempDir has no keep() and defaults to system
             // temp. Create only this fixture in the native Project Run space.
-            let scratch = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../ProjectCentral/now/tmp");
+            let scratch =
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../ProjectCentral/now/tmp");
             fs::create_dir_all(&scratch).unwrap();
             let scratch = scratch.canonicalize().unwrap();
             assert!(fs::symlink_metadata(&scratch).unwrap().file_type().is_dir());
-            let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
             let base = scratch.join(format!(
                 "root-handoff-read-{}-{nonce}-{}",
-                std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
             ));
             fs::create_dir(&base).unwrap();
             let identity = HandoffReadPath::identity(&fs::symlink_metadata(&base).unwrap());
             let root = base.join("Central");
             fs::create_dir_all(root.join("Control")).unwrap();
-            Self { base, root, identity }
+            Self {
+                base,
+                root,
+                identity,
+            }
         }
 
         fn action(&self, root: &Path, action: &str, input: &Value) -> ActionResult {
@@ -2837,7 +2855,9 @@ mod root_scope_tests {
                 home: None,
             };
             let connectors = ConnectorRegistry::default();
-            let connector_context = ConnectorContext { platform: "test".into() };
+            let connector_context = ConnectorContext {
+                platform: "test".into(),
+            };
             let context = ActionExecutionContext {
                 root_options: &options,
                 connectors: &connectors,
@@ -2887,7 +2907,10 @@ mod root_scope_tests {
         let handoff: Value = serde_json::from_str(read["content"].as_str().unwrap()).unwrap();
         assert_eq!(handoff, data["handoff"]);
         assert_eq!(fs::read(&path).unwrap(), bytes);
-        assert_eq!(HandoffReadPath::identity(&fs::metadata(&path).unwrap()), identity);
+        assert_eq!(
+            HandoffReadPath::identity(&fs::metadata(&path).unwrap()),
+            identity
+        );
         assert!(!fixture.root.join("Control/agents/now/clearings").exists());
         fixture.finish();
     }
@@ -2910,7 +2933,9 @@ mod root_scope_tests {
         let handoff: Value = serde_json::from_str(read["content"].as_str().unwrap()).unwrap();
         assert_eq!(handoff, data["handoff"]);
         let inspected = fixture.action(
-            &fixture.root, "projectcentral.now.inspect", &json!({"project":"member"})
+            &fixture.root,
+            "projectcentral.now.inspect",
+            &json!({"project":"member"}),
         );
         assert!(inspected.ok, "{inspected:?}");
         assert_eq!(inspected.data.unwrap()["active_items"][0], data["handoff"]);
@@ -2955,8 +2980,8 @@ mod root_scope_tests {
         assert_eq!(data["read_path_unavailable"]["kind"], "InvalidInput");
         assert!(data["read_path_unavailable"]["raw_os_error"].is_null());
         let source = data["source"].as_str().unwrap();
-        let stored: Value = serde_json::from_slice(&fs::read(fixture.root.join(source)).unwrap())
-            .unwrap();
+        let stored: Value =
+            serde_json::from_slice(&fs::read(fixture.root.join(source)).unwrap()).unwrap();
         assert_eq!(stored, data["handoff"]);
         assert!(!other.join(source).exists());
         fixture.finish();
@@ -2980,10 +3005,14 @@ mod root_scope_tests {
         assert!(data["read_path"].is_null());
         assert_eq!(data["read_path_unavailable"]["stage"], "after_publication");
         let id = data["handoff"]["id"].as_str().unwrap();
-        let stored: Value = serde_json::from_slice(&fs::read(saved.join(format!("{id}.json")))
-            .unwrap()).unwrap();
+        let stored: Value =
+            serde_json::from_slice(&fs::read(saved.join(format!("{id}.json"))).unwrap()).unwrap();
         assert_eq!(stored, data["handoff"]);
-        assert!(!fixture.root.join(ROOT_NOW_AGENT_DIR).join(format!("{id}.json")).exists());
+        assert!(!fixture
+            .root
+            .join(ROOT_NOW_AGENT_DIR)
+            .join(format!("{id}.json"))
+            .exists());
         fixture.finish();
     }
 
@@ -3030,16 +3059,22 @@ mod root_scope_tests {
                     || HandoffReadPath::identity(&metadata) != self.identity
                 {
                     return Err(HandoffReadPath::changed(
-                        "owned permission restoration affiliation changed"
+                        "owned permission restoration affiliation changed",
                     ));
                 }
                 fs::set_permissions(&self.path, self.permissions.clone())
             });
             if let Err(error) = restored {
                 if std::thread::panicking() {
-                    eprintln!("native owned permission restoration failed at {:?}: {error}", self.path);
+                    eprintln!(
+                        "native owned permission restoration failed at {:?}: {error}",
+                        self.path
+                    );
                 } else {
-                    panic!("native owned permission restoration failed at {:?}: {error}", self.path);
+                    panic!(
+                        "native owned permission restoration failed at {:?}: {error}",
+                        self.path
+                    );
                 }
             }
         }
@@ -3048,7 +3083,11 @@ mod root_scope_tests {
     #[test]
     fn native_route_capture_eacces_keeps_legacy_publication_and_actual_cause() {
         use std::os::unix::fs::PermissionsExt;
-        assert_ne!(unsafe { libc::geteuid() }, 0, "actual EACCES requires nonroot");
+        assert_ne!(
+            unsafe { libc::geteuid() },
+            0,
+            "actual EACCES requires nonroot"
+        );
         let fixture = NativeReadFixture::new();
         let metadata = fs::metadata(&fixture.root).unwrap();
         let restore = RestoreRootPermissions {
@@ -3063,13 +3102,20 @@ mod root_scope_tests {
         let data = fixture.returned(&fixture.root, &verification_input());
         assert!(data["read_path"].is_null());
         assert_eq!(data["read_path_unavailable"]["stage"], "before_publication");
-        assert_eq!(data["read_path_unavailable"]["kind"], format!("{:?}", oracle.kind()));
-        assert_eq!(data["read_path_unavailable"]["raw_os_error"], json!(oracle.raw_os_error()));
+        assert_eq!(
+            data["read_path_unavailable"]["kind"],
+            format!("{:?}", oracle.kind())
+        );
+        assert_eq!(
+            data["read_path_unavailable"]["raw_os_error"],
+            json!(oracle.raw_os_error())
+        );
         assert_eq!(data["read_path_unavailable"]["message"], oracle.to_string());
         drop(restore);
         let stored: Value = serde_json::from_slice(
-            &fs::read(fixture.root.join(data["source"].as_str().unwrap())).unwrap()
-        ).unwrap();
+            &fs::read(fixture.root.join(data["source"].as_str().unwrap())).unwrap(),
+        )
+        .unwrap();
         assert_eq!(stored, data["handoff"]);
         fixture.finish();
     }
@@ -3078,7 +3124,9 @@ mod root_scope_tests {
     fn actual_non_utf8_root_has_no_fabricated_native_location() {
         use std::os::unix::ffi::OsStringExt;
         let fixture = NativeReadFixture::new();
-        let root = fixture.base.join(std::ffi::OsString::from_vec(b"root-\xff".to_vec()));
+        let root = fixture
+            .base
+            .join(std::ffi::OsString::from_vec(b"root-\xff".to_vec()));
         // APFS/macOS refuses the invalid filename before any owner publication.
         // This is a physical prerequisite oracle, not a successful read route.
         #[cfg(target_os = "macos")]
@@ -3092,9 +3140,8 @@ mod root_scope_tests {
                 names
             };
             let before = entry_names(&fixture.base);
-            let root_identity = HandoffReadPath::identity(
-                &fs::symlink_metadata(&fixture.root).unwrap(),
-            );
+            let root_identity =
+                HandoffReadPath::identity(&fs::symlink_metadata(&fixture.root).unwrap());
             let error = fs::create_dir_all(root.join("Control"))
                 .expect_err("native macOS invalid filename must refuse before publication");
             assert_eq!(error.raw_os_error(), Some(libc::EILSEQ));
@@ -3120,11 +3167,11 @@ mod root_scope_tests {
             assert_eq!(data["read_path_unavailable"]["stage"], "before_publication");
             assert!(data["read_path_unavailable"]["raw_os_error"].is_null());
             let stored: Value = serde_json::from_slice(
-                &fs::read(root.join(data["source"].as_str().unwrap())).unwrap()
-            ).unwrap();
+                &fs::read(root.join(data["source"].as_str().unwrap())).unwrap(),
+            )
+            .unwrap();
             assert_eq!(stored, data["handoff"]);
             fixture.finish();
         }
     }
 }
-

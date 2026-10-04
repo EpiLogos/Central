@@ -127,7 +127,10 @@ pub fn read_project_manifest(project_root: &Path) -> io::Result<ProjectCentralMa
     parse_project_manifest(&bytes, &path)
 }
 
-pub(crate) fn parse_project_manifest(bytes: &[u8], path: &Path) -> io::Result<ProjectCentralManifest> {
+pub(crate) fn parse_project_manifest(
+    bytes: &[u8],
+    path: &Path,
+) -> io::Result<ProjectCentralManifest> {
     serde_json::from_slice(bytes).map_err(|error| {
         io::Error::new(
             io::ErrorKind::InvalidData,

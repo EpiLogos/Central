@@ -622,8 +622,7 @@ mod tests {
             use std::time::{SystemTime, UNIX_EPOCH};
 
             static NEXT: AtomicU64 = AtomicU64::new(0);
-            let parent =
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("../ProjectCentral/now/tmp");
+            let parent = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ProjectCentral/now/tmp");
             fs::create_dir_all(&parent).unwrap();
             let parent = parent.canonicalize().unwrap();
             let path = parent.join(format!(
@@ -693,14 +692,15 @@ mod tests {
 
             // Retain an actual failure's material for hosted evidence readback.
             if std::thread::panicking() {
-                eprintln!("native learning fixture retained at {}", self.path.display());
+                eprintln!(
+                    "native learning fixture retained at {}",
+                    self.path.display()
+                );
                 return;
             }
             // Never remove a substituted root or any neighbouring fixture.
             if fs::symlink_metadata(&self.path).is_ok_and(|metadata| {
-                metadata.is_dir()
-                    && metadata.dev() == self.device
-                    && metadata.ino() == self.inode
+                metadata.is_dir() && metadata.dev() == self.device && metadata.ino() == self.inode
             }) {
                 fs::remove_dir_all(&self.path).unwrap();
             }
@@ -784,7 +784,10 @@ mod tests {
                 assert_eq!(row["recorded_at_unix_seconds"], 301);
                 assert_eq!(row["source_fixtures"], json!([raw["file"]]));
                 assert_eq!(row["revision"], learning["revision"]);
-                assert_eq!(row["content"], "Signal from the actual attributed raw fixture.");
+                assert_eq!(
+                    row["content"],
+                    "Signal from the actual attributed raw fixture."
+                );
                 expected.push(json!({"now_ref": allocation["now_ref"], "fixture": row}));
                 for receipt in [allocation, &raw, &learning] {
                     let relative = if receipt.get("source").is_some() {
@@ -821,13 +824,9 @@ mod tests {
             for row in &expected {
                 assert!(rows.contains(row), "missing actual scoped learning: {row}");
             }
-            let metadata = super::super::execute_at(
-                root,
-                "learnings_read",
-                &json!({"project": project}),
-                304,
-            )
-            .unwrap();
+            let metadata =
+                super::super::execute_at(root, "learnings_read", &json!({"project": project}), 304)
+                    .unwrap();
             assert_eq!(metadata["total"], 2);
             for row in metadata["learnings"].as_array().unwrap() {
                 assert!(row["fixture"].get("content").is_none());
@@ -859,14 +858,16 @@ mod tests {
             let bytes = source::encoded(&changed).unwrap().into_bytes();
             fs::write(&path, &bytes).unwrap();
             for input in [json!({}), json!({"now_ref": null})] {
-                let failure = super::super::execute_at(root, "learnings_read", &input, 302)
-                    .unwrap_err();
+                let failure =
+                    super::super::execute_at(root, "learnings_read", &input, 302).unwrap_err();
                 assert_eq!(
                     failure.kind(),
                     io::ErrorKind::InvalidInput,
                     "{field}: {failure}"
                 );
-                assert!(failure.to_string().contains("NOW source identity/schema mismatch"));
+                assert!(failure
+                    .to_string()
+                    .contains("NOW source identity/schema mismatch"));
                 assert_eq!(fs::read(&path).unwrap(), bytes);
             }
             fs::write(&path, &original).unwrap();

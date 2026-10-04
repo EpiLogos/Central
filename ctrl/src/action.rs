@@ -432,7 +432,9 @@ fn control_open_action(
                 Some("control.open"),
                 status,
                 error.to_string(),
-                Some(json!({"io_error": {"kind": format!("{:?}", error.kind()), "raw_os_error": error.raw_os_error(), "message": error.to_string()}, "effects": "none"})),
+                Some(
+                    json!({"io_error": {"kind": format!("{:?}", error.kind()), "raw_os_error": error.raw_os_error(), "message": error.to_string()}, "effects": "none"}),
+                ),
             );
         }
     };
@@ -479,19 +481,25 @@ fn control_search_action(
             Some("control.search"),
             ResultStatus::InvalidCentralStructure,
             error.to_string(),
-            Some(json!({"io_error": {"kind": format!("{:?}", error.kind()), "raw_os_error": error.raw_os_error(), "message": error.to_string()}, "effects": "none"})),
+            Some(
+                json!({"io_error": {"kind": format!("{:?}", error.kind()), "raw_os_error": error.raw_os_error(), "message": error.to_string()}, "effects": "none"}),
+            ),
         ),
         Err(error) if error.kind() == io::ErrorKind::InvalidInput => ActionResult::failure(
             Some("control.search"),
             ResultStatus::InvalidInput,
             error.to_string(),
-            Some(json!({"io_error": {"kind": format!("{:?}", error.kind()), "raw_os_error": error.raw_os_error(), "message": error.to_string()}, "effects": "none"})),
+            Some(
+                json!({"io_error": {"kind": format!("{:?}", error.kind()), "raw_os_error": error.raw_os_error(), "message": error.to_string()}, "effects": "none"}),
+            ),
         ),
         Err(error) => ActionResult::failure(
             Some("control.search"),
             ResultStatus::InternalFailure,
             error.to_string(),
-            Some(json!({"io_error": {"kind": format!("{:?}", error.kind()), "raw_os_error": error.raw_os_error(), "message": error.to_string()}, "effects": "none"})),
+            Some(
+                json!({"io_error": {"kind": format!("{:?}", error.kind()), "raw_os_error": error.raw_os_error(), "message": error.to_string()}, "effects": "none"}),
+            ),
         ),
     }
 }
@@ -521,13 +529,17 @@ fn control_index_action(
             Some("control.index"),
             ResultStatus::InvalidCentralStructure,
             error.to_string(),
-            Some(json!({"io_error": {"kind": format!("{:?}", error.kind()), "raw_os_error": error.raw_os_error(), "message": error.to_string()}, "effects": "none"})),
+            Some(
+                json!({"io_error": {"kind": format!("{:?}", error.kind()), "raw_os_error": error.raw_os_error(), "message": error.to_string()}, "effects": "none"}),
+            ),
         ),
         Err(error) => ActionResult::failure(
             Some("control.index"),
             ResultStatus::InternalFailure,
             error.to_string(),
-            Some(json!({"io_error": {"kind": format!("{:?}", error.kind()), "raw_os_error": error.raw_os_error(), "message": error.to_string()}, "effects": "none"})),
+            Some(
+                json!({"io_error": {"kind": format!("{:?}", error.kind()), "raw_os_error": error.raw_os_error(), "message": error.to_string()}, "effects": "none"}),
+            ),
         ),
     }
 }

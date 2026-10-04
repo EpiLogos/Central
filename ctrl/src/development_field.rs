@@ -316,7 +316,12 @@ fn write_relations(root: &Path, path: &Path, value: &DevelopmentSourceRelations)
     }
     let mut bytes = serde_json::to_vec_pretty(value).map_err(io::Error::other)?;
     bytes.push(b'\n');
-    crate::file_mutation::atomic_record(root, path.strip_prefix(root).map_err(io::Error::other)?, &bytes, crate::file_mutation::RecordDisposition::ReplaceOrCreate)
+    crate::file_mutation::atomic_record(
+        root,
+        path.strip_prefix(root).map_err(io::Error::other)?,
+        &bytes,
+        crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+    )
 }
 
 fn safe_member(raw: &str) -> io::Result<PathBuf> {
@@ -875,7 +880,12 @@ fn write_root_ground_relation(
     }
     let mut bytes = serde_json::to_vec_pretty(&value).map_err(io::Error::other)?;
     bytes.push(b'\n');
-    crate::file_mutation::atomic_record(central_root, Path::new(CONTROL_GROUND_RELATIONS_SOURCE), &bytes, crate::file_mutation::RecordDisposition::ReplaceOrCreate)?;
+    crate::file_mutation::atomic_record(
+        central_root,
+        Path::new(CONTROL_GROUND_RELATIONS_SOURCE),
+        &bytes,
+        crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+    )?;
     Ok(source_reference)
 }
 
@@ -912,7 +922,12 @@ fn create_text_source(
         world_root,
         relative.parent().unwrap_or(Path::new(self_prefix)),
     )?;
-    crate::file_mutation::atomic_record(world_root, &relative, content.as_bytes(), crate::file_mutation::RecordDisposition::CreateNew)?;
+    crate::file_mutation::atomic_record(
+        world_root,
+        &relative,
+        content.as_bytes(),
+        crate::file_mutation::RecordDisposition::CreateNew,
+    )?;
     Ok(relative.to_string_lossy().replace('\\', "/"))
 }
 
@@ -1209,26 +1224,49 @@ fn project_ensure_action(
 
 // The existing native Source mutation owner supplies one root/project lock
 // order. No publication lock or reentrant source write is introduced here.
-fn lock_development_action(world_root: &Path, project: bool, input: &Value, context: &ActionExecutionContext<'_>)
-    -> io::Result<crate::continuous_work::source::MutationLocks>
-{
+fn lock_development_action(
+    world_root: &Path,
+    project: bool,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> io::Result<crate::continuous_work::source::MutationLocks> {
     use std::os::unix::fs::MetadataExt;
     let central = if project {
-        resolve_central_root(context.root_options).map_err(io::Error::other)?.path
-    } else { world_root.to_path_buf() };
+        resolve_central_root(context.root_options)
+            .map_err(io::Error::other)?
+            .path
+    } else {
+        world_root.to_path_buf()
+    };
     let project_member = if project {
-        Some(input.get("project").and_then(Value::as_str).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "project requires native Work member"))?)
-    } else { None };
+        Some(
+            input
+                .get("project")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "project requires native Work member",
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
     let scope = crate::continuous_work::source::Scope::resolve(&central, project_member)?;
     let admitted = fs::metadata(&scope.root)?;
     let expected = fs::metadata(world_root)?;
     if (admitted.dev(), admitted.ino()) != (expected.dev(), expected.ino()) {
-        return Err(io::Error::other("Development Source scope changed before owner serialization"));
+        return Err(io::Error::other(
+            "Development Source scope changed before owner serialization",
+        ));
     }
     let locks = crate::continuous_work::source::lock(&scope)?;
     let current = fs::metadata(world_root)?;
     if (admitted.dev(), admitted.ino()) != (current.dev(), current.ino()) {
-        return Err(io::Error::other("Development Source scope changed during owner serialization"));
+        return Err(io::Error::other(
+            "Development Source scope changed during owner serialization",
+        ));
     }
     Ok(locks)
 }
@@ -1286,41 +1324,50 @@ fn root_source_create_action(
         let _mutation = lock_development_action(&root, false, input, context)?;
         let relative = create_text_source(&root, ROOT_SELF_DIR, &member, content)?;
         let completion = (|| {
-        let mut roles = vec![
-            "self-description-source".to_owned(),
-            "root-self-source-aperture".to_owned(),
-        ];
-        if let Some(tier) = tier {
-            roles.push(format!("document-tier-{tier}"));
-        }
-        let source_reference = write_root_ground_relation(
-            &root,
-            &relative,
-            &provenance,
-            &standing,
-            roles,
-            "control-self",
-        )?;
-        if let Some(tier) = tier {
-            mutate_relations(
-                &root, &root.join(ROOT_DEVELOPMENT_RELATIONS),
-                CONTROL_WORLD_REF,
-                |relations| {
-                    bind_tier(
-                        relations,
-                        tier,
-                        &source_reference,
-                        optional(input, "canonical_label"),
-                        optional(input, "canonical_path"),
-                    )
-                },
+            let mut roles = vec![
+                "self-description-source".to_owned(),
+                "root-self-source-aperture".to_owned(),
+            ];
+            if let Some(tier) = tier {
+                roles.push(format!("document-tier-{tier}"));
+            }
+            let source_reference = write_root_ground_relation(
+                &root,
+                &relative,
+                &provenance,
+                &standing,
+                roles,
+                "control-self",
             )?;
-        }
-        inspect_root_development_field(&root)
+            if let Some(tier) = tier {
+                mutate_relations(
+                    &root,
+                    &root.join(ROOT_DEVELOPMENT_RELATIONS),
+                    CONTROL_WORLD_REF,
+                    |relations| {
+                        bind_tier(
+                            relations,
+                            tier,
+                            &source_reference,
+                            optional(input, "canonical_label"),
+                            optional(input, "canonical_path"),
+                        )
+                    },
+                )?;
+            }
+            inspect_root_development_field(&root)
         })();
-        completion.map_err(|error| crate::file_mutation::record_owner_error(error,
-            "development.self_material_created", None, Some(&crate::source_safety::content_revision_bytes(content.as_bytes())),
-            "material_published_source_binding_or_final_read_unconfirmed"))
+        completion.map_err(|error| {
+            crate::file_mutation::record_owner_error(
+                error,
+                "development.self_material_created",
+                None,
+                Some(&crate::source_safety::content_revision_bytes(
+                    content.as_bytes(),
+                )),
+                "material_published_source_binding_or_final_read_unconfirmed",
+            )
+        })
     })();
     result
         .map(|reading| {
@@ -1388,42 +1435,51 @@ fn project_source_create_action(
         let _mutation = lock_development_action(&root, true, input, context)?;
         let relative = create_text_source(&root, PROJECT_SELF_DIR, &member, content)?;
         let completion = (|| {
-        let mut roles = vec![
-            "self-description-source".to_owned(),
-            "project-self-source-aperture".to_owned(),
-        ];
-        if let Some(tier) = tier {
-            roles.push(format!("document-tier-{tier}"));
-        }
-        let applied = apply_accepted_ground_relation(
-            &root,
-            &relative,
-            provenance,
-            standing,
-            SourceTreatment::OrdinaryProjectSource,
-            roles,
-        )?;
-        let manifest = read_project_manifest(&root)?;
-        if let Some(tier) = tier {
-            mutate_relations(
-                &root, &root.join(PROJECT_DEVELOPMENT_RELATIONS),
-                &format!("project:{}", manifest.project_id),
-                |relations| {
-                    bind_tier(
-                        relations,
-                        tier,
-                        &applied.relation.source_ref,
-                        optional(input, "canonical_label"),
-                        optional(input, "canonical_path"),
-                    )
-                },
+            let mut roles = vec![
+                "self-description-source".to_owned(),
+                "project-self-source-aperture".to_owned(),
+            ];
+            if let Some(tier) = tier {
+                roles.push(format!("document-tier-{tier}"));
+            }
+            let applied = apply_accepted_ground_relation(
+                &root,
+                &relative,
+                provenance,
+                standing,
+                SourceTreatment::OrdinaryProjectSource,
+                roles,
             )?;
-        }
-        inspect_project_development_field(&root)
+            let manifest = read_project_manifest(&root)?;
+            if let Some(tier) = tier {
+                mutate_relations(
+                    &root,
+                    &root.join(PROJECT_DEVELOPMENT_RELATIONS),
+                    &format!("project:{}", manifest.project_id),
+                    |relations| {
+                        bind_tier(
+                            relations,
+                            tier,
+                            &applied.relation.source_ref,
+                            optional(input, "canonical_label"),
+                            optional(input, "canonical_path"),
+                        )
+                    },
+                )?;
+            }
+            inspect_project_development_field(&root)
         })();
-        completion.map_err(|error| crate::file_mutation::record_owner_error(error,
-            "development.self_material_created", None, Some(&crate::source_safety::content_revision_bytes(content.as_bytes())),
-            "material_published_source_binding_or_final_read_unconfirmed"))
+        completion.map_err(|error| {
+            crate::file_mutation::record_owner_error(
+                error,
+                "development.self_material_created",
+                None,
+                Some(&crate::source_safety::content_revision_bytes(
+                    content.as_bytes(),
+                )),
+                "material_published_source_binding_or_final_read_unconfirmed",
+            )
+        })
     })();
     result
         .map(|reading| {
@@ -1474,22 +1530,38 @@ fn tier_relate(
         ensure_source(&bindings, source_reference)?;
         let scope_ref = format!("project:{}", manifest.project_id);
         mutate_relations(
-            world_root, &world_root.join(PROJECT_DEVELOPMENT_RELATIONS),
+            world_root,
+            &world_root.join(PROJECT_DEVELOPMENT_RELATIONS),
             &scope_ref,
             |relations| bind_tier(relations, tier, source_reference, label, path),
         )?;
-        inspect_project_development_field(world_root).map_err(|error| crate::file_mutation::record_owner_error(error,
-            "development.tier_relation_final_read", Some(source_reference), None, "relation_acknowledged_source_bytes_unchanged"))
+        inspect_project_development_field(world_root).map_err(|error| {
+            crate::file_mutation::record_owner_error(
+                error,
+                "development.tier_relation_final_read",
+                Some(source_reference),
+                None,
+                "relation_acknowledged_source_bytes_unchanged",
+            )
+        })
     } else {
         let bindings = control_source_bindings(world_root)?;
         ensure_source(&bindings, source_reference)?;
         mutate_relations(
-            world_root, &world_root.join(ROOT_DEVELOPMENT_RELATIONS),
+            world_root,
+            &world_root.join(ROOT_DEVELOPMENT_RELATIONS),
             CONTROL_WORLD_REF,
             |relations| bind_tier(relations, tier, source_reference, label, path),
         )?;
-        inspect_root_development_field(world_root).map_err(|error| crate::file_mutation::record_owner_error(error,
-            "development.tier_relation_final_read", Some(source_reference), None, "relation_acknowledged_source_bytes_unchanged"))
+        inspect_root_development_field(world_root).map_err(|error| {
+            crate::file_mutation::record_owner_error(
+                error,
+                "development.tier_relation_final_read",
+                Some(source_reference),
+                None,
+                "relation_acknowledged_source_bytes_unchanged",
+            )
+        })
     }
 }
 
@@ -1511,7 +1583,8 @@ fn root_tier_action(
             None,
         );
     }
-    lock_development_action(&root, false, input, context).and_then(|_mutation| tier_relate(&root, false, input, ACTION))
+    lock_development_action(&root, false, input, context)
+        .and_then(|_mutation| tier_relate(&root, false, input, ACTION))
         .map(|reading| ActionResult::success(ACTION, serde_json::to_value(reading).unwrap()))
         .unwrap_or_else(|error| io_failure(ACTION, error))
 }
@@ -1534,7 +1607,8 @@ fn project_tier_action(
             None,
         );
     }
-    lock_development_action(&root, true, input, context).and_then(|_mutation| tier_relate(&root, true, input, ACTION))
+    lock_development_action(&root, true, input, context)
+        .and_then(|_mutation| tier_relate(&root, true, input, ACTION))
         .map(|reading| ActionResult::success(ACTION, serde_json::to_value(reading).unwrap()))
         .unwrap_or_else(|error| io_failure(ACTION, error))
 }
@@ -1591,26 +1665,33 @@ fn project_retain_tier_action(
             ],
         )?;
         let completion = (|| {
-        let manifest = read_project_manifest(&root)?;
-        let scope_ref = format!("project:{}", manifest.project_id);
-        mutate_relations(
-            &root, &root.join(PROJECT_DEVELOPMENT_RELATIONS),
-            &scope_ref,
-            |relations| {
-                bind_tier(
-                    relations,
-                    tier,
-                    &applied.relation.source_ref,
-                    optional(input, "canonical_label"),
-                    optional(input, "canonical_path"),
-                )
-            },
-        )?;
-        inspect_project_development_field(&root)
+            let manifest = read_project_manifest(&root)?;
+            let scope_ref = format!("project:{}", manifest.project_id);
+            mutate_relations(
+                &root,
+                &root.join(PROJECT_DEVELOPMENT_RELATIONS),
+                &scope_ref,
+                |relations| {
+                    bind_tier(
+                        relations,
+                        tier,
+                        &applied.relation.source_ref,
+                        optional(input, "canonical_label"),
+                        optional(input, "canonical_path"),
+                    )
+                },
+            )?;
+            inspect_project_development_field(&root)
         })();
-        completion.map_err(|error| crate::file_mutation::record_owner_error(error,
-            "development.retained_relation_completion", Some(&applied.relation.source_ref), None,
-            "accepted_ground_relation_acknowledged_source_bytes_unchanged"))
+        completion.map_err(|error| {
+            crate::file_mutation::record_owner_error(
+                error,
+                "development.retained_relation_completion",
+                Some(&applied.relation.source_ref),
+                None,
+                "accepted_ground_relation_acknowledged_source_bytes_unchanged",
+            )
+        })
     })();
     result
         .map(|reading| ActionResult::success(ACTION, serde_json::to_value(reading).unwrap()))
@@ -1701,9 +1782,15 @@ fn experience_relate(
     } else {
         inspect_root_development_field(world_root)
     };
-    reading.map_err(|error| crate::file_mutation::record_owner_error(error,
-        "development.experience_relation_final_read", Some(source_reference), None,
-        "relation_acknowledged_source_bytes_unchanged"))
+    reading.map_err(|error| {
+        crate::file_mutation::record_owner_error(
+            error,
+            "development.experience_relation_final_read",
+            Some(source_reference),
+            None,
+            "relation_acknowledged_source_bytes_unchanged",
+        )
+    })
 }
 
 fn root_ux_action(
@@ -1724,7 +1811,8 @@ fn root_ux_action(
             None,
         );
     }
-    lock_development_action(&root, false, input, context).and_then(|_mutation| experience_relate(&root, false, input, false))
+    lock_development_action(&root, false, input, context)
+        .and_then(|_mutation| experience_relate(&root, false, input, false))
         .map(|reading| ActionResult::success(ACTION, serde_json::to_value(reading).unwrap()))
         .unwrap_or_else(|error| io_failure(ACTION, error))
 }
@@ -1747,7 +1835,8 @@ fn project_ux_action(
             None,
         );
     }
-    lock_development_action(&root, true, input, context).and_then(|_mutation| experience_relate(&root, true, input, false))
+    lock_development_action(&root, true, input, context)
+        .and_then(|_mutation| experience_relate(&root, true, input, false))
         .map(|reading| ActionResult::success(ACTION, serde_json::to_value(reading).unwrap()))
         .unwrap_or_else(|error| io_failure(ACTION, error))
 }
@@ -1780,7 +1869,8 @@ fn root_ex_action(
         Ok(root) => root,
         Err(result) => return result,
     };
-    lock_development_action(&root, false, input, context).and_then(|_mutation| experience_relate(&root, false, input, true))
+    lock_development_action(&root, false, input, context)
+        .and_then(|_mutation| experience_relate(&root, false, input, true))
         .map(|reading| ActionResult::success(ACTION, serde_json::to_value(reading).unwrap()))
         .unwrap_or_else(|error| io_failure(ACTION, error))
 }
@@ -1798,7 +1888,8 @@ fn project_ex_action(
         Ok(root) => root,
         Err(result) => return result,
     };
-    lock_development_action(&root, true, input, context).and_then(|_mutation| experience_relate(&root, true, input, true))
+    lock_development_action(&root, true, input, context)
+        .and_then(|_mutation| experience_relate(&root, true, input, true))
         .map(|reading| ActionResult::success(ACTION, serde_json::to_value(reading).unwrap()))
         .unwrap_or_else(|error| io_failure(ACTION, error))
 }
@@ -2073,7 +2164,8 @@ mod tests {
         let manifest = read_project_manifest(&project).unwrap();
         let scope_ref = format!("project:{}", manifest.project_id);
         mutate_relations(
-            &project, &project.join(PROJECT_DEVELOPMENT_RELATIONS),
+            &project,
+            &project.join(PROJECT_DEVELOPMENT_RELATIONS),
             &scope_ref,
             |relations| bind_tier(relations, 1, &applied.relation.source_ref, None, None),
         )
@@ -2139,7 +2231,8 @@ mod tests {
         let manifest = read_project_manifest(&project).unwrap();
         let scope_ref = format!("project:{}", manifest.project_id);
         mutate_relations(
-            &project, &project.join(PROJECT_DEVELOPMENT_RELATIONS),
+            &project,
+            &project.join(PROJECT_DEVELOPMENT_RELATIONS),
             &scope_ref,
             |relations| {
                 relate_ux(relations, "ux:example:main", &ux_source.relation.source_ref)?;

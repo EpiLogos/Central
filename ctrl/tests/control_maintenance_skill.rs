@@ -15,7 +15,8 @@ fn temporary_directory(label: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let scratch = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../ProjectCentral/now/tmp");
+    let scratch =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../ProjectCentral/now/tmp");
     fs::create_dir_all(&scratch).unwrap();
     let path = scratch.join(format!(
         "central-control-maintenance-skill-{label}-{}-{nonce}",
@@ -141,7 +142,11 @@ fn fixture_source_is_ordinary_filesystem_control_and_audit_read_does_not_mutate_
     let case = fixture(&fixtures, "clean-control-tree");
     let outer = temporary_directory("filesystem");
     struct Owned(PathBuf);
-    impl Drop for Owned { fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); } }
+    impl Drop for Owned {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
     let _owned = Owned(outer.clone());
     let root = outer.join("Central");
     initialize_central(&root).unwrap();
@@ -186,7 +191,10 @@ fn fixture_source_is_ordinary_filesystem_control_and_audit_read_does_not_mutate_
     );
     assert_eq!(data["matches"][0]["source_class"], "unresolved");
     assert!(data["matches"][0]["source_binding"].is_null());
-    assert!(data["matches"][0]["source_revision"]["revision"].as_str().unwrap().starts_with("central.content-fnv1a64/v1:"));
+    assert!(data["matches"][0]["source_revision"]["revision"]
+        .as_str()
+        .unwrap()
+        .starts_with("central.content-fnv1a64/v1:"));
 
     let after = fs::read_to_string(&source_path).unwrap();
     assert_eq!(
@@ -194,14 +202,17 @@ fn fixture_source_is_ordinary_filesystem_control_and_audit_read_does_not_mutate_
         "audit/read procedure must not mutate authored Control"
     );
     assert_eq!(fs::read_dir(root.join(".central")).unwrap().count(), 0);
-
 }
 
 #[test]
 fn declared_human_legacy_file_is_owner_recognised_and_retained_in_place() {
     let outer = temporary_directory("declared-human");
     struct Owned(PathBuf);
-    impl Drop for Owned { fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); } }
+    impl Drop for Owned {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
     let _owned = Owned(outer.clone());
     let root = outer.join("Central");
     initialize_central(&root).unwrap();
@@ -215,29 +226,53 @@ fn declared_human_legacy_file_is_owner_recognised_and_retained_in_place() {
         "relations":[{"ref":"central:source:control:root:legacy-human","path":path,
             "provenance":"human-authored","standing":"durable-source",
             "roles":["agent-governance-source"],"treatment":"retain-native-in-place"}]
-    })).unwrap();
+    }))
+    .unwrap();
     fs::write(&relation_file, &relations).unwrap();
-    fs::write(root.join("Control/agents/wiki/unselected.txt"), b"declared-human-needle").unwrap();
+    fs::write(
+        root.join("Control/agents/wiki/unselected.txt"),
+        b"declared-human-needle",
+    )
+    .unwrap();
     let before = fs::read(&source).unwrap();
     let mut registry = create_core_action_registry();
     central_ctrl::projectcentral_ops::register_projectcentral_actions(&mut registry);
     let connectors = ConnectorRegistry::default();
-    let connector_context = ConnectorContext { platform:"fixture-os".to_owned() };
-    let root_options = RootOptions { explicit_root:Some(root.clone()), ..RootOptions::default() };
-    let context = ActionExecutionContext { root_options:&root_options, connectors:&connectors, connector_context:&connector_context };
-    let owner = registry.execute("projectcentral.source.read",
-        &json!({"source_ref":"central:source:control:root:legacy-human"}), &context);
+    let connector_context = ConnectorContext {
+        platform: "fixture-os".to_owned(),
+    };
+    let root_options = RootOptions {
+        explicit_root: Some(root.clone()),
+        ..RootOptions::default()
+    };
+    let context = ActionExecutionContext {
+        root_options: &root_options,
+        connectors: &connectors,
+        connector_context: &connector_context,
+    };
+    let owner = registry.execute(
+        "projectcentral.source.read",
+        &json!({"source_ref":"central:source:control:root:legacy-human"}),
+        &context,
+    );
     assert_eq!(owner.status, ResultStatus::Success, "{owner:?}");
     let owner = owner.data.unwrap();
     assert_eq!(owner["source"]["provenance"], "human-authored");
-    let search = registry.execute("control.search", &json!({"query":"declared-human-needle"}), &context);
+    let search = registry.execute(
+        "control.search",
+        &json!({"query":"declared-human-needle"}),
+        &context,
+    );
     assert_eq!(search.status, ResultStatus::Success, "{search:?}");
     let data = search.data.unwrap();
     assert_eq!(data["matches"].as_array().unwrap().len(), 1);
     assert_eq!(data["matches"][0]["source_path"], path);
     assert_eq!(data["matches"][0]["source_class"], "authored");
     assert_eq!(data["matches"][0]["source_binding"], owner["source"]);
-    assert_eq!(data["matches"][0]["source_revision"]["revision"], owner["revision"]["revision"]);
+    assert_eq!(
+        data["matches"][0]["source_revision"]["revision"],
+        owner["revision"]["revision"]
+    );
     assert_eq!(fs::read(&source).unwrap(), before);
     assert_eq!(fs::read(&relation_file).unwrap(), relations);
 }

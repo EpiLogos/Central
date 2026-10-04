@@ -319,7 +319,12 @@ fn write_proposal(root: &Path, path: &Path, proposal: &ControlProposal) -> Resul
         fs::create_dir_all(parent)?;
     }
     let bytes = serde_json::to_vec_pretty(proposal).map_err(io::Error::other)?;
-    crate::file_mutation::atomic_record(root, path.strip_prefix(root).map_err(io::Error::other)?, &bytes, crate::file_mutation::RecordDisposition::CreateNew)
+    crate::file_mutation::atomic_record(
+        root,
+        path.strip_prefix(root).map_err(io::Error::other)?,
+        &bytes,
+        crate::file_mutation::RecordDisposition::CreateNew,
+    )
 }
 
 fn read_proposal(path: &Path) -> Result<ControlProposal, io::Error> {
@@ -425,8 +430,13 @@ fn control_propose_action(
             "control.propose-change",
             json!({ "proposal": proposal, "proposal_path": path, "authored_source_mutated": false }),
         ),
-        Err(error) if crate::file_mutation::record_failure_result("control.propose-change", &error).is_some() =>
-            crate::file_mutation::record_failure_result("control.propose-change", &error).expect("matched native record failure"),
+        Err(error)
+            if crate::file_mutation::record_failure_result("control.propose-change", &error)
+                .is_some() =>
+        {
+            crate::file_mutation::record_failure_result("control.propose-change", &error)
+                .expect("matched native record failure")
+        }
         Err(error) => ActionResult::failure(
             Some("control.propose-change"),
             ResultStatus::InternalFailure,

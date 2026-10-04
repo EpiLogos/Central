@@ -15,7 +15,11 @@ fn main() {
         let execution = run_cli_with_surface(&args, &CliEnvironment::from_process(), &mut surface);
         println!("{}", execution.output);
         // Reaching normal return means the required kill never occurred.
-        std::process::exit(if execution.exit_code == 0 { 78 } else { execution.exit_code });
+        std::process::exit(if execution.exit_code == 0 {
+            78
+        } else {
+            execution.exit_code
+        });
     }
     #[cfg(not(unix))]
     {

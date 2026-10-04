@@ -595,7 +595,12 @@ fn save_intent(scope: &Scope, intent: &Intent) -> io::Result<()> {
             "document recovery intent exceeds current native source size limit",
         ));
     }
-    crate::file_mutation::atomic_record(&scope.root, Path::new(&intent_path(&intent.request_key)), &bytes, crate::file_mutation::RecordDisposition::ReplaceOrCreate)
+    crate::file_mutation::atomic_record(
+        &scope.root,
+        Path::new(&intent_path(&intent.request_key)),
+        &bytes,
+        crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+    )
 }
 fn finish(scope: &Scope, intent: &mut Intent) -> io::Result<Value> {
     let current = scope.read(&intent.source_ref)?;
@@ -630,24 +635,48 @@ fn finish(scope: &Scope, intent: &mut Intent) -> io::Result<Value> {
                 &intent.previous_revision,
                 &intent.content,
             )?;
-            scope.reconcile(
-                Some((&intent.actor.principal_ref, &intent.actor.actor_kind, None)),
-                std::slice::from_ref(&current.source.source_ref),
-            ).map_err(|error| crate::file_mutation::record_owner_error(error,
-                "document.after_source_write", Some(&intent.source_ref), Some(&intent.next_revision), "acknowledged"))?;
+            scope
+                .reconcile(
+                    Some((&intent.actor.principal_ref, &intent.actor.actor_kind, None)),
+                    std::slice::from_ref(&current.source.source_ref),
+                )
+                .map_err(|error| {
+                    crate::file_mutation::record_owner_error(
+                        error,
+                        "document.after_source_write",
+                        Some(&intent.source_ref),
+                        Some(&intent.next_revision),
+                        "acknowledged",
+                    )
+                })?;
         }
     } else if current.revision.revision != intent.next_revision {
         if committed_in(&parse(&current)?, &intent.request_key, &intent.digest) {
             // Committed, then superseded by a later native revision: the
             // document's own operations log is the evidence; nothing is rewritten.
             intent.status = "committed".into();
-            save_intent(scope, intent).map_err(|error| crate::file_mutation::record_owner_error(error,
-                "document.superseded_committed_intent", Some(&intent.source_ref), Some(&intent.next_revision), "observed_in_current_document"))?;
+            save_intent(scope, intent).map_err(|error| {
+                crate::file_mutation::record_owner_error(
+                    error,
+                    "document.superseded_committed_intent",
+                    Some(&intent.source_ref),
+                    Some(&intent.next_revision),
+                    "observed_in_current_document",
+                )
+            })?;
             let mut response = read(
                 scope,
                 &json!({"source_ref":intent.source_ref,"document_id":intent.document_id}),
-            ).map_err(|error| crate::file_mutation::record_owner_error(error,
-                "document.superseded_committed_read", Some(&intent.source_ref), Some(&intent.next_revision), "observed_in_current_document"))?;
+            )
+            .map_err(|error| {
+                crate::file_mutation::record_owner_error(
+                    error,
+                    "document.superseded_committed_read",
+                    Some(&intent.source_ref),
+                    Some(&intent.next_revision),
+                    "observed_in_current_document",
+                )
+            })?;
             response["operation_receipt"] = json!({"request_key":intent.request_key,"status":intent.status,"actor":intent.actor,"reviewed_by":intent.reviewer_ref,"previous_revision":intent.previous_revision,"revision":intent.next_revision,"superseded_by_later_revision":true});
             return Ok(response);
         }
@@ -656,34 +685,41 @@ fn finish(scope: &Scope, intent: &mut Intent) -> io::Result<Value> {
         ));
     }
     let completion = (|| {
-    let committed = scope.read(&intent.source_ref)?;
-    if committed.revision.revision != intent.next_revision {
-        return Err(conflict(
-            "native document commit did not match its intended revision",
-        ));
-    }
-    retain_metadata(
-        scope,
-        &committed,
-        &document,
-        Some(
-            intent
-                .previous_metadata_revision
-                .as_deref()
-                .unwrap_or(&intent.previous_revision),
-        ),
-    )?;
-    intent.status = "committed".into();
-    save_intent(scope, intent)?;
-    let mut response = read(
-        scope,
-        &json!({"source_ref":intent.source_ref,"document_id":intent.document_id}),
-    )?;
-    response["operation_receipt"] = json!({"request_key":intent.request_key,"status":intent.status,"actor":intent.actor,"reviewed_by":intent.reviewer_ref,"previous_revision":intent.previous_revision,"revision":intent.next_revision});
-    Ok(response)
+        let committed = scope.read(&intent.source_ref)?;
+        if committed.revision.revision != intent.next_revision {
+            return Err(conflict(
+                "native document commit did not match its intended revision",
+            ));
+        }
+        retain_metadata(
+            scope,
+            &committed,
+            &document,
+            Some(
+                intent
+                    .previous_metadata_revision
+                    .as_deref()
+                    .unwrap_or(&intent.previous_revision),
+            ),
+        )?;
+        intent.status = "committed".into();
+        save_intent(scope, intent)?;
+        let mut response = read(
+            scope,
+            &json!({"source_ref":intent.source_ref,"document_id":intent.document_id}),
+        )?;
+        response["operation_receipt"] = json!({"request_key":intent.request_key,"status":intent.status,"actor":intent.actor,"reviewed_by":intent.reviewer_ref,"previous_revision":intent.previous_revision,"revision":intent.next_revision});
+        Ok(response)
     })();
-    completion.map_err(|error| crate::file_mutation::record_owner_error(error,
-        "document.commit_finalization", Some(&intent.source_ref), Some(&intent.next_revision), "published_or_observed_by_native_owner"))
+    completion.map_err(|error| {
+        crate::file_mutation::record_owner_error(
+            error,
+            "document.commit_finalization",
+            Some(&intent.source_ref),
+            Some(&intent.next_revision),
+            "published_or_observed_by_native_owner",
+        )
+    })
 }
 fn committed_in(document: &Value, request_key: &str, digest: &str) -> bool {
     document["operations"].as_array().is_some_and(|operations| {

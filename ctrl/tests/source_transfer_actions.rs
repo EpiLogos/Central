@@ -1737,10 +1737,17 @@ fn root_bundle_carries_no_paths_credentials_machine_identities_or_generated_stat
     assert_eq!(snapshot(&central_b), untouched);
 }
 
-
 #[test]
 fn actual_creation_aperture_keeps_root_and_recursive_masks_distinct_from_missing_descendants() {
-    for (index, ancestor) in ["", "Control", "Control/agents", "Control/agents/expressions"].iter().enumerate() {
+    for (index, ancestor) in [
+        "",
+        "Control",
+        "Control/agents",
+        "Control/agents/expressions",
+    ]
+    .iter()
+    .enumerate()
+    {
         let (_origin, central_a, paths) = agent_ground_origin(&format!("aperture-origin-{index}"));
         let (_receiver, central_b) = bootstrap_root(&format!("aperture-receiver-{index}"));
         let selected = paths[2].clone();
@@ -1755,30 +1762,50 @@ fn actual_creation_aperture_keeps_root_and_recursive_masks_distinct_from_missing
         let retained = central_b.join("Control/user/unselected.txt");
         fs::write(&retained, b"unselected owner source").unwrap();
         let before = fs::read(&retained).unwrap();
-        let refused = root_apply(&central_b, &bundle_file, "agent", json!({
-            "accept_unestablished_identity":true,"accept_unestablished_lineage":[reference]
-        }));
-        assert_eq!(refused.status, ResultStatus::UnavailableCapability, "{refused:?}");
+        let refused = root_apply(
+            &central_b,
+            &bundle_file,
+            "agent",
+            json!({
+                "accept_unestablished_identity":true,"accept_unestablished_lineage":[reference]
+            }),
+        );
+        assert_eq!(
+            refused.status,
+            ResultStatus::UnavailableCapability,
+            "{refused:?}"
+        );
         let error = refused.error.unwrap();
         let details = error.details.unwrap();
         assert_eq!(details["failure_stage"], "source_creation_aperture");
         assert_eq!(details["marker_present"], true);
         assert_eq!(details["failed_source_effect"], "none");
         assert!(details["io_error"].is_null());
-        assert!(!central_b.join("Control/agents/expressions/x-guardian").exists());
+        assert!(!central_b
+            .join("Control/agents/expressions/x-guardian")
+            .exists());
         assert_eq!(fs::read(&retained).unwrap(), before);
         assert_eq!(fs::read(&marker).unwrap(), b"");
         if *ancestor == "Control/agents/expressions" {
             let sibling = root_ref(&paths[0]);
             let exported = root_export(&central_a, std::slice::from_ref(&sibling), "agent", None);
             assert_eq!(exported.status, ResultStatus::Success, "{exported:?}");
-            let sibling_bundle = write_bundle_file(central_b.parent().unwrap(), &exported.data.unwrap());
-            let applied = root_apply(&central_b, &sibling_bundle, "agent", json!({
-                "accept_unestablished_identity":true,"accept_unestablished_lineage":[sibling]
-            }));
+            let sibling_bundle =
+                write_bundle_file(central_b.parent().unwrap(), &exported.data.unwrap());
+            let applied = root_apply(
+                &central_b,
+                &sibling_bundle,
+                "agent",
+                json!({
+                    "accept_unestablished_identity":true,"accept_unestablished_lineage":[sibling]
+                }),
+            );
             assert_eq!(applied.status, ResultStatus::Success, "{applied:?}");
             assert_eq!(applied.data.unwrap()["applied_count"], 1);
-            assert_eq!(fs::read(central_b.join(&paths[0])).unwrap(), fs::read(central_a.join(&paths[0])).unwrap());
+            assert_eq!(
+                fs::read(central_b.join(&paths[0])).unwrap(),
+                fs::read(central_a.join(&paths[0])).unwrap()
+            );
             // Restore the original selected native bundle; the native marker
             // remains in place during the independent sibling operation.
             let exported = root_export(&central_a, std::slice::from_ref(&reference), "agent", None);
@@ -1786,12 +1813,20 @@ fn actual_creation_aperture_keeps_root_and_recursive_masks_distinct_from_missing
             write_bundle_file(central_b.parent().unwrap(), &exported.data.unwrap());
         }
         fs::remove_file(marker).unwrap();
-        let reopened = root_apply(&central_b, &bundle_file, "agent", json!({
-            "accept_unestablished_identity":true,"accept_unestablished_lineage":[reference]
-        }));
+        let reopened = root_apply(
+            &central_b,
+            &bundle_file,
+            "agent",
+            json!({
+                "accept_unestablished_identity":true,"accept_unestablished_lineage":[reference]
+            }),
+        );
         assert_eq!(reopened.status, ResultStatus::Success, "{reopened:?}");
         assert_eq!(reopened.data.unwrap()["applied_count"], 1);
-        assert_eq!(fs::read(central_b.join(&selected)).unwrap(), fs::read(central_a.join(&selected)).unwrap());
+        assert_eq!(
+            fs::read(central_b.join(&selected)).unwrap(),
+            fs::read(central_a.join(&selected)).unwrap()
+        );
         assert_eq!(fs::read(&retained).unwrap(), before);
     }
 }
@@ -1809,18 +1844,33 @@ fn actual_creation_aperture_refuses_redirected_parent_and_retains_unselected_sou
     fs::create_dir(&target).unwrap();
     fs::write(target.join("retained.txt"), b"retained private fixture").unwrap();
     symlink(&target, central_b.join("Control/agents/expressions")).unwrap();
-    let refused = root_apply(&central_b, &bundle, "agent", json!({
-        "accept_unestablished_identity":true,"accept_unestablished_lineage":[reference]
-    }));
-    assert_eq!(refused.status, ResultStatus::UnavailableCapability, "{refused:?}");
+    let refused = root_apply(
+        &central_b,
+        &bundle,
+        "agent",
+        json!({
+            "accept_unestablished_identity":true,"accept_unestablished_lineage":[reference]
+        }),
+    );
+    assert_eq!(
+        refused.status,
+        ResultStatus::UnavailableCapability,
+        "{refused:?}"
+    );
     let details = refused.error.unwrap().details.unwrap();
     assert_eq!(details["failure_stage"], "source_creation_aperture");
     assert_eq!(details["marker_present"], false);
     assert_eq!(details["io_error"]["kind"], "PermissionDenied");
     assert!(details["io_error"]["raw_os_error"].is_null());
     assert!(!target.join("x-guardian").exists());
-    assert_eq!(fs::read(target.join("retained.txt")).unwrap(), b"retained private fixture");
-    assert_eq!(fs::read_link(central_b.join("Control/agents/expressions")).unwrap(), target);
+    assert_eq!(
+        fs::read(target.join("retained.txt")).unwrap(),
+        b"retained private fixture"
+    );
+    assert_eq!(
+        fs::read_link(central_b.join("Control/agents/expressions")).unwrap(),
+        target
+    );
 }
 
 #[test]

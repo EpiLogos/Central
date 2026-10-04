@@ -86,7 +86,12 @@ pub(crate) fn execute(all: &[Scope], input: &Value, write: bool) -> io::Result<V
         }
         rows.push(row.clone());
         safe_directory(&scope.root, Path::new(".central/bkmr"))?;
-        write_atomic(&scope.root, &path, &serde_json::to_vec_pretty(&state)?, crate::file_mutation::RecordDisposition::ReplaceOrCreate)?;
+        write_atomic(
+            &scope.root,
+            &path,
+            &serde_json::to_vec_pretty(&state)?,
+            crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+        )?;
         return Ok(row);
     }
     let mut result = Vec::new();
