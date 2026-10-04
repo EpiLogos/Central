@@ -46,7 +46,7 @@ Root operational Flow state lives at the Central root (`.central/flows.json`, `.
 Implementation standing:
 
 - `projectcentral.flow.*` Actions serve both registers. Absent `project` names the root.
-- `projectcentral.now.*` Actions currently require `project` and operate on a Work project. The root field is present under `Control/agents/now/` (stamped as a distributed default). Its lifecycle — inspect / init / return / update / promote / rollover — is executed by the session-strap mirroring procedure until a native root NOW Action exists.
+- `projectcentral.now.return` serves both registers: absent or null `project` writes an ordinary bounded root return; a present `project` keeps the Work Project contract. The other `projectcentral.now.*` Actions listed below still require `project`. An ordinary handoff ID is distinct from the allocated clearing `NOWRef` read by `central.now.read`.
 
 ## Why this exists
 
@@ -229,11 +229,45 @@ A Factory Artifact, Run, accepted canonical relation or another durable owner ca
 ```text
 projectcentral.now.inspect    read current temporal field; non-mutating; requires project
 projectcentral.now.init       opt a valid ProjectCentral into NOW/DAY; requires project
-projectcentral.now.return     write attributed bounded Agent return; requires project
+projectcentral.now.return     write attributed bounded Agent return; absent project selects root
 projectcentral.now.update     update status / add preserve refs; requires project
 projectcentral.now.promote    explicit return into human ground or Agent Wiki owner path; requires project
 projectcentral.now.rollover   snapshot DAY, then clean/carry NOW; requires project
 ```
+
+A successful `projectcentral.now.return` keeps its existing `source` and `handoff`
+fields and adds optional selected-read metadata:
+
+```text
+read_path.action = central.files.read
+read_path.input.location = Central-owned central.path-ref/v1
+```
+
+The owner constructs this location from the admitted canonical Central root and
+actual publication member captured before writing. A Project route retains its
+actual `Work/<member>/ProjectCentral/now/agents/<id>.json` member, independently
+of the manifest Project ID. The unchanged original root mapping and existing
+parent affiliations are checked again before returning the route. This is
+physical observation evidence, not another Source/World identity or read grant.
+
+When that optional mapping cannot be evidenced, the actual successful return
+remains successful: `read_path` is null and `read_path_unavailable` records the
+observed before/after-publication stage, IO kind, actual optional OS code and
+message. There is no freshly retargeted-root fallback or invented read ref.
+Retain the successful handoff instead of resubmitting it. Existing records are
+not rewritten; an older owner may omit these additive fields entirely.
+
+A consumer passes the route back to `central.files.read` and checks the actual
+selected record ID and supported handoff schema. That Action remains the native
+file reader with its current admission, content revision and 4 MiB UTF-8 bound;
+a route does not turn selected-file delivery into a full NOW inspection or
+allocate a clearing. Root `projectcentral.now.inspect` is not added here.
+
+The optional route checkpoints do not repair the inherited ordinary return
+writer or make the current file reader an atomic disclosure/freshness service.
+Raw writer publication and reader final revalidation/typed cause retention are
+separate native-owner obligations. These added definitions require real native
+qualification before any installed or whole-continuation claim.
 
 Human scratch requires no Action. Generic Agent/action callers can use the structured Actions; a future O:I Surface can project the same contract.
 

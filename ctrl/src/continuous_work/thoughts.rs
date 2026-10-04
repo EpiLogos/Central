@@ -405,8 +405,10 @@ pub(crate) fn learnings_read(scope: &Scope, input: &Value) -> io::Result<Value> 
             {
                 let source = scope.read(&binding.source_ref)?;
                 let record: NowRecord = serde_json::from_str(&source.content)?;
-                if record.schema != placement::NOW_SCHEMA
-                    || record.scope_ref != scope.world_ref
+                if !matches!(
+                    record.schema.as_str(),
+                    placement::NOW_SCHEMA | placement::NOW_SCHEMA_V2
+                ) || record.scope_ref != scope.world_ref
                     || record.source_ref != binding.source_ref
                 {
                     return Err(invalid("NOW source identity/schema mismatch"));
@@ -603,6 +605,275 @@ mod tests {
             200,
         )
         .unwrap()
+    }
+
+    // This controlled material stays in the product Run space. It is not a
+    // personal World, placement grant or a simulated native reply.
+    struct LearningWorld {
+        path: PathBuf,
+        device: u64,
+        inode: u64,
+    }
+
+    impl LearningWorld {
+        fn new() -> Self {
+            use std::os::unix::fs::MetadataExt;
+            use std::sync::atomic::{AtomicU64, Ordering};
+            use std::time::{SystemTime, UNIX_EPOCH};
+
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let parent =
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../ProjectCentral/now/tmp");
+            fs::create_dir_all(&parent).unwrap();
+            let parent = parent.canonicalize().unwrap();
+            let path = parent.join(format!(
+                "native-v2-learnings-{}-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos(),
+                NEXT.fetch_add(1, Ordering::Relaxed),
+            ));
+            fs::create_dir(&path).unwrap();
+            let metadata = fs::symlink_metadata(&path).unwrap();
+            let fixture = Self {
+                path,
+                device: metadata.dev(),
+                inode: metadata.ino(),
+            };
+            crate::initialize_central(&fixture.path).unwrap();
+            for name in ["one", "two"] {
+                let root = fixture.path.join("Work").join(name);
+                fs::create_dir_all(root.join("ProjectCentral/user")).unwrap();
+                fs::write(
+                    root.join("ProjectCentral/project.json"),
+                    serde_json::to_vec(&crate::projectcentral::ProjectCentralManifest::new(
+                        format!("test/{name}"),
+                    ))
+                    .unwrap(),
+                )
+                .unwrap();
+            }
+            let scope = Scope::resolve(&fixture.path, None).unwrap();
+            let path = "Control/user/placement-policy.json";
+            let policy = json!({
+                "schema": placement::POLICY_SCHEMA, "scope_ref": "control:root",
+                "authority_refs": [], "writable": [
+                    {"path": "Work/one", "class": "repository"},
+                    {"path": "Work/two", "class": "repository"}
+                ], "protected": [], "enforcement": "harness-interception",
+                "required_coverage": ["filesystem"], "lease_seconds": 300,
+                "expires_at_unix_seconds": 9999
+            });
+            fs::write(fixture.path.join(path), source::encoded(&policy).unwrap()).unwrap();
+            fs::create_dir_all(fixture.path.join("Control/relations")).unwrap();
+            fs::write(
+                fixture.path.join(&scope.relations_path),
+                source::encoded(&json!({
+                    "schema": scope.relations_schema, "project_id": scope.relations_id,
+                    "relations": [{
+                        "ref": scope.source_ref(path), "path": path,
+                        "roles": [placement::POLICY_ROLE], "provenance": "human-adopted",
+                        "standing": "architecture-contract", "treatment": "projectcentral-user",
+                        "recognition": "controlled-test-fixture-not-personal-adoption",
+                        "recorded_at_unix_seconds": 1
+                    }]
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            fixture
+        }
+    }
+
+    impl Drop for LearningWorld {
+        fn drop(&mut self) {
+            use std::os::unix::fs::MetadataExt;
+
+            // Retain an actual failure's material for hosted evidence readback.
+            if std::thread::panicking() {
+                eprintln!("native learning fixture retained at {}", self.path.display());
+                return;
+            }
+            // Never remove a substituted root or any neighbouring fixture.
+            if fs::symlink_metadata(&self.path).is_ok_and(|metadata| {
+                metadata.is_dir()
+                    && metadata.dev() == self.device
+                    && metadata.ino() == self.inode
+            }) {
+                fs::remove_dir_all(&self.path).unwrap();
+            }
+        }
+    }
+
+    fn native_lane_allocation(root: &Path, project: Option<&str>, task: &str) -> Value {
+        let policy = super::super::tests::policy(root, project);
+        super::super::execute_at(
+            root,
+            "allocate",
+            &json!({
+                "project": project, "task_ref": task, "purpose": "bounded native learning read",
+                "participant_refs": ["agent:test"], "source_refs": [],
+                "work_refs": [{"repo": "Work/one", "branch": "techne/learning-reader"}],
+                "expected_policy_revision": policy["revision"]
+            }),
+            100,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn native_v1_and_v2_learnings_are_readable_across_each_scope_without_rewriting_sources() {
+        let fixture = LearningWorld::new();
+        let root = &fixture.path;
+        for project in [None, Some("one"), Some("two")] {
+            let scope = Scope::resolve(root, project).unwrap();
+            let allocations = [
+                allocated(root, project, "task:legacy-learning"),
+                native_lane_allocation(root, project, "task:lane-learning"),
+            ];
+            let mut expected = Vec::new();
+            let mut preserved = Vec::new();
+            for (index, allocation) in allocations.iter().enumerate() {
+                let record = super::super::execute_at(
+                    root,
+                    "now_read",
+                    &json!({"project": project, "now_ref": allocation["now_ref"]}),
+                    200,
+                )
+                .unwrap();
+                assert_eq!(
+                    record["record"]["schema"],
+                    if index == 0 {
+                        placement::NOW_SCHEMA
+                    } else {
+                        placement::NOW_SCHEMA_V2
+                    }
+                );
+                let raw = append(root, project, allocation, "native-original");
+                let learning = super::super::execute_at(
+                    root,
+                    "learnings_distill",
+                    &json!({
+                        "project": project, "now_ref": allocation["now_ref"], "slug": "native-learning",
+                        "day": "2026-09-13", "actor": "agent:test", "actor_kind": "agent",
+                        "agent_session_ref": "sess:native-learning", "reading": "T5-prime",
+                        "content": "Signal from the actual attributed raw fixture.",
+                        "source_fixtures": [raw["file"]]
+                    }),
+                    301,
+                )
+                .unwrap();
+                let scoped = super::super::execute_at(
+                    root,
+                    "learnings_read",
+                    &json!({"project": project, "now_ref": allocation["now_ref"], "include_content": true}),
+                    302,
+                )
+                .unwrap();
+                assert_eq!(scoped["source_ref"], allocation["source"]["ref"]);
+                assert_eq!(scoped["total"], 1);
+                let row = scoped["learnings"][0].clone();
+                assert_eq!(row["conforming"], true);
+                assert_eq!(row["actor"], "agent:test");
+                assert_eq!(row["actor_kind"], "agent");
+                assert_eq!(row["agent_session_ref"], "sess:native-learning");
+                assert_eq!(row["day"], "2026-09-13");
+                assert_eq!(row["reading"], "T5-prime");
+                assert_eq!(row["recorded_at_unix_seconds"], 301);
+                assert_eq!(row["source_fixtures"], json!([raw["file"]]));
+                assert_eq!(row["revision"], learning["revision"]);
+                assert_eq!(row["content"], "Signal from the actual attributed raw fixture.");
+                expected.push(json!({"now_ref": allocation["now_ref"], "fixture": row}));
+                for receipt in [allocation, &raw, &learning] {
+                    let relative = if receipt.get("source").is_some() {
+                        receipt["source"]["path"].as_str().unwrap()
+                    } else {
+                        receipt["path"].as_str().unwrap()
+                    };
+                    let path = scope.root.join(relative);
+                    preserved.push((path.clone(), fs::read(&path).unwrap()));
+                }
+            }
+            let all = super::super::execute_at(
+                root,
+                "learnings_read",
+                &json!({"project": project, "include_content": true}),
+                303,
+            )
+            .unwrap();
+            let null_ref = super::super::execute_at(
+                root,
+                "learnings_read",
+                &json!({"project": project, "now_ref": null, "include_content": true}),
+                303,
+            )
+            .unwrap();
+            assert_eq!(all, null_ref);
+            assert_eq!(all["schema"], LEARNINGS_READING_SCHEMA);
+            assert_eq!(all["now_ref"], Value::Null);
+            assert_eq!(all["total"], 2);
+            assert_eq!(all["truncated"], false);
+            assert_eq!(all["automatic_agent_or_model_invocation"], false);
+            let rows = all["learnings"].as_array().unwrap();
+            assert_eq!(rows.len(), expected.len());
+            for row in &expected {
+                assert!(rows.contains(row), "missing actual scoped learning: {row}");
+            }
+            let metadata = super::super::execute_at(
+                root,
+                "learnings_read",
+                &json!({"project": project}),
+                304,
+            )
+            .unwrap();
+            assert_eq!(metadata["total"], 2);
+            for row in metadata["learnings"].as_array().unwrap() {
+                assert!(row["fixture"].get("content").is_none());
+            }
+            for (path, bytes) in preserved {
+                assert_eq!(fs::read(path).unwrap(), bytes);
+            }
+        }
+    }
+
+    #[test]
+    fn unscoped_learning_read_keeps_schema_and_bound_identity_refusals() {
+        let fixture = LearningWorld::new();
+        let root = &fixture.path;
+        let allocation = native_lane_allocation(root, None, "task:invalid-learning-record");
+        let path = root.join(allocation["source"]["path"].as_str().unwrap());
+        let original = fs::read(&path).unwrap();
+        let record: Value = serde_json::from_slice(&original).unwrap();
+        for (field, changed_value) in [
+            ("schema", "central.now-clearing/v3"),
+            ("scope_ref", "project:another-owner"),
+            (
+                "source_ref",
+                "central:source:control:root:Control/agents/now/clearings/unrelated/now.json",
+            ),
+        ] {
+            let mut changed = record.clone();
+            changed[field] = json!(changed_value);
+            let bytes = source::encoded(&changed).unwrap().into_bytes();
+            fs::write(&path, &bytes).unwrap();
+            for input in [json!({}), json!({"now_ref": null})] {
+                let failure = super::super::execute_at(root, "learnings_read", &input, 302)
+                    .unwrap_err();
+                assert_eq!(
+                    failure.kind(),
+                    io::ErrorKind::InvalidInput,
+                    "{field}: {failure}"
+                );
+                assert!(failure.to_string().contains("NOW source identity/schema mismatch"));
+                assert_eq!(fs::read(&path).unwrap(), bytes);
+            }
+            fs::write(&path, &original).unwrap();
+        }
+        let valid = super::super::execute_at(root, "learnings_read", &json!({}), 303).unwrap();
+        assert_eq!(valid["total"], 0);
+        assert_eq!(fs::read(&path).unwrap(), original);
     }
 
     #[test]

@@ -317,6 +317,20 @@ fn flow_append(
     request: &Value,
     caller: &FlowCaller,
 ) -> Result<(Value, Value, FlowAppend), FlowRefusal> {
+    let expected_document = request.get("expectedDocumentId").filter(|value| !value.is_null());
+    if let Some(expected) = expected_document {
+        // Validate with the existing native UUID parser, retaining the exact
+        // authored spelling as the document basis rather than normalizing it.
+        let valid = expected
+            .as_str()
+            .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok());
+        if !valid {
+            return refuse("invalid-expected-document-id", "expected_document_id must be an exact UUID string");
+        }
+        if doc.pointer("/meta/documentId") != Some(expected) {
+            return refuse("document-mismatch", "the Flow document at this location differs from the pinned document");
+        }
+    }
     let operation_ref = str_of(request, "operationRef").unwrap_or("");
     if operation_ref.is_empty() {
         return refuse("empty-operation", "a native operation reference is required");
@@ -366,6 +380,9 @@ fn flow_append(
     }
     probe.insert("relations".into(), Value::Array(relations.clone()));
     probe.insert("request".into(), json!({"ref": operation_ref, "digest": ""}));
+    if let Some(expected) = expected_document {
+        probe.get_mut("request").expect("request inserted")["documentId"] = expected.clone();
+    }
     let digest = flow_request_digest(&Value::Object(probe.clone()));
     let entries: Vec<Value> = doc
         .get("entries")
@@ -376,6 +393,9 @@ fn flow_append(
         .iter()
         .find(|e| e.pointer("/request/ref").and_then(Value::as_str) == Some(operation_ref))
     {
+        if existing.pointer("/request/documentId").filter(|value| !value.is_null()) != expected_document {
+            return refuse("request-conflict", format!("operation {operation_ref} already recorded with a different document basis"));
+        }
         if existing.pointer("/request/digest").and_then(Value::as_str) != Some(digest.as_str()) {
             return refuse(
                 "request-conflict",
@@ -523,6 +543,9 @@ fn flow_append(
     }
     entry.insert("attribution".into(), attribution.clone());
     entry.insert("request".into(), json!({"ref": operation_ref, "digest": digest}));
+    if let Some(expected) = expected_document {
+        entry.get_mut("request").expect("request inserted")["documentId"] = expected.clone();
+    }
     if let Some(reply) = relations.iter().find(|r| str_of(r, "type") == Some("reply")) {
         entry.insert(
             "replyTo".into(),
@@ -658,6 +681,7 @@ fn flow_append_execute(
     let caller = flow_caller(input, principal)?;
     let request = json!({
         "operationRef": input.get("operation_ref"),
+        "expectedDocumentId": input.get("expected_document_id"),
         "authorKey": input.get("author_key"),
         "html": input.get("html"),
         "at": input.get("at"),
@@ -1015,6 +1039,7 @@ pub fn register_flow_append(registry: &mut ActionRegistry) {
     let inputs = vec![
         input("location", "object", true),
         input("operation_ref", "string", true),
+        input("expected_document_id", "string", false),
         input("author_key", "string", true),
         input("html", "string", true),
         input("at", "string", true),
@@ -1037,7 +1062,7 @@ pub fn register_flow_append(registry: &mut ActionRegistry) {
             ActionDescriptor {
                 id: "central.flow.append".into(),
                 title: "Append a Flow contribution".into(),
-                description: "Append one distinct, validated contribution to a v0.4 Flow instance under Control/user/flows/ through the ordinary-file CAS. Idempotent by operation_ref: a replay recovers, a different payload under the same ref is refused. Verified attribution requires a host-held native credential; otherwise attribution is declared.".into(),
+                description: "Append one distinct, validated contribution to a v0.4 Flow instance under Control/user/flows/ through the ordinary-file CAS. When supplied, expected_document_id pins the exact document UUID on every CAS read and replay. Idempotent by operation_ref: a replay recovers, a different payload under the same ref is refused. Verified attribution requires a host-held native credential; otherwise attribution is declared.".into(),
                 inputs,
                 output: ActionOutputDefinition { output_type: "central-flow-append".into() },
                 mutation_class: MutationClass::LocallyMutating,
