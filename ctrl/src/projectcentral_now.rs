@@ -3079,16 +3079,52 @@ mod root_scope_tests {
         use std::os::unix::ffi::OsStringExt;
         let fixture = NativeReadFixture::new();
         let root = fixture.base.join(std::ffi::OsString::from_vec(b"root-\xff".to_vec()));
-        fs::create_dir_all(root.join("Control")).unwrap();
-        let data = fixture.returned(&root, &verification_input());
-        assert!(data["read_path"].is_null());
-        assert_eq!(data["read_path_unavailable"]["stage"], "before_publication");
-        assert!(data["read_path_unavailable"]["raw_os_error"].is_null());
-        let stored: Value = serde_json::from_slice(
-            &fs::read(root.join(data["source"].as_str().unwrap())).unwrap()
-        ).unwrap();
-        assert_eq!(stored, data["handoff"]);
-        fixture.finish();
+        // APFS/macOS refuses the invalid filename before any owner publication.
+        // This is a physical prerequisite oracle, not a successful read route.
+        #[cfg(target_os = "macos")]
+        {
+            let entry_names = |directory: &Path| {
+                let mut names = fs::read_dir(directory)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().file_name())
+                    .collect::<Vec<_>>();
+                names.sort();
+                names
+            };
+            let before = entry_names(&fixture.base);
+            let root_identity = HandoffReadPath::identity(
+                &fs::symlink_metadata(&fixture.root).unwrap(),
+            );
+            let error = fs::create_dir_all(root.join("Control"))
+                .expect_err("native macOS invalid filename must refuse before publication");
+            assert_eq!(error.raw_os_error(), Some(libc::EILSEQ));
+            assert_eq!(
+                HandoffReadPath::identity(&fs::symlink_metadata(&fixture.base).unwrap()),
+                fixture.identity,
+            );
+            assert_eq!(
+                HandoffReadPath::identity(&fs::symlink_metadata(&fixture.root).unwrap()),
+                root_identity,
+            );
+            assert_eq!(entry_names(&fixture.base), before);
+            assert!(entry_names(&fixture.root.join("Control")).is_empty());
+            fixture.finish();
+        }
+        // Linux admits these real bytes: retain the complete native Return,
+        // unavailable location and same persisted handoff identity oracle.
+        #[cfg(not(target_os = "macos"))]
+        {
+            fs::create_dir_all(root.join("Control")).unwrap();
+            let data = fixture.returned(&root, &verification_input());
+            assert!(data["read_path"].is_null());
+            assert_eq!(data["read_path_unavailable"]["stage"], "before_publication");
+            assert!(data["read_path_unavailable"]["raw_os_error"].is_null());
+            let stored: Value = serde_json::from_slice(
+                &fs::read(root.join(data["source"].as_str().unwrap())).unwrap()
+            ).unwrap();
+            assert_eq!(stored, data["handoff"]);
+            fixture.finish();
+        }
     }
 }
 
