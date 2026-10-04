@@ -559,6 +559,10 @@ Consumers receive source identities, revisions and retained standing without rea
 
 `cap.central.source-history` · #capability #central
 
+**Additional native read, 4 October 2026 (Source `a3bd6806`).** `central.temporal.source-history` delegates to [continuous-work history](../../ctrl/src/continuous_work/history.rs), reading the existing owner `.central/file-history` store with Source identity, current eligibility and paging. It creates no competing history database and does not adopt or restore Source. [Native consumer interfaces](../../docs/CAW-NATIVE-CONSUMER-INTERFACES.md) and [dated architecture relations](../../docs/ARCHITECTURE-NAVIGATION.md#native-documentation-advisory--3-october-2026) distinguish it from the retained provider/recovery path below. Its added relation is source-inspected; no separate execution grade is assigned here.
+
+**Retained provider and recovery account, 6 September 2026.** These existing operations and their historical evidence remain available alongside the native temporal read; their verification limit below is unchanged.
+
 A person needs to understand how a source changed or retrieve a prior version before deciding what to restore. projectcentral.source.history, compare and recovery.preview request bounded history from an optional native provider and check the current recovery basis.
 
 The caller receives revision entries, differences or historical content. Applying recovered content uses the normal source-write/proposal path; the preview itself leaves current content unchanged.
@@ -576,6 +580,10 @@ The caller receives revision entries, differences or historical content. Applyin
 
 `cap.central.now` · #capability #central
 
+**Native successor, 4 October 2026 (Source `a3bd6806`).** `central.now.*` owns Agent NOW allocation, inspection, lifecycle and raw/distilled continuation; `central.work.*` reads and checks source-bound placement. The [current reader route](../../docs/ARCHITECTURE-NAVIGATION.md#native-learning-reader-successor--4-october-2026) reaches `central.now.learnings.read`, its [dispatcher](../../ctrl/src/continuous_work/mod.rs), [reader and regression definitions](../../ctrl/src/continuous_work/thoughts.rs), Scope owner and two executed hosted cases. Omitted Project selects root; an explicit Project selects its own register. Reading does not invoke an Agent, change lifecycle, publish Wiki knowledge or adopt human ground. Follow the [native consumer interfaces](../../docs/CAW-NATIVE-CONSUMER-INTERFACES.md) for requests and failures.
+
+**Earlier implementation account, retained at its 6 September 2026 reading.** The following paragraph, code and test references remain historical context; the native successor above supplies current navigation.
+
 Current scratch, questions and handoffs need to remain available after a chat ends. projectcentral.now.init and inspect establish/read the temporal field; now.return and update record attributed questions, notes and handoffs with lifecycle and external references.
 
 The next session can recover human scratch and bounded agent returns from files, including open work and supporting evidence references.
@@ -592,6 +600,10 @@ The next session can recover human scratch and bounded agent returns from files,
 ### Close the day and carry useful work forward
 
 `cap.central.day-rollover` · #capability #central
+
+**Native boundary, 4 October 2026 (Source `a3bd6806`).** `central.day.read/ensure/lifecycle` and `central.time.policy/occurrences` have their [native temporal owner](../../ctrl/src/continuous_work/temporal.rs) and [consumer contract](../../docs/CAW-NATIVE-CONSUMER-INTERFACES.md). Human Day writing, Receiving, civil-time occurrence calculation and Agent NOW lifecycle are separate. A date change alone neither archives active work, closes human writing nor invokes an Agent. [The dated architecture correction](../../docs/ARCHITECTURE-NAVIGATION.md#native-documentation-advisory--3-october-2026) relates these five Actions without upgrading the capability's standing.
+
+**Earlier rollover design and implementation account, retained at its 6 September 2026 reading.** The following carry-forward description and references are history, not current automatic Day behaviour.
 
 A person needs a dated account of work while keeping unfinished material available and promoting useful findings deliberately. now.rollover snapshots the chosen local civil day and carries live material; now.promote records the move from temporal material toward a durable owner.
 
