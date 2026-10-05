@@ -253,6 +253,69 @@ fn write_scoped_source(
     root_register: bool,
 ) -> io::Result<WorldSourceWriteReceipt> {
     let _lock = crate::source_safety::lock(project_root, "source-mutation.lock")?;
+    write_scoped_source_locked(
+        project_root,
+        source_ref,
+        expected_revision,
+        content,
+        actor,
+        actor_kind,
+        agent_session_ref,
+        root_register,
+        None,
+    )
+}
+
+/// Only the existing Source Return owner calls this entry, while holding the
+/// root and Project mutation guards. A retained authorization record is never
+/// passed as a Principal: the owner authenticates it afresh under those guards.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn write_commissioned_return_source(
+    scope: &crate::continuous_work::source::Scope,
+    principal: &crate::continuous_work::authority::Principal,
+    captured_binding: &SourceBinding,
+    expected_revision: &str,
+    basis_content: &str,
+    content: &str,
+    agent_session_ref: &str,
+    _guards: &crate::continuous_work::source::MutationLocks,
+) -> io::Result<WorldSourceWriteReceipt> {
+    if scope.project.is_none() || principal.scope_ref != scope.world_ref {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Source maintenance requires the exact authenticated Project scope",
+        ));
+    }
+    write_scoped_source_locked(
+        &scope.root,
+        &captured_binding.source_ref,
+        expected_revision,
+        content,
+        agent_session_ref,
+        "agent",
+        Some(agent_session_ref.to_owned()),
+        false,
+        Some((scope, principal, captured_binding, basis_content)),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_scoped_source_locked(
+    project_root: &Path,
+    source_ref: &str,
+    expected_revision: &str,
+    content: &str,
+    actor: &str,
+    actor_kind: &str,
+    agent_session_ref: Option<String>,
+    root_register: bool,
+    maintenance: Option<(
+        &crate::continuous_work::source::Scope,
+        &crate::continuous_work::authority::Principal,
+        &SourceBinding,
+        &str,
+    )>,
+) -> io::Result<WorldSourceWriteReceipt> {
     validate_actor_kind(actor_kind)?;
     validate_attribution(actor_kind, agent_session_ref.as_deref())?;
     if expected_revision.trim().is_empty() {
@@ -279,7 +342,38 @@ fn write_scoped_source(
     let binding = basis.binding.clone();
     let previous_revision = basis.revision.revision.clone();
     require_retrieval(&binding)?;
-    enforce_write_authority(&binding, actor_kind, agent_session_ref.as_deref())?;
+    if let Some((_, principal, captured_binding, basis_content)) = maintenance {
+        principal.require_human()?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(io::Error::other)?
+            .as_secs();
+        if root_register
+            || principal.scope_ref != horizon.world_ref
+            || !principal.permits("projectcentral.source.return_accept")
+            || now >= principal.expires_at_unix_seconds
+            || natively_owned(&binding)
+            || !binding
+                .roles
+                .iter()
+                .any(|role| role == "project-human-source-aperture")
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Source maintenance lacks current exact Project/action authority or a supported ordinary human-source aperture",
+            ));
+        }
+        if &binding != captured_binding
+            || crate::source_safety::read(project_root, &binding.path)? != basis_content
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Source maintenance binding or exact basis bytes changed",
+            ));
+        }
+    } else {
+        enforce_write_authority(&binding, actor_kind, agent_session_ref.as_deref())?;
+    }
     if previous_revision != expected_revision {
         return Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
@@ -287,6 +381,30 @@ fn write_scoped_source(
         ));
     }
     let _path = safe_source_member_path(project_root, &binding.path, true)?;
+    if let Some((scope, principal, _, _)) = maintenance {
+        let token = std::env::var("CENTRAL_NATIVE_TOKEN").ok();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(io::Error::other)?
+            .as_secs();
+        let current = crate::continuous_work::authority::authenticate(
+            scope,
+            token.as_deref(),
+            "projectcentral.source.return_accept",
+            Some(&principal.authority_revision),
+            now,
+        )?;
+        current.require_human()?;
+        if current.principal_ref != principal.principal_ref
+            || current.scope_ref != principal.scope_ref
+            || current.authority_ref != principal.authority_ref
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Source maintenance authorizing principal changed before publication",
+            ));
+        }
+    }
     crate::source_safety::replace(project_root, &binding.path, expected_revision, content)?;
     let mut attributions = BTreeMap::new();
     attributions.insert(
