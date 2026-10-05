@@ -1,0 +1,38 @@
+{
+  "schema": "factory.developmental-local-provider/v1",
+  "state": {
+    "schema": "factory.developmental-state/v1",
+    "build": {
+      "project": {
+        "ref": "project:0000000000VSBCPB1YT7WJAVRG",
+        "revision": 1
+      },
+      "runs": {
+        "runs": {}
+      },
+      "revision": 1,
+      "claims": {},
+      "evidence": {},
+      "candidates": {},
+      "humanRequests": {},
+      "agencies": {},
+      "executions": {},
+      "trajectories": {}
+    },
+    "journeys": [],
+    "workflowSources": [],
+    "executionCorrelations": [],
+    "routineContinuations": [],
+    "commissions": [],
+    "developmentalMutations": [],
+    "attemptStates": {},
+    "centralProjectLinks": {
+      "project:0000000000VSBCPB1YT7WJAVRG": {
+        "factoryProjectRef": "project:0000000000VSBCPB1YT7WJAVRG",
+        "centralProjectRef": "Central",
+        "sourcePath": "/Users/admin/Central/Work/Central/ProjectCentral/project.json",
+        "sourceRevision": "blake3:c3fd4e4ade10e2bf2044841b54ce2af212c747fca81446eb0437b1a8cf2350ea"
+      }
+    }
+  }
+}

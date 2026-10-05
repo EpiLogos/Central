@@ -1,0 +1,6 @@
+{
+  "schema": "factory.project-placement/v1",
+  "projectKey": "central-project:Central",
+  "factoryProjectRef": "project:0000000000VSBCPB1YT7WJAVRG",
+  "stateFile": "development-state.json"
+}
