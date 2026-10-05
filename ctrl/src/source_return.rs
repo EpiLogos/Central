@@ -2,16 +2,22 @@
 //! Declared acceptance fields never confer human source authority.
 use crate::{
     action::*,
+    continuous_work::{authority, source::Scope},
     result::{ActionResult, ResultStatus},
     root::resolve_central_root,
+    source_horizon::SourceBinding,
     source_safety::content_revision_bytes,
-    world_source::{enforce_write_authority, read_world_source, write_world_source},
+    world_source::{
+        enforce_write_authority, read_world_source, write_commissioned_return_source,
+        write_world_source,
+    },
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
     fs, io,
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
 };
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,6 +34,71 @@ struct SourceReturn {
     status: String,
     accepted_by_ref: Option<String>,
     result_revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    basis_source: Option<SourceBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    maintenance_authorization: Option<MaintenanceAuthorization>,
+}
+
+/// Historical operation attribution, never a deserializable native Principal
+/// and never permission to resend a retained proposal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MaintenanceAuthorization {
+    acceptance: String,
+    principal_ref: String,
+    actor_kind: String,
+    scope_ref: String,
+    authority_ref: String,
+    authority_revision: String,
+    action: String,
+    expires_at_unix_seconds: u64,
+}
+impl MaintenanceAuthorization {
+    fn observed(principal: &authority::Principal) -> Self {
+        Self {
+            acceptance: "commissioned-maintenance".into(),
+            principal_ref: principal.principal_ref.clone(),
+            actor_kind: principal.actor_kind.clone(),
+            scope_ref: principal.scope_ref.clone(),
+            authority_ref: principal.authority_ref.clone(),
+            authority_revision: principal.authority_revision.clone(),
+            action: "projectcentral.source.return_accept".into(),
+            expires_at_unix_seconds: principal.expires_at_unix_seconds,
+        }
+    }
+}
+fn native_now() -> io::Result<u64> {
+    Ok(std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(io::Error::other)?
+        .as_secs())
+}
+fn require_current_scope(
+    scope: &Scope,
+    requested_central: &Path,
+    root: &fs::File,
+    project: &fs::File,
+) -> io::Result<()> {
+    let current = Scope::resolve(requested_central, scope.project.as_deref())?;
+    let current_root = crate::file_mutation::directory(&current.central_root, Path::new(""))?;
+    let current_project = crate::file_mutation::directory(&current.root, Path::new(""))?;
+    let held_root = root.metadata()?;
+    let held_project = project.metadata()?;
+    let root_metadata = current_root.metadata()?;
+    let project_metadata = current_project.metadata()?;
+    if current.world_ref != scope.world_ref
+        || current.central_root != scope.central_root
+        || current.root != scope.root
+        || (held_root.dev(), held_root.ino()) != (root_metadata.dev(), root_metadata.ino())
+        || (held_project.dev(), held_project.ino())
+            != (project_metadata.dev(), project_metadata.ino())
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "Source maintenance native root or Project affiliation changed",
+        ));
+    }
+    Ok(())
 }
 fn invalid(m: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, m)
@@ -74,7 +145,18 @@ fn load(project: &Path, dir: &Path, reference: &str) -> io::Result<SourceReturn>
         crate::file_mutation::open_native_file(project, rel)?
             .take((crate::source_safety::MAX_SOURCE * 12 + 65536) as u64),
     )?;
-    if r.schema != "central.source-return/v1" || r.return_ref != reference {
+    if !matches!(
+        r.schema.as_str(),
+        "central.source-return/v1" | "central.source-return/v2"
+    ) || r.return_ref != reference
+        || (r.schema == "central.source-return/v2"
+            && (r
+                .basis_source
+                .as_ref()
+                .is_none_or(|binding| binding.source_ref != r.source_ref)
+                || (matches!(r.status.as_str(), "applying" | "accepted")
+                    && r.maintenance_authorization.is_none())))
+    {
         return Err(invalid("Return identity mismatch"));
     }
     Ok(r)
@@ -96,12 +178,16 @@ fn save(
 }
 fn reading(project: &Path, r: &SourceReturn) -> io::Result<Value> {
     let current = read_world_source(project, &r.source_ref)?;
-    let refusal=enforce_write_authority(&current.source,"agent",Some(&r.agent_session_ref)).err().map(|e|format!("{e}; this Action context has no attested human principal and acceptance strings do not grant it"));
+    let refusal = if r.schema == "central.source-return/v2" {
+        Some("Commissioned maintenance requires current authenticated exact Project/action authority; this proposal is not permission".to_owned())
+    } else {
+        enforce_write_authority(&current.source,"agent",Some(&r.agent_session_ref)).err().map(|e|format!("{e}; this Action context has no attested human principal and acceptance strings do not grant it"))
+    };
     Ok(
-        json!({"schema":"central.source-return-reading/v1","proposal":r,"current":current,"basis_current":current.revision.revision==r.basis_revision,"acceptance":{"available":r.status=="pending"&&refusal.is_none(),"reason":refusal},"authored_source_mutated":false,"automatic_agent_or_model_invocation":false}),
+        json!({"schema":if r.schema=="central.source-return/v2"{"central.source-return-reading/v2"}else{"central.source-return-reading/v1"},"proposal":r,"current":current,"basis_current":current.revision.revision==r.basis_revision,"acceptance":{"available":r.status=="pending"&&refusal.is_none(),"reason":refusal},"authored_source_mutated":false,"automatic_agent_or_model_invocation":false}),
     )
 }
-fn run(project: &Path, op: &str, input: &Value) -> io::Result<Value> {
+fn run(project: &Path, op: &str, input: &Value, central: &Path) -> io::Result<Value> {
     let _lock = crate::source_safety::lock(project, "source-return.lock")?;
     let dir = directory(project)?;
     if op == "return" {
@@ -140,8 +226,15 @@ fn run(project: &Path, op: &str, input: &Value) -> io::Result<Value> {
                 .as_nanos(),
             std::process::id()
         );
+        let maintenance_proposal =
+            input.get("acceptance").and_then(Value::as_str) == Some("commissioned-maintenance");
         let r = SourceReturn {
-            schema: "central.source-return/v1".into(),
+            schema: if maintenance_proposal {
+                "central.source-return/v2"
+            } else {
+                "central.source-return/v1"
+            }
+            .into(),
             return_ref: format!("{}{id}", prefix(project)?),
             source_ref: source.into(),
             basis_revision: basis.into(),
@@ -153,6 +246,12 @@ fn run(project: &Path, op: &str, input: &Value) -> io::Result<Value> {
             status: "pending".into(),
             accepted_by_ref: None,
             result_revision: None,
+            basis_source: if maintenance_proposal {
+                Some(current.source)
+            } else {
+                None
+            },
+            maintenance_authorization: None,
         };
         save(
             project,
@@ -221,8 +320,16 @@ fn run(project: &Path, op: &str, input: &Value) -> io::Result<Value> {
     let mut recovered = false;
     if r.status == "applying" {
         let current = read_world_source(project, &r.source_ref)?;
+        if r.maintenance_authorization.is_some() && r.basis_source.as_ref() != Some(&current.source)
+        {
+            return Err(io::Error::other(
+                "Interrupted maintenance Source binding changed; retain uncertainty without resend",
+            ));
+        }
         let target = content_revision_bytes(r.proposed_content.as_bytes());
-        if current.revision.revision == target {
+        if current.revision.revision == target
+            && (r.maintenance_authorization.is_none() || current.content == r.proposed_content)
+        {
             r.status = "accepted".into();
             r.result_revision = Some(target);
             save(
@@ -241,7 +348,9 @@ fn run(project: &Path, op: &str, input: &Value) -> io::Result<Value> {
                     "target_observed",
                 )
             })?;
-        } else if current.revision.revision == r.basis_revision {
+        } else if current.revision.revision == r.basis_revision
+            && (r.maintenance_authorization.is_none() || current.content == r.basis_content)
+        {
             r.status = "pending".into();
             save(
                 project,
@@ -265,7 +374,22 @@ fn run(project: &Path, op: &str, input: &Value) -> io::Result<Value> {
         recovered = true;
     }
     if op == "return_read" {
-        return reading(project, &r).map_err(|error| {
+        let result: io::Result<Value> = (|| {
+            let mut value = reading(project, &r)?;
+            if input.get("acceptance").and_then(Value::as_str) == Some("commissioned-maintenance") {
+                let scope = Scope::resolve(central, Some(text(input, "project")?))?;
+                let root = Scope::resolve(&scope.central_root, None)?;
+                let (source, _, revision) =
+                    authority::recognised_source(&root, authority::AUTHORITY_ROLE)?;
+                value["commissioned_maintenance"] = json!({
+                    "authority_ref":source.source.source_ref,"authority_revision":revision,
+                    "action":"projectcentral.source.return_accept","scope_ref":scope.world_ref,
+                    "requires_current_authenticated_principal":true,"available":false,
+                    "note":"Source basis is not permission or physical human review"});
+            }
+            Ok(value)
+        })();
+        return result.map_err(|error| {
             if recovered {
                 crate::file_mutation::record_owner_error_with_ref(
                     error,
@@ -302,9 +426,79 @@ fn run(project: &Path, op: &str, input: &Value) -> io::Result<Value> {
             )
         });
     }
-    if text(input, "acceptance")? != "human-accepted" {
+    let acceptance = text(input, "acceptance")?;
+    let maintenance = acceptance == "commissioned-maintenance";
+    if !maintenance && acceptance != "human-accepted" {
         return Err(invalid("Explicit acceptance is required"));
     }
+    if !maintenance
+        && (r.schema == "central.source-return/v2" || r.maintenance_authorization.is_some())
+    {
+        return Err(invalid(
+            "A retained maintenance attempt cannot become declared collaborative acceptance; make a fresh exact proposal",
+        ));
+    }
+    let scope = if maintenance {
+        if [
+            "principal",
+            "token",
+            "authorizing_principal",
+            "actor",
+            "actor_kind",
+            "agent_session_ref",
+            "source_ref",
+            "proposed_content",
+        ]
+        .iter()
+        .any(|field| input.get(field).is_some())
+        {
+            return Err(invalid("Source acceptance cannot supply principal or replace immutable proposal attribution/content"));
+        }
+        let scope = Scope::resolve(central, Some(text(input, "project")?))?;
+        if scope.root != fs::canonicalize(project)? {
+            return Err(invalid(
+                "Source Return and authenticated Project do not share an owner",
+            ));
+        }
+        Some(scope)
+    } else {
+        None
+    };
+    let held = scope
+        .as_ref()
+        .map(|scope| -> io::Result<_> {
+            Ok((
+                crate::file_mutation::directory(&scope.central_root, Path::new(""))?,
+                crate::file_mutation::directory(&scope.root, Path::new(""))?,
+            ))
+        })
+        .transpose()?;
+    let guards = scope
+        .as_ref()
+        .map(crate::continuous_work::source::lock)
+        .transpose()?;
+    let principal = if let Some(scope) = &scope {
+        let expected_authority = text(input, "expected_authority_revision")?;
+        if expected_authority.trim().is_empty() || expected_authority.len() > 4096 {
+            return Err(invalid(
+                "expected_authority_revision requires bounded nonempty text",
+            ));
+        }
+        let (root, project) = held.as_ref().expect("held maintenance owner");
+        require_current_scope(scope, central, root, project)?;
+        let token = std::env::var("CENTRAL_NATIVE_TOKEN").ok();
+        let principal = authority::authenticate(
+            scope,
+            token.as_deref(),
+            "projectcentral.source.return_accept",
+            Some(expected_authority),
+            native_now()?,
+        )?;
+        principal.require_human()?;
+        Some(principal)
+    } else {
+        None
+    };
     let current = read_world_source(project, &r.source_ref)?;
     let expected = text(input, "expected_revision")?;
     if expected != r.basis_revision || current.revision.revision != r.basis_revision {
@@ -314,10 +508,45 @@ fn run(project: &Path, op: &str, input: &Value) -> io::Result<Value> {
     }
     // Source authority is derived from native binding. Never convert an Agent
     // return into a human actor merely because a caller supplied acceptance text.
-    enforce_write_authority(&current.source,"agent",Some(&r.agent_session_ref)).map_err(|e|io::Error::new(io::ErrorKind::PermissionDenied,format!("{e}; no attested human acceptance principal is present in native ActionExecutionContext")))?;
+    if maintenance {
+        if r.schema != "central.source-return/v2" {
+            return Err(invalid(
+                "Maintenance requires a fresh explicitly selected v2 Source Return",
+            ));
+        }
+        let captured = r.basis_source.as_ref().ok_or_else(|| invalid(
+            "Legacy Return lacks an owner-captured binding; make a fresh exact proposal for maintenance"))?;
+        if captured != &current.source || current.content != r.basis_content {
+            return Ok(
+                json!({"outcome":"conflict","proposal":r,"current":current,"authored_source_mutated":false}),
+            );
+        }
+        if crate::world_source::natively_owned(captured)
+            || !captured
+                .roles
+                .iter()
+                .any(|role| role == "project-human-source-aperture")
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Maintenance cannot replace native owner state or an unsupported Source role",
+            ));
+        }
+    } else {
+        enforce_write_authority(&current.source,"agent",Some(&r.agent_session_ref)).map_err(|e|io::Error::new(io::ErrorKind::PermissionDenied,format!("{e}; no attested human acceptance principal is present in native ActionExecutionContext")))?;
+    }
     let accepted = text(input, "accepted_by_ref")?;
     if accepted.len() > 4096 {
         return Err(invalid("accepted_by_ref exceeds bounded size"));
+    }
+    if let Some(principal) = &principal {
+        if accepted != principal.principal_ref {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "accepted_by_ref differs from the authenticated authorizing principal",
+            ));
+        }
+        r.maintenance_authorization = Some(MaintenanceAuthorization::observed(principal));
     }
     r.accepted_by_ref = Some(accepted.into());
     r.status = "applying".into();
@@ -329,20 +558,40 @@ fn run(project: &Path, op: &str, input: &Value) -> io::Result<Value> {
     )?;
     // The retired Flow registry played no authority here: every retained
     // source applies as the ordinary world source it always was.
-    let applied = write_world_source(
-        project,
-        &r.source_ref,
-        &r.basis_revision,
-        &r.proposed_content,
-        &r.agent_session_ref,
-        "agent",
-        Some(r.agent_session_ref.clone()),
-    )
-    .map(|receipt| {
-        (
-            receipt.revision.revision.clone(),
-            json!({"owner_operation":"projectcentral.source.write","source":receipt}),
+    let applied = if let Some(principal) = &principal {
+        let scope = scope.as_ref().expect("authenticated maintenance scope");
+        let (root, project) = held.as_ref().expect("held maintenance owner");
+        require_current_scope(scope, central, root, project).and_then(|()| {
+            write_commissioned_return_source(
+                scope,
+                principal,
+                r.basis_source.as_ref().expect("validated captured binding"),
+                &r.basis_revision,
+                &r.basis_content,
+                &r.proposed_content,
+                &r.agent_session_ref,
+                guards.as_ref().expect("held maintenance mutation guards"),
+            )
+        })
+    } else {
+        write_world_source(
+            project,
+            &r.source_ref,
+            &r.basis_revision,
+            &r.proposed_content,
+            &r.agent_session_ref,
+            "agent",
+            Some(r.agent_session_ref.clone()),
         )
+    }
+    .map(|receipt| {
+        let revision = receipt.revision.revision.clone();
+        let mut observed =
+            json!({"owner_operation":"projectcentral.source.write","source":receipt});
+        if let Some(authorization) = &r.maintenance_authorization {
+            observed["maintenance_authorization"] = json!(authorization);
+        }
+        (revision, observed)
     });
     match applied {
         Ok((revision, receipt)) => {
@@ -384,7 +633,11 @@ fn run(project: &Path, op: &str, input: &Value) -> io::Result<Value> {
                     ))
                 }
             };
-            if current.revision.revision == r.basis_revision {
+            if current.revision.revision == r.basis_revision
+                && (r.maintenance_authorization.is_none()
+                    || (r.basis_source.as_ref() == Some(&current.source)
+                        && current.content == r.basis_content))
+            {
                 r.status = "pending".into();
                 if let Err(secondary) = save(
                     project,
@@ -420,7 +673,7 @@ fn action(op: &str, input: &Value, context: &ActionExecutionContext<'_>) -> Acti
         if !manifest.validate().valid {
             return Err(invalid("Invalid Project identity"));
         }
-        run(&project, op, input)
+        run(&project, op, input, &root)
     })();
     match result {
         Ok(v) => ActionResult::success(&id, v),
@@ -472,6 +725,7 @@ pub(crate) fn register(registry: &mut ActionRegistry) {
                 ("reason", true),
                 ("evidence_refs", false),
                 ("agent_session_ref", true),
+                ("acceptance", false),
             ],
             "returns" => vec![("project", true), ("limit", false), ("before", false)],
             "return_accept" => vec![
@@ -480,6 +734,12 @@ pub(crate) fn register(registry: &mut ActionRegistry) {
                 ("expected_revision", true),
                 ("acceptance", true),
                 ("accepted_by_ref", true),
+                ("expected_authority_revision", false),
+            ],
+            "return_read" => vec![
+                ("project", true),
+                ("return_ref", true),
+                ("acceptance", false),
             ],
             _ => vec![("project", true), ("return_ref", true)],
         };

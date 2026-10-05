@@ -28,6 +28,8 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -189,7 +191,7 @@ jobs:
           test ! -e "$out/binary-provenance.py"
           test ! -L "$out/binary-provenance.py"
           cat > "$out/binary-provenance.py" <<'PY_NATIVE_IMAGE'
-          import hashlib, json, os, pathlib, shutil, stat, sys
+          import contextlib, hashlib, json, os, pathlib, shutil, stat, sys, tarfile
 
           mode, out_arg, *args = sys.argv[1:]
           out = pathlib.Path(out_arg).resolve(strict=True)
@@ -200,11 +202,13 @@ jobs:
           }
           helper_sha = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()
 
-          def observe(path):
+          def observe(path, maximum=None):
               before = path.lstat()
               assert stat.S_ISREG(before.st_mode) and before.st_uid == os.geteuid(), path
               assert stat.S_IMODE(before.st_mode) & 0o111 and os.access(path, os.X_OK), path
-              fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+              if maximum is not None:
+                  assert 0 < before.st_size <= maximum, (path, before.st_size, maximum)
+              fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
               digest, header, count = hashlib.sha256(), b'', 0
               with os.fdopen(fd, 'rb') as stream:
                   initial = os.fstat(stream.fileno())
@@ -214,6 +218,8 @@ jobs:
                           header = part[:16]
                       digest.update(part)
                       count += len(part)
+                      if maximum is not None:
+                          assert count <= maximum, (path, count, maximum)
                   final = os.fstat(stream.fileno())
               after = path.lstat()
               fields = ('st_dev', 'st_ino', 'st_uid', 'st_mode', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
@@ -232,6 +238,246 @@ jobs:
                       'device': initial.st_dev, 'inode': initial.st_ino, 'uid': initial.st_uid,
                       'mtime_ns': initial.st_mtime_ns, 'ctime_ns': initial.st_ctime_ns,
                       'header_hex': header.hex(), 'native_format': native_format}
+
+
+          previous_basis = {
+              'source': '1a94aeef3791dd083e789ebd332d4856daa1c62d',
+              'tree': '64ef113b77120bc8a801a961d72343785ba8dcda',
+              'lock_sha256': '0104ee9d4011c4c3c26916f39819aa0c251a43604b1197eda76706c41fbf3a5d',
+              'files': 372, 'logical_bytes': 6093624,
+              'role': 'previous-ctrl', 'origin': 'actual locked release build of immutable maintained Source; not historical prelocal image',
+          }
+          previous_source = out / 'source-return-previous-source'
+          previous_image = out / 'source-return-previous-ctrl'
+          previous_limit, source_limit, manifest_limit, buffer_limit = 128 * 1024 * 1024, 16 * 1024 * 1024, 262144, 1024 * 1024
+          physical_fields = ('st_dev', 'st_ino', 'st_uid', 'st_mode', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+          previous_phase = {'stage': 'not-started', 'native_executed': False}
+
+          def physical(value):
+              return {key: getattr(value, key) for key in physical_fields}
+
+          @contextlib.contextmanager
+          def held(path, maximum):
+              before = path.lstat()
+              fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+              stream = None
+              try:
+                  initial = os.fstat(fd)
+                  assert stat.S_ISREG(initial.st_mode) and initial.st_uid == os.geteuid(), path
+                  assert 0 <= initial.st_size <= maximum and physical(before) == physical(initial), path
+                  stream = os.fdopen(fd, 'rb')
+                  fd = None
+                  yield stream, physical(initial)
+                  assert physical(initial) == physical(os.fstat(stream.fileno())) == physical(path.lstat()), path
+              finally:
+                  if stream is not None:
+                      stream.close()
+                  elif fd is not None:
+                      os.close(fd)
+
+          @contextlib.contextmanager
+          def exclusive(path, mode=0o600):
+              fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, mode)
+              stream = None
+              try:
+                  stream = os.fdopen(fd, 'wb')
+                  fd = None
+                  yield stream
+                  stream.flush()
+                  os.fsync(stream.fileno())
+              finally:
+                  if stream is not None:
+                      stream.close()
+                  elif fd is not None:
+                      os.close(fd)
+
+          def write_new_json(path, value):
+              with exclusive(path) as stream:
+                  stream.write((json.dumps(value, indent=2) + '\n').encode())
+
+          def read_small(path):
+              with held(path, manifest_limit) as (stream, identity):
+                  raw = stream.read(manifest_limit + 1)
+                  assert len(raw) == identity['st_size'] and len(raw) <= manifest_limit, path
+              return raw
+
+          def manifest():
+              rows = []
+              for raw in read_small(out / 'source-return-previous-manifest.bin').split(b'\0'):
+                  if not raw:
+                      continue
+                  header, name = raw.split(b'\t', 1)
+                  mode, kind, blob, size = header.decode('ascii').split()
+                  name = name.decode('utf-8')
+                  member = pathlib.PurePosixPath(name)
+                  assert mode in {'100644', '100755'} and kind == 'blob', name
+                  assert not member.is_absolute() and all(part not in {'', '.', '..'} for part in member.parts), name
+                  assert str(member) == name, name
+                  rows.append({'path': name, 'mode': int(mode[-3:], 8), 'blob': blob, 'bytes': int(size)})
+              assert len(rows) == previous_basis['files'] and len({x['path'] for x in rows}) == len(rows), 'previous Source census mismatch'
+              assert sum(x['bytes'] for x in rows) == previous_basis['logical_bytes'], 'previous Source logical size mismatch'
+              return rows
+
+          def source_observation(rows):
+              root = previous_source.lstat()
+              assert stat.S_ISDIR(root.st_mode) and root.st_uid == os.geteuid() and stat.S_IMODE(root.st_mode) == 0o700, previous_source
+              expected = {row['path'] for row in rows}
+              expected_dirs = {str(parent) for row in rows for parent in pathlib.PurePosixPath(row['path']).parents if str(parent) != '.'}
+              actual, files = set(), []
+              for directory, dirs, names in os.walk(previous_source, followlinks=False):
+                  for name in dirs:
+                      child = pathlib.Path(directory) / name
+                      assert str(child.relative_to(previous_source)) in expected_dirs, 'unexpected Source directory'
+                      value = child.lstat()
+                      assert stat.S_ISDIR(value.st_mode) and value.st_uid == os.geteuid(), name
+                  for name in names:
+                      actual.add(str((pathlib.Path(directory) / name).relative_to(previous_source)))
+                      assert len(actual) <= len(expected), 'unexpected Source file'
+              assert actual == expected, 'previous Source membership changed'
+              for row in rows:
+                  path = previous_source / row['path']
+                  digest = hashlib.sha1(('blob ' + str(row['bytes']) + '\0').encode())
+                  count = 0
+                  with held(path, source_limit) as (stream, identity):
+                      assert identity['st_size'] == row['bytes'] and stat.S_IMODE(identity['st_mode']) == row['mode'], path
+                      assert path.lstat().st_nlink == 1, path
+                      for part in iter(lambda: stream.read(buffer_limit), b''):
+                          count += len(part)
+                          assert count <= row['bytes'], path
+                          digest.update(part)
+                  assert count == row['bytes'] and digest.hexdigest() == row['blob'], path
+                  files.append(dict(row, physical=identity))
+              lock = read_small(previous_source / 'Cargo.lock')
+              assert hashlib.sha256(lock).hexdigest() == previous_basis['lock_sha256'], 'previous native lock changed'
+              assert physical(root) == physical(previous_source.lstat()), previous_source
+              return {'root': physical(root), 'files': files, 'source_basis': previous_basis}
+
+          def prepare_previous():
+              assert sys.platform == 'linux' and not args, args
+              previous_phase['stage'] = 'immutable-source-manifest'
+              assert read_small(out / 'source-return-previous-tree.txt') == (previous_basis['tree'] + '\n').encode(), 'previous tree mismatch'
+              rows = manifest()
+              expected = {row['path']: row for row in rows}
+              os.mkdir(previous_source, 0o700)
+              previous_phase['stage'] = 'exclusive-source-material'
+              seen = set()
+              with held(out / 'source-return-previous-source.tar', source_limit) as (stream, archive_identity):
+                  with tarfile.open(fileobj=stream, mode='r:') as archive:
+                      for member in archive:
+                          if member.isdir():
+                              name = member.name.rstrip('/')
+                              assert any(row['path'].startswith(name + '/') for row in rows), name
+                              continue
+                          assert member.isreg() and not member.linkname and member.name in expected and member.name not in seen, member.name
+                          row = expected[member.name]
+                          assert (member.size, member.mode) == (row['bytes'], row['mode']), member.name
+                          path = previous_source / row['path']
+                          path.parent.mkdir(parents=True, exist_ok=True)
+                          digest, count = hashlib.sha1(('blob ' + str(row['bytes']) + '\0').encode()), 0
+                          with archive.extractfile(member) as payload, exclusive(path, row['mode']) as target:
+                              for part in iter(lambda: payload.read(buffer_limit), b''):
+                                  count += len(part)
+                                  assert count <= row['bytes'], member.name
+                                  digest.update(part)
+                                  target.write(part)
+                              assert count == row['bytes'] and digest.hexdigest() == row['blob'], member.name
+                              os.fchmod(target.fileno(), row['mode'])
+                          seen.add(member.name)
+              assert seen == set(expected), 'incomplete immutable Source extraction'
+              previous_phase['stage'] = 'held-source-reobservation'
+              observation = source_observation(rows)
+              write_new_json(out / 'source-return-previous-source.json', dict(observation, archive_identity=archive_identity,
+                  standing='immutable Git source material; not a registered checkout/World or native behavioral pass'))
+
+          def capture_previous():
+              previous_phase['stage'] = 'actual-previous-compiler-artifact'
+              rows = manifest()
+              original_source = json.loads(read_small(out / 'source-return-previous-source.json'))
+              assert source_observation(rows) == {key: original_source[key] for key in ('root', 'files', 'source_basis')}, 'previous compiler Source changed'
+              artifacts = []
+              with held(out / 'source-return-previous-build.jsonl', source_limit) as (stream, log_identity):
+                  count = 0
+                  while True:
+                      line = stream.readline(buffer_limit)
+                      if not line:
+                          break
+                      count += len(line)
+                      assert count <= log_identity['st_size'] and (line.endswith(b'\n') or count == log_identity['st_size']), 'incomplete or over-capacity CompilerArtifact line'
+                      value = json.loads(line)
+                      if value.get('reason') == 'compiler-artifact' and value.get('target', {}).get('name') == 'ctrl' and value['target'].get('kind') == ['bin'] and value.get('executable'):
+                          artifacts.append(value)
+                  assert count == log_identity['st_size'], 'CompilerArtifact capture incomplete'
+              assert len(artifacts) == 1, artifacts
+              artifact = artifacts[0]
+              assert artifact['features'] == [] and artifact['profile']['test'] is False, artifact
+              assert pathlib.Path(artifact['manifest_path']).resolve(strict=True) == previous_source / 'ctrl/Cargo.toml', artifact
+              assert pathlib.Path(artifact['target']['src_path']).resolve(strict=True) == previous_source / 'ctrl/src/main.rs', artifact
+              build_path = pathlib.Path(artifact['executable']).resolve(strict=True)
+              before = observe(build_path, previous_limit)
+              previous_phase['stage'] = 'exclusive-previous-executable-capture'
+              with held(build_path, previous_limit) as (stream, identity), exclusive(previous_image, 0o700) as target:
+                  digest, count = hashlib.sha256(), 0
+                  for part in iter(lambda: stream.read(buffer_limit), b''):
+                      count += len(part)
+                      assert count <= previous_limit, 'previous image capacity'
+                      digest.update(part)
+                      target.write(part)
+                  assert count == before['bytes'] and digest.hexdigest() == before['sha256'], 'previous held image changed'
+                  os.fchmod(target.fileno(), 0o700)
+              after, captured = observe(build_path, previous_limit), observe(previous_image, previous_limit)
+              assert before == after and previous_image.lstat().st_nlink == 1, 'previous capture identity changed'
+              assert all(before[key] == captured[key] for key in ('sha256', 'bytes', 'uid', 'header_hex', 'native_format')), 'previous copy changed bytes'
+              assert captured['mode'] == 0o700 and captured['header_hex'].startswith('7f454c46020101'), captured
+              record = {'role': 'previous-ctrl', 'source_basis': previous_basis, 'compiler_artifact': artifact,
+                        'build_path': str(build_path), 'build_image_before': before, 'build_image_after': after,
+                        'source_build_revision': previous_basis['source'], 'compiler_log_identity': log_identity,
+                        'path': str(previous_image), 'executed_path': str(previous_image), 'captured_image': captured,
+                        'capture_helper_sha256': helper_sha,
+                        'standing': 'actual original/copy/current observations; not historic image or native behavioral pass'}
+              write_new_json(out / 'source-return-previous-binary.json', record)
+              with exclusive(out / 'source-return-previous-path.txt') as target:
+                  target.write((str(previous_image) + '\n').encode())
+
+          def check_previous():
+              assert len(args) == 1 and args[0] and all(c.isalnum() or c == '-' for c in args[0]), args
+              stage = args[0]
+              account = {'stage': stage, 'role': 'previous-ctrl', 'matches': False, 'native_pass_credit': 0}
+              try:
+                  original_source = json.loads(read_small(out / 'source-return-previous-source.json'))
+                  actual_source = source_observation(manifest())
+                  assert actual_source == {key: original_source[key] for key in ('root', 'files', 'source_basis')}, 'previous current Source changed'
+                  record = json.loads(read_small(out / 'source-return-previous-binary.json'))
+                  assert record['role'] == 'previous-ctrl' and record['source_basis'] == previous_basis, 'previous Source basis changed'
+                  assert record['capture_helper_sha256'] == helper_sha, 'previous helper changed'
+                  assert record['path'] == record['executed_path'] == str(previous_image), 'previous selected path changed'
+                  assert read_small(out / 'source-return-previous-path.txt') == (str(previous_image) + '\n').encode(), 'previous selector changed'
+                  artifact = record['compiler_artifact']
+                  assert artifact['target']['name'] == 'ctrl' and artifact['target']['kind'] == ['bin'] and artifact['features'] == [] and artifact['profile']['test'] is False, artifact
+                  assert pathlib.Path(artifact['manifest_path']).resolve(strict=True) == previous_source / 'ctrl/Cargo.toml', 'previous manifest role changed'
+                  assert pathlib.Path(artifact['target']['src_path']).resolve(strict=True) == previous_source / 'ctrl/src/main.rs', 'previous target role changed'
+                  assert pathlib.Path(artifact['executable']).resolve(strict=True) == pathlib.Path(record['build_path']), 'previous compiler path changed'
+                  original = observe(pathlib.Path(record['build_path']), previous_limit)
+                  captured = observe(previous_image, previous_limit)
+                  assert original == record['build_image_before'] == record['build_image_after'], 'previous original image changed'
+                  assert captured == record['captured_image'] and previous_image.lstat().st_nlink == 1, 'previous captured image changed'
+                  account.update(matches=True, actual_original=original, actual_captured=captured,
+                                 source_basis=previous_basis, source_files=len(actual_source['files']))
+              except Exception as error:
+                  account.update(error_type=type(error).__name__, errno=getattr(error, 'errno', None), inspection_error=str(error))
+                  write_new_json(out / ('source-return-previous-' + stage + '.json'), account)
+                  raise
+              write_new_json(out / ('source-return-previous-' + stage + '.json'), account)
+
+          def previous_operation(operation):
+              try:
+                  operation()
+              except Exception as error:
+                  try:
+                      write_new_json(out / ('source-return-previous-' + mode + '-failure.json'),
+                                     dict(previous_phase, error_type=type(error).__name__, errno=getattr(error, 'errno', None), inspection_error=str(error)))
+                  except Exception as retention_error:
+                      raise error from retention_error
+                  raise
 
           if mode == 'capture':
               assert len(args) == 1, args
@@ -296,9 +542,31 @@ jobs:
                          'standing': 'actual image observations at this stage; no universal immutability claim'}
               (out / ('binary-images-' + stage + '.json')).write_text(json.dumps(account, indent=2) + '\n')
               assert not failures, failures
+          elif mode == 'prepare-previous':
+              previous_operation(prepare_previous)
+          elif mode == 'capture-previous':
+              assert not args, args
+              previous_operation(capture_previous)
+          elif mode == 'check-previous':
+              check_previous()
           else:
               raise AssertionError(mode)
           PY_NATIVE_IMAGE
+          previous_source_ref=1a94aeef3791dd083e789ebd332d4856daa1c62d
+          git merge-base --is-ancestor "$previous_source_ref" HEAD
+          git rev-parse "$previous_source_ref^{tree}" > "$out/source-return-previous-tree.txt"
+          git ls-tree -r -l -z "$previous_source_ref" > "$out/source-return-previous-manifest.bin"
+          git -c tar.umask=0022 archive --format=tar "$previous_source_ref" > "$out/source-return-previous-source.tar"
+          python3 "$out/binary-provenance.py" prepare-previous "$out"
+          previous_target_dir="${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/target}"
+          case "$previous_target_dir" in
+            /*) ;;
+            *) previous_target_dir="$GITHUB_WORKSPACE/$previous_target_dir" ;;
+          esac
+          SUITE_BUILD_REVISION="$previous_source_ref" CARGO_TARGET_DIR="$previous_target_dir" cargo build --locked --release --manifest-path "$out/source-return-previous-source/Cargo.toml" -p ctrl --bin ctrl --message-format=json 2> "$out/source-return-previous-build.stderr" | tee "$out/source-return-previous-build.jsonl"
+          python3 "$out/binary-provenance.py" capture-previous "$out"
+          previous_ctrl=$(cat "$out/source-return-previous-path.txt")
+          python3 "$out/binary-provenance.py" check-previous "$out" after-previous-build
           cargo build --locked -p ctrl --bin ctrl --message-format=json 2> "$out/ctrl-build.stderr" | tee "$out/ctrl-build.jsonl"
           python3 "$out/binary-provenance.py" capture "$out" ctrl
           python3 "$out/binary-provenance.py" check "$out" before-opt-in-build ctrl
@@ -309,6 +577,9 @@ jobs:
             local status=$?
             trap - EXIT
             if ! python3 "$out/binary-provenance.py" check "$out" final-execution ctrl ordinary-child; then
+              if test "$status" -eq 0; then status=1; fi
+            fi
+            if ! python3 "$out/binary-provenance.py" check-previous "$out" final-execution; then
               if test "$status" -eq 0; then status=1; fi
             fi
             exit "$status"
@@ -322,8 +593,10 @@ jobs:
           CTRL_BIN="$ctrl" CTRL_ORDINARY_INTERRUPTION_BIN="$ordinary_child" CTRL_NATIVE_EVIDENCE_DIR="$out" python3 ctrl/tests/native/ordinary_files.py 2>&1 | tee "$out/ordinary-files-native.log"
           python3 "$out/binary-provenance.py" check "$out" after-ordinary ctrl ordinary-child
           python3 "$out/binary-provenance.py" check "$out" before-source-return ctrl ordinary-child
-          CTRL_BIN="$ctrl" python3 ctrl/tests/native/source_returns.py 2>&1 | tee "$out/source-returns-native.log"
+          python3 "$out/binary-provenance.py" check-previous "$out" before-source-return
+          CTRL_BIN="$ctrl" SOURCE_RETURN_REQUIRE_CUTOVER=1 SOURCE_RETURN_PREVIOUS_CTRL_BIN="$previous_ctrl" python3 ctrl/tests/native/source_returns.py 2>&1 | tee "$out/source-returns-native.log"
           python3 "$out/binary-provenance.py" check "$out" after-source-return ctrl ordinary-child
+          python3 "$out/binary-provenance.py" check-previous "$out" after-source-return
           git diff --exit-code
       - name: Retain actual atomic native step outcomes
         if: always()
