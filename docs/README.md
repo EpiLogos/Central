@@ -170,3 +170,4 @@ dependency rule; this index carries the corpus.
 - [Source transfer](SOURCE-TRANSFER.md): scoped source movement between grounds of one world, with explicit direction/authority and recorded divergence conflicts.
 
 - [Chosen root recognition](ROOT-RECOGNITION.md): bounded metadata-only recognition before explicit desktop binding.
+- [Personal-history intake](PERSONAL-HISTORY-INTAKE.md): collections through the adoption path — inspect, plan, human-accepted apply, verify, rollback — bound to the anchored person (Central #242).
