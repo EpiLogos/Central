@@ -1658,13 +1658,12 @@ pub fn apply_plan(
 }
 
 fn upsert_relation(doc: &mut Value, source_ref: &str, resource_path: &str, entry: &PlanEntry) {
-    // Root relations use world-relative paths without a leading slash;
-    // external retained origins keep their absolute path.
-    let relation_path = if resource_path.starts_with('/') {
-        resource_path.to_owned()
-    } else {
-        format!("/{}", resource_path.trim_start_matches('/'))
-    };
+    // Relations carry world-relative paths without a leading slash, exactly
+    // like every other ground relation; external retained origins keep their
+    // absolute path.
+    let relation_path = resource_path
+        .trim_start_matches('/')
+        .to_owned();
     let relations = relations_array(doc);
     if let Some(existing) = relations
         .iter_mut()
