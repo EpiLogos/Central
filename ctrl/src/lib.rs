@@ -32,6 +32,7 @@ pub mod machine_account;
 pub mod names;
 pub mod pasu;
 pub mod personal;
+pub mod personal_history;
 pub mod picker;
 pub mod projectcentral;
 pub mod projectcentral_ground;
