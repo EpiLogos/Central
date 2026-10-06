@@ -226,7 +226,12 @@ impl PersonalCollectionRecord {
         }
         let mut body = serde_json::to_vec_pretty(self).map_err(io::Error::other)?;
         body.push(b'\n');
-        write_atomic(&path, &body)?;
+        write_atomic(
+            root,
+            &path,
+            &body,
+            crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+        )?;
         Ok(path)
     }
 }
@@ -1096,8 +1101,10 @@ impl ApplyJournal {
         let area = journal_area(root, &self.collection_id);
         fs::create_dir_all(&area)?;
         write_atomic(
+            root,
             &Self::path(root, &self.collection_id),
             &serde_json::to_vec_pretty(self).map_err(io::Error::other)?,
+            crate::file_mutation::RecordDisposition::ReplaceOrCreate,
         )
     }
     /// After a successful apply the journal becomes the import's durable
@@ -1107,8 +1114,10 @@ impl ApplyJournal {
         let path = journal_area(root, &self.collection_id)
             .join(format!("import-{}.receipt.json", self.sequence));
         write_atomic(
+            root,
             &path,
             &serde_json::to_vec_pretty(&self).map_err(io::Error::other)?,
+            crate::file_mutation::RecordDisposition::ReplaceOrCreate,
         )?;
         let live = Self::path(root, &self.collection_id);
         if live.exists() {
@@ -1393,7 +1402,7 @@ pub fn apply_plan(
                                             restore.parent().unwrap_or(Path::new(".")),
                                         )
                                         .map_err(|e| e.to_string())?;
-                                        if let Err(error) = write_atomic(&restore, &prior_bytes) {
+                                        if let Err(error) = write_atomic(root, &restore, &prior_bytes, crate::file_mutation::RecordDisposition::ReplaceOrCreate) {
                                             refused.push(format!(
                                                 "{}: restore point failed, update withheld: {error}",
                                                 entry.entry_id
@@ -1661,9 +1670,7 @@ fn upsert_relation(doc: &mut Value, source_ref: &str, resource_path: &str, entry
     // Relations carry world-relative paths without a leading slash, exactly
     // like every other ground relation; external retained origins keep their
     // absolute path.
-    let relation_path = resource_path
-        .trim_start_matches('/')
-        .to_owned();
+    let relation_path = resource_path.trim_start_matches('/').to_owned();
     let relations = relations_array(doc);
     if let Some(existing) = relations
         .iter_mut()
@@ -2063,7 +2070,14 @@ pub fn rollback_import(
                 if live_revision.revision == entry.content_revision {
                     let prior_revision = fnv(&prior_bytes).revision;
                     if prior_revision == alternative.content_revision {
-                        if write_atomic(&live, &prior_bytes).is_ok() {
+                        if write_atomic(
+                            &scope.root,
+                            &live,
+                            &prior_bytes,
+                            crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+                        )
+                        .is_ok()
+                        {
                             restored_entries.push(entry_id.clone());
                             let mut restored_entry = entry.clone();
                             restored_entry.content_revision = prior_revision;
