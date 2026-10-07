@@ -823,7 +823,7 @@ pub(crate) fn read_now(
 }
 /// The listing row of one clearing. Horizon fields appear only on records
 /// that carry them, so a listing of standalone clearings is unchanged.
-fn now_row(record: &NowRecord, source: &source::SourceReading) -> Value {
+pub(crate) fn now_row(record: &NowRecord, source: &source::SourceReading) -> Value {
     let mut row = json!({
         "now_ref": record.now_ref,
         "source_ref": record.source_ref,
