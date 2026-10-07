@@ -3,8 +3,8 @@ use crate::action::{
     ActionOutputDefinition, ActionRegistry, MutationClass,
 };
 use crate::agent_profile::{
-    AgentProfile, AgentProfileError, AgentProfileScope, AGENT_PROFILE_PROVENANCE_SCHEMA,
-    AGENT_PROFILE_SCHEMA,
+    AgentProfile, AgentProfileError, AgentProfileScope, AgentSelfDefinition,
+    AGENT_PROFILE_PROVENANCE_SCHEMA, AGENT_PROFILE_SCHEMA,
 };
 use crate::agent_profile_store::{AgentProfileStore, AgentProfileStoreError};
 use crate::projectcentral::read_project_manifest;
@@ -246,6 +246,13 @@ fn validate_ingested_profile(profile: &AgentProfile) -> Result<(), String> {
         provenance
             .validate()
             .map_err(|error| format!("invalid intent provenance: {error}"))?;
+    }
+    // The Agent self binding is validated through the typed record's own
+    // rules, never a copied check that could drift from the profile schema.
+    if let Some(definition) = &profile.self_definition {
+        definition
+            .validate()
+            .map_err(|error| format!("invalid self definition: {error}"))?;
     }
     Ok(())
 }
@@ -581,6 +588,25 @@ fn propose_action_with_origin(
     if let Some(value) = optional_text(input, "expressive_character_ref") {
         profile.expressive_character_ref = Some(value);
     }
+    // The self binding travels as a whole JSON object and is typed-parsed and
+    // validated here: a malformed binding is refused, never silently dropped.
+    if let Some(value) = input.get("self_definition") {
+        profile.self_definition = match serde_json::from_value::<Option<AgentSelfDefinition>>(
+            value.clone(),
+        ) {
+            Ok(definition) => definition,
+            Err(error) => {
+                return ActionResult::failure(
+                    Some(AGENT_PROFILE_PROPOSE_ACTION),
+                    ResultStatus::InvalidInput,
+                    format!(
+                        "self_definition is not a valid Agent self definition document: {error}"
+                    ),
+                    None,
+                );
+            }
+        };
+    }
     let assignments: Result<(), String> = (|| {
         profile.governance_refs = optional_ref_list(input, "governance_refs")?;
         profile.skill_refs = optional_ref_list(input, "skill_refs")?;
@@ -733,6 +759,7 @@ fn express_action(
         "placement_intent_refs",
         "provenance_refs",
         "expressive_character_ref",
+        "self_definition",
     ] {
         if let Some(value) = input.get(field) {
             proposal[field] = value.clone();
@@ -843,11 +870,14 @@ pub fn register_agent_profile_actions(registry: &mut ActionRegistry) {
         ("placement_intent_refs", false),
         ("provenance_refs", false),
         ("expressive_character_ref", false),
+        ("self_definition", false),
     ] {
         propose_inputs.push(input(
             name,
             if name.ends_with("_refs") {
                 "array"
+            } else if name == "self_definition" {
+                "object"
             } else {
                 "string"
             },
@@ -873,6 +903,7 @@ pub fn register_agent_profile_actions(registry: &mut ActionRegistry) {
         input("placement_intent_refs", "array", false),
         input("provenance_refs", "array", false),
         input("expressive_character_ref", "string", false),
+        input("self_definition", "object", false),
     ];
     registry
         .register(
@@ -1357,8 +1388,127 @@ mod tests {
     }
 
     #[test]
-    fn public_propose_cannot_spoof_origin_action() {
+    fn self_definition_travels_through_save_propose_and_express() {
         let root = fixture_root();
+        let registry = registry();
+        let mut options = None;
+        let mut connectors = None;
+        let mut connector_context = None;
+        let context = context(&root, &mut options, &mut connectors, &mut connector_context);
+        let binding = json!({
+            "source": {
+                "reference": "central:source:control:root:Control/self/agents/guardian/self.md",
+                "content_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            },
+            "relational_logos": {
+                "reference": "central:source:control:root:Control/self/agents/guardian/relational-logos.md",
+                "content_digest": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+            },
+        });
+
+        // save -> read round trip
+        let mut profile = personal_profile("p1");
+        profile["self_definition"] = binding.clone();
+        let saved = registry.execute(
+            AGENT_PROFILE_SAVE_ACTION,
+            &json!({"scope":"personal", "profile": profile}),
+            &context,
+        );
+        assert!(saved.ok, "{saved:?}");
+        let read = registry.execute(
+            AGENT_PROFILE_READ_ACTION,
+            &json!({"scope":"personal", "profile_ref":"agent-profile:guardian"}),
+            &context,
+        );
+        assert!(read.ok, "{read:?}");
+        assert_eq!(
+            read.data.as_ref().unwrap()["profile"]["self_definition"],
+            binding
+        );
+
+        // propose carries it
+        let mut input = propose_input(None);
+        input["profile_ref"] = json!("agent-profile:proposed-self");
+        input["agent_ref"] = json!("agent:proposed-self");
+        input["self_definition"] = binding.clone();
+        let proposed = registry.execute(AGENT_PROFILE_PROPOSE_ACTION, &input, &context);
+        assert!(proposed.ok, "{proposed:?}");
+        assert_eq!(
+            proposed.data.as_ref().unwrap()["profile"]["self_definition"],
+            binding
+        );
+
+        // express carries it through its allowlist
+        let expressed = registry.execute(
+            AGENT_PROFILE_EXPRESS_ACTION,
+            &json!({
+                "scope": "personal",
+                "world_ref": "world:personal",
+                "ratified_world_refs": ["world:personal"],
+                "intent_expression": INTENT,
+                "self_definition": binding,
+            }),
+            &context,
+        );
+        assert!(expressed.ok, "{expressed:?}");
+        let profile_ref = expressed.data.as_ref().unwrap()["allocation"]["profile_ref"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let reread = registry.execute(
+            AGENT_PROFILE_READ_ACTION,
+            &json!({"scope":"personal", "profile_ref": profile_ref}),
+            &context,
+        );
+        assert!(reread.ok, "{reread:?}");
+        assert_eq!(
+            reread.data.as_ref().unwrap()["profile"]["self_definition"]["source"]["reference"],
+            "central:source:control:root:Control/self/agents/guardian/self.md"
+        );
+
+        // a malformed binding is refused, never silently dropped
+        let mut bad = propose_input(None);
+        bad["profile_ref"] = json!("agent-profile:bad-self");
+        bad["agent_ref"] = json!("agent:bad-self");
+        bad["self_definition"] = json!({
+            "source": {
+                "reference": "central:source:control:root:Control/self/agents/guardian/self.md",
+                "content_digest": "sha256:not-a-digest",
+            },
+            "relational_logos": {
+                "reference": "central:source:control:root:Control/self/agents/guardian/relational-logos.md",
+                "content_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            },
+        });
+        let refused = registry.execute(AGENT_PROFILE_PROPOSE_ACTION, &bad, &context);
+        assert!(!refused.ok);
+        assert_eq!(refused.status, ResultStatus::InvalidInput);
+        let dir = root.join("Control/agents/profiles");
+        for entry in fs::read_dir(&dir).unwrap() {
+            let text = fs::read_to_string(entry.unwrap().path()).unwrap();
+            assert!(
+                !text.contains("agent-profile:bad-self"),
+                "a malformed self definition must never author ground"
+            );
+        }
+
+        // a profile without a self binding does not serialize the field
+        let mut plain_input = propose_input(None);
+        plain_input["profile_ref"] = json!("agent-profile:plain-self");
+        plain_input["agent_ref"] = json!("agent:plain-self");
+        let plain = registry.execute(AGENT_PROFILE_PROPOSE_ACTION, &plain_input, &context);
+        assert!(plain.ok, "{plain:?}");
+        assert!(plain
+            .data
+            .as_ref()
+            .unwrap()["profile"]
+            .get("self_definition")
+            .is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn public_propose_cannot_spoof_origin_action() {        let root = fixture_root();
         let registry = registry();
         let mut options = None;
         let mut connectors = None;
