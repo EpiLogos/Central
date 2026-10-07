@@ -1,7 +1,7 @@
 //! Controlled native source/credential tests. Test credentials and authored
 //! authority fixtures exist only in disposable worlds, never production setup.
 use central_ctrl::{
-    agent_profile::{AgentProfile, AgentProfileScope},
+    agent_profile::{AgentProfile, AgentProfileScope, AgentSelfDefinition},
     agent_profile_acceptance::{execute_with_token_at, ACCEPT, REVIEW, ROSTER},
     agent_profile_store::AgentProfileStore,
     continuous_work::source::Scope,
@@ -24,16 +24,19 @@ impl Drop for World {
         let _ = fs::remove_dir_all(&self.0);
     }
 }
-fn world() -> World {
+fn world_with_grant_expiry(expires_at_unix_seconds: u64) -> World {
     let path =
         std::env::temp_dir().join(format!("central-agent-acceptance-{}", uuid::Uuid::new_v4()));
     central_ctrl::initialize_central(&path).unwrap();
     let scope = Scope::resolve(&path, None).unwrap();
-    let grants:Vec<_>=[(HUMAN,"human"),(AGENT,"agent")].into_iter().map(|(token,kind)|json!({"principal_ref":format!("{kind}:controlled-test"),"actor_kind":kind,"token_sha256":format!("{:x}",Sha256::digest(token.as_bytes())),"scope_refs":["control:root"],"actions":[ACCEPT],"expires_at_unix_seconds":200})).collect();
+    let grants:Vec<_>=[(HUMAN,"human"),(AGENT,"agent")].into_iter().map(|(token,kind)|json!({"principal_ref":format!("{kind}:controlled-test"),"actor_kind":kind,"token_sha256":format!("{:x}",Sha256::digest(token.as_bytes())),"scope_refs":["control:root"],"actions":[ACCEPT],"expires_at_unix_seconds":expires_at_unix_seconds})).collect();
     fs::write(path.join("Control/user/agent-authority.json"),serde_json::to_vec(&json!({"schema":"central.native-action-authority/v1","scope_ref":"control:root","grants":grants})).unwrap()).unwrap();
     fs::create_dir_all(path.join("Control/relations")).unwrap();
     fs::write(path.join("Control/relations/source-relations.json"),serde_json::to_vec(&json!({"schema":"central.control.ground-relations/v1","project_id":"control:root","relations":[{"ref":scope.source_ref("Control/user/agent-authority.json"),"path":"Control/user/agent-authority.json","roles":["native-action-authority"],"provenance":"human-adopted","standing":"architecture-contract","treatment":"projectcentral-user","recognition":"controlled-test-only-not-personal-adoption","recorded_at_unix_seconds":1}]})).unwrap()).unwrap();
     World(path)
+}
+fn world() -> World {
+    world_with_grant_expiry(200)
 }
 fn proposal(root: &Path) -> AgentProfile {
     let mut profile = AgentProfile::propose_from_intent(
@@ -55,6 +58,58 @@ fn proposal(root: &Path) -> AgentProfile {
         .save(&profile, None)
         .unwrap();
     profile
+}
+/// Write one exact self source under the root's Control tree and return its
+/// wire pin (`central:source:control:root:<relpath>` + sha256 of the bytes).
+fn self_source_pin(root: &Path, relative: &str, text: &str) -> Value {
+    let path = root.join(relative);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, text).unwrap();
+    json!({
+        "reference": format!("central:source:control:root:{relative}"),
+        "content_digest": format!("sha256:{:x}", Sha256::digest(text.as_bytes())),
+    })
+}
+fn self_binding(root: &Path) -> (Value, String, String) {
+    let self_text = "I read before I write; I return what I borrow.";
+    let logos_text = "You act from within a relation.";
+    let source = self_source_pin(
+        root,
+        "Control/self/agents/test-creation/self.md",
+        self_text,
+    );
+    let logos = self_source_pin(
+        root,
+        "Control/self/agents/test-creation/relational-logos.md",
+        logos_text,
+    );
+    (json!({"source": source, "relational_logos": logos}), self_text.into(), logos_text.into())
+}
+fn proposal_with_self(root: &Path) -> (AgentProfile, Value) {
+    let (binding, _, _) = self_binding(root);
+    let mut profile = AgentProfile::propose_from_intent(
+        "agent-profile:test-creation",
+        "r1",
+        "agent:test-creation",
+        AgentProfileScope::Personal,
+        WorldRef::new("world:personal").unwrap(),
+        "Read the explicitly selected project sources; return an attributed comparison.",
+        "agent-profile.express",
+    )
+    .unwrap();
+    profile.name = Some("Source reader".into());
+    profile.purpose = profile
+        .intent_provenance
+        .as_ref()
+        .map(|p| p.intent_expression.clone());
+    profile.self_definition = Some(AgentSelfDefinition {
+        source: serde_json::from_value(binding["source"].clone()).unwrap(),
+        relational_logos: serde_json::from_value(binding["relational_logos"].clone()).unwrap(),
+    });
+    AgentProfileStore::personal(root)
+        .save(&profile, None)
+        .unwrap();
+    (profile, binding)
 }
 fn input(profile: &AgentProfile) -> Value {
     json!({"scope":"root","profile_ref":profile.profile_ref})
@@ -211,4 +266,207 @@ fn real_cli_expresses_name_and_skill_intent_but_cannot_self_accept() {
         .output()
         .unwrap();
     assert!(!output.status.success());
+}
+#[test]
+fn self_pinned_review_shows_exact_text_and_acceptance_records_verified_pins() {
+    let w = world();
+    let (p, binding) = proposal_with_self(&w.0);
+    let r = review(&w.0, &p);
+    assert_eq!(r["self_sources_resolved"], true);
+    assert_eq!(r["self_definition"]["source"]["resolved"], true);
+    assert_eq!(
+        r["self_definition"]["source"]["text"],
+        "I read before I write; I return what I borrow."
+    );
+    assert_eq!(
+        r["self_definition"]["relational_logos"]["text"],
+        "You act from within a relation."
+    );
+    assert_eq!(r["self_definition"]["source"]["reference"], binding["source"]["reference"]);
+    assert_eq!(
+        r["self_definition"]["source"]["content_digest"],
+        binding["source"]["content_digest"]
+    );
+
+    let accepted =
+        execute_with_token_at(&w.0, ACCEPT, &acceptance(&w.0, &p), Some(HUMAN), 100).unwrap();
+    assert_eq!(accepted["accepted"], true);
+    assert_eq!(accepted["acceptance"]["self_source"], binding["source"]);
+    assert_eq!(
+        accepted["acceptance"]["relational_logos"],
+        binding["relational_logos"]
+    );
+    assert_eq!(
+        accepted["acceptance"]["principal_ref"],
+        "human:controlled-test"
+    );
+
+    // Re-review after acceptance still agrees: same receipt, still resolved.
+    let again = review(&w.0, &p);
+    assert_eq!(again["accepted"], true);
+    assert_eq!(again["acceptance"], accepted["acceptance"]);
+    assert_eq!(again["self_sources_resolved"], true);
+}
+#[test]
+fn missing_self_source_keeps_review_readable_but_cannot_be_accepted() {
+    let w = world();
+    let (p, _) = proposal_with_self(&w.0);
+    fs::remove_file(w.0.join("Control/self/agents/test-creation/relational-logos.md")).unwrap();
+    let r = review(&w.0, &p);
+    assert_eq!(r["self_sources_resolved"], false);
+    assert_eq!(r["self_definition"]["source"]["resolved"], true);
+    assert_eq!(r["self_definition"]["relational_logos"]["resolved"], false);
+    assert_eq!(
+        r["self_definition"]["relational_logos"]["reason"],
+        "self-source-missing"
+    );
+    // Acceptance is refused before any receipt is written.
+    assert!(execute_with_token_at(&w.0, ACCEPT, &acceptance(&w.0, &p), Some(HUMAN), 100).is_err());
+    assert!(!w.0.join(".central/agent-profile-acceptances").exists());
+    assert_eq!(review(&w.0, &p)["accepted"], false);
+}
+#[test]
+fn withheld_self_source_cannot_be_accepted() {
+    let w = world();
+    let (p, _) = proposal_with_self(&w.0);
+    fs::write(
+        w.0.join("Control/self/agents/test-creation/.no-agent-retrieval"),
+        b"",
+    )
+    .unwrap();
+    let r = review(&w.0, &p);
+    assert_eq!(r["self_sources_resolved"], false);
+    assert_eq!(
+        r["self_definition"]["source"]["reason"],
+        "self-source-withheld"
+    );
+    assert!(execute_with_token_at(&w.0, ACCEPT, &acceptance(&w.0, &p), Some(HUMAN), 100).is_err());
+    assert!(!w.0.join(".central/agent-profile-acceptances").exists());
+}
+#[test]
+fn digest_mismatched_self_source_cannot_be_accepted() {
+    let w = world();
+    let (p, _) = proposal_with_self(&w.0);
+    fs::write(
+        w.0.join("Control/self/agents/test-creation/self.md"),
+        "The bytes moved on after the pin.",
+    )
+    .unwrap();
+    let r = review(&w.0, &p);
+    assert_eq!(r["self_sources_resolved"], false);
+    assert_eq!(
+        r["self_definition"]["source"]["reason"],
+        "self-source-digest-mismatch"
+    );
+    assert!(execute_with_token_at(&w.0, ACCEPT, &acceptance(&w.0, &p), Some(HUMAN), 100).is_err());
+    assert!(!w.0.join(".central/agent-profile-acceptances").exists());
+    assert_eq!(review(&w.0, &p)["accepted"], false);
+}
+#[test]
+fn real_cli_express_review_accept_with_self_pins() {
+    let w = world_with_grant_expiry(4102444800);
+    let (binding, self_text, logos_text) = self_binding(&w.0);
+    let input = json!({
+        "scope":"root",
+        "world_ref":"world:personal",
+        "ratified_world_refs":["world:personal"],
+        "intent_expression":"Bind my self sources and my relational ground.",
+        "self_definition": binding,
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_ctrl"))
+        .args([
+            "--json",
+            "--root",
+            w.0.to_str().unwrap(),
+            "action",
+            "run",
+            "agent-profile.express",
+            &input.to_string(),
+        ])
+        .env_remove("CENTRAL_NATIVE_TOKEN")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let expressed: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let profile_ref = expressed["data"]["allocation"]["profile_ref"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let revision = expressed["data"]["profile"]["revision"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // Review resolves the bound self through the real CLI.
+    let review_input = json!({"scope":"root","profile_ref":profile_ref});
+    let output = Command::new(env!("CARGO_BIN_EXE_ctrl"))
+        .args([
+            "--json",
+            "--root",
+            w.0.to_str().unwrap(),
+            "action",
+            "run",
+            "agent-profile.review",
+            &review_input.to_string(),
+        ])
+        .env_remove("CENTRAL_NATIVE_TOKEN")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let reviewed: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(reviewed["data"]["self_sources_resolved"], true);
+    assert_eq!(
+        reviewed["data"]["self_definition"]["source"]["text"],
+        self_text
+    );
+    assert_eq!(
+        reviewed["data"]["self_definition"]["relational_logos"]["text"],
+        logos_text
+    );
+    let content_digest = reviewed["data"]["content_digest"].as_str().unwrap();
+
+    // The real CLI accepts only with the human native token, and the receipt
+    // records the verified pins.
+    let accept_input = json!({
+        "scope":"root",
+        "profile_ref":profile_ref,
+        "expected_revision":revision,
+        "expected_content_digest":content_digest,
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_ctrl"))
+        .args([
+            "--json",
+            "--root",
+            w.0.to_str().unwrap(),
+            "action",
+            "run",
+            "agent-profile.accept",
+            &accept_input.to_string(),
+        ])
+        .env("CENTRAL_NATIVE_TOKEN", HUMAN)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let accepted: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(accepted["data"]["accepted"], true);
+    assert_eq!(
+        accepted["data"]["acceptance"]["self_source"],
+        binding["source"]
+    );
+    assert_eq!(
+        accepted["data"]["acceptance"]["relational_logos"],
+        binding["relational_logos"]
+    );
 }

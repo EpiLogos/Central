@@ -5,6 +5,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
+use std::io;
+use std::path::Path;
 
 pub const AGENT_PROFILE_SCHEMA: &str = "central.agent-profile/v1";
 pub const AGENT_PROFILE_PROVENANCE_SCHEMA: &str = "central.agent-profile-provenance/v1";
@@ -101,6 +103,161 @@ pub enum AgentProfileScope {
     Project,
 }
 
+/// One pinned Agent-self source: a Central source ref plus the exact-content
+/// digest the pinned file must verify against. Refs only: the bytes are never
+/// copied into the profile; resolution reads the exact source at use time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSelfSourcePin {
+    /// A Central source ref in the `central:source:{world_ref}:{relpath}` form
+    /// the source horizon produces (the path member is ref-escaped, so the
+    /// world ref and the relative path separate at the ref's final `:`).
+    pub reference: String,
+    /// `sha256:` plus the lowercase hex sha256 of the exact UTF-8 bytes.
+    pub content_digest: String,
+}
+
+impl AgentSelfSourcePin {
+    /// Validate only Central-owned source structure. This performs no
+    /// filesystem access: resolution is a separate, horizon-admitted act.
+    pub(crate) fn validate(&self, role: &str) -> Result<(), AgentProfileError> {
+        let reference_field = format!("Agent self definition {role} reference");
+        if self.reference.trim().is_empty()
+            || self.reference != self.reference.trim()
+            || self.reference.len() > 1024
+            || self
+                .reference
+                .chars()
+                .any(|value| value.is_control() || value.is_whitespace())
+            || parse_self_source_reference(&self.reference).is_err()
+        {
+            return Err(AgentProfileError::InvalidText(reference_field));
+        }
+        let digest_field = format!("Agent self definition {role} content digest");
+        let hex = self
+            .content_digest
+            .strip_prefix("sha256:")
+            .ok_or_else(|| AgentProfileError::InvalidText(digest_field.clone()))?;
+        if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err(AgentProfileError::InvalidText(digest_field));
+        }
+        Ok(())
+    }
+}
+
+/// The authored Agent-self binding: the Agent's own source and the relational
+/// ground it appears through, each pinned to exact source bytes by digest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSelfDefinition {
+    pub source: AgentSelfSourcePin,
+    pub relational_logos: AgentSelfSourcePin,
+}
+
+impl AgentSelfDefinition {
+    pub(crate) fn validate(&self) -> Result<(), AgentProfileError> {
+        self.source.validate("source")?;
+        self.relational_logos.validate("relational logos")?;
+        Ok(())
+    }
+}
+
+/// The exact bytes of one self source after horizon-admitted resolution, with
+/// the digest that was verified against the pin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentSelfResolvedPin {
+    pub reference: String,
+    pub content_digest: String,
+    pub text: String,
+}
+
+/// Both pins of an Agent self definition resolved to exact bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentSelfResolution {
+    pub source: AgentSelfResolvedPin,
+    pub relational_logos: AgentSelfResolvedPin,
+}
+
+/// Split one `central:source:{world_ref}:{relpath}` ref into its world ref and
+/// relative path. Ref-escaping guarantees the path member of a horizon ref
+/// carries no raw `:`, so the split lands at the final `:`; a hand-written ref
+/// with a raw `:` in its path member simply fails to resolve to the intended
+/// member (and fails its digest) rather than escaping its world.
+pub fn parse_self_source_reference(reference: &str) -> Result<(String, String), AgentProfileError> {
+    let invalid = || {
+        AgentProfileError::InvalidText("Agent self definition source reference".to_string())
+    };
+    let rest = reference.strip_prefix("central:source:").ok_or_else(invalid)?;
+    let (world_ref, relative) = rest.rsplit_once(':').ok_or_else(invalid)?;
+    if world_ref.is_empty() || relative.is_empty() {
+        return Err(invalid());
+    }
+    if crate::source_safety::relative_member(relative).is_err() {
+        return Err(invalid());
+    }
+    Ok((world_ref.to_owned(), relative.to_owned()))
+}
+
+/// Resolve one pinned self source to its exact bytes: parse the ref, admit the
+/// member through the source retrieval horizon, read the exact bytes, and
+/// verify the pinned sha256 digest against them.
+pub fn resolve_self_source_pin(
+    pin: &AgentSelfSourcePin,
+    world_root: &Path,
+) -> Result<AgentSelfResolvedPin, AgentProfileError> {
+    let (_, relative) = parse_self_source_reference(&pin.reference)?;
+    let member = world_root.join(&relative);
+    match crate::source_horizon::retrieval_admission(world_root, &member) {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(AgentProfileError::SelfSourceWithheld {
+                reference: pin.reference.clone(),
+            });
+        }
+        Err(error) => {
+            return Err(AgentProfileError::SelfSourceUnreadable {
+                reference: pin.reference.clone(),
+                reason: error.to_string(),
+            });
+        }
+    }
+    let text = crate::source_safety::read(world_root, &relative).map_err(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            AgentProfileError::SelfSourceMissing {
+                reference: pin.reference.clone(),
+            }
+        } else {
+            AgentProfileError::SelfSourceUnreadable {
+                reference: pin.reference.clone(),
+                reason: error.to_string(),
+            }
+        }
+    })?;
+    let content_digest = format!("sha256:{}", crate::continuous_work::source::key(&text));
+    if content_digest != pin.content_digest {
+        return Err(AgentProfileError::SelfSourceDigestMismatch {
+            reference: pin.reference.clone(),
+            expected: pin.content_digest.clone(),
+            actual: content_digest,
+        });
+    }
+    Ok(AgentSelfResolvedPin {
+        reference: pin.reference.clone(),
+        content_digest,
+        text,
+    })
+}
+
+/// Resolve both pins of an Agent self definition under one world root.
+pub fn resolve_self_definition(
+    definition: &AgentSelfDefinition,
+    world_root: &Path,
+) -> Result<AgentSelfResolution, AgentProfileError> {
+    Ok(AgentSelfResolution {
+        source: resolve_self_source_pin(&definition.source, world_root)?,
+        relational_logos: resolve_self_source_pin(&definition.relational_logos, world_root)?,
+    })
+}
+
 /// Durable Central source describing how an already-existing semantic Agent is
 /// intended to inhabit a personal or Project World.
 ///
@@ -177,6 +334,12 @@ pub struct AgentProfile {
     /// `character`). Refs only: the material itself is never copied here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expressive_character_ref: Option<String>,
+    /// Optional authored Agent-self binding: the Agent's own source and its
+    /// relational ground, each a Central source ref pinned to exact bytes by
+    /// sha256 digest. Refs and digests only: the bytes are resolved at use
+    /// time through the retrieval horizon, never copied into the profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub self_definition: Option<AgentSelfDefinition>,
 }
 
 impl AgentProfile {
@@ -210,6 +373,7 @@ impl AgentProfile {
             provenance_refs: Vec::new(),
             intent_provenance: None,
             expressive_character_ref: None,
+            self_definition: None,
         };
         value.validate_shape()?;
         Ok(value)
@@ -344,6 +508,7 @@ impl AgentProfile {
             source_profile_is_agent_identity: false,
             source_profile_is_effective_profile: false,
             source_profile_is_material_binding: false,
+            self_definition: self.self_definition.clone(),
         }
     }
 
@@ -399,6 +564,9 @@ impl AgentProfile {
                 "Agent Profile expressive character ref".into(),
             ));
         }
+        if let Some(definition) = &self.self_definition {
+            definition.validate()?;
+        }
         if let Some(provenance) = &self.intent_provenance {
             provenance.validate()?;
         }
@@ -418,6 +586,10 @@ pub struct AgentProfileHandoff {
     pub source_profile_is_agent_identity: bool,
     pub source_profile_is_effective_profile: bool,
     pub source_profile_is_material_binding: bool,
+    /// The authored Agent-self binding travels with the profile: a projection
+    /// that silently dropped it would misrepresent the authored ground.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub self_definition: Option<AgentSelfDefinition>,
 }
 
 fn required(value: String, field: &str) -> Result<String, AgentProfileError> {
@@ -510,6 +682,25 @@ pub enum AgentProfileError {
     /// The expressed intent was empty, carried surrounding whitespace, or
     /// contained unsafe characters; an authored profile never rewrites intent.
     InvalidIntentExpression,
+    /// A pinned self source is absent from its owner world.
+    SelfSourceMissing {
+        reference: String,
+    },
+    /// The pinned self source is withheld from Agent retrieval by the horizon.
+    SelfSourceWithheld {
+        reference: String,
+    },
+    /// The pinned self source's exact bytes do not verify against the digest.
+    SelfSourceDigestMismatch {
+        reference: String,
+        expected: String,
+        actual: String,
+    },
+    /// The pinned self source could not be read for a named reason.
+    SelfSourceUnreadable {
+        reference: String,
+        reason: String,
+    },
     World(WorldError),
 }
 
@@ -568,6 +759,24 @@ impl fmt::Display for AgentProfileError {
             Self::InvalidIntentExpression => formatter.write_str(
                 "intent expression must be non-empty, trimmed, and free of unsafe characters",
             ),
+            Self::SelfSourceMissing { reference } => {
+                write!(formatter, "Agent self source is missing: {reference}")
+            }
+            Self::SelfSourceWithheld { reference } => write!(
+                formatter,
+                "Agent self source is withheld from retrieval: {reference}"
+            ),
+            Self::SelfSourceDigestMismatch {
+                reference,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "Agent self source digest mismatch for {reference}: expected {expected}, actual {actual}"
+            ),
+            Self::SelfSourceUnreadable { reference, reason } => {
+                write!(formatter, "Agent self source could not be read: {reference}: {reason}")
+            }
             Self::World(error) => fmt::Display::fmt(error, formatter),
         }
     }
@@ -583,6 +792,7 @@ mod tests {
         ComputerAccessSubject, WorkspaceIntent,
     };
     use crate::world::WorldRecord;
+    use std::fs;
 
     fn world(value: &str) -> WorldRef {
         WorldRef::new(value).unwrap()
@@ -963,5 +1173,275 @@ mod tests {
             profile.validate_shape(),
             Err(AgentProfileError::InvalidText(_))
         ));
+    }
+
+    fn pinned(profile: &mut AgentProfile, reference: &str, digest: &str) {
+        profile.self_definition = Some(AgentSelfDefinition {
+            source: AgentSelfSourcePin {
+                reference: reference.into(),
+                content_digest: digest.into(),
+            },
+            relational_logos: AgentSelfSourcePin {
+                reference: format!("{reference}#relational"),
+                content_digest: digest.into(),
+            },
+        });
+    }
+
+    fn write_self_source(root: &Path, relative: &str, text: &str) -> String {
+        let path = root.join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, text).unwrap();
+        format!("sha256:{}", crate::continuous_work::source::key(text))
+    }
+
+    #[test]
+    fn self_definition_round_trips_and_is_omitted_when_absent() {
+        let (_, personal, _, _) = fixture();
+        let mut profile = AgentProfile::new(
+            "agent-profile:kite",
+            "n1",
+            "agent:kite",
+            AgentProfileScope::Personal,
+            personal,
+        )
+        .unwrap();
+        let plain = serde_json::to_value(&profile).unwrap();
+        assert!(plain.get("self_definition").is_none());
+
+        pinned(
+            &mut profile,
+            "central:source:control:root:Control/self/agents/kite/self.md",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        );
+        profile.validate_shape().unwrap();
+        let encoded = serde_json::to_string(&profile).unwrap();
+        let decoded: AgentProfile = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, profile);
+        assert_eq!(
+            serde_json::to_value(&decoded).unwrap()["self_definition"]["source"]["reference"],
+            "central:source:control:root:Control/self/agents/kite/self.md"
+        );
+
+        // A legacy profile without the field loads unchanged and stays omitted.
+        let legacy: AgentProfile = serde_json::from_value(serde_json::json!({
+            "schema": AGENT_PROFILE_SCHEMA,
+            "ref": "agent-profile:legacy",
+            "revision": "p1",
+            "agent_ref": "agent:legacy",
+            "scope": "personal",
+            "world_ref": "world:personal",
+            "ratified_world_refs": ["world:personal"]
+        }))
+        .unwrap();
+        assert!(legacy.self_definition.is_none());
+        assert!(serde_json::to_value(&legacy)
+            .unwrap()
+            .get("self_definition")
+            .is_none());
+    }
+
+    #[test]
+    fn self_definition_validation_refuses_bad_digest_ref_and_control_chars() {
+        let (_, personal, _, _) = fixture();
+        let mut profile = AgentProfile::new(
+            "agent-profile:kite",
+            "n1",
+            "agent:kite",
+            AgentProfileScope::Personal,
+            personal,
+        )
+        .unwrap();
+        let good_digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let good_ref = "central:source:control:root:Control/self/agents/kite/self.md";
+        pinned(&mut profile, good_ref, good_digest);
+        profile.validate_shape().unwrap();
+
+        for digest in [
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "sha256:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
+            "sha256:0123",
+            "md5:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        ] {
+            pinned(&mut profile, good_ref, digest);
+            assert!(
+                matches!(
+                    profile.validate_shape(),
+                    Err(AgentProfileError::InvalidText(field)) if field.contains("digest"),
+                ),
+                "digest {digest:?} accepted"
+            );
+        }
+
+        for reference in [
+            "Control/self/agents/kite/self.md",
+            "central:source:control:root:",
+            "central:source:",
+            "central:source::Control/self/agents/kite/self.md",
+            "central:source:control:root:../escape.md",
+            " central:source:control:root:self.md",
+            "central:source:control:root:self\u{7}.md",
+            "central:source:control:root:path with space.md",
+        ] {
+            pinned(&mut profile, reference, good_digest);
+            assert!(
+                matches!(
+                    profile.validate_shape(),
+                    Err(AgentProfileError::InvalidText(field)) if field.contains("reference"),
+                ),
+                "reference {reference:?} accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn self_definition_sources_resolve_to_exact_bytes_or_name_the_failure() {
+        let root = crate::tempdir().unwrap();
+        let world_root = root.path();
+        let digest = write_self_source(
+            world_root,
+            "Control/self/agents/kite/self.md",
+            "I am the kite: I read before I write.",
+        );
+        let logos_digest = write_self_source(
+            world_root,
+            "Control/self/agents/kite/relational-logos.md",
+            "You act from within a relation.",
+        );
+        let definition = AgentSelfDefinition {
+            source: AgentSelfSourcePin {
+                reference: "central:source:control:root:Control/self/agents/kite/self.md".into(),
+                content_digest: digest,
+            },
+            relational_logos: AgentSelfSourcePin {
+                reference:
+                    "central:source:control:root:Control/self/agents/kite/relational-logos.md"
+                        .into(),
+                content_digest: logos_digest.clone(),
+            },
+        };
+
+        let resolved = resolve_self_definition(&definition, world_root).unwrap();
+        assert_eq!(
+            resolved.source.text,
+            "I am the kite: I read before I write."
+        );
+        assert_eq!(
+            resolved.relational_logos.text,
+            "You act from within a relation."
+        );
+        assert_eq!(resolved.source.reference, definition.source.reference);
+        assert_eq!(
+            resolved.source.content_digest,
+            definition.source.content_digest
+        );
+
+        // A changed file no longer verifies against its pin.
+        write_self_source(
+            world_root,
+            "Control/self/agents/kite/self.md",
+            "The bytes moved on.",
+        );
+        assert_eq!(
+            resolve_self_definition(&definition, world_root).unwrap_err(),
+            AgentProfileError::SelfSourceDigestMismatch {
+                reference: definition.source.reference.clone(),
+                expected: definition.source.content_digest.clone(),
+                actual: format!(
+                    "sha256:{}",
+                    crate::continuous_work::source::key("The bytes moved on.")
+                ),
+            }
+        );
+        write_self_source(
+            world_root,
+            "Control/self/agents/kite/self.md",
+            "I am the kite: I read before I write.",
+        );
+
+        // A missing source is named, not paraphrased.
+        let missing = AgentSelfDefinition {
+            relational_logos: definition.relational_logos.clone(),
+            source: AgentSelfSourcePin {
+                reference: "central:source:control:root:Control/self/agents/kite/absent.md".into(),
+                content_digest: definition.source.content_digest.clone(),
+            },
+        };
+        assert_eq!(
+            resolve_self_definition(&missing, world_root).unwrap_err(),
+            AgentProfileError::SelfSourceMissing {
+                reference: missing.source.reference.clone(),
+            }
+        );
+
+        // A source behind a retrieval deny marker is withheld by the horizon.
+        fs::create_dir_all(world_root.join("Control/self/agents/sealed")).unwrap();
+        fs::write(world_root.join("Control/self/agents/sealed/self.md"), "sealed").unwrap();
+        fs::write(world_root.join("Control/self/agents/sealed/.no-agent-retrieval"), b"").unwrap();
+        let withheld = AgentSelfDefinition {
+            source: AgentSelfSourcePin {
+                reference: "central:source:control:root:Control/self/agents/kite/self.md".into(),
+                content_digest: definition.source.content_digest.clone(),
+            },
+            relational_logos: AgentSelfSourcePin {
+                reference:
+                    "central:source:control:root:Control/self/agents/sealed/relational-logos.md"
+                        .into(),
+                content_digest: logos_digest,
+            },
+        };
+        assert!(matches!(
+            resolve_self_definition(&withheld, world_root).unwrap_err(),
+            AgentProfileError::SelfSourceWithheld { .. }
+        ));
+    }
+
+    #[test]
+    fn project_variant_and_handoff_carry_self_definition() {
+        let (graph, personal, project, _) = fixture();
+        let mut personal_profile = AgentProfile::new(
+            "agent-profile:kite",
+            "p1",
+            "agent:kite",
+            AgentProfileScope::Personal,
+            personal,
+        )
+        .unwrap();
+        pinned(
+            &mut personal_profile,
+            "central:source:control:root:Control/self/agents/kite/self.md",
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        );
+        let project_profile = personal_profile
+            .project_variant("agent-profile:kite:factory", "j1", project, &graph)
+            .unwrap();
+        assert_eq!(project_profile.self_definition, personal_profile.self_definition);
+
+        let handoff = personal_profile.handoff();
+        assert_eq!(handoff.self_definition, personal_profile.self_definition);
+        let encoded = serde_json::to_value(&handoff).unwrap();
+        assert_eq!(
+            encoded["self_definition"]["source"]["reference"],
+            "central:source:control:root:Control/self/agents/kite/self.md"
+        );
+
+        // Absent stays absent in both projections.
+        let (_, personal, project, _) = fixture();
+        let plain = AgentProfile::new(
+            "agent-profile:plain",
+            "p1",
+            "agent:plain",
+            AgentProfileScope::Personal,
+            personal,
+        )
+        .unwrap();
+        let project_plain = plain
+            .project_variant("agent-profile:plain:factory", "j1", project, &graph)
+            .unwrap();
+        assert!(project_plain.self_definition.is_none());
+        assert!(serde_json::to_value(plain.handoff())
+            .unwrap()
+            .get("self_definition")
+            .is_none());
     }
 }
