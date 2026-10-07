@@ -343,12 +343,23 @@ pub(crate) fn field(scope: &Scope, input: &Value, now: u64) -> io::Result<Value>
     // never mirrored: a remote block is one availability reading plus its
     // routing provenance, not a copy of the other machine.
     let mut gateway_remotes_reading: Option<Value> = None;
+    // Cross-cell connection records (the workcell owner's own registry) join
+    // a declared remote to its actual client-side connection state: declared,
+    // connected, and reachable are different facts and every one of them is
+    // carried, never collapsed.
+    let connection_records = if include_material {
+        Some(owner_reading("workcell", &["connections", "list", "--json"], now))
+    } else {
+        None
+    };
     if include_gateway {
         let list = owner_reading("aikit", &["gateway", "remote", "list", "--json"], now);
         if list["available"].as_bool() == Some(true) {
             // Probe every declared remote concurrently: one slow machine
             // must not stretch the whole field by its own timeout.
-            let mut pending: Vec<(String, Value, std::sync::mpsc::Receiver<Value>)> = Vec::new();
+            let mut pending: Vec<
+                (String, Value, std::sync::mpsc::Receiver<Value>, Option<Value>),
+            > = Vec::new();
             for remote in list["reading"]["data"]["remotes"]
                 .as_array()
                 .cloned()
@@ -380,12 +391,41 @@ pub(crate) fn field(scope: &Scope, input: &Value, now: u64) -> io::Result<Value>
                     &["gateway", "status", "--at", reference.as_str(), "--json"],
                     now,
                 );
-                pending.push((reference, remote, status));
+                let connection = connection_records
+                    .as_ref()
+                    .and_then(|records| {
+                        records["reading"]["connections"]
+                            .as_array()
+                            .map(|rows| {
+                                rows.iter()
+                                    .find(|row| {
+                                        row["workcell_ref"].as_str() == Some(reference.as_str())
+                                            || row["label"].as_str()
+                                                == Some(reference.strip_prefix("workcell:").unwrap_or(reference.as_str()))
+                                            || row["connection"].as_str()
+                                                == Some(reference.strip_prefix("workcell:").unwrap_or(reference.as_str()))
+                                    })
+                                    .cloned()
+                            })
+                            .unwrap_or(None)
+                    });
+                pending.push((reference, remote, status, connection));
             }
-            for (reference, remote, receiver) in pending {
+            for (reference, remote, receiver, connection) in pending {
                 let status = receiver
                     .recv()
                     .unwrap_or_else(|_| json!({"available": false, "reason": "remote gateway reading thread ended without an answer"}));
+                let mut material = json!({
+                    "available": false,
+                    "observation_scope": "remote-ground",
+                    "reason": "this Workcell's NOW plane and material census live on their own ground and are not mirrored here; its Gateway is the addressable part",
+                });
+                if let Some(record) = connection {
+                    material["connection"] = json!({
+                        "record": record,
+                        "note": "the workcell owner's own cross-cell connection record; census composition follows the owner's per-connection reading",
+                    });
+                }
                 workcells.push(json!({
                     "workcell_ref": reference,
                     "root": Value::Null,
@@ -397,11 +437,7 @@ pub(crate) fn field(scope: &Scope, input: &Value, now: u64) -> io::Result<Value>
                         "websocket_bind": remote["websocket_bind"],
                         "route": "aikit gateway status --at — the answer names the gateway that produced it",
                     },
-                    "material": {
-                        "available": false,
-                        "observation_scope": "remote-ground",
-                        "reason": "this Workcell's NOW plane and material census live on their own ground and are not mirrored here; its Gateway is the addressable part",
-                    },
+                    "material": material,
                     "gateway": {
                         "available": status["available"].as_bool() == Some(true),
                         "observation_scope": "remote-declared",

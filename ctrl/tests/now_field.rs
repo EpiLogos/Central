@@ -466,3 +466,49 @@ fn field_names_unreadable_remote_declarations_instead_of_dropping_them() {
         "no remote block is invented when the declaration list cannot be read"
     );
 }
+
+#[test]
+fn field_joins_a_remote_connection_record_to_its_declared_block() {
+    let world = World::new();
+    world.workcell_root();
+    let dir = unique("central-now-field-conn");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("places.json"), CANNED_CENSUS).unwrap();
+    fs::write(dir.join("status.json"), CANNED_STATUS).unwrap();
+    fs::write(dir.join("instances.json"), CANNED_INSTANCES).unwrap();
+    fs::write(dir.join("gateway-status.json"), CANNED_GATEWAY).unwrap();
+    fs::write(dir.join("gateway-remote.json"), CANNED_GATEWAY_REMOTES).unwrap();
+    fs::write(
+        dir.join("connections.json"),
+        r#"{"ok":true,"connections":[{"label":"mac","workcell_ref":"workcell:mac","endpoint":"100.109.102.82:7777","state":"connected"}]}"#,
+    )
+    .unwrap();
+    let bin = stub_owners(&dir, &[("workcell", &writing_stub()), ("aikit", &writing_stub())]);
+
+    let field = with_path(&bin, || world.field(&json!({})));
+    let mac = field["workcells"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|block| block["workcell_ref"] == "workcell:mac")
+        .expect("declared remote present");
+    let connection = &mac["material"]["connection"];
+    assert_eq!(
+        connection["record"]["state"], "connected",
+        "the owner's own connection record is carried, joined by ref/label"
+    );
+    assert!(connection["note"].as_str().unwrap().contains("owner"));
+
+    // Without a matching record the material block stays the honest
+    // remote-ground reading with no invented connection.
+    fs::write(dir.join("connections.json"), r#"{"ok":true,"connections":[]}"#).unwrap();
+    let field = with_path(&bin, || world.field(&json!({})));
+    let mac = field["workcells"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|block| block["workcell_ref"] == "workcell:mac")
+        .unwrap();
+    assert!(mac["material"]["connection"].is_null());
+    assert_eq!(mac["material"]["observation_scope"], "remote-ground");
+}
