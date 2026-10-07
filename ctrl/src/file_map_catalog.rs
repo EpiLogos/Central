@@ -18,6 +18,13 @@ pub(crate) const MAX_ENTRIES: usize = 1_000_000;
 #[derive(Clone, Debug)]
 pub(crate) struct Scope {
     pub root: PathBuf,
+    /// Where this scope's derived state lives: its bkmr database, bindings
+    /// index, caches, locks and relation edits. A scope inside the ground keeps
+    /// them under `root`. An external scope — an absolute path outside the
+    /// ground, such as a folder in ~/Documents — is read-only: placement.json
+    /// grants no writes there, so its state lives under
+    /// `<ground>/.central/scopes/<name>` instead.
+    pub state: PathBuf,
     pub world: String,
     pub project: Option<String>,
 }
@@ -414,10 +421,23 @@ impl Scope {
         let manifest = project_manifest(&root)
             .map_err(|error| read_failure(error, "known", "project_declaration", "unavailable"))?;
         Ok(Self {
+            state: root.clone(),
             root,
             world: format!("project:{}", manifest.project_id),
             project,
         })
+    }
+    pub fn is_external(&self) -> bool {
+        self.state != self.root
+    }
+    /// The relations document an external scope is read from: its own
+    /// ProjectCentral copy until the ground has edited it, then the ground's.
+    fn relations_root(&self) -> &Path {
+        if self.is_external() && self.state.join(self.relations_path()).is_file() {
+            &self.state
+        } else {
+            &self.root
+        }
     }
     pub fn relations_path(&self) -> &'static str {
         if self.world == "control:root" {
@@ -427,7 +447,7 @@ impl Scope {
         }
     }
     pub(crate) fn observed_document(&self) -> io::Result<(Value, String)> {
-        let (doc, basis) = metadata_document(&self.root, self.relations_path())?;
+        let (doc, basis) = metadata_document(self.relations_root(), self.relations_path())?;
         if !doc.is_null() {
             let (schema, id) = if self.world == "control:root" {
                 (
@@ -477,16 +497,16 @@ impl Scope {
         }
         doc["file_map"] = serde_json::to_value(ground)?;
         let path = Path::new(self.relations_path());
-        safe_directory(&self.root, path.parent().unwrap())?;
+        safe_directory(&self.state, path.parent().unwrap())?;
         write_atomic(
-            &self.root,
-            &self.root.join(path),
+            &self.state,
+            &self.state.join(path),
             &serde_json::to_vec_pretty(&doc)?,
             crate::file_mutation::RecordDisposition::ReplaceOrCreate,
         )
     }
     pub fn index(&self) -> io::Result<Index> {
-        let path = safe_member(&self.root, INDEX, false)?;
+        let path = safe_member(&self.state, INDEX, false)?;
         if !path.exists() {
             return Ok(Index {
                 schema: SCHEMA.into(),
@@ -502,9 +522,10 @@ impl Scope {
         Ok(index)
     }
     pub fn save_index(&self, index: &Index) -> io::Result<()> {
+        safe_directory(&self.state, Path::new(INDEX).parent().unwrap())?;
         write_atomic(
-            &self.root,
-            &self.root.join(INDEX),
+            &self.state,
+            &self.state.join(INDEX),
             &serde_json::to_vec_pretty(index)?,
             crate::file_mutation::RecordDisposition::ReplaceOrCreate,
         )
@@ -528,6 +549,7 @@ pub(crate) fn scopes(root: &Path) -> io::Result<Vec<Scope>> {
     }
     let base = Scope {
         root: root.into(),
+        state: root.into(),
         world: "control:root".into(),
         project: None,
     };
@@ -570,13 +592,28 @@ pub(crate) fn scopes(root: &Path) -> io::Result<Vec<Scope>> {
             safe_member(root, &path, true)
         }
         .map_err(|error| read_failure(error, "known", "owner_root", "unavailable"))?;
-        let scope = Scope::project(target, Some(name))?;
+        let external = !target.starts_with(root);
+        let mut scope = Scope::project(target, Some(name.clone()))?;
+        if external {
+            scope.state = external_state(root, &name)?;
+        }
         if !seen.insert(scope.world.clone()) {
             return Err(invalid("Duplicate participating Project World identity"));
         }
         result.push(scope);
     }
     Ok(result)
+}
+/// The ground-side home of an external scope's derived state, created on
+/// first sight so locks and indexes never fall back into the external tree.
+pub(crate) fn external_state(root: &Path, name: &str) -> io::Result<PathBuf> {
+    let relative = relative(name)?;
+    if relative.components().count() != 1 {
+        return Err(invalid("External scope name must be one path component"));
+    }
+    let member = Path::new(".central/scopes").join(relative);
+    safe_directory(root, &member)?;
+    Ok(root.join(member))
 }
 pub(crate) fn selected<'a>(scopes: &'a [Scope], input: &Value) -> io::Result<&'a Scope> {
     match input.get("project").and_then(Value::as_str) {

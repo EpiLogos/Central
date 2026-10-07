@@ -21,16 +21,16 @@ pub(crate) fn adopt(scope: &Scope, input: &Value) -> io::Result<Value> {
     } else {
         safe_member(&scope.root, raw, true)?
     };
-    let backend = Backend::new(&scope.root);
+    let backend = Backend::for_scope(scope);
     if fs::symlink_metadata(backend.db()).is_ok()
-        || scope.root.join(".central/bkmr/adoption.json").exists()
+        || scope.state.join(".central/bkmr/adoption.json").exists()
     {
         return Err(conflict(
             "The map already has a database or adoption receipt; neither is overwritten",
         ));
     }
-    safe_directory(&scope.root, Path::new(".central/bkmr"))?;
-    let backup = scope.root.join(".central/bkmr/adopted-original.db");
+    safe_directory(&scope.state, Path::new(".central/bkmr"))?;
+    let backup = scope.state.join(".central/bkmr/adopted-original.db");
     if fs::symlink_metadata(&backup).is_ok() {
         return Err(conflict(
             "A retained original backup exists; explicit recovery is required",
@@ -41,7 +41,7 @@ pub(crate) fn adopt(scope: &Scope, input: &Value) -> io::Result<Value> {
         return Err(invalid("Source is not a SQLite database"));
     }
     let stage = scope
-        .root
+        .state
         .join(format!(".central/bkmr/adopt-{}.db", std::process::id()));
     let file = fs::OpenOptions::new()
         .create_new(true)
@@ -73,8 +73,8 @@ pub(crate) fn adopt(scope: &Scope, input: &Value) -> io::Result<Value> {
         let receipt = json!({"schema":"central.bkmr-adoption/v1","source_database":source,"source_main_revision":content_revision_bytes(&before),"backup":".central/bkmr/adopted-original.db","backup_revision":content_revision_bytes(&fs::read(&backup)?),"status":"backed-up"});
         backup_read_observed = true;
         write_atomic(
-            &scope.root,
-            &scope.root.join(".central/bkmr/adoption.json"),
+            &scope.state,
+            &scope.state.join(".central/bkmr/adoption.json"),
             &serde_json::to_vec_pretty(&receipt)?,
             crate::file_mutation::RecordDisposition::CreateNew,
         )?;
@@ -96,8 +96,8 @@ pub(crate) fn adopt(scope: &Scope, input: &Value) -> io::Result<Value> {
         receipt["status"] = json!("adopted");
         receipt["retained_records"] = json!(records.len());
         write_atomic(
-            &scope.root,
-            &scope.root.join(".central/bkmr/adoption.json"),
+            &scope.state,
+            &scope.state.join(".central/bkmr/adoption.json"),
             &serde_json::to_vec_pretty(&receipt)?,
             crate::file_mutation::RecordDisposition::ReplaceOrCreate,
         )?;
@@ -136,7 +136,7 @@ pub(crate) fn record_adopt(scope: &Scope, input: &Value) -> io::Result<Value> {
         .as_i64()
         .filter(|id| *id > 0)
         .ok_or_else(|| invalid("A positive record_id is required"))?;
-    let backend = Backend::new(&scope.root);
+    let backend = Backend::for_scope(scope);
     let records = backend.records()?;
     let row = records
         .iter()
@@ -206,6 +206,10 @@ pub(crate) fn scope_register(all: &[Scope], input: &Value) -> io::Result<Value> 
     let external = Path::new(raw).is_absolute();
     if external && input["allow_external"] != true {
         return Err(invalid("External scope requires allow_external=true"));
+    }
+    // An external scope's state lives at <ground>/.central/scopes/<name>.
+    if external && Path::new(name).components().count() != 1 {
+        return Err(invalid("External scope name must be one path component"));
     }
     let path = if external {
         safe_member(Path::new("/"), raw.trim_start_matches('/'), true)?
