@@ -273,7 +273,8 @@ pub fn execute_with_token_at(
     // A profile that binds self sources is only acceptable while both pins
     // resolve to their exact digested bytes. The named refusal precedes any
     // receipt write: acceptance can never claim an unresolved self source.
-    let self_definition: Option<AgentSelfDefinition> = match current["profile"].get("self_definition")
+    let self_definition: Option<AgentSelfDefinition> = match current["profile"]
+        .get("self_definition")
     {
         Some(value) => Some(
             serde_json::from_value(value.clone()).map_err(|error| invalid(error.to_string()))?,
@@ -312,9 +313,7 @@ pub fn execute_with_token_at(
         // The verified pins are recorded on the receipt: this acceptance
         // recognised a self bound to exactly this source evidence.
         self_source: self_definition.as_ref().map(|d| d.source.clone()),
-        relational_logos: self_definition
-            .as_ref()
-            .map(|d| d.relational_logos.clone()),
+        relational_logos: self_definition.as_ref().map(|d| d.relational_logos.clone()),
     };
     // Immutable evidence lives in Central's native state, not the generated
     // profile directory or a renderer Agent store. Descriptor-relative native

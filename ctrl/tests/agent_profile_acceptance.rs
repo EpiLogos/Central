@@ -73,17 +73,17 @@ fn self_source_pin(root: &Path, relative: &str, text: &str) -> Value {
 fn self_binding(root: &Path) -> (Value, String, String) {
     let self_text = "I read before I write; I return what I borrow.";
     let logos_text = "You act from within a relation.";
-    let source = self_source_pin(
-        root,
-        "Control/self/agents/test-creation/self.md",
-        self_text,
-    );
+    let source = self_source_pin(root, "Control/self/agents/test-creation/self.md", self_text);
     let logos = self_source_pin(
         root,
         "Control/self/agents/test-creation/relational-logos.md",
         logos_text,
     );
-    (json!({"source": source, "relational_logos": logos}), self_text.into(), logos_text.into())
+    (
+        json!({"source": source, "relational_logos": logos}),
+        self_text.into(),
+        logos_text.into(),
+    )
 }
 fn proposal_with_self(root: &Path) -> (AgentProfile, Value) {
     let (binding, _, _) = self_binding(root);
@@ -282,7 +282,10 @@ fn self_pinned_review_shows_exact_text_and_acceptance_records_verified_pins() {
         r["self_definition"]["relational_logos"]["text"],
         "You act from within a relation."
     );
-    assert_eq!(r["self_definition"]["source"]["reference"], binding["source"]["reference"]);
+    assert_eq!(
+        r["self_definition"]["source"]["reference"],
+        binding["source"]["reference"]
+    );
     assert_eq!(
         r["self_definition"]["source"]["content_digest"],
         binding["source"]["content_digest"]

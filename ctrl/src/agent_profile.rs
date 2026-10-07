@@ -137,7 +137,10 @@ impl AgentSelfSourcePin {
             .content_digest
             .strip_prefix("sha256:")
             .ok_or_else(|| AgentProfileError::InvalidText(digest_field.clone()))?;
-        if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        if hex.len() != 64
+            || !hex
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
         {
             return Err(AgentProfileError::InvalidText(digest_field));
         }
@@ -183,10 +186,11 @@ pub struct AgentSelfResolution {
 /// with a raw `:` in its path member simply fails to resolve to the intended
 /// member (and fails its digest) rather than escaping its world.
 pub fn parse_self_source_reference(reference: &str) -> Result<(String, String), AgentProfileError> {
-    let invalid = || {
-        AgentProfileError::InvalidText("Agent self definition source reference".to_string())
-    };
-    let rest = reference.strip_prefix("central:source:").ok_or_else(invalid)?;
+    let invalid =
+        || AgentProfileError::InvalidText("Agent self definition source reference".to_string());
+    let rest = reference
+        .strip_prefix("central:source:")
+        .ok_or_else(invalid)?;
     let (world_ref, relative) = rest.rsplit_once(':').ok_or_else(invalid)?;
     if world_ref.is_empty() || relative.is_empty() {
         return Err(invalid());
@@ -1376,8 +1380,16 @@ mod tests {
 
         // A source behind a retrieval deny marker is withheld by the horizon.
         fs::create_dir_all(world_root.join("Control/self/agents/sealed")).unwrap();
-        fs::write(world_root.join("Control/self/agents/sealed/self.md"), "sealed").unwrap();
-        fs::write(world_root.join("Control/self/agents/sealed/.no-agent-retrieval"), b"").unwrap();
+        fs::write(
+            world_root.join("Control/self/agents/sealed/self.md"),
+            "sealed",
+        )
+        .unwrap();
+        fs::write(
+            world_root.join("Control/self/agents/sealed/.no-agent-retrieval"),
+            b"",
+        )
+        .unwrap();
         let withheld = AgentSelfDefinition {
             source: AgentSelfSourcePin {
                 reference: "central:source:control:root:Control/self/agents/kite/self.md".into(),
@@ -1415,7 +1427,10 @@ mod tests {
         let project_profile = personal_profile
             .project_variant("agent-profile:kite:factory", "j1", project, &graph)
             .unwrap();
-        assert_eq!(project_profile.self_definition, personal_profile.self_definition);
+        assert_eq!(
+            project_profile.self_definition,
+            personal_profile.self_definition
+        );
 
         let handoff = personal_profile.handoff();
         assert_eq!(handoff.self_definition, personal_profile.self_definition);

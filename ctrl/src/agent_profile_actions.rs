@@ -591,21 +591,20 @@ fn propose_action_with_origin(
     // The self binding travels as a whole JSON object and is typed-parsed and
     // validated here: a malformed binding is refused, never silently dropped.
     if let Some(value) = input.get("self_definition") {
-        profile.self_definition = match serde_json::from_value::<Option<AgentSelfDefinition>>(
-            value.clone(),
-        ) {
-            Ok(definition) => definition,
-            Err(error) => {
-                return ActionResult::failure(
-                    Some(AGENT_PROFILE_PROPOSE_ACTION),
-                    ResultStatus::InvalidInput,
-                    format!(
+        profile.self_definition =
+            match serde_json::from_value::<Option<AgentSelfDefinition>>(value.clone()) {
+                Ok(definition) => definition,
+                Err(error) => {
+                    return ActionResult::failure(
+                        Some(AGENT_PROFILE_PROPOSE_ACTION),
+                        ResultStatus::InvalidInput,
+                        format!(
                         "self_definition is not a valid Agent self definition document: {error}"
                     ),
-                    None,
-                );
-            }
-        };
+                        None,
+                    );
+                }
+            };
     }
     let assignments: Result<(), String> = (|| {
         profile.governance_refs = optional_ref_list(input, "governance_refs")?;
@@ -1498,17 +1497,15 @@ mod tests {
         plain_input["agent_ref"] = json!("agent:plain-self");
         let plain = registry.execute(AGENT_PROFILE_PROPOSE_ACTION, &plain_input, &context);
         assert!(plain.ok, "{plain:?}");
-        assert!(plain
-            .data
-            .as_ref()
-            .unwrap()["profile"]
+        assert!(plain.data.as_ref().unwrap()["profile"]
             .get("self_definition")
             .is_none());
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn public_propose_cannot_spoof_origin_action() {        let root = fixture_root();
+    fn public_propose_cannot_spoof_origin_action() {
+        let root = fixture_root();
         let registry = registry();
         let mut options = None;
         let mut connectors = None;
