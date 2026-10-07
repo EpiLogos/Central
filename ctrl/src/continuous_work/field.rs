@@ -155,6 +155,24 @@ fn capped(value: &Value, field: &str, max: usize) -> (Value, usize) {
     (bounded, rows.len() - max)
 }
 
+/// One owner reading bundle for the local cell, run on its own thread so a
+/// degraded owner cannot serialise its timeout across the whole field: the
+/// composed reading costs roughly its slowest call, not the sum of them.
+fn owner_reading_threaded(
+    program: &str,
+    args: &[&str],
+    now: u64,
+) -> std::sync::mpsc::Receiver<Value> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let program = program.to_owned();
+    let args: Vec<String> = args.iter().map(|value| value.to_string()).collect();
+    std::thread::spawn(move || {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let _ = sender.send(owner_reading(&program, &args, now));
+    });
+    receiver
+}
+
 /// The full composed field over this scope's Workcell-root NOWs.
 pub(crate) fn field(scope: &Scope, input: &Value, now: u64) -> io::Result<Value> {
     if now == 0 {
@@ -204,16 +222,23 @@ pub(crate) fn field(scope: &Scope, input: &Value, now: u64) -> io::Result<Value>
             .any(|(record, _)| record.workcell_ref.as_deref() == Some(reference.as_str()))
     });
     let material_reading = if include_material && local_requested {
+        let census = owner_reading_threaded("workcell", &["places", "--json"], now);
+        let status = owner_reading_threaded("workcell", &["status", "--json"], now);
+        let instances = owner_reading_threaded("workcell", &["instances", "list", "--json"], now);
         Some(json!({
-            "census": owner_reading("workcell", &["places", "--json"], now),
-            "status": owner_reading("workcell", &["status", "--json"], now),
-            "instances": owner_reading("workcell", &["instances", "list", "--json"], now),
+            "census": census.recv().unwrap_or_else(|_| json!({"available": false, "reason": "census reading thread ended without an answer"})),
+            "status": status.recv().unwrap_or_else(|_| json!({"available": false, "reason": "status reading thread ended without an answer"})),
+            "instances": instances.recv().unwrap_or_else(|_| json!({"available": false, "reason": "instances reading thread ended without an answer"})),
         }))
     } else {
         None
     };
     let gateway_reading = if include_gateway && local_requested {
-        Some(owner_reading("aikit", &["gateway", "status", "--json"], now))
+        Some(
+            owner_reading_threaded("aikit", &["gateway", "status", "--json"], now)
+                .recv()
+                .unwrap_or_else(|_| json!({"available": false, "reason": "gateway reading thread ended without an answer"})),
+        )
     } else {
         None
     };
@@ -309,6 +334,85 @@ pub(crate) fn field(scope: &Scope, input: &Value, now: u64) -> io::Result<Value>
             }));
         }
     }
+
+    // Declared remote Workcells: AIKit's own remote-gateway declarations name
+    // other machines this home can reach. The Gateway behind a declared
+    // remote is observable from here through that route — the one piece of
+    // the other machine that is genuinely addressable without copying it.
+    // The remote ground's NOW plane and material census live there and are
+    // never mirrored: a remote block is one availability reading plus its
+    // routing provenance, not a copy of the other machine.
+    let mut gateway_remotes_reading: Option<Value> = None;
+    if include_gateway {
+        let list = owner_reading("aikit", &["gateway", "remote", "list", "--json"], now);
+        if list["available"].as_bool() == Some(true) {
+            // Probe every declared remote concurrently: one slow machine
+            // must not stretch the whole field by its own timeout.
+            let mut pending: Vec<(String, Value, std::sync::mpsc::Receiver<Value>)> = Vec::new();
+            for remote in list["reading"]["data"]["remotes"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+            {
+                let reference = match remote["workcell_ref"].as_str() {
+                    Some(value) if !value.is_empty() => value.to_string(),
+                    _ => continue,
+                };
+                if placement::validate_workcell_ref(&reference).is_err() {
+                    continue;
+                }
+                if roots.iter().any(|(record, _)| {
+                    record.workcell_ref.as_deref() == Some(reference.as_str())
+                }) {
+                    continue;
+                }
+                if !filter.is_empty() && !filter.iter().any(|wanted| wanted == &reference) {
+                    continue;
+                }
+                if workcells
+                    .iter()
+                    .any(|block| block["workcell_ref"] == reference)
+                {
+                    continue;
+                }
+                let status = owner_reading_threaded(
+                    "aikit",
+                    &["gateway", "status", "--at", reference.as_str(), "--json"],
+                    now,
+                );
+                pending.push((reference, remote, status));
+            }
+            for (reference, remote, receiver) in pending {
+                let status = receiver
+                    .recv()
+                    .unwrap_or_else(|_| json!({"available": false, "reason": "remote gateway reading thread ended without an answer"}));
+                workcells.push(json!({
+                    "workcell_ref": reference,
+                    "root": Value::Null,
+                    "children": [],
+                    "children_count": 0,
+                    "children_unscanned": [],
+                    "remote_declaration": {
+                        "token_location": remote["token_location"],
+                        "websocket_bind": remote["websocket_bind"],
+                        "route": "aikit gateway status --at — the answer names the gateway that produced it",
+                    },
+                    "material": {
+                        "available": false,
+                        "observation_scope": "remote-ground",
+                        "reason": "this Workcell's NOW plane and material census live on their own ground and are not mirrored here; its Gateway is the addressable part",
+                    },
+                    "gateway": {
+                        "available": status["available"].as_bool() == Some(true),
+                        "observation_scope": "remote-declared",
+                        "status": status,
+                    },
+                }));
+            }
+        } else {
+            gateway_remotes_reading = Some(list);
+        }
+    }
     let missing: Vec<String> = filter
         .iter()
         .filter(|reference| {
@@ -340,6 +444,7 @@ pub(crate) fn field(scope: &Scope, input: &Value, now: u64) -> io::Result<Value>
         "workcells": workcells,
         "missing_workcell_roots": missing,
         "unjoined_local": unjoined_local,
+        "gateway_remotes_unavailable": gateway_remotes_reading,
         "horizon": placement::horizon_reading(scope)?,
         "bounds": {
             "subprocess_timeout_ms": SUBPROCESS_TIMEOUT_MS,

@@ -171,6 +171,9 @@ const CANNED_INSTANCES: &str = r#"{"ok":true,"workcell_ref":"workcell:local","in
    "harness_ref":"harness/pi","instance_ref":"instance:pi:stub","liveness":"live","observed_at":"unix:1000",
    "pids":[11],"schema":"workcell.harness-instance/v1","seams":[],"workcell_ref":"workcell:local"}]}"#;
 
+const CANNED_GATEWAY_REMOTES: &str = r#"{"ok":true,"schema":1,"warnings":[],
+  "data":{"remotes":[{"workcell_ref":"workcell:mac","token_location":"file:/tmp/mac.token","websocket_bind":"100.109.102.82:7788","websocket_path":"/"}]},"type":"remotes"}"#;
+
 const CANNED_GATEWAY: &str = r#"{"ok":true,"schema":1,"warnings":[],
   "data":{"type":"status","status":{"version":"aikit.agency-gateway/v1","gateway_ref":"agency-gateway/stub",
   "binding_count":1,"stream_count":2,"delivery_receipt_count":3,"pending_delivery_count":0,
@@ -187,7 +190,6 @@ esac
 "#
     .to_string()
 }
-
 const FAILING_STUB: &str = "#!/bin/sh\necho \"stub owner refused: controlled failure\" >&2\nexit 3\n";
 
 #[test]
@@ -387,4 +389,80 @@ fn field_refuses_malformed_workcell_filters() {
     )
     .unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+}
+
+#[test]
+fn field_includes_declared_remote_gateways_without_mirroring_their_ground() {
+    let world = World::new();
+    world.workcell_root();
+    let dir = unique("central-now-field-remote");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("places.json"), CANNED_CENSUS).unwrap();
+    fs::write(dir.join("status.json"), CANNED_STATUS).unwrap();
+    fs::write(dir.join("instances.json"), CANNED_INSTANCES).unwrap();
+    fs::write(dir.join("gateway-status.json"), CANNED_GATEWAY).unwrap();
+    fs::write(dir.join("gateway-remote.json"), CANNED_GATEWAY_REMOTES).unwrap();
+    let bin = stub_owners(&dir, &[("workcell", &writing_stub()), ("aikit", &writing_stub())]);
+
+    let field = with_path(&bin, || world.field(&json!({})));
+    let blocks = field["workcells"].as_array().unwrap();
+    let mac = blocks
+        .iter()
+        .find(|block| block["workcell_ref"] == "workcell:mac")
+        .expect("the declared remote appears beside the local root");
+    // A remote block is one availability reading, not a mirror: no root NOW,
+    // no children, and its material explicitly lives on its own ground.
+    assert!(mac["root"].is_null());
+    assert_eq!(mac["children_count"], 0);
+    assert_eq!(mac["material"]["available"], false);
+    assert_eq!(mac["material"]["observation_scope"], "remote-ground");
+    // The Gateway behind the declared remote is the addressable part, with
+    // the routing provenance the owner's own command carries.
+    assert_eq!(mac["gateway"]["available"], true);
+    assert_eq!(mac["gateway"]["observation_scope"], "remote-declared");
+    assert_eq!(
+        mac["gateway"]["status"]["reading"]["data"]["status"]["gateway_ref"],
+        "agency-gateway/stub"
+    );
+    assert_eq!(
+        mac["remote_declaration"]["websocket_bind"],
+        "100.109.102.82:7788"
+    );
+    assert!(
+        blocks.iter().any(|block| block["workcell_ref"] == "workcell:local"),
+        "the local root is still present beside the remote"
+    );
+
+    // Omitting the gateway reading omits the remote blocks entirely: nothing
+    // is observed that the caller did not ask for.
+    let field = with_path(&bin, || world.field(&json!({"include_gateway": false})));
+    assert!(
+        !field["workcells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|block| block["workcell_ref"] == "workcell:mac")
+    );
+}
+
+#[test]
+fn field_names_unreadable_remote_declarations_instead_of_dropping_them() {
+    let world = World::new();
+    world.workcell_root();
+    let dir = unique("central-now-field-remote-dead");
+    fs::create_dir_all(&dir).unwrap();
+    // Only the failing stub is on PATH: the remote list cannot be read.
+    let bin = stub_owners(&dir, &[("aikit", FAILING_STUB)]);
+    let field = with_path(&bin, || world.field(&json!({})));
+    let unavailable = &field["gateway_remotes_unavailable"];
+    assert_eq!(unavailable["available"], false);
+    assert!(
+        unavailable["reason"].as_str().unwrap().contains("controlled failure"),
+        "the remote-declaration failure is named: {}",
+        unavailable["reason"]
+    );
+    assert!(
+        !field["workcells"].as_array().unwrap().iter().any(|block| block["workcell_ref"] == "workcell:mac"),
+        "no remote block is invented when the declaration list cannot be read"
+    );
 }
