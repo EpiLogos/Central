@@ -2,6 +2,7 @@
 //! No personal installation, default-policy adoption, model call or shell rewrite.
 pub mod authority;
 pub mod documents;
+pub mod field;
 mod extended;
 mod history;
 pub mod migration;
@@ -99,6 +100,7 @@ pub fn execute_with_token_at(
             }
         }
         "now_children" => placement::children(&scope, input),
+        "now_field" => field::field(&scope, input, now),
         "now_list" => Ok(json!({
             "schema": "central.now-listing/v1",
             "records": placement::list_now(&scope, input)?,
@@ -219,6 +221,7 @@ handler!(
     "workcell_root"
 );
 handler!(now_children_action, "central.now.children", "now_children");
+handler!(now_field_action, "central.now.field", "now_field");
 handler!(time_action, "central.time.policy", "time_policy");
 handler!(
     time_occurrences_action,
@@ -329,6 +332,7 @@ pub fn register_actions(registry: &mut ActionRegistry) {
         ("central.now.allocate", "Allocate an agent NOW clearing", "Idempotently allocate one source-owned NOW and T destination per task; preserve ordinary authorised repository writes. parent_now_ref hangs the clearing as a child of an allocated NOW in this scope or the root scope; workcell_ref declares the Workcell it is placed on.", true, allocate_action, &[("task_ref","string",true),("purpose","string",true),("expected_policy_revision","string",true),("participant_refs","array",false),("source_refs","array",false),("work_refs","array",false),("parent_now_ref","string",false),("workcell_ref","string",false)]),
         ("central.now.workcell-root", "Ensure a Workcell's root NOW", "Idempotently ensure the one root NOW of a Workcell in the root register (task central:task:control:root:workcell-root:<workcell_ref>); child NOWs placed on the Workcell hang from it. Root register only; expected_policy_revision is checked when given.", true, workcell_root_action, &[("workcell_ref","string",true),("expected_policy_revision","string",false)]),
         ("central.now.children", "List a NOW's child NOWs", "List every clearing whose parent_now_ref is this NOW, uncapped: a root NOW's children across the root register and every Project, a Project NOW's children in its Project. Unreadable Projects are named in unscanned. Read-only.", false, now_children_action, &[("now_ref","string",true)]),
+        ("central.now.field", "Read the composed NOW field", "One composed activity reading over every Workcell-root NOW: the root and its child NOWs from this register, the local cell's material census/instances/status and Gateway status from their native owners with observation time and honest unavailability, the declared machine binding joining them, and the Day-rollover horizon. Unavailable owners are named, never fabricated; census panes carry no NOW membership. Read-only.", false, now_field_action, &[("workcell_refs","array",false),("include_material","boolean",false),("include_gateway","boolean",false)]),
         ("central.work.validate", "Validate current task write placement", "Revalidate policy, NOW and destination anchors. Return a usable NOW retry destination; do not claim OS enforcement.", false, validate_action, &[("now_ref","string",true),("expected_now_revision","string",true),("expected_policy_revision","string",true),("destination","string",true),("expected_destination_anchor","object",false)]),
         ("central.now.read", "Read allocated NOW source", "Read exact NOW identity, lifecycle and source revision; optionally include current native placement without allocating or re-entering the task.", false, now_read_action, &[("now_ref","string",true),("with_placement","boolean",false)]),
         ("central.now.list", "List allocated NOWs by participant", "List the World's allocated NOW clearings with identity, lifecycle and source revision, optionally filtered to records carrying any of the given participant refs; read-only.", false, now_list_action, &[("participant_refs","array",false)]),
