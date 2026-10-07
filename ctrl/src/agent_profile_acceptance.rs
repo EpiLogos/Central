@@ -6,6 +6,9 @@ use crate::action::{
     ActionAvailability, ActionDescriptor, ActionExecutionContext, ActionInputDefinition,
     ActionOutputDefinition, ActionRegistry, MutationClass,
 };
+use crate::agent_profile::{
+    resolve_self_source_pin, AgentProfileError, AgentSelfDefinition, AgentSelfSourcePin,
+};
 use crate::agent_profile_actions::resolve_store;
 use crate::agent_profile_store::AgentProfileStore;
 use crate::continuous_work::{
@@ -25,20 +28,6 @@ pub const REVIEW: &str = "agent-profile.review";
 pub const ACCEPT: &str = "agent-profile.accept";
 pub const ROSTER: &str = "agent-profile.roster";
 const SCHEMA: &str = "central.agent-profile-acceptance/v1";
-
-/// One pinned Agent-self source recorded on an acceptance: a Central source ref
-/// plus the exact-content digest the pinned file verified against when the human
-/// accepted. Refs only: the bytes are never copied into the receipt. Wire shape
-/// ported from the owner self-integration line
-/// (`feat/agent-self-integration-20261007`, `ctrl/src/agent_profile.rs`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AgentSelfSourcePin {
-    /// A Central source ref in the `central:source:{world_ref}:{relpath}` form
-    /// the source horizon produces.
-    pub reference: String,
-    /// `sha256:` plus the lowercase hex sha256 of the exact UTF-8 bytes.
-    pub content_digest: String,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -120,6 +109,43 @@ fn profile_source(
     }
     Ok((reading, digest(&text)))
 }
+/// The named short reason one pinned self source could not be resolved. Review
+/// stays readable so the author can see what is wrong; acceptance cannot be
+/// claimed while any pin is unresolved.
+fn self_source_reason(error: &AgentProfileError) -> &'static str {
+    match error {
+        AgentProfileError::SelfSourceMissing { .. } => "self-source-missing",
+        AgentProfileError::SelfSourceWithheld { .. } => "self-source-withheld",
+        AgentProfileError::SelfSourceDigestMismatch { .. } => "self-source-digest-mismatch",
+        AgentProfileError::SelfSourceUnreadable { .. } => "self-source-unreadable",
+        _ => "self-source-invalid",
+    }
+}
+fn reviewed_self_pin(pin: &AgentSelfSourcePin, world_root: &Path) -> Value {
+    match resolve_self_source_pin(pin, world_root) {
+        Ok(resolved) => json!({
+            "reference": pin.reference,
+            "content_digest": pin.content_digest,
+            "resolved": true,
+            "text": resolved.text,
+        }),
+        Err(error) => json!({
+            "reference": pin.reference,
+            "content_digest": pin.content_digest,
+            "resolved": false,
+            "reason": self_source_reason(&error),
+        }),
+    }
+}
+fn reviewed_self_definition(definition: &AgentSelfDefinition, world_root: &Path) -> (Value, bool) {
+    let source = reviewed_self_pin(&definition.source, world_root);
+    let relational_logos = reviewed_self_pin(&definition.relational_logos, world_root);
+    let resolved = source["resolved"] == json!(true) && relational_logos["resolved"] == json!(true);
+    (
+        json!({"source": source, "relational_logos": relational_logos}),
+        resolved,
+    )
+}
 fn review(store: &AgentProfileStore, scope: &Scope, profile_ref: &str) -> io::Result<Value> {
     let (reading, content_digest) = profile_source(store, profile_ref)?;
     let path = receipt_path(profile_ref, &content_digest);
@@ -146,13 +172,20 @@ fn review(store: &AgentProfileStore, scope: &Scope, profile_ref: &str) -> io::Re
             ));
         }
     }
-    Ok(
-        json!({"schema":"central.agent-profile-review/v1", "profile":reading.profile,
+    let mut payload = json!({"schema":"central.agent-profile-review/v1", "profile":reading.profile,
         "source_path":reading.source_path, "content_digest":content_digest,
         "accepted":acceptance.is_some(), "acceptance":acceptance,
         "scope_ref":scope.world_ref, "execution_authority_granted":false,
-        "standing_note":"Acceptance recognises this exact reusable Agent definition; source editing invalidates it. Original generated provenance is retained. Agency, model selection, task role and AgentSession remain separate."}),
-    )
+        "standing_note":"Acceptance recognises this exact reusable Agent definition; source editing invalidates it. Original generated provenance is retained. Agency, model selection, task role and AgentSession remain separate."});
+    // A bound Agent self is resolved for the reviewer: exact pinned bytes when
+    // they verify, and the named reason when they do not. An unresolved pin
+    // keeps the review readable but can never be accepted below.
+    if let Some(definition) = &reading.profile.self_definition {
+        let (reviewed, resolved) = reviewed_self_definition(definition, store.owner_root());
+        payload["self_definition"] = reviewed;
+        payload["self_sources_resolved"] = json!(resolved);
+    }
+    Ok(payload)
 }
 
 /// Same production handler as the CLI, with an explicit credential channel and
@@ -238,6 +271,24 @@ pub fn execute_with_token_at(
     if current["accepted"] == true {
         return Ok(current);
     }
+    // A profile that binds self sources is only acceptable while both pins
+    // resolve to their exact digested bytes. The named refusal precedes any
+    // receipt write: acceptance can never claim an unresolved self source.
+    let self_definition: Option<AgentSelfDefinition> = match current["profile"]
+        .get("self_definition")
+    {
+        Some(value) => Some(
+            serde_json::from_value(value.clone()).map_err(|error| invalid(error.to_string()))?,
+        ),
+        None => None,
+    };
+    if let Some(definition) = &self_definition {
+        if let Err(error) =
+            crate::agent_profile::resolve_self_definition(definition, store.owner_root())
+        {
+            return Err(invalid(format!("{error}; no acceptance was recorded")));
+        }
+    }
     let content_digest = current["content_digest"]
         .as_str()
         .ok_or_else(|| invalid("Source digest unavailable"))?;
@@ -260,12 +311,10 @@ pub fn execute_with_token_at(
         authority_ref: principal.authority_ref,
         authority_revision: principal.authority_revision,
         accepted_at_unix_seconds: now,
-        // Pin verification and recording belong to the self-integration owner
-        // line, which sets these for profiles that bind self sources. This
-        // line's own acceptances record no pins and keep earlier receipts
-        // parsing unchanged.
-        self_source: None,
-        relational_logos: None,
+        // The verified pins are recorded on the receipt: this acceptance
+        // recognised a self bound to exactly this source evidence.
+        self_source: self_definition.as_ref().map(|d| d.source.clone()),
+        relational_logos: self_definition.as_ref().map(|d| d.relational_logos.clone()),
     };
     // Immutable evidence lives in Central's native state, not the generated
     // profile directory or a renderer Agent store. Descriptor-relative native
