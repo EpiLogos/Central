@@ -234,6 +234,61 @@ fn git_census_reports_worktrees_branches_and_attention_for_a_fixture_repo() {
 }
 
 #[test]
+fn git_census_answers_through_the_default_cli_composition() {
+    // The shipped composition (run_cli -> run_cli_with_surface) must carry the
+    // git-sync Connector itself: GitState-backed reads may not depend on a
+    // desktop host surface or a test-only mount. This drives the production
+    // path with no manual registration.
+    use std::process::Command;
+
+    let root = temporary_directory("git-census-default-composition").join("Central");
+    initialize_central(&root).unwrap();
+    let repo = root.join("Work/example");
+    fs::create_dir_all(&repo).unwrap();
+
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(args)
+            .output()
+            .expect("git runs");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    git(&["init", "--initial-branch=main"]);
+    git(&["config", "user.email", "contract@example.invalid"]);
+    git(&["config", "user.name", "Contract"]);
+    fs::write(repo.join("seed.txt"), "seed\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-m", "seed"]);
+    fs::write(repo.join("dirty.txt"), "uncommitted\n").unwrap();
+
+    let run = run_cli(
+        &[
+            "--json".to_owned(),
+            "action".to_owned(),
+            "run".to_owned(),
+            "central.git.census".to_owned(),
+            r#"{"project":"example"}"#.to_owned(),
+        ],
+        &environment(&root),
+    );
+    assert_eq!(
+        run.result.status,
+        ResultStatus::Success,
+        "census through the default composition failed: {}",
+        run.output
+    );
+    assert!(run.output.contains("Work/example"), "{}", run.output);
+    assert!(run.output.contains(r#""branch":"main""#), "{}", run.output);
+    assert!(run.output.contains(r#""dirty_files":1"#), "{}", run.output);
+}
+
+#[test]
 fn action_describe_discloses_a_known_action_contract() {
     let root = temporary_directory("describe-known").join("Central");
     initialize_central(&root).unwrap();
