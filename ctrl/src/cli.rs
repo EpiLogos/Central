@@ -1205,10 +1205,11 @@ pub fn run_cli_with_surface(
     environment: &CliEnvironment,
     surface: &mut dyn TerminalSurface,
 ) -> CliExecution {
-    // The shipped binary composes git-sync so GitState-backed reads
-    // (central.git.census) answer on every platform through the CLI, not only
-    // under a desktop host surface. Feature-gated: library embedders keep the
-    // lean default registry.
+    // The shipped cut composes git-sync (--features cli-git-sync) so
+    // GitState-backed reads (central.git.census) answer on every platform
+    // through the CLI, not only under a desktop host surface. Off by default:
+    // the default dependency tree never carries the Connector (boundary
+    // guard), and library embedders keep the lean registry.
     #[cfg_attr(not(feature = "cli-git-sync"), allow(unused_mut))]
     let mut connectors = create_default_connector_registry();
     #[cfg(feature = "cli-git-sync")]

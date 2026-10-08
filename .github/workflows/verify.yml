@@ -196,8 +196,8 @@ jobs:
           mode, out_arg, *args = sys.argv[1:]
           out = pathlib.Path(out_arg).resolve(strict=True)
           specs = {
-              'ctrl': ('ctrl', ['bin'], ['cli-git-sync', 'default'], False, 'ctrl-build.jsonl', 'ctrl-binary.json', 'ctrl-path.txt', 'ctrl'),
-              'ordinary-child': ('native_ordinary_interruption_child', ['test'], ['cli-git-sync', 'default', 'native-ordinary-interruption-child'], True,
+              'ctrl': ('ctrl', ['bin'], ['cli-git-sync'], False, 'ctrl-build.jsonl', 'ctrl-binary.json', 'ctrl-path.txt', 'ctrl'),
+              'ordinary-child': ('native_ordinary_interruption_child', ['test'], ['native-ordinary-interruption-child'], True,
                                  'ordinary-child-build.jsonl', 'ordinary-child-binary.json', 'ordinary-child-path.txt', 'ordinary-interruption-child'),
           }
           helper_sha = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()
@@ -567,7 +567,8 @@ jobs:
           python3 "$out/binary-provenance.py" capture-previous "$out"
           previous_ctrl=$(cat "$out/source-return-previous-path.txt")
           python3 "$out/binary-provenance.py" check-previous "$out" after-previous-build
-          cargo build --locked -p ctrl --bin ctrl --message-format=json 2> "$out/ctrl-build.stderr" | tee "$out/ctrl-build.jsonl"
+          cargo build --locked -p ctrl --bin ctrl --features cli-git-sync --message-format=json 2> "$out/ctrl-build.stderr" | tee "$out/ctrl-build.jsonl"
+          cargo test --locked -p ctrl --test cli_contract --features cli-git-sync git_census_answers_through_the_default_cli_composition 2>&1 | tee "$out/ctrl-composed-contract.log"
           python3 "$out/binary-provenance.py" capture "$out" ctrl
           python3 "$out/binary-provenance.py" check "$out" before-opt-in-build ctrl
           cargo test --locked -p ctrl --test native_ordinary_interruption_child --features native-ordinary-interruption-child --no-run --message-format=json 2> "$out/ordinary-child-build.stderr" | tee "$out/ordinary-child-build.jsonl"
@@ -850,8 +851,8 @@ jobs:
           mode, out_arg, *args = sys.argv[1:]
           out = pathlib.Path(out_arg).resolve(strict=True)
           specs = {
-              'ctrl': ('ctrl', ['bin'], ['cli-git-sync', 'default'], False, 'ctrl-build.jsonl', 'ctrl-binary.json', 'ctrl-path.txt', 'ctrl'),
-              'ordinary-child': ('native_ordinary_interruption_child', ['test'], ['cli-git-sync', 'default', 'native-ordinary-interruption-child'], True,
+              'ctrl': ('ctrl', ['bin'], ['cli-git-sync'], False, 'ctrl-build.jsonl', 'ctrl-binary.json', 'ctrl-path.txt', 'ctrl'),
+              'ordinary-child': ('native_ordinary_interruption_child', ['test'], ['native-ordinary-interruption-child'], True,
                                  'ordinary-child-build.jsonl', 'ordinary-child-binary.json', 'ordinary-child-path.txt', 'ordinary-interruption-child'),
           }
           helper_sha = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()
@@ -955,7 +956,7 @@ jobs:
           else:
               raise AssertionError(mode)
           PY_NATIVE_IMAGE
-          cargo build --locked -p ctrl --bin ctrl --message-format=json 2> "$out/ctrl-build.stderr" | tee "$out/ctrl-build.jsonl"
+          cargo build --locked -p ctrl --bin ctrl --features cli-git-sync --message-format=json 2> "$out/ctrl-build.stderr" | tee "$out/ctrl-build.jsonl"
           python3 "$out/binary-provenance.py" capture "$out" ctrl
           python3 "$out/binary-provenance.py" check "$out" before-opt-in-build ctrl
           cargo test --locked -p ctrl --test native_ordinary_interruption_child --features native-ordinary-interruption-child --no-run --message-format=json 2> "$out/ordinary-child-build.stderr" | tee "$out/ordinary-child-build.jsonl"
