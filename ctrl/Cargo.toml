@@ -12,13 +12,13 @@ native-receiving-incomplete-child = []
 # links central_ctrl normally and alone arms its exact owned-root admission.
 # The opted-in library contains the bridge; default builds contain no hooks.
 native-ordinary-interruption-child = []
-# The shipped ctrl binary composes the git-sync Connector (GitState,
+# The shipped ctrl cut composes the git-sync Connector (GitState,
 # SourceHistory) so GitState-backed reads (central.git.census) work through
-# the CLI on every platform, not only the desktop host surface. The core
-# library keeps the dependency optional so embedders can opt out.
+# the CLI on every platform, not only the desktop host surface: release and
+# verify builds pass --features cli-git-sync explicitly. The core keeps the
+# dependency optional and OFF by default — the default dependency tree never
+# carries it (enforced by the verify workflow boundary guard).
 cli-git-sync = ["dep:central-git-sync-connector"]
-
-default = ["cli-git-sync"]
 
 [lib]
 name = "central_ctrl"

@@ -111,6 +111,7 @@ fn generic_action_run_rejects_non_object_or_extra_input() {
     assert!(extra.output.contains("at most one JSON object"));
 }
 
+#[cfg(feature = "cli-git-sync")]
 #[test]
 fn git_census_reports_worktrees_branches_and_attention_for_a_fixture_repo() {
     use std::process::Command;
@@ -233,6 +234,7 @@ fn git_census_reports_worktrees_branches_and_attention_for_a_fixture_repo() {
     assert_eq!(bad.result.status, ResultStatus::InvalidInput);
 }
 
+#[cfg(feature = "cli-git-sync")]
 #[test]
 fn git_census_answers_through_the_default_cli_composition() {
     // The shipped composition (run_cli -> run_cli_with_surface) must carry the
