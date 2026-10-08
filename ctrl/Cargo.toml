@@ -12,6 +12,13 @@ native-receiving-incomplete-child = []
 # links central_ctrl normally and alone arms its exact owned-root admission.
 # The opted-in library contains the bridge; default builds contain no hooks.
 native-ordinary-interruption-child = []
+# The shipped ctrl binary composes the git-sync Connector (GitState,
+# SourceHistory) so GitState-backed reads (central.git.census) work through
+# the CLI on every platform, not only the desktop host surface. The core
+# library keeps the dependency optional so embedders can opt out.
+cli-git-sync = ["dep:central-git-sync-connector"]
+
+default = ["cli-git-sync"]
 
 [lib]
 name = "central_ctrl"
@@ -47,11 +54,12 @@ chrono-tz = "0.10"
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 rusqlite = { version = "0.37", features = ["bundled", "backup"] }
+# git-sync backs the GitState/SourceHistory read models (central.git.census);
+# composed by the shipped CLI via the cli-git-sync feature, optional for
+# library embedders.
+central-git-sync-connector = { path = "../connectors/git-sync", optional = true }
 
 [dev-dependencies]
 # Contract tests validate emitted documents against the frozen C0 JSON Schemas
 # (byte-exact fixture copies); default features stay off (no external resolver).
 jsonschema = { version = "0.56.0", default-features = false }
-# git-sync is a host-surface Connector, never a ctrl-core (normal) dependency;
-# the git-census contract test mounts it as a dev-only provider.
-central-git-sync-connector = { path = "../connectors/git-sync" }
