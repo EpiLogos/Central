@@ -804,6 +804,45 @@ pub(crate) fn composed_returns(
     rows.dedup_by(|a, b| a["return_ref"] == b["return_ref"]);
     Ok(rows)
 }
+/// The return pass at closure: what this NOW's T stream still owes before
+/// the task can be called finished. Fixtures without a distilled learning
+/// are the deferred-and-not-integrated residue the caller must either
+/// distill (`central.now.learnings.distill`) or name as obligations.
+fn return_pass(
+    scope: &Scope,
+    source_path: &str,
+    obligations: usize,
+) -> io::Result<Value> {
+    let t = placement::now_destination(scope, source_path)?;
+    let (fixtures, _) = super::thoughts::list_stream(scope, &t, usize::MAX, false)?;
+    let prime = super::thoughts::stream_destination(scope, source_path, true)?;
+    let (learnings, _) = super::thoughts::list_stream(scope, &prime, usize::MAX, false)?;
+    let mut distilled: Vec<String> = Vec::new();
+    for row in &learnings {
+        if let Some(matter) = &row.matter {
+            for fixture in &matter.source_fixtures {
+                if !distilled.contains(fixture) {
+                    distilled.push(fixture.clone());
+                }
+            }
+        }
+    }
+    // Only front-matter-bearing files are T fixtures; plain retained .md
+    // material in the writable destination is working payload, not residue.
+    let undistilled: Vec<String> = fixtures
+        .iter()
+        .filter(|row| row.matter.is_some())
+        .map(|row| row.file.clone())
+        .filter(|file| !distilled.contains(file))
+        .collect();
+    Ok(json!({
+        "t_fixtures": fixtures.len(),
+        "learnings": learnings.len(),
+        "undistilled": undistilled,
+        "obligations": obligations,
+    }))
+}
+
 pub fn now_lifecycle(
     scope: &Scope,
     input: &Value,
@@ -820,6 +859,28 @@ pub fn now_lifecycle(
         return Err(invalid(
             "NOW lifecycle is active, quiescent, closed or archived",
         ));
+    }
+    let pass = if matches!(next, "closed" | "archived") {
+        Some(return_pass(
+            scope,
+            &current.source.path,
+            record.obligations.len(),
+        )?)
+    } else {
+        None
+    };
+    if next == "closed" {
+        let undistilled = pass
+            .as_ref()
+            .and_then(|p| p["undistilled"].as_array().cloned())
+            .unwrap_or_default();
+        if !undistilled.is_empty() {
+            return Err(conflict(format!(
+                "NOW has {} T fixture(s) not distilled into learnings: {}. Run the return pass: distill via central.now.learnings.distill, or name them as obligations before closure.",
+                undistilled.len(),
+                undistilled.iter().map(|v| v.as_str().unwrap_or_default()).collect::<Vec<_>>().join(", ")
+            )));
+        }
     }
     if next == "archived" {
         if record.lifecycle != "closed" {
@@ -906,6 +967,7 @@ pub fn now_lifecycle(
         "archive_source_bytes_retained":true,"artifacts_deleted":!tombstoned.is_empty(),
         "payloads_tombstoned":tombstoned,"payload_tend_failures":tend_failures,"processes_stopped":false,
         "scope_of_settlement":"recorded native obligations and receiving ledger, not an inferred global process census",
+        "return_pass":pass,
         "automatic_agent_or_model_invocation":false}),
     )
 }

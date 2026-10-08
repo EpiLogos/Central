@@ -217,14 +217,14 @@ fn validate_fixture_reference(scope: &Scope, t_dir: &Path, reference: &str) -> i
     }
 }
 
-struct StreamRow {
-    file: String,
-    revision: String,
-    matter: Option<ContemplativeFrontMatter>,
-    body: String,
+pub(crate) struct StreamRow {
+    pub(crate) file: String,
+    pub(crate) revision: String,
+    pub(crate) matter: Option<ContemplativeFrontMatter>,
+    pub(crate) body: String,
 }
 
-fn list_stream(
+pub(crate) fn list_stream(
     scope: &Scope,
     dir: &Path,
     limit: usize,

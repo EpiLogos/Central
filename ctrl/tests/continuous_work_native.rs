@@ -552,3 +552,78 @@ fn real_cli_binary_appends_reads_and_distills_thought_streams() {
         "binary-fixture-2026-09-13.md"
     );
 }
+
+#[test]
+fn closure_runs_the_return_pass_and_refuses_undistilled_fixtures() {
+    let world = world();
+    let now = at("2026-10-08T12:00:00Z");
+    ensure(&world, None, now);
+    let policy = execute_at(world.path(), "policy", &json!({}), now).unwrap();
+    let allocation = run(
+        &world,
+        "allocate",
+        &json!({"task_ref": "task:return-pass", "purpose": "the return-pass closure contract", "expected_policy_revision": policy["revision"]}),
+        AGENT,
+        now,
+    )
+    .unwrap();
+    let now_ref = allocation["now_ref"].as_str().unwrap().to_string();
+
+    let revision = |at_now: u64| -> Value {
+        let read =
+            execute_at(world.path(), "now_read", &json!({"now_ref": now_ref}), at_now).unwrap();
+        read["revision"]["revision"].clone()
+    };
+
+    run(
+        &world,
+        "thoughts_append",
+        &json!({"now_ref":now_ref,"slug":"deferred-thread","day":"2026-10-08",
+            "actor":"agent:test","actor_kind":"agent",
+            "content":"a deferred thread the task never integrated"}),
+        AGENT,
+        now + 10,
+    )
+    .unwrap();
+
+    let refused = run(
+        &world,
+        "now_lifecycle",
+        &json!({"now_ref":now_ref,"expected_revision":revision(now + 10),
+            "expected_policy_revision":policy["revision"],"lifecycle":"closed"}),
+        AGENT,
+        now + 20,
+    )
+    .unwrap_err();
+    let error = refused.to_string();
+    assert!(error.contains("not distilled into learnings"), "{error}");
+    assert!(error.contains("deferred-thread"), "{error}");
+
+    run(
+        &world,
+        "learnings_distill",
+        &json!({"now_ref":now_ref,"slug":"return-pass-learning","day":"2026-10-08",
+            "actor":"agent:test","actor_kind":"agent",
+            "content":"the deferred thread is integrated toward the next task",
+            "source_fixtures":["deferred-thread-2026-10-08.md"]}),
+        AGENT,
+        now + 30,
+    )
+    .unwrap();
+
+    let closed = run(
+        &world,
+        "now_lifecycle",
+        &json!({"now_ref":now_ref,"expected_revision":revision(now + 30),
+            "expected_policy_revision":policy["revision"],"lifecycle":"closed"}),
+        AGENT,
+        now + 40,
+    )
+    .unwrap();
+    assert_eq!(closed["return_pass"]["t_fixtures"], 1);
+    assert_eq!(closed["return_pass"]["learnings"], 1);
+    assert_eq!(
+        closed["return_pass"]["undistilled"].as_array().unwrap().len(),
+        0
+    );
+}

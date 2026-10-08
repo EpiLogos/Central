@@ -11,7 +11,7 @@
     "platforms": ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"]
   },
   "build": {
-    "command": ["cargo", "build", "--workspace", "--locked", "--release"]
+    "command": ["cargo", "build", "--workspace", "--locked", "--release", "--features", "ctrl/cli-git-sync"]
   },
   "verify": {
     "source_command": ["cargo", "test", "--workspace", "--locked"],
