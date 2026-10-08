@@ -469,12 +469,50 @@ fn inspect(all: &[Scope], input: &Value) -> io::Result<Value> {
     // probe: attachments that only need provider state skip the full walk.
     let want_resources = input["resources"] != false;
     if want_resources {
+        // Optional scoping: only sources under these absolute path prefixes
+        // enter the response. Consumers that need one subtree (the NOW field,
+        // a project's records) must not materialize the whole pooled world.
+        let prefixes: Vec<String> = input
+            .get("path_prefixes")
+            .and_then(Value::as_array)
+            .map(|list| {
+                list.iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let under_prefix = |path: &std::path::Path| -> bool {
+            prefixes.is_empty() || {
+                let Some(path_str) = path.to_str() else { return false };
+                prefixes.iter().any(|prefix| {
+                    path_str.starts_with(prefix)
+                        && (path_str.len() == prefix.len()
+                            || path_str.as_bytes().get(prefix.len()) == Some(&b'/'))
+                })
+            }
+        };
         for chosen in &choices {
-            for entry in entries(chosen)? {
+            // Serve from the refresh-time enumeration snapshot when present;
+            // the live walk is refresh-scale work (see entries cache).
+            let scoped: Vec<crate::file_map_catalog::Entry> = {
+                let cached = chosen.load_entries_cache().ok().flatten();
+                match cached.filter(|items| !items.is_empty()) {
+                    Some(items) => items,
+                    None => {
+                        let items = entries(chosen)?;
+                        let _ = chosen.save_entries_cache(&items);
+                        items
+                    }
+                }
+            };
+            for entry in scoped {
                 if input["federated"] != true
                     && chosen.world != scope.world
                     && !linked_refs.contains(&entry.source.source_ref)
                 {
+                    continue;
+                }
+                if !under_prefix(&entry.path) {
                     continue;
                 }
                 if policy_allows(&excluded, &entry.source.source_ref) {

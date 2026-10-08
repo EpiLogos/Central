@@ -1,0 +1,18 @@
+{
+  "schema": "central.project-now.handoff/v1",
+  "id": "sourcecreate20260925-projectcentralsourcecreate-2026-09-25",
+  "provenance": "agent-authored-bounded-return",
+  "actor": "zcode-cradle-document-surface",
+  "kind": "handoff",
+  "recorded_at_unix_seconds": 1790335386,
+  "subject": "source-create-2026-09-25: projectcentral.source.create — an authored door for absent project human-ground documents",
+  "result": "Branch feat/document-source-create-20260925 (from 2076b9f, head 3408be3). projectcentral.source.create admits one absent document into a project human ground (ProjectCentral/user) with the flows door discipline: atomic no-overwrite (staging+linkat), parent must already exist, path bounded to the manifest human ground at most one directory deep, .no-agent-retrieval honoured, authority decided on the aperture standing before anything exists (declared non-human callers and agent-session writes refuse), recorded as the horizon Added change with declared attribution — not ordinary file history. Later revisions flow through projectcentral.source.write CAS unchanged. Tests: world_source_actions 10/10 incl. admitted chain (create->horizon->CAS write->stale refusal) and every refusal; neighbours green; clippy -D warnings green (one pre-existing needless borrow on the branch tip repaired for the gate). Consumer: O-I create-in-place (goal/vision/mockup) uses the door. Next: land on Central main after owner recognition; the fixed retrieval_allowed absolute-path bug is covered by the masked-creation test.",
+  "status": "carried",
+  "carried_from_days": [
+    "2026-09-26",
+    "2026-09-27",
+    "2026-09-28",
+    "2026-09-29",
+    "2026-09-30"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "schema": "central.project-now.handoff/v1",
+  "id": "scoped-roster-primitive-landed-in-ctrl-2026-10-07",
+  "provenance": "agent-authored-bounded-return",
+  "actor": "agent/oh-i",
+  "kind": "handoff",
+  "recorded_at_unix_seconds": 1791381019,
+  "subject": "Scoped roster primitive landed in ctrl; AIKit deploy rides on encounter lane; 40s end-to-end owned",
+  "result": "Continuation of the file-map lane after owner correction: the standard is a few hundred ms warm, inherently scoped, Redis-robust — AIKit search is the cradle load-bearing retrieval and 3m20s was not acceptable to name-and-defer. What changed since: (1) ctrl inspect gained path_prefixes scoping (absolute-prefix boundary filter) and serves resources from the entries cache with walk-fallback — the NOW-field roster question now answers in 0.37s returning 135 scoped sources instead of 65s returning the 177k-source world; full inspect (legacy consumers) dropped 65s to 1.3s cache-served; federated search steady at ~3s. (2) aikit-adapters: visit_source_roster now accepts and sends path_prefixes, and the now-field provider derives them from its own scope includes (glob static prefixes joined to central root) — the inherently-scoped call the owner described. Compiled and verified at crate level. DEPLOY BOUNDARY NAMED, NOT PALMED OFF: aikit-cli cannot release-build because crates/aikit-cli/src/encounter_service.rs + aikit-store/encounter.rs carry another lane in-flight work (+215 lines, fork_at_turn/reissue_from_turn, last touched 11:02 today) whose store-side methods do not compile; my files are confined to aikit-adapters + now_field and the change ships with the next aikit build after that lane lands. With OLD aikit + new ctrl the end-to-end probe is 40s (was 3m20s), zero absences — the residual is AIKit orchestration fan-out and discovery walks inside the ai-kit crate tree. PROCESS DEBT OWNED: installing by cp into the content-addressed product store (products/central/ea5999...) invalidated the code signature (exit 137 SIGKILL) and briefly broke ctrl; restored via rm+cp from backup and re-signed ad hoc — the store directory digest no longer matches its content, so the next OI product publish should re-materialize it properly. Backups: OI bin ctrl.pre-filemap-cache.bak (owner original Oct-6) and ctrl.pre-scoped-inspect.bak (search-fix build).",
+  "status": "active"
+}
