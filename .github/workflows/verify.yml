@@ -196,7 +196,7 @@ jobs:
           mode, out_arg, *args = sys.argv[1:]
           out = pathlib.Path(out_arg).resolve(strict=True)
           specs = {
-              'ctrl': ('ctrl', ['bin'], [], False, 'ctrl-build.jsonl', 'ctrl-binary.json', 'ctrl-path.txt', 'ctrl'),
+              'ctrl': ('ctrl', ['bin'], ['cli-git-sync', 'default'], False, 'ctrl-build.jsonl', 'ctrl-binary.json', 'ctrl-path.txt', 'ctrl'),
               'ordinary-child': ('native_ordinary_interruption_child', ['test'], ['native-ordinary-interruption-child'], True,
                                  'ordinary-child-build.jsonl', 'ordinary-child-binary.json', 'ordinary-child-path.txt', 'ordinary-interruption-child'),
           }
@@ -850,7 +850,7 @@ jobs:
           mode, out_arg, *args = sys.argv[1:]
           out = pathlib.Path(out_arg).resolve(strict=True)
           specs = {
-              'ctrl': ('ctrl', ['bin'], [], False, 'ctrl-build.jsonl', 'ctrl-binary.json', 'ctrl-path.txt', 'ctrl'),
+              'ctrl': ('ctrl', ['bin'], ['cli-git-sync', 'default'], False, 'ctrl-build.jsonl', 'ctrl-binary.json', 'ctrl-path.txt', 'ctrl'),
               'ordinary-child': ('native_ordinary_interruption_child', ['test'], ['native-ordinary-interruption-child'], True,
                                  'ordinary-child-build.jsonl', 'ordinary-child-binary.json', 'ordinary-child-path.txt', 'ordinary-interruption-child'),
           }
