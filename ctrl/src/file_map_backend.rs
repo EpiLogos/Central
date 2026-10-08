@@ -28,15 +28,23 @@ pub(crate) fn embedding_model() -> String {
 }
 
 pub(crate) struct Backend {
+    /// The tree bkmr reads (its WORLD base path and working directory).
     pub root: PathBuf,
+    /// Where bkmr's database and config are written: `root` for a scope inside
+    /// the ground, the ground-side state directory for an external scope.
+    pub state: PathBuf,
     pub area: PathBuf,
 }
 impl Backend {
-    pub fn new(root: &Path) -> Self {
+    pub fn with_state(root: &Path, state: &Path) -> Self {
         Self {
             root: root.into(),
-            area: root.join(".central/bkmr"),
+            state: state.into(),
+            area: state.join(".central/bkmr"),
         }
+    }
+    pub fn for_scope(scope: &super::file_map_catalog::Scope) -> Self {
+        Self::with_state(&scope.root, &scope.state)
     }
     pub fn db(&self) -> PathBuf {
         self.area.join("index.db")
@@ -48,7 +56,7 @@ impl Backend {
         invoke(&["--version".into()], None, None, DEFAULT_TIMEOUT_SECS)
     }
     pub fn prepare(&self) -> io::Result<()> {
-        super::file_map::safe_directory(&self.root, Path::new(".central/bkmr/home/.config/bkmr"))?;
+        super::file_map::safe_directory(&self.state, Path::new(".central/bkmr/home/.config/bkmr"))?;
         let config = format!(
             "db_url = {}\n[base_paths]\nWORLD = {}\n\n[embeddings]\nmodel = {}\n",
             serde_json::to_string(&self.db().to_string_lossy())?,
@@ -60,7 +68,7 @@ impl Backend {
         // --config. Isolate HOME as well so BOTH code paths see this scope.
         if fs::read_to_string(&path).ok().as_deref() != Some(&config) {
             super::file_map::write_atomic(
-                &self.root,
+                &self.state,
                 &path,
                 config.as_bytes(),
                 crate::file_mutation::RecordDisposition::ReplaceOrCreate,
@@ -78,7 +86,7 @@ impl Backend {
     /// Commands that legitimately re-embed a whole scope — `backfill` after a
     /// model switch — need minutes, not the default per-call ceiling.
     pub fn run_allowance(&self, args: &[String], timeout_secs: u64) -> io::Result<String> {
-        super::file_map::safe_member(&self.root, ".central/bkmr", true)?;
+        super::file_map::safe_member(&self.state, ".central/bkmr", true)?;
         for name in [
             "index.db",
             "index.db-wal",
@@ -88,8 +96,8 @@ impl Backend {
             let p = self.area.join(name);
             if fs::symlink_metadata(&p).is_ok() {
                 super::file_map::safe_member(
-                    &self.root,
-                    p.strip_prefix(&self.root)
+                    &self.state,
+                    p.strip_prefix(&self.state)
                         .unwrap()
                         .to_str()
                         .ok_or_else(|| io::Error::other("Non-UTF8 map path"))?,
@@ -435,7 +443,7 @@ mod tests {
         // platform temp dir is one (/var → /private/var): resolve the real
         // path before handing it to the backend.
         let dir = std::fs::canonicalize(dir).unwrap();
-        let backend = Backend::new(&dir);
+        let backend = Backend::with_state(&dir, &dir);
         backend.prepare().expect("real bkmr prepares an index");
         backend
             .run(&[

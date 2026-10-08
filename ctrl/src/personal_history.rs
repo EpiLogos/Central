@@ -605,6 +605,7 @@ fn scope_for(root: &Path, project: Option<&str>) -> io::Result<Scope> {
     match project {
         None => Ok(Scope {
             root: root.canonicalize()?,
+            state: root.canonicalize()?,
             world: "control:root".to_owned(),
             project: None,
         }),

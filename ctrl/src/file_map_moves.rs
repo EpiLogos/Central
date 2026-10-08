@@ -133,6 +133,11 @@ fn move_exclusive(from: &Path, to: &Path) -> io::Result<()> {
 }
 pub(crate) fn plan(root: &Path, all: &[Scope], input: &Value) -> io::Result<Value> {
     let (owner, entry) = lookup(all, text(input, "source_ref")?)?;
+    if owner.is_external() {
+        return Err(invalid(
+            "External scopes are read-only (placement.json grants no writes there); move the file with the owner's own tools and refresh",
+        ));
+    }
     let from = entry
         .path
         .strip_prefix(&owner.root)
@@ -387,6 +392,17 @@ pub(crate) fn resume_scopes(root: &Path, input: &Value) -> io::Result<Vec<Scope>
             }
         }
         result.push(Scope {
+            state: if world.external {
+                super::file_map_catalog::external_state(
+                    root,
+                    world
+                        .project
+                        .as_deref()
+                        .ok_or_else(|| invalid("External scope without a name"))?,
+                )?
+            } else {
+                current.clone()
+            },
             root: current,
             world: world.world.clone(),
             project: world.project.clone(),
@@ -550,7 +566,7 @@ pub(crate) fn apply(
         refresh.extend(plan.documents.iter().map(|d| d.world.clone()));
         for reference in refresh {
             let world = scope(all, &reference)?;
-            if super::file_map_backend::Backend::new(&world.root).present() {
+            if super::file_map_backend::Backend::for_scope(world).present() {
                 indexes.push(super::file_map::refresh(world, world.index()?.embeddings)?);
             }
         }

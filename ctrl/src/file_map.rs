@@ -437,7 +437,7 @@ pub(crate) fn resolve(all: &[Scope], input: &Value) -> io::Result<Value> {
 }
 fn inspect(all: &[Scope], input: &Value) -> io::Result<Value> {
     let scope = selected(all, input)?;
-    let backend = Backend::new(&scope.root);
+    let backend = Backend::for_scope(scope);
     let version = backend.version();
     let mut choices = vec![scope];
     let mut linked_refs = BTreeSet::new();
@@ -455,7 +455,7 @@ fn inspect(all: &[Scope], input: &Value) -> io::Result<Value> {
     }
     let initialized: Vec<_> = choices
         .iter()
-        .filter(|s| Backend::new(&s.root).present())
+        .filter(|s| Backend::for_scope(s).present())
         .collect();
     let available = version.is_ok() && !initialized.is_empty();
     // A federated hybrid query must not silently drop maps without embeddings.
@@ -706,9 +706,9 @@ pub fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
         "inspect" | "search" | "resolve" | "locate" | "projection-read" | "skill-tree"
     ) {
         let mut roots: Vec<_> = if op.starts_with("move-") {
-            all.iter().map(|s| s.root.clone()).collect()
+            all.iter().map(|s| s.state.clone()).collect()
         } else {
-            vec![scope.root.clone()]
+            vec![scope.state.clone()]
         };
         roots.sort();
         roots.dedup();
@@ -726,9 +726,9 @@ pub fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
         "register" | "link" | "scope-register" | "move-plan" | "move-apply" | "move-rollback"
     ) {
         let mut roots: Vec<_> = if op.starts_with("move-") {
-            all.iter().map(|s| s.root.clone()).collect()
+            all.iter().map(|s| s.state.clone()).collect()
         } else {
-            vec![scope.root.clone()]
+            vec![scope.state.clone()]
         };
         roots.sort();
         roots.dedup();
@@ -1391,5 +1391,152 @@ mod binding_read_tests {
             .unwrap()["result"]["source"]["standing"],
             "active"
         );
+    }
+}
+
+#[cfg(test)]
+mod external_scope_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    /// A ground plus an external project folder beside it (outside the ground),
+    /// registered the way ~/Documents/epi was: an absolute path in the root
+    /// register's file_map.scopes.
+    struct World {
+        base: PathBuf,
+        root: PathBuf,
+        external: PathBuf,
+    }
+    impl World {
+        fn new() -> Self {
+            let scratch = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ProjectCentral/now/tmp");
+            fs::create_dir_all(&scratch).unwrap();
+            let base = scratch.canonicalize().unwrap().join(format!(
+                "file-map-external-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            let root = base.join("ground");
+            let external = base.join("documents-epi");
+            fs::create_dir_all(root.join("Control/user")).unwrap();
+            fs::create_dir_all(external.join("ProjectCentral")).unwrap();
+            fs::write(external.join("notes.md"), "owner material\n").unwrap();
+            fs::write(
+                external.join("ProjectCentral/project.json"),
+                serde_json::to_vec(&json!({"schema":"central.project/v1","project_id":"epi",
+                    "human_source":"ProjectCentral/user",
+                    "wiki":{"profile":"okf-wiki/v1","source":"ProjectCentral/agents/wiki/wiki.json"}}))
+                .unwrap(),
+            )
+            .unwrap();
+            let relations = root.join(source_horizon::CONTROL_GROUND_RELATIONS_SOURCE);
+            fs::create_dir_all(relations.parent().unwrap()).unwrap();
+            fs::write(
+                &relations,
+                serde_json::to_vec(&json!({
+                    "schema":source_horizon::CONTROL_GROUND_RELATIONS_SCHEMA,
+                    "project_id":"control:root","relations":[],
+                    "file_map":{"scopes":{"epi":external.to_str().unwrap()}}
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            Self {
+                base,
+                root,
+                external,
+            }
+        }
+        /// Every path under the external tree, so a test can prove it unchanged.
+        fn external_listing(&self) -> Vec<PathBuf> {
+            let mut out = Vec::new();
+            let mut stack = vec![self.external.clone()];
+            while let Some(dir) = stack.pop() {
+                for entry in fs::read_dir(&dir).unwrap() {
+                    let path = entry.unwrap().path();
+                    if path.is_dir() {
+                        stack.push(path.clone());
+                    }
+                    out.push(path);
+                }
+            }
+            out.sort();
+            out
+        }
+    }
+    impl Drop for World {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.base);
+        }
+    }
+
+    #[test]
+    fn external_scope_state_lives_in_the_ground() {
+        let world = World::new();
+        let all = scopes(&world.root).unwrap();
+        let epi = all.iter().find(|s| s.world == "project:epi").unwrap();
+        assert!(epi.is_external());
+        assert_eq!(epi.state, world.root.join(".central/scopes/epi"));
+        let inside = all.iter().find(|s| s.world == "control:root").unwrap();
+        assert!(!inside.is_external());
+    }
+
+    #[test]
+    fn writes_for_an_external_scope_never_touch_its_tree() {
+        let world = World::new();
+        let before = world.external_listing();
+        execute(
+            &world.root,
+            "pool",
+            &json!({"project":"epi","enable":false}),
+        )
+        .unwrap();
+        let all = scopes(&world.root).unwrap();
+        let epi = all.iter().find(|s| s.world == "project:epi").unwrap();
+        epi.save_index(&epi.index().unwrap()).unwrap();
+        assert_eq!(
+            world.external_listing(),
+            before,
+            "external tree was written"
+        );
+        assert!(epi
+            .state
+            .join(source_horizon::GROUND_RELATIONS_SOURCE)
+            .is_file());
+        assert!(epi.state.join(".central/bkmr/bindings.json").is_file());
+        assert!(!epi.ground().unwrap().content_pool.enabled);
+        assert_eq!(
+            super::super::file_map_backend::Backend::for_scope(epi).area,
+            epi.state.join(".central/bkmr")
+        );
+    }
+
+    #[test]
+    fn external_relations_read_from_the_tree_until_the_ground_edits_them() {
+        let world = World::new();
+        let own = world.external.join(source_horizon::GROUND_RELATIONS_SOURCE);
+        fs::create_dir_all(own.parent().unwrap()).unwrap();
+        fs::write(
+            &own,
+            serde_json::to_vec(&json!({"schema":source_horizon::GROUND_RELATIONS_SCHEMA,
+                "project_id":"epi","relations":[],"file_map":{"content_pool":{"enabled":true}}}))
+            .unwrap(),
+        )
+        .unwrap();
+        let all = scopes(&world.root).unwrap();
+        let epi = all.iter().find(|s| s.world == "project:epi").unwrap();
+        assert!(epi.ground().unwrap().content_pool.enabled);
+        let mut ground = epi.ground().unwrap();
+        ground.content_pool.enabled = false;
+        epi.save(&ground, epi.document().unwrap()).unwrap();
+        assert!(!epi.ground().unwrap().content_pool.enabled);
+        let untouched: Value = serde_json::from_slice(&fs::read(&own).unwrap()).unwrap();
+        assert_eq!(untouched["file_map"]["content_pool"]["enabled"], true);
+    }
+
+    #[test]
+    fn external_scope_name_must_be_one_component() {
+        assert!(super::super::file_map_catalog::external_state(Path::new("/tmp"), "a/b").is_err());
     }
 }
