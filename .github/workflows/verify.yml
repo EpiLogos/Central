@@ -197,7 +197,7 @@ jobs:
           out = pathlib.Path(out_arg).resolve(strict=True)
           specs = {
               'ctrl': ('ctrl', ['bin'], ['cli-git-sync', 'default'], False, 'ctrl-build.jsonl', 'ctrl-binary.json', 'ctrl-path.txt', 'ctrl'),
-              'ordinary-child': ('native_ordinary_interruption_child', ['test'], ['native-ordinary-interruption-child'], True,
+              'ordinary-child': ('native_ordinary_interruption_child', ['test'], ['cli-git-sync', 'default', 'native-ordinary-interruption-child'], True,
                                  'ordinary-child-build.jsonl', 'ordinary-child-binary.json', 'ordinary-child-path.txt', 'ordinary-interruption-child'),
           }
           helper_sha = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()
@@ -851,7 +851,7 @@ jobs:
           out = pathlib.Path(out_arg).resolve(strict=True)
           specs = {
               'ctrl': ('ctrl', ['bin'], ['cli-git-sync', 'default'], False, 'ctrl-build.jsonl', 'ctrl-binary.json', 'ctrl-path.txt', 'ctrl'),
-              'ordinary-child': ('native_ordinary_interruption_child', ['test'], ['native-ordinary-interruption-child'], True,
+              'ordinary-child': ('native_ordinary_interruption_child', ['test'], ['cli-git-sync', 'default', 'native-ordinary-interruption-child'], True,
                                  'ordinary-child-build.jsonl', 'ordinary-child-binary.json', 'ordinary-child-path.txt', 'ordinary-interruption-child'),
           }
           helper_sha = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()
