@@ -1,0 +1,11 @@
+{
+  "schema": "central.project-now.handoff/v1",
+  "id": "pool-exclusions-landed-for-epilegacy-stale-2026-10-07",
+  "provenance": "agent-authored-bounded-return",
+  "actor": "agent/oh-i",
+  "kind": "handoff",
+  "recorded_at_unix_seconds": 1791384987,
+  "subject": "Pool exclusions landed for epi/legacy; stale record resolved; AIKit change certified 681/0",
+  "result": "Follow-ups from the file-map lane landed: (1) Pool exclusions applied through central.file-map.pool to the two Documents scopes — epi and legacy now exclude node_modules, .git, target, dist, build, .venv, venv, .cache, .next, coverage, .turbo, .svelte-kit, DerivedData, Pods, __pycache__, .pytest_cache, .mypy_cache (hygiene set only; no owner-content directories excluded — that remains the owner call for Epii-Character-Images/bimba-portable). epi exclusion-aware walk 27s (was ~50s), legacy 6.2s (was 8.6s); stale entries caches invalidated and re-persisted exclusion-aware. Federated search: cold 50s one-time, warm 3.0s steady. (2) Stale carried record central-primary-main-workcentral-is-18-2026-09-28 resolved through projectcentral.now.update — the lane it awaited landed via PRs #229/#230/#231 and the installed binary carries the work; it will stop re-carrying day to day. (3) AIKit scoped-roster change certified in its crate: cargo test -p aikit-adapters 681 passed / 0 failed / 5 ignored. It stands uncommitted in the ai-kit working tree beside the encounter lane in-flight work (aikit-cli cannot release-build until fork_at_turn/reissue_from_turn store methods land); the change builds and deploys with that lane completion, no rework needed. End-to-end aikit knowledge search with deployed ctrl: 35s (was 3m20s), zero absences — residual is AIKit orchestration fan-out inside ai-kit, which cannot build until the encounter lane lands; after it does, the scoped roster rides the same build. Named for the owner: whether Epii-Character-Images and bimba-portable belong in the epi pool is a content judgment, not hygiene.",
+  "status": "active"
+}

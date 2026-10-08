@@ -13,6 +13,7 @@ use std::{
 
 pub const SCHEMA: &str = "central.file-map/v1";
 const INDEX: &str = ".central/bkmr/bindings.json";
+const ENTRIES_CACHE: &str = ".central/bkmr/entries-cache.json";
 const TEXT_LIMIT: usize = 32768;
 pub(crate) const MAX_ENTRIES: usize = 1_000_000;
 #[derive(Clone, Debug)]
@@ -107,7 +108,7 @@ pub(crate) struct Indexed {
     #[serde(default)]
     pub import_id: Option<i64>,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Entry {
     pub source: SourceBinding,
     pub world_ref: String,
@@ -529,6 +530,28 @@ impl Scope {
             &serde_json::to_vec_pretty(index)?,
             crate::file_mutation::RecordDisposition::ReplaceOrCreate,
         )
+    }
+    /// The enumeration snapshot federated search serves from. `entries()` walks
+    /// the whole pooled tree with per-file metadata, which is refresh-scale
+    /// work; a query must load the last refresh's walk instead of redoing it.
+    /// Staleness stays safe: matched files are content-hashed at query time and
+    /// a stale binding is disclosed, not served.
+    pub fn save_entries_cache(&self, entries: &[Entry]) -> io::Result<()> {
+        write_atomic(
+            &self.root,
+            &self.root.join(ENTRIES_CACHE),
+            &serde_json::to_vec(entries)?,
+            crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+        )
+    }
+    pub fn load_entries_cache(&self) -> io::Result<Option<Vec<Entry>>> {
+        match fs::read(self.root.join(ENTRIES_CACHE)) {
+            Ok(bytes) => Ok(serde_json::from_slice(&bytes)
+                .map(Some)
+                .map_err(io::Error::other)?),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 }
 pub(crate) fn scopes(root: &Path) -> io::Result<Vec<Scope>> {

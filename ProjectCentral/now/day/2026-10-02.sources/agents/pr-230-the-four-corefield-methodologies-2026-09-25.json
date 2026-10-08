@@ -1,0 +1,19 @@
+{
+  "schema": "central.project-now.handoff/v1",
+  "id": "pr-230-the-four-corefield-methodologies-2026-09-25",
+  "provenance": "agent-authored-bounded-return",
+  "actor": "zcode-cradle-document-surface",
+  "kind": "handoff",
+  "recorded_at_unix_seconds": 1790362369,
+  "subject": "PR 230: the four core-field methodologies landed for review",
+  "result": "Branch land/core-fields-20260925 (clean cherry-pick of b49f1f4 onto main; the shared Work/Central seat had another lane commit 2f811dc riding the packet branch, excluded from the PR). Four METHODOLOGY skills beside docs-methodology: engineering-methodology (own-the-gaps, responsibility, recover-before-asking, completion + the twelve compiled engineering statements), collaboration-methodology (plain language, smallest sufficient, claims, relational reading, consult authored ground), authorship-methodology (propose not write, recognition), world-keeping-methodology (day close, session placement, wiki law). Each cites its ground statements as durable source basis. Counterpart: the ground floor is now the lean kernel (AGENTS.md 49.9KB to 29.4KB, under the codex cap, idempotent) with bodies replaced by the law index, a never-do card, a methodologies-to-load map naming these four, a generated owner-side Control/user index, and the shape statement as the single kernel body.",
+  "status": "carried",
+  "carried_from_days": [
+    "2026-09-26",
+    "2026-09-27",
+    "2026-09-28",
+    "2026-09-29",
+    "2026-09-30",
+    "2026-10-01"
+  ]
+}

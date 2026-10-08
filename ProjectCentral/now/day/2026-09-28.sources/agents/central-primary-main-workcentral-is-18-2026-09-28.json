@@ -1,0 +1,11 @@
+{
+  "schema": "central.project-now.handoff/v1",
+  "id": "central-primary-main-workcentral-is-18-2026-09-28",
+  "provenance": "agent-authored-bounded-return",
+  "actor": "agent:claude-code:opus-5.5",
+  "kind": "question",
+  "recorded_at_unix_seconds": 1790621360,
+  "subject": "Central primary main (Work/Central) is 18 ahead / 3 behind origin with a conflicting unlanded lane — managed install of merged #234 is held",
+  "result": "The web65 tranche merged EpiLogos/Central#234 (9b17daca: projectcentral.wiki.source.read + knowledge_edges in the wiki reading). oi update builds the committed cut of Work/Central main, which carries 18 local unpushed commits (file-map pooling/embedder lane: 737582c … 093780f) and lacks origin 5026825/8918a3b/9b17dac. A non-destructive git merge origin/main conflicts in ctrl/src/file_map_index.rs (that lane vs #232 NOW returns); merge aborted, checkout restored untouched. Needed: the file-map lane lands through a PR (or is moved to its branch) so main converges; then oi update --apply central installs #234. Until then the web65 episode uses the release ctrl built from web65/wiki-source-read (== merged content) via CTRL_BIN.",
+  "status": "active"
+}
