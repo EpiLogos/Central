@@ -2,8 +2,8 @@
 //! No personal installation, default-policy adoption, model call or shell rewrite.
 pub mod authority;
 pub mod documents;
-pub mod field;
 mod extended;
+pub mod field;
 mod history;
 pub mod migration;
 pub mod placement;
@@ -82,6 +82,11 @@ pub fn execute_with_token_at(
             // only the frozen allocation basis. Read-only over the existing
             // receiving ledger — it allocates nothing and adds no new store.
             let returns = temporal::composed_returns(&scope, &record.now_ref, &record.source_ref)?;
+            // Payload violations in T, so a working agent sees bulky evidence
+            // it left there while it still works. Walks this clearing's T only.
+            let violations = placement::now_destination(&scope, &reading.source.path)
+                .and_then(|t| placement::t_payload_violations(&t))
+                .unwrap_or_else(|error| json!({"unreadable": error.to_string()}));
             match input.get("with_placement") {
                 Some(Value::Bool(true)) => {
                     // Current acting facts are explicitly requested. Ordinary
@@ -95,6 +100,7 @@ pub fn execute_with_token_at(
                     result["schema"] = json!("central.now-reading/v1");
                     result["placement_included"] = json!(true);
                     result["returns"] = Value::Array(returns);
+                    result["t_payload_violations"] = violations;
                     result
                         .as_object_mut()
                         .expect("native reading object")
@@ -102,7 +108,7 @@ pub fn execute_with_token_at(
                     Ok(result)
                 }
                 None | Some(Value::Bool(false)) => Ok(
-                    json!({"schema":"central.now-reading/v1","record":record,"source":reading.source,"revision":reading.revision,"returns":returns,"automatic_agent_or_model_invocation":false,
+                    json!({"schema":"central.now-reading/v1","record":record,"source":reading.source,"revision":reading.revision,"returns":returns,"t_payload_violations":violations,"automatic_agent_or_model_invocation":false,
                         "pointer_note":"Records are pointers, not authority: follow the governing guidance, and search the native surface before building anything new."}),
                 ),
                 _ => Err(invalid("with_placement must be a boolean")),

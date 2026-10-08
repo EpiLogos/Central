@@ -884,6 +884,239 @@ pub(crate) fn now_destination(scope: &Scope, source_path: &str) -> io::Result<Pa
     }
     Ok(scope.root.join(parent).join("T"))
 }
+
+// ---- T payload law -------------------------------------------------------
+//
+// T holds the findings of a clearing: plans, findings, coordination and
+// tracking. Bulky evidence (CI artifact zips, app bundles, build trees) is
+// downloaded to the machine's evidence cache, and T keeps only the finding,
+// its source and the payload's sha256. The definition below matches the
+// machine sweeper (Control/user/workcell/tend_caches.py) exactly.
+
+/// Any file at or above this size in T is a payload, whatever its name.
+pub const T_MAX_FILE_BYTES: u64 = 50 * 1024 * 1024;
+/// Archive and bundle suffixes that are payloads at any size (case-insensitive).
+pub const T_ARCHIVE_SUFFIXES: [&str; 12] = [
+    ".zip", ".tar", ".tgz", ".gz", ".xz", ".zst", ".bz2", ".7z", ".dmg", ".pkg", ".ipa", ".apk",
+];
+const CARGO_CACHEDIR_SIGNATURE: &[u8] = b"Signature: 8a477f597d28d172789f06886806bc55";
+pub const SWEPT_PAYLOAD_SCHEMA: &str = "central.swept-payload/v1";
+const SWEPT_SUFFIX: &str = ".swept.json";
+
+/// One payload found in a clearing's T. Directory payloads (cargo targets,
+/// node_modules) are reported once at their root and never descended.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Payload {
+    pub path: PathBuf,
+    pub bytes: u64,
+    /// archive | large-file | cargo-target | node_modules
+    pub kind: &'static str,
+}
+impl Payload {
+    pub fn is_dir(&self) -> bool {
+        matches!(self.kind, "cargo-target" | "node_modules")
+    }
+}
+
+fn is_cargo_target(dir: &Path) -> bool {
+    use std::io::Read;
+    let tag = dir.join("CACHEDIR.TAG");
+    if !fs::symlink_metadata(&tag).is_ok_and(|m| m.is_file()) {
+        return false;
+    }
+    let mut head = [0u8; CARGO_CACHEDIR_SIGNATURE.len()];
+    fs::File::open(&tag).is_ok_and(|mut file| file.read_exact(&mut head).is_ok())
+        && head == CARGO_CACHEDIR_SIGNATURE
+}
+
+/// Apparent bytes of regular files under `dir`, never following symlinks.
+fn tree_bytes(dir: &Path) -> u64 {
+    let mut total = 0;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&current) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(meta) = fs::symlink_metadata(entry.path()) else {
+                continue;
+            };
+            if meta.is_dir() {
+                stack.push(entry.path());
+            } else if meta.is_file() {
+                total += meta.len();
+            }
+        }
+    }
+    total
+}
+
+/// The payloads in one clearing's T, largest first. A missing T, or a T that
+/// is itself a symlink, has none; symlinks inside T are never followed and
+/// `.swept.json` tombstones are never payloads.
+pub fn t_payloads(t_dir: &Path) -> io::Result<Vec<Payload>> {
+    match fs::symlink_metadata(t_dir) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(error) => return Err(error),
+        Ok(meta) if !meta.is_dir() => return Ok(vec![]),
+        Ok(_) => {}
+    }
+    let mut payloads = vec![];
+    let mut stack = vec![t_dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let meta = fs::symlink_metadata(&path)?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            if meta.is_dir() {
+                if name == ".git" {
+                    continue;
+                }
+                let kind = if name == "node_modules" {
+                    "node_modules"
+                } else if is_cargo_target(&path) {
+                    "cargo-target"
+                } else {
+                    stack.push(path);
+                    continue;
+                };
+                payloads.push(Payload {
+                    bytes: tree_bytes(&path),
+                    path,
+                    kind,
+                });
+            } else if meta.is_file() {
+                if name.ends_with(SWEPT_SUFFIX) {
+                    continue;
+                }
+                let lower = name.to_ascii_lowercase();
+                let kind = if T_ARCHIVE_SUFFIXES.iter().any(|s| lower.ends_with(s)) {
+                    "archive"
+                } else if meta.len() >= T_MAX_FILE_BYTES {
+                    "large-file"
+                } else {
+                    continue;
+                };
+                payloads.push(Payload {
+                    path,
+                    bytes: meta.len(),
+                    kind,
+                });
+            }
+        }
+    }
+    payloads.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.path.cmp(&b.path)));
+    Ok(payloads)
+}
+
+/// A cheap reading of T's payload violations for working agents: count,
+/// total bytes and the ten largest (count 0 when T is clean).
+pub(crate) fn t_payload_violations(t_dir: &Path) -> io::Result<Value> {
+    let payloads = t_payloads(t_dir)?;
+    if payloads.is_empty() {
+        return Ok(json!({"count":0,"total_bytes":0,"largest":[]}));
+    }
+    let total: u64 = payloads.iter().map(|p| p.bytes).sum();
+    Ok(json!({
+        "count": payloads.len(),
+        "total_bytes": total,
+        "largest": payloads.iter().take(10).collect::<Vec<_>>(),
+        "remedy": "move bulky evidence to evidence_cache; keep finding, source and sha256 in T; close tombstones what remains",
+    }))
+}
+
+fn file_sha256(path: &Path) -> io::Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    io::copy(&mut fs::File::open(path)?, &mut hasher)?;
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Replace every payload in T with a `<name>.swept.json` tombstone (the
+/// machine sweeper's schema) and delete the payload. Source bytes in T are
+/// untouched. Returns the tombstoned rows and per-payload failures; one
+/// failure never stops the others.
+pub(crate) fn tombstone_t_payloads(
+    t_dir: &Path,
+    why: &str,
+    swept_by: &str,
+    now: u64,
+) -> io::Result<(Vec<Value>, Vec<Value>)> {
+    let mut done = vec![];
+    let mut failed = vec![];
+    for payload in t_payloads(t_dir)? {
+        let name = payload
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let outcome = (|| -> io::Result<Value> {
+            let sha256 = if payload.is_dir() {
+                Value::Null
+            } else {
+                json!(file_sha256(&payload.path)?)
+            };
+            let stone = payload.path.with_file_name(format!("{name}{SWEPT_SUFFIX}"));
+            let record = json!({
+                "schema": SWEPT_PAYLOAD_SCHEMA,
+                "name": name,
+                "bytes": payload.bytes,
+                "sha256": sha256,
+                "why": format!("{why} ({})", payload.kind),
+                "swept_at_unix_seconds": now,
+                "swept_by": swept_by,
+            });
+            let mut body = serde_json::to_vec_pretty(&record)?;
+            body.push(b'\n');
+            fs::write(&stone, body)?;
+            if payload.is_dir() {
+                fs::remove_dir_all(&payload.path)?;
+            } else {
+                fs::remove_file(&payload.path)?;
+            }
+            Ok(
+                json!({"path":payload.path,"kind":payload.kind,"bytes":payload.bytes,"sha256":sha256,"tombstone":stone}),
+            )
+        })();
+        match outcome {
+            Ok(row) => done.push(row),
+            Err(error) => failed
+                .push(json!({"path":payload.path,"kind":payload.kind,"error":error.to_string()})),
+        }
+    }
+    Ok((done, failed))
+}
+
+/// Where bulky evidence for this clearing goes: outside ground, keyed by the
+/// clearing's directory name. Stated, never created here.
+fn evidence_cache(destination: &Path) -> Value {
+    match (
+        std::env::var_os("HOME"),
+        destination.parent().and_then(Path::file_name),
+    ) {
+        (Some(home), Some(id)) => json!(PathBuf::from(home)
+            .join("Library/Caches/central/evidence")
+            .join(id)),
+        _ => Value::Null,
+    }
+}
+fn artifact_bounds() -> Value {
+    json!({
+        "max_file_bytes": T_MAX_FILE_BYTES,
+        "refused_kinds": {
+            "archive_suffixes": T_ARCHIVE_SUFFIXES,
+            "directories": ["cargo target (CACHEDIR.TAG)", "node_modules"],
+            "symlinks": "never followed",
+        },
+        "bulky_evidence": "download to evidence_cache; record finding, source and sha256 in T",
+        "on_close": "payloads remaining in T are replaced by <name>.swept.json tombstones",
+    })
+}
 /// Refuse a wholly excluded clearing before creating/rebinding source or T.
 /// A protected descendant does not erase the entire aperture; validation still
 /// excludes that descendant and ambiguous mutations of its parents.
@@ -925,7 +1158,7 @@ pub(super) fn allocation_reading(
         anchor: anchor(&scope.central_root, &destination)?,
     });
     Ok(
-        json!({"schema":"central.now-allocation/v1","created":created,"now_ref":record.now_ref,"source":source.source,"revision":source.revision,"record":record,"writable_destination":destination,"artifact_namespace":"T","permitted_artifact_kinds":["plans","findings","coordination","tracking"],"policy":policy,"automatic_agent_or_model_invocation":false}),
+        json!({"schema":"central.now-allocation/v1","created":created,"now_ref":record.now_ref,"source":source.source,"revision":source.revision,"record":record,"writable_destination":destination,"artifact_namespace":"T","permitted_artifact_kinds":["plans","findings","coordination","tracking"],"evidence_cache":evidence_cache(&destination),"artifact_bounds":artifact_bounds(),"policy":policy,"automatic_agent_or_model_invocation":false}),
     )
 }
 /// The allocation basis of one clearing: everything its identity and

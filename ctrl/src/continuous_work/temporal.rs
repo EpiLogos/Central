@@ -881,9 +881,30 @@ pub fn now_lifecycle(
         &principal.actor_kind,
         now,
     )?;
+    // Leaving the active horizon tends T: bulky payloads (archives, files at
+    // or above the bound, build trees) become `.swept.json` tombstones that
+    // keep their name, size and sha256. Findings and other source bytes stay.
+    // Runs after the lifecycle is recorded, so a refused transition never
+    // deletes anything; one payload failing never stops the others.
+    let (tombstoned, tend_failures) = if matches!(next, "closed" | "archived") {
+        match placement::now_destination(scope, &current.source.path).and_then(|t| {
+            placement::tombstone_t_payloads(
+                &t,
+                &format!("now {next}: clearing payload"),
+                &principal.principal_ref,
+                now,
+            )
+        }) {
+            Ok(outcome) => outcome,
+            Err(error) => (vec![], vec![json!({"error": error.to_string()})]),
+        }
+    } else {
+        (vec![], vec![])
+    };
     Ok(
         json!({"schema":"central.now-lifecycle/v1","record":record,"source":changed.source,"revision":changed.revision,
-        "archive_source_bytes_retained":true,"artifacts_deleted":false,"processes_stopped":false,
+        "archive_source_bytes_retained":true,"artifacts_deleted":!tombstoned.is_empty(),
+        "payloads_tombstoned":tombstoned,"payload_tend_failures":tend_failures,"processes_stopped":false,
         "scope_of_settlement":"recorded native obligations and receiving ledger, not an inferred global process census",
         "automatic_agent_or_model_invocation":false}),
     )
