@@ -26,6 +26,20 @@ pub const ACCEPT: &str = "agent-profile.accept";
 pub const ROSTER: &str = "agent-profile.roster";
 const SCHEMA: &str = "central.agent-profile-acceptance/v1";
 
+/// One pinned Agent-self source recorded on an acceptance: a Central source ref
+/// plus the exact-content digest the pinned file verified against when the human
+/// accepted. Refs only: the bytes are never copied into the receipt. Wire shape
+/// ported from the owner self-integration line
+/// (`feat/agent-self-integration-20261007`, `ctrl/src/agent_profile.rs`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSelfSourcePin {
+    /// A Central source ref in the `central:source:{world_ref}:{relpath}` form
+    /// the source horizon produces.
+    pub reference: String,
+    /// `sha256:` plus the lowercase hex sha256 of the exact UTF-8 bytes.
+    pub content_digest: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Acceptance {
@@ -40,6 +54,14 @@ pub struct Acceptance {
     pub authority_ref: String,
     pub authority_revision: String,
     pub accepted_at_unix_seconds: u64,
+    /// The verified Agent-self pins this acceptance recognised. Absent on
+    /// receipts written before the self binding existed, so every earlier
+    /// receipt keeps parsing; receipts written by the self-integration owner
+    /// line for profiles that bind self sources carry them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub self_source: Option<AgentSelfSourcePin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relational_logos: Option<AgentSelfSourcePin>,
 }
 
 #[derive(Deserialize)]
@@ -238,6 +260,12 @@ pub fn execute_with_token_at(
         authority_ref: principal.authority_ref,
         authority_revision: principal.authority_revision,
         accepted_at_unix_seconds: now,
+        // Pin verification and recording belong to the self-integration owner
+        // line, which sets these for profiles that bind self sources. This
+        // line's own acceptances record no pins and keep earlier receipts
+        // parsing unchanged.
+        self_source: None,
+        relational_logos: None,
     };
     // Immutable evidence lives in Central's native state, not the generated
     // profile directory or a renderer Agent store. Descriptor-relative native
