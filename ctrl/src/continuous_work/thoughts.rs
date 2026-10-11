@@ -56,10 +56,11 @@ pub struct ContemplativeFrontMatter {
     /// from. Always empty for raw T fixtures.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_fixtures: Vec<String>,
-    /// The working-thought reading this fixture carries, when the writer
-    /// names one: `T0`..`T5` (Question, Trace, Challenge, Pattern,
-    /// Discovery, Insight) or `T0-prime`..`T5-prime` (Assumption, Lacuna,
-    /// Affordance, Anomaly, Concealment, Integration). Absent is lawful.
+    /// The working-thought reading this fixture carries: `T0`..`T5`
+    /// (Question, Trace, Challenge, Pattern, Discovery, Insight) or
+    /// `T0-prime`..`T5-prime` (Assumption, Lacuna, Affordance, Anomaly,
+    /// Concealment, Integration). New appends require it; absent on disk is
+    /// legacy, read lawfully and never rewritten.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reading: Option<String>,
 }
@@ -67,7 +68,7 @@ pub struct ContemplativeFrontMatter {
 /// The twelve working-thought readings, machine spellings. The human names
 /// live in the action description and the module doc; the enum here is the
 /// whole law.
-const READINGS: [&str; 12] = [
+pub(crate) const READINGS: [&str; 12] = [
     "T0", "T1", "T2", "T3", "T4", "T5", "T0-prime", "T1-prime", "T2-prime", "T3-prime", "T4-prime",
     "T5-prime",
 ];
@@ -373,7 +374,9 @@ pub(crate) fn thoughts_append(scope: &Scope, input: &Value, now: u64) -> io::Res
     let actor = text(input, "actor")?;
     let actor_kind = text(input, "actor_kind")?;
     validate_attribution(actor, actor_kind)?;
-    let typed_reading = validate_reading(optional_ref(input, "reading")?.as_deref())?;
+    // The reading coordinate is the metadata law: a thought without its
+    // reading is not admitted (the fresh-flow rule, 2026-10-11).
+    let typed_reading = validate_reading(Some(text(input, "reading")?))?;
     write_fixture(
         scope,
         &record,
@@ -601,7 +604,8 @@ mod tests {
                 "actor_kind": "agent",
                 "agent_session_ref": "sess:test",
                 "content": "## Raw stream fixture\n\nWhat returned today.",
-            }),
+             "reading": "T4",
+                }),
             200,
         )
         .unwrap()
@@ -945,6 +949,7 @@ mod tests {
             "day": "2026-09-13",
             "actor": "agent:test",
             "actor_kind": "agent",
+            "reading": "T1",
             "content": "different bytes entirely",
         });
         assert_eq!(
@@ -975,6 +980,7 @@ mod tests {
                     "now_ref": allocation["now_ref"], "slug": "still-writing",
                     "day": "2026-09-13", "actor": "agent:test", "actor_kind": "agent",
                     "content": "must refuse",
+                 "reading": "T4",
                 }),
                 203
             )
@@ -1254,33 +1260,22 @@ mod reading_tests {
             .kind(),
             io::ErrorKind::InvalidInput
         );
-        // Absent reading stays lawful and reads as absent.
-        super::super::execute_at(
-            root,
-            "thoughts_append",
-            &json!({
-                "now_ref": allocation["now_ref"], "slug": "untyped", "day": "2026-09-16",
-                "actor": "agent:test", "actor_kind": "agent", "content": "no reading named",
-            }),
-            203,
-        )
-        .unwrap();
-        let stream = super::super::execute_at(
-            root,
-            "thoughts_read",
-            &json!({
-                "now_ref": allocation["now_ref"],
-            }),
-            204,
-        )
-        .unwrap();
-        let untyped = stream["fixtures"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|row| row["file"] == "untyped-2026-09-16.md")
-            .unwrap();
-        assert!(untyped.get("reading").is_none());
+        // The fresh-flow law: a thought without its reading is not admitted.
+        assert_eq!(
+            super::super::execute_at(
+                root,
+                "thoughts_append",
+                &json!({
+                    "now_ref": allocation["now_ref"], "slug": "ungraded", "day": "2026-09-16",
+                    "actor": "agent:test", "actor_kind": "agent",
+                    "content": "no reading named",
+                }),
+                203
+            )
+            .unwrap_err()
+            .kind(),
+            io::ErrorKind::InvalidInput
+        );
     }
 
     #[test]
