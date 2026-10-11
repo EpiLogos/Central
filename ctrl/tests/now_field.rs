@@ -56,7 +56,7 @@ impl World {
         let scope = Scope::resolve(world.root(), None).unwrap();
         let policy_path = "Control/user/placement.json";
         fs::write(
-            world.root().join(&policy_path),
+            world.root().join(policy_path),
             serde_json::to_vec_pretty(&json!({
                 "schema":"central.work-placement-policy/v1","scope_ref":"control:root",
                 "writable":[{"path":"Work/one","class":"repository"}],
@@ -198,7 +198,7 @@ const FAILING_STUB: &str =
 fn field_composes_declared_material_gateway_and_children() {
     let world = World::new();
     let root_now = world.workcell_root();
-    let child = world.child(&root_now, "task:field-child");
+    let _child = world.child(&root_now, "task:field-child");
     let dir = unique("central-now-field-stubs");
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join("places.json"), CANNED_CENSUS).unwrap();
