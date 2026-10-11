@@ -808,11 +808,7 @@ pub(crate) fn composed_returns(
 /// the task can be called finished. Fixtures without a distilled learning
 /// are the deferred-and-not-integrated residue the caller must either
 /// distill (`central.now.learnings.distill`) or name as obligations.
-fn return_pass(
-    scope: &Scope,
-    source_path: &str,
-    obligations: usize,
-) -> io::Result<Value> {
+fn return_pass(scope: &Scope, source_path: &str, obligations: usize) -> io::Result<Value> {
     let t = placement::now_destination(scope, source_path)?;
     let (fixtures, _) = super::thoughts::list_stream(scope, &t, usize::MAX, false)?;
     let prime = super::thoughts::stream_destination(scope, source_path, true)?;
@@ -1073,7 +1069,10 @@ mod receiving_obligation_tests {
         };
         append("a-question", "T0");
         append("an-anomaly", "T3-prime");
-        let discovery_file = append("a-discovery", "T4")["file"].as_str().unwrap().to_owned();
+        let discovery_file = append("a-discovery", "T4")["file"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         super::super::execute_at(
             &root,
             "learnings_distill",
@@ -1093,10 +1092,16 @@ mod receiving_obligation_tests {
         let pass = return_pass(&scope, &source_path, 0).unwrap();
         let grouped = pass["undistilled_by_reading"].as_object().unwrap();
         assert_eq!(grouped["T0"].as_array().unwrap().len(), 1, "{grouped:?}");
-        assert_eq!(grouped["T3-prime"].as_array().unwrap().len(), 1, "{grouped:?}");
-        assert!(grouped.get("T4").is_none(), "the distilled fixture is carried: {grouped:?}");
+        assert_eq!(
+            grouped["T3-prime"].as_array().unwrap().len(),
+            1,
+            "{grouped:?}"
+        );
+        assert!(
+            grouped.get("T4").is_none(),
+            "the distilled fixture is carried: {grouped:?}"
+        );
     }
-
 
     #[test]
     fn accepted_contribution_still_blocks_archive_but_cursor_is_not_a_return() {
