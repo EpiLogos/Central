@@ -7,8 +7,7 @@
 use central_ctrl::continuous_work::{execute_at, source::Scope};
 use serde_json::{json, Value};
 use std::{
-    fs,
-    io,
+    fs, io,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
     sync::{Mutex, OnceLock},
@@ -150,7 +149,9 @@ fn stub_owners(dir: &Path, scripts: &[(&str, &str)]) -> PathBuf {
 }
 
 fn with_path<T>(bin: &Path, run: impl FnOnce() -> T) -> T {
-    let _guard = field_env().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = field_env()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let original = std::env::var("PATH").unwrap_or_default();
     std::env::set_var("PATH", format!("{}:{}", bin.display(), original));
     let result = run();
@@ -190,7 +191,8 @@ esac
 "#
     .to_string()
 }
-const FAILING_STUB: &str = "#!/bin/sh\necho \"stub owner refused: controlled failure\" >&2\nexit 3\n";
+const FAILING_STUB: &str =
+    "#!/bin/sh\necho \"stub owner refused: controlled failure\" >&2\nexit 3\n";
 
 #[test]
 fn field_composes_declared_material_gateway_and_children() {
@@ -203,22 +205,22 @@ fn field_composes_declared_material_gateway_and_children() {
     fs::write(dir.join("status.json"), CANNED_STATUS).unwrap();
     fs::write(dir.join("instances.json"), CANNED_INSTANCES).unwrap();
     fs::write(dir.join("gateway-status.json"), CANNED_GATEWAY).unwrap();
-    let bin = stub_owners(&dir, &[("workcell", &writing_stub()), ("aikit", &writing_stub())]);
+    let bin = stub_owners(
+        &dir,
+        &[("workcell", &writing_stub()), ("aikit", &writing_stub())],
+    );
     let field = with_path(&bin, || world.field(&json!({})));
     assert_eq!(field["schema"], "central.now-field/v1");
 
     // The machine declaration joins the local readings to the Workcell root.
     assert_eq!(
-        field["machine"]["declared_workcell_ref"],
-        "workcell:local",
+        field["machine"]["declared_workcell_ref"], "workcell:local",
         "declared binding read from Control/machines/current.json"
     );
-    assert!(
-        field["machine"]["declaration_source_ref"]
-            .as_str()
-            .unwrap()
-            .starts_with("central:source:control:root:Control/machines/current.json")
-    );
+    assert!(field["machine"]["declaration_source_ref"]
+        .as_str()
+        .unwrap()
+        .starts_with("central:source:control:root:Control/machines/current.json"));
 
     assert_eq!(field["workcells"].as_array().unwrap().len(), 1);
     let workcell = &field["workcells"][0];
@@ -244,7 +246,13 @@ fn field_composes_declared_material_gateway_and_children() {
         "the owner's census is carried, not rewritten"
     );
     assert_eq!(material["census"]["observed_at_unix_seconds"], 1_000);
-    assert_eq!(material["instances"]["reading"]["instances"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        material["instances"]["reading"]["instances"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 
     // Gateway status comes from the AIKit owner's own status reading.
     let gateway = &workcell["gateway"];
@@ -274,17 +282,17 @@ fn field_marks_failed_owners_unavailable_not_empty() {
     // Only failing owner stubs are on PATH ahead of the machine's real
     // binaries: workcell exits 3 with its own words on stderr and aikit does
     // the same, so every owner reading must report its own failure.
-    let bin = stub_owners(
-        &dir,
-        &[("workcell", FAILING_STUB), ("aikit", FAILING_STUB)],
-    );
+    let bin = stub_owners(&dir, &[("workcell", FAILING_STUB), ("aikit", FAILING_STUB)]);
     let field = with_path(&bin, || {
         world.field(&json!({"workcell_refs":["workcell:local"]}))
     });
 
     let workcell = &field["workcells"][0];
     // The NOW plane is still read: unavailability is not absence of work.
-    assert_eq!(workcell["root"]["task_ref"], "central:task:control:root:workcell-root:workcell:local");
+    assert_eq!(
+        workcell["root"]["task_ref"],
+        "central:task:control:root:workcell-root:workcell:local"
+    );
     let material = &workcell["material"];
     assert_eq!(material["available"], false);
     let census = &material["census"];
@@ -338,11 +346,18 @@ fn field_truncates_census_rows_and_discloses_the_bound() {
     });
     let dir = unique("central-now-field-cap");
     fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join("places.json"), serde_json::to_vec(&census).unwrap()).unwrap();
+    fs::write(
+        dir.join("places.json"),
+        serde_json::to_vec(&census).unwrap(),
+    )
+    .unwrap();
     fs::write(dir.join("status.json"), CANNED_STATUS).unwrap();
     fs::write(dir.join("instances.json"), CANNED_INSTANCES).unwrap();
     fs::write(dir.join("gateway-status.json"), CANNED_GATEWAY).unwrap();
-    let bin = stub_owners(&dir, &[("workcell", &writing_stub()), ("aikit", &writing_stub())]);
+    let bin = stub_owners(
+        &dir,
+        &[("workcell", &writing_stub()), ("aikit", &writing_stub())],
+    );
     let field = with_path(&bin, || world.field(&json!({})));
     let census = &field["workcells"][0]["material"]["census"];
     assert_eq!(
@@ -402,7 +417,10 @@ fn field_includes_declared_remote_gateways_without_mirroring_their_ground() {
     fs::write(dir.join("instances.json"), CANNED_INSTANCES).unwrap();
     fs::write(dir.join("gateway-status.json"), CANNED_GATEWAY).unwrap();
     fs::write(dir.join("gateway-remote.json"), CANNED_GATEWAY_REMOTES).unwrap();
-    let bin = stub_owners(&dir, &[("workcell", &writing_stub()), ("aikit", &writing_stub())]);
+    let bin = stub_owners(
+        &dir,
+        &[("workcell", &writing_stub()), ("aikit", &writing_stub())],
+    );
 
     let field = with_path(&bin, || world.field(&json!({})));
     let blocks = field["workcells"].as_array().unwrap();
@@ -429,20 +447,20 @@ fn field_includes_declared_remote_gateways_without_mirroring_their_ground() {
         "100.109.102.82:7788"
     );
     assert!(
-        blocks.iter().any(|block| block["workcell_ref"] == "workcell:local"),
+        blocks
+            .iter()
+            .any(|block| block["workcell_ref"] == "workcell:local"),
         "the local root is still present beside the remote"
     );
 
     // Omitting the gateway reading omits the remote blocks entirely: nothing
     // is observed that the caller did not ask for.
     let field = with_path(&bin, || world.field(&json!({"include_gateway": false})));
-    assert!(
-        !field["workcells"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|block| block["workcell_ref"] == "workcell:mac")
-    );
+    assert!(!field["workcells"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|block| block["workcell_ref"] == "workcell:mac"));
 }
 
 #[test]
@@ -457,12 +475,19 @@ fn field_names_unreadable_remote_declarations_instead_of_dropping_them() {
     let unavailable = &field["gateway_remotes_unavailable"];
     assert_eq!(unavailable["available"], false);
     assert!(
-        unavailable["reason"].as_str().unwrap().contains("controlled failure"),
+        unavailable["reason"]
+            .as_str()
+            .unwrap()
+            .contains("controlled failure"),
         "the remote-declaration failure is named: {}",
         unavailable["reason"]
     );
     assert!(
-        !field["workcells"].as_array().unwrap().iter().any(|block| block["workcell_ref"] == "workcell:mac"),
+        !field["workcells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|block| block["workcell_ref"] == "workcell:mac"),
         "no remote block is invented when the declaration list cannot be read"
     );
 }
@@ -483,7 +508,10 @@ fn field_joins_a_remote_connection_record_to_its_declared_block() {
         r#"{"ok":true,"connections":[{"label":"mac","workcell_ref":"workcell:mac","endpoint":"100.109.102.82:7777","state":"connected"}]}"#,
     )
     .unwrap();
-    let bin = stub_owners(&dir, &[("workcell", &writing_stub()), ("aikit", &writing_stub())]);
+    let bin = stub_owners(
+        &dir,
+        &[("workcell", &writing_stub()), ("aikit", &writing_stub())],
+    );
 
     let field = with_path(&bin, || world.field(&json!({})));
     let mac = field["workcells"]
@@ -501,7 +529,11 @@ fn field_joins_a_remote_connection_record_to_its_declared_block() {
 
     // Without a matching record the material block stays the honest
     // remote-ground reading with no invented connection.
-    fs::write(dir.join("connections.json"), r#"{"ok":true,"connections":[]}"#).unwrap();
+    fs::write(
+        dir.join("connections.json"),
+        r#"{"ok":true,"connections":[]}"#,
+    )
+    .unwrap();
     let field = with_path(&bin, || world.field(&json!({})));
     let mac = field["workcells"]
         .as_array()

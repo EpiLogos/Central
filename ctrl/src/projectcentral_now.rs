@@ -2617,7 +2617,10 @@ mod attribution_tests {
         );
         assert!(recorded.ok, "{recorded:?}");
         let handoff = &recorded.data.as_ref().unwrap()["handoff"];
-        assert_eq!(handoff["source_fixtures"][0]["fixture"], "a-question-2026-10-11.md");
+        assert_eq!(
+            handoff["source_fixtures"][0]["fixture"],
+            "a-question-2026-10-11.md"
+        );
         assert_eq!(handoff["source_fixtures"][0]["reading"], "T0");
         assert_eq!(handoff["source_fixtures"][1]["reading"], "T3-prime");
         assert_eq!(handoff["praxis"]["tools_used"][0], "aikit knowledge route");

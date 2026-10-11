@@ -100,9 +100,8 @@ fn run_owner_json(program: &str, args: &[&str]) -> Result<(Value, u64), String> 
         use io::Read;
         let _ = pipe.read_to_string(&mut stdout);
     }
-    let value: Value = serde_json::from_str(stdout.trim()).map_err(|error| {
-        format!("{program} {args:?} wrote unparseable output: {error}")
-    })?;
+    let value: Value = serde_json::from_str(stdout.trim())
+        .map_err(|error| format!("{program} {args:?} wrote unparseable output: {error}"))?;
     Ok((value, elapsed_ms))
 }
 
@@ -137,10 +136,7 @@ fn declared_workcell(scope: &Scope) -> Option<(String, String)> {
         .filter_map(|binding| binding["reference"].as_str())
         .next()?
         .to_string();
-    Some((
-        reference,
-        scope.source_ref("Control/machines/current.json"),
-    ))
+    Some((reference, scope.source_ref("Control/machines/current.json")))
 }
 
 /// Cap a JSON array with an honest truncation count.
@@ -246,15 +242,10 @@ pub(crate) fn field(scope: &Scope, input: &Value, now: u64) -> io::Result<Value>
     let mut workcells = Vec::new();
     let mut unjoined_local: Option<Value> = None;
     for (record, reading) in &roots {
-        let children = placement::children(
-            scope,
-            &json!({"now_ref": record.now_ref}),
-        )?;
-        let is_declared = declared
-            .as_ref()
-            .is_some_and(|(reference, _)| {
-                record.workcell_ref.as_deref() == Some(reference.as_str())
-            });
+        let children = placement::children(scope, &json!({"now_ref": record.now_ref}))?;
+        let is_declared = declared.as_ref().is_some_and(|(reference, _)| {
+            record.workcell_ref.as_deref() == Some(reference.as_str())
+        });
         let material = if !include_material {
             json!({"available": false, "reason": "material reading not requested", "observation_scope": "omitted"})
         } else if !is_declared {
@@ -273,11 +264,8 @@ pub(crate) fn field(scope: &Scope, input: &Value, now: u64) -> io::Result<Value>
                 census_bounded["reading"] = census;
                 census_bounded["truncated_rows"] = json!(census_truncated);
             }
-            let (instances, instances_truncated) = capped(
-                &value["instances"]["reading"],
-                "instances",
-                INSTANCES_MAX,
-            );
+            let (instances, instances_truncated) =
+                capped(&value["instances"]["reading"], "instances", INSTANCES_MAX);
             let mut instances_bounded = value["instances"].clone();
             if instances_truncated > 0 {
                 instances_bounded["reading"] = instances;
@@ -348,7 +336,11 @@ pub(crate) fn field(scope: &Scope, input: &Value, now: u64) -> io::Result<Value>
     // connected, and reachable are different facts and every one of them is
     // carried, never collapsed.
     let connection_records = if include_material {
-        Some(owner_reading("workcell", &["connections", "list", "--json"], now))
+        Some(owner_reading(
+            "workcell",
+            &["connections", "list", "--json"],
+            now,
+        ))
     } else {
         None
     };
@@ -357,9 +349,12 @@ pub(crate) fn field(scope: &Scope, input: &Value, now: u64) -> io::Result<Value>
         if list["available"].as_bool() == Some(true) {
             // Probe every declared remote concurrently: one slow machine
             // must not stretch the whole field by its own timeout.
-            let mut pending: Vec<
-                (String, Value, std::sync::mpsc::Receiver<Value>, Option<Value>),
-            > = Vec::new();
+            let mut pending: Vec<(
+                String,
+                Value,
+                std::sync::mpsc::Receiver<Value>,
+                Option<Value>,
+            )> = Vec::new();
             for remote in list["reading"]["data"]["remotes"]
                 .as_array()
                 .cloned()
@@ -372,9 +367,10 @@ pub(crate) fn field(scope: &Scope, input: &Value, now: u64) -> io::Result<Value>
                 if placement::validate_workcell_ref(&reference).is_err() {
                     continue;
                 }
-                if roots.iter().any(|(record, _)| {
-                    record.workcell_ref.as_deref() == Some(reference.as_str())
-                }) {
+                if roots
+                    .iter()
+                    .any(|(record, _)| record.workcell_ref.as_deref() == Some(reference.as_str()))
+                {
                     continue;
                 }
                 if !filter.is_empty() && !filter.iter().any(|wanted| wanted == &reference) {
@@ -391,24 +387,30 @@ pub(crate) fn field(scope: &Scope, input: &Value, now: u64) -> io::Result<Value>
                     &["gateway", "status", "--at", reference.as_str(), "--json"],
                     now,
                 );
-                let connection = connection_records
-                    .as_ref()
-                    .and_then(|records| {
-                        records["reading"]["connections"]
-                            .as_array()
-                            .map(|rows| {
-                                rows.iter()
-                                    .find(|row| {
-                                        row["workcell_ref"].as_str() == Some(reference.as_str())
-                                            || row["label"].as_str()
-                                                == Some(reference.strip_prefix("workcell:").unwrap_or(reference.as_str()))
-                                            || row["connection"].as_str()
-                                                == Some(reference.strip_prefix("workcell:").unwrap_or(reference.as_str()))
-                                    })
-                                    .cloned()
-                            })
-                            .unwrap_or(None)
-                    });
+                let connection = connection_records.as_ref().and_then(|records| {
+                    records["reading"]["connections"]
+                        .as_array()
+                        .map(|rows| {
+                            rows.iter()
+                                .find(|row| {
+                                    row["workcell_ref"].as_str() == Some(reference.as_str())
+                                        || row["label"].as_str()
+                                            == Some(
+                                                reference
+                                                    .strip_prefix("workcell:")
+                                                    .unwrap_or(reference.as_str()),
+                                            )
+                                        || row["connection"].as_str()
+                                            == Some(
+                                                reference
+                                                    .strip_prefix("workcell:")
+                                                    .unwrap_or(reference.as_str()),
+                                            )
+                                })
+                                .cloned()
+                        })
+                        .unwrap_or(None)
+                });
                 pending.push((reference, remote, status, connection));
             }
             for (reference, remote, receiver, connection) in pending {

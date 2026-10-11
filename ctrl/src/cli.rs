@@ -5,9 +5,9 @@ use crate::projectcentral_ops::register_projectcentral_actions;
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::RootOptions;
 use central_connector_sdk::{ConnectorContext, ConnectorRegistry};
-use central_reference_connectors::create_default_connector_registry;
 #[cfg(feature = "cli-git-sync")]
 use central_git_sync_connector::GitSynchronizerConnector;
+use central_reference_connectors::create_default_connector_registry;
 use serde_json::{json, Value};
 use std::env;
 use std::path::PathBuf;

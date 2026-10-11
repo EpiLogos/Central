@@ -571,8 +571,13 @@ fn closure_runs_the_return_pass_and_refuses_undistilled_fixtures() {
     let now_ref = allocation["now_ref"].as_str().unwrap().to_string();
 
     let revision = |at_now: u64| -> Value {
-        let read =
-            execute_at(world.path(), "now_read", &json!({"now_ref": now_ref}), at_now).unwrap();
+        let read = execute_at(
+            world.path(),
+            "now_read",
+            &json!({"now_ref": now_ref}),
+            at_now,
+        )
+        .unwrap();
         read["revision"]["revision"].clone()
     };
 
@@ -625,7 +630,10 @@ fn closure_runs_the_return_pass_and_refuses_undistilled_fixtures() {
     assert_eq!(closed["return_pass"]["t_fixtures"], 1);
     assert_eq!(closed["return_pass"]["learnings"], 1);
     assert_eq!(
-        closed["return_pass"]["undistilled"].as_array().unwrap().len(),
+        closed["return_pass"]["undistilled"]
+            .as_array()
+            .unwrap()
+            .len(),
         0
     );
 }

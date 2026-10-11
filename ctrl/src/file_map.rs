@@ -483,7 +483,9 @@ fn inspect(all: &[Scope], input: &Value) -> io::Result<Value> {
             .unwrap_or_default();
         let under_prefix = |path: &std::path::Path| -> bool {
             prefixes.is_empty() || {
-                let Some(path_str) = path.to_str() else { return false };
+                let Some(path_str) = path.to_str() else {
+                    return false;
+                };
                 prefixes.iter().any(|prefix| {
                     path_str.starts_with(prefix)
                         && (path_str.len() == prefix.len()
