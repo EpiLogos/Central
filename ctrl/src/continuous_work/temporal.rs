@@ -804,6 +804,60 @@ pub(crate) fn composed_returns(
     rows.dedup_by(|a, b| a["return_ref"] == b["return_ref"]);
     Ok(rows)
 }
+/// The return pass at closure: what this NOW's T stream still owes before
+/// the task can be called finished. Fixtures without a distilled learning
+/// are the deferred-and-not-integrated residue the caller must either
+/// distill (`central.now.learnings.distill`) or name as obligations.
+fn return_pass(scope: &Scope, source_path: &str, obligations: usize) -> io::Result<Value> {
+    let t = placement::now_destination(scope, source_path)?;
+    let (fixtures, _) = super::thoughts::list_stream(scope, &t, usize::MAX, false)?;
+    let prime = super::thoughts::stream_destination(scope, source_path, true)?;
+    let (learnings, _) = super::thoughts::list_stream(scope, &prime, usize::MAX, false)?;
+    let mut distilled: Vec<String> = Vec::new();
+    for row in &learnings {
+        if let Some(matter) = &row.matter {
+            for fixture in &matter.source_fixtures {
+                if !distilled.contains(fixture) {
+                    distilled.push(fixture.clone());
+                }
+            }
+        }
+    }
+    // Only front-matter-bearing files are T fixtures; plain retained .md
+    // material in the writable destination is working payload, not residue.
+    let undistilled: Vec<String> = fixtures
+        .iter()
+        .filter(|row| row.matter.is_some())
+        .map(|row| row.file.clone())
+        .filter(|file| !distilled.contains(file))
+        .collect();
+    // The reading pattern of what is thought and not yet carried: undistilled
+    // fixtures grouped by their working-thought reading (T0..T5, T0-prime..T5-prime).
+    let mut undistilled_by_reading: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for row in fixtures.iter().filter(|row| row.matter.is_some()) {
+        if distilled.contains(&row.file) {
+            continue;
+        }
+        let reading = row
+            .matter
+            .as_ref()
+            .and_then(|matter| matter.reading.clone())
+            .unwrap_or_else(|| "ungraded".to_string());
+        undistilled_by_reading
+            .entry(reading)
+            .or_default()
+            .push(row.file.clone());
+    }
+    Ok(json!({
+        "t_fixtures": fixtures.len(),
+        "learnings": learnings.len(),
+        "undistilled": undistilled,
+        "undistilled_by_reading": undistilled_by_reading,
+        "obligations": obligations,
+    }))
+}
+
 pub fn now_lifecycle(
     scope: &Scope,
     input: &Value,
@@ -820,6 +874,28 @@ pub fn now_lifecycle(
         return Err(invalid(
             "NOW lifecycle is active, quiescent, closed or archived",
         ));
+    }
+    let pass = if matches!(next, "closed" | "archived") {
+        Some(return_pass(
+            scope,
+            &current.source.path,
+            record.obligations.len(),
+        )?)
+    } else {
+        None
+    };
+    if next == "closed" {
+        let undistilled = pass
+            .as_ref()
+            .and_then(|p| p["undistilled"].as_array().cloned())
+            .unwrap_or_default();
+        if !undistilled.is_empty() {
+            return Err(conflict(format!(
+                "NOW has {} T fixture(s) not distilled into learnings: {}. Run the return pass: distill via central.now.learnings.distill, or name them as obligations before closure.",
+                undistilled.len(),
+                undistilled.iter().map(|v| v.as_str().unwrap_or_default()).collect::<Vec<_>>().join(", ")
+            )));
+        }
     }
     if next == "archived" {
         if record.lifecycle != "closed" {
@@ -881,10 +957,32 @@ pub fn now_lifecycle(
         &principal.actor_kind,
         now,
     )?;
+    // Leaving the active horizon tends T: bulky payloads (archives, files at
+    // or above the bound, build trees) become `.swept.json` tombstones that
+    // keep their name, size and sha256. Findings and other source bytes stay.
+    // Runs after the lifecycle is recorded, so a refused transition never
+    // deletes anything; one payload failing never stops the others.
+    let (tombstoned, tend_failures) = if matches!(next, "closed" | "archived") {
+        match placement::now_destination(scope, &current.source.path).and_then(|t| {
+            placement::tombstone_t_payloads(
+                &t,
+                &format!("now {next}: clearing payload"),
+                &principal.principal_ref,
+                now,
+            )
+        }) {
+            Ok(outcome) => outcome,
+            Err(error) => (vec![], vec![json!({"error": error.to_string()})]),
+        }
+    } else {
+        (vec![], vec![])
+    };
     Ok(
         json!({"schema":"central.now-lifecycle/v1","record":record,"source":changed.source,"revision":changed.revision,
-        "archive_source_bytes_retained":true,"artifacts_deleted":false,"processes_stopped":false,
+        "archive_source_bytes_retained":true,"artifacts_deleted":!tombstoned.is_empty(),
+        "payloads_tombstoned":tombstoned,"payload_tend_failures":tend_failures,"processes_stopped":false,
         "scope_of_settlement":"recorded native obligations and receiving ledger, not an inferred global process census",
+        "return_pass":pass,
         "automatic_agent_or_model_invocation":false}),
     )
 }
@@ -936,6 +1034,75 @@ pub fn now_obligations(
 #[cfg(test)]
 mod receiving_obligation_tests {
     use super::*;
+    #[test]
+    fn return_pass_groups_undistilled_thoughts_by_their_reading() {
+        let world = super::super::tests::world();
+        let root = world.path().to_path_buf();
+        let policy = super::super::tests::policy(&root, None);
+        let allocation = super::super::execute_at(
+            &root,
+            "allocate",
+            &json!({
+                "task_ref":"task:readings",
+                "purpose":"bounded implementation",
+                "participant_refs":["agent:test"],
+                "source_refs":[],
+                "expected_policy_revision":policy["revision"]
+            }),
+            100,
+        )
+        .unwrap();
+        let now_ref = allocation["now_ref"].as_str().unwrap();
+        let append = |slug: &str, reading: &str| {
+            super::super::execute_at(
+                &root,
+                "thoughts_append",
+                &json!({
+                    "now_ref": now_ref, "slug": slug, "day": "2026-10-11",
+                    "actor": "agent:test", "actor_kind": "agent",
+                    "reading": reading,
+                    "content": "plain in-the-moment writing",
+                }),
+                200,
+            )
+            .unwrap()
+        };
+        append("a-question", "T0");
+        append("an-anomaly", "T3-prime");
+        let discovery_file = append("a-discovery", "T4")["file"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        super::super::execute_at(
+            &root,
+            "learnings_distill",
+            &json!({
+                "now_ref": now_ref, "slug": "the-integration",
+                "day": "2026-10-11", "actor": "agent:test", "actor_kind": "agent",
+                "reading": "T5-prime",
+                "content": "the discovery's answer, carried",
+                "source_fixtures": [discovery_file],
+            }),
+            300,
+        )
+        .unwrap();
+        let hex = now_ref.rsplit(':').next().unwrap();
+        let source_path = format!("Control/agents/now/clearings/{hex}/now.json");
+        let scope = Scope::resolve(&root, None).unwrap();
+        let pass = return_pass(&scope, &source_path, 0).unwrap();
+        let grouped = pass["undistilled_by_reading"].as_object().unwrap();
+        assert_eq!(grouped["T0"].as_array().unwrap().len(), 1, "{grouped:?}");
+        assert_eq!(
+            grouped["T3-prime"].as_array().unwrap().len(),
+            1,
+            "{grouped:?}"
+        );
+        assert!(
+            grouped.get("T4").is_none(),
+            "the distilled fixture is carried: {grouped:?}"
+        );
+    }
+
     #[test]
     fn accepted_contribution_still_blocks_archive_but_cursor_is_not_a_return() {
         let world = super::super::tests::world();

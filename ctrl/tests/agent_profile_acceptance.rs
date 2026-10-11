@@ -472,4 +472,69 @@ fn real_cli_express_review_accept_with_self_pins() {
         accepted["data"]["acceptance"]["relational_logos"],
         binding["relational_logos"]
     );
+/// The owner's self-integration line (`feat/agent-self-integration-20261007`,
+/// Central commit `93aa397`) records the verified self-definition pins on
+/// acceptance receipts. Such receipts are immutable personal evidence on the
+/// real ground: the acceptance schema must keep parsing them and the roster
+/// must keep reading every profile — while still refusing any other unknown
+/// field (`deny_unknown_fields` is not widened past the two named pins).
+#[test]
+fn roster_reads_receipts_that_record_self_definition_pins() {
+    let w = world();
+    let p = proposal(&w.0);
+    execute_with_token_at(&w.0, ACCEPT, &acceptance(&w.0, &p), Some(HUMAN), 100).unwrap();
+    // Amend the receipt exactly as the self-integration owner line writes it:
+    // the same bound fields plus the two verified self pins. Pretty JSON, as
+    // the native receipt writer emits.
+    let receipt_dir = w.0.join(".central/agent-profile-acceptances");
+    let receipt_path = fs::read_dir(&receipt_dir)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let mut receipt: Value =
+        serde_json::from_str(&fs::read_to_string(&receipt_path).unwrap()).unwrap();
+    let pin_text = b"I read before I write; I return what I borrow.";
+    let pin = |name: &str| {
+        json!({
+            "reference": format!("central:source:control:root:Control/self/agents/test-creation/{name}.md"),
+            "content_digest": format!("sha256:{:x}", Sha256::digest(pin_text)),
+        })
+    };
+    receipt["self_source"] = pin("self");
+    receipt["relational_logos"] = pin("relational-logos");
+    fs::write(
+        &receipt_path,
+        serde_json::to_string_pretty(&receipt).unwrap(),
+    )
+    .unwrap();
+    let stored: Value = serde_json::from_str(&fs::read_to_string(&receipt_path).unwrap()).unwrap();
+
+    // Review and the roster read the pinned receipt and echo the pins.
+    let r = review(&w.0, &p);
+    assert_eq!(r["accepted"], true);
+    assert_eq!(r["acceptance"], stored);
+    let roster = execute_with_token_at(&w.0, ROSTER, &json!({"scope":"root"}), None, 300).unwrap();
+    assert_eq!(roster["profiles"][0]["acceptance"], stored);
+    assert_eq!(
+        roster["profiles"][0]["acceptance"]["self_source"],
+        pin("self")
+    );
+    assert_eq!(
+        roster["profiles"][0]["acceptance"]["relational_logos"],
+        pin("relational-logos")
+    );
+
+    // Strictness is preserved: any other unknown field still refuses the read.
+    let mut forged: Value =
+        serde_json::from_str(&fs::read_to_string(&receipt_path).unwrap()).unwrap();
+    forged["self_sources_resolved"] = json!(true);
+    fs::write(
+        &receipt_path,
+        serde_json::to_string_pretty(&forged).unwrap(),
+    )
+    .unwrap();
+    assert!(execute_with_token_at(&w.0, REVIEW, &input(&p), None, 100).is_err());
+    assert!(execute_with_token_at(&w.0, ROSTER, &json!({"scope":"root"}), None, 300).is_err());
 }

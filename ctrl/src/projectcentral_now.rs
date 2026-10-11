@@ -68,6 +68,31 @@ pub struct NowHandoffWorkcell {
     pub branch: Option<String>,
 }
 
+/// One T fixture a return distills: the fixture filename inside the
+/// clearing's `T/` stream, and the working-thought reading it carries
+/// (`T0`..`T5`, `T0-prime`..`T5-prime`). A return carrying source_fixtures
+/// counts those fixtures as distilled BY THE REGISTER — the return is the
+/// durable record, the T stream stays ephemeral by design.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NowHandoffFixture {
+    /// Plain fixture filename (`<slug>-<day>.md`), never a path.
+    pub fixture: String,
+    /// The fixture's working-thought reading (one of the twelve).
+    pub reading: String,
+}
+
+/// The praxis of the run: what the work actually relied on. The register
+/// carries it so learning does not depend on session logs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NowHandoffPraxis {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills_used: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub methods_used: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools_used: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NowHandoff {
     pub schema: String,
@@ -116,6 +141,14 @@ pub struct NowHandoff {
     /// shared meeting room. v2 shared-effort extension.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub implicated: Vec<String>,
+    /// The T fixtures this return distills, each with its working-thought
+    /// reading. v3 T-distillation extension; present only when declared.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_fixtures: Vec<NowHandoffFixture>,
+    /// The run's praxis — skills, methods, tools. v3 T-distillation
+    /// extension; present only when declared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub praxis: Option<NowHandoffPraxis>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -921,7 +954,113 @@ fn create_handoff(
             None,
         ));
     }
-    let schema = if workcell.is_some() || !implicated.is_empty() {
+    // The T-distillation bridge: the return names the fixtures it distills
+    // (each with its reading coordinate) and the praxis it relied on.
+    let source_fixtures = match input.get("source_fixtures") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(rows)) => {
+            if rows.len() > 256 {
+                return Err(ActionResult::failure(
+                    Some(action),
+                    ResultStatus::InvalidInput,
+                    "source_fixtures carries at most 256 fixtures",
+                    None,
+                ));
+            }
+            let mut parsed_fixtures = Vec::new();
+            for row in rows {
+                let fixture = row
+                    .get("fixture")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim();
+                let reading = row
+                    .get("reading")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim();
+                let lawful_name = !fixture.is_empty()
+                    && fixture.ends_with(".md")
+                    && !fixture.contains('/')
+                    && !fixture.contains('\\')
+                    && !fixture.contains("..")
+                    && fixture != ".md";
+                if !lawful_name {
+                    return Err(ActionResult::failure(
+                        Some(action),
+                        ResultStatus::InvalidInput,
+                        "source_fixtures entries name plain fixture filenames (<slug>-<day>.md), never paths",
+                        None,
+                    ));
+                }
+                if !crate::continuous_work::thoughts::READINGS.contains(&reading) {
+                    return Err(ActionResult::failure(
+                        Some(action),
+                        ResultStatus::InvalidInput,
+                        "source_fixtures readings must be one of the twelve working-thought readings (T0..T5, T0-prime..T5-prime)",
+                        None,
+                    ));
+                }
+                parsed_fixtures.push(NowHandoffFixture {
+                    fixture: fixture.to_owned(),
+                    reading: reading.to_owned(),
+                });
+            }
+            parsed_fixtures
+        }
+        Some(_) => {
+            return Err(ActionResult::failure(
+                Some(action),
+                ResultStatus::InvalidInput,
+                "source_fixtures must be an array of {fixture, reading} objects",
+                None,
+            ))
+        }
+    };
+    let praxis = match input.get("praxis") {
+        None | Some(Value::Null) => None,
+        Some(value @ Value::Object(_)) => {
+            let parsed_praxis: NowHandoffPraxis = serde_json::from_value(value.clone()).map_err(|_| {
+                ActionResult::failure(
+                    Some(action),
+                    ResultStatus::InvalidInput,
+                    "praxis carries skills_used, methods_used and tools_used as arrays of non-empty strings",
+                    None,
+                )
+            })?;
+            let lawful = [
+                (parsed_praxis.skills_used.as_slice(), "skills_used"),
+                (parsed_praxis.methods_used.as_slice(), "methods_used"),
+                (parsed_praxis.tools_used.as_slice(), "tools_used"),
+            ]
+            .into_iter()
+            .all(|(rows, _name)| {
+                rows.len() <= 64 && rows.iter().all(|entry| !entry.trim().is_empty())
+            });
+            if !lawful {
+                return Err(ActionResult::failure(
+                    Some(action),
+                    ResultStatus::InvalidInput,
+                    "praxis arrays carry at most 64 non-empty entries each",
+                    None,
+                ));
+            }
+            Some(parsed_praxis)
+        }
+        Some(_) => {
+            return Err(ActionResult::failure(
+                Some(action),
+                ResultStatus::InvalidInput,
+                "praxis must be an object with skills_used, methods_used and tools_used arrays",
+                None,
+            ))
+        }
+    };
+    let schema = if workcell.is_some()
+        || !implicated.is_empty()
+        || !source_fixtures.is_empty()
+        || praxis.is_some()
+    {
         HANDOFF_SCHEMA_V2
     } else {
         HANDOFF_SCHEMA
@@ -949,6 +1088,8 @@ fn create_handoff(
         work_refs,
         workcell,
         implicated,
+        source_fixtures,
+        praxis,
     })
 }
 
@@ -2082,6 +2223,8 @@ pub fn register_projectcentral_now_actions(registry: &mut ActionRegistry) {
                     ("work_refs", false),
                     ("workcell", false),
                     ("implicated", false),
+                    ("source_fixtures", false),
+                    ("praxis", false),
                 ],
             ),
             return_action,
@@ -2155,6 +2298,8 @@ mod tests {
             subject: "Test return".into(),
             result: "Returned material".into(),
             status: status.into(),
+            source_fixtures: Vec::new(),
+            praxis: None,
             run_ref: None,
             session_ref: None,
             focus_ref: None,
@@ -2436,6 +2581,79 @@ mod attribution_tests {
             handoff["work_refs"][0]["worktree_path"],
             "/bounded/worktree"
         );
+    }
+
+    /// T-distillation bridge (central.project-now.handoff/v2+): a return
+    /// names the T fixtures it distills (each with its reading coordinate)
+    /// and the praxis it relied on — the register is the durable memory,
+    /// the T stream stays ephemeral by design.
+    #[test]
+    fn return_carries_distilled_fixtures_with_readings_and_praxis() {
+        let temp = tempdir().unwrap();
+        let central = temp.path().join("Central");
+        let project = central.join("Work/example");
+        fs::create_dir_all(&project).unwrap();
+        initialize_projectcentral(&central, &project, "example/project").unwrap();
+        initialize_now(&project).unwrap();
+
+        let recorded = drive_return(
+            &central,
+            json!({
+                "actor":"agent:distiller",
+                "kind":"learning",
+                "subject":"the day's thought, distilled",
+                "result":"What the raw stream meant, stated plainly.",
+                "status":"active",
+                "source_fixtures":[
+                    {"fixture":"a-question-2026-10-11.md","reading":"T0"},
+                    {"fixture":"an-anomaly-2026-10-11.md","reading":"T3-prime"}
+                ],
+                "praxis":{
+                    "skills_used":["m-prime-development"],
+                    "methods_used":["engineering-methodology"],
+                    "tools_used":["aikit knowledge route","seat instrument"]
+                }
+            }),
+        );
+        assert!(recorded.ok, "{recorded:?}");
+        let handoff = &recorded.data.as_ref().unwrap()["handoff"];
+        assert_eq!(
+            handoff["source_fixtures"][0]["fixture"],
+            "a-question-2026-10-11.md"
+        );
+        assert_eq!(handoff["source_fixtures"][0]["reading"], "T0");
+        assert_eq!(handoff["source_fixtures"][1]["reading"], "T3-prime");
+        assert_eq!(handoff["praxis"]["tools_used"][0], "aikit knowledge route");
+    }
+
+    #[test]
+    fn return_refuses_invented_readings_and_path_fixtures() {
+        let temp = tempdir().unwrap();
+        let central = temp.path().join("Central");
+        let project = central.join("Work/example");
+        fs::create_dir_all(&project).unwrap();
+        initialize_projectcentral(&central, &project, "example/project").unwrap();
+        initialize_now(&project).unwrap();
+
+        let invented = drive_return(
+            &central,
+            json!({
+                "actor":"agent:distiller","kind":"learning",
+                "subject":"invented reading","result":"must refuse","status":"active",
+                "source_fixtures":[{"fixture":"x-2026-10-11.md","reading":"T7"}]
+            }),
+        );
+        assert!(!invented.ok, "{invented:?}");
+
+        let pathed = drive_return(
+            &central,
+            json!({
+                "actor":"agent:distiller","kind":"learning",
+                "subject":"path fixture","result":"must refuse","status":"active",
+                "source_fixtures":[{"fixture":"../escape-2026-10-11.md","reading":"T0"}]
+            }),
+        );
+        assert!(!pathed.ok, "{pathed:?}");
     }
 
     /// Shared-effort extension (central.project-now.handoff/v2): a return

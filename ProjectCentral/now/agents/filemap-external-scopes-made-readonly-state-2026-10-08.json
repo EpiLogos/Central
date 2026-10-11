@@ -1,0 +1,15 @@
+{
+  "schema": "central.project-now.handoff/v1",
+  "id": "filemap-external-scopes-made-readonly-state-2026-10-08",
+  "provenance": "agent-authored-bounded-return",
+  "actor": "agent:claude-code:file-map-external-scopes",
+  "kind": "handoff",
+  "recorded_at_unix_seconds": 1791416623,
+  "subject": "file-map external scopes made read-only; state moved into the ground (PR #262)",
+  "result": "PR https://github.com/EpiLogos/Central/pull/262 on seat env-2/central branch fix/file-map-external-scope-state. External file-map scopes (absolute paths outside the ground, e.g. ~/Documents/epi, ~/Documents/legacy) now keep bkmr db, bindings, adoption, locks and relation edits under <ground>/.central/scopes/<name>; in-ground scopes unchanged (state==root). ctrl suite green; clippy only pre-existing tests/now_field.rs warnings from #260. FOLLOW-UP: the uncommitted federated entries-cache work in Work/Central (save_entries_cache/load_entries_cache using self.root) must switch to self.state when it lands, or the 120 MB cache keeps landing in ~/Documents. After merge: reinstall ctrl, trash ~/Documents/{epi,legacy}/.central lock files, then seat release env-2 central. Companion PR #261 (clearing T payload law) on env-1.",
+  "status": "active",
+  "source_refs": [
+    "https://github.com/EpiLogos/Central/pull/262",
+    "https://github.com/EpiLogos/Central/pull/261"
+  ]
+}

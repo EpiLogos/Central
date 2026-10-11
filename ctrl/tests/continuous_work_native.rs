@@ -387,7 +387,7 @@ fn thought_streams_append_distill_and_refuse_inactive_tasks() {
             "project":"one","now_ref":now_ref,"slug":"session-return",
             "day":"2026-09-13","actor":"agent:test","actor_kind":"agent",
             "agent_session_ref":"sess:native","content":"Raw contemplative fixture.",
-        }),
+            "reading": "T4"}),
         200,
     )
     .unwrap();
@@ -455,6 +455,7 @@ fn thought_streams_append_distill_and_refuse_inactive_tasks() {
         let mut input = json!({
             "project":"one","now_ref":now_ref,"slug":"still-writing",
             "day":"2026-09-13","actor":"agent:test","actor_kind":"agent",
+            "reading":"T2",
             "content":"must refuse",
         });
         if operation == "learnings_distill" {
@@ -488,7 +489,7 @@ fn thought_streams_append_distill_and_refuse_inactive_tasks() {
             "project":"one","now_ref":now_ref,"slug":"re-entered",
             "day":"2026-09-13","actor":"agent:test","actor_kind":"agent",
             "content":"After explicit re-entry.",
-        }),
+            "reading": "T4"}),
         304,
     )
     .is_ok());
@@ -527,7 +528,7 @@ fn real_cli_binary_appends_reads_and_distills_thought_streams() {
     let now_ref = allocation["data"]["now_ref"].as_str().unwrap().to_owned();
     let append = invoke(
         "central.now.thoughts.append",
-        json!({"now_ref":now_ref,"slug":"binary-fixture","day":"2026-09-13","actor":"agent:test","actor_kind":"agent","content":"Written through the real binary."}),
+        json!({"now_ref":now_ref,"slug":"binary-fixture","day":"2026-09-13","actor":"agent:test","actor_kind":"agent","reading":"T5","content":"Written through the real binary."}),
     );
     assert_eq!(append["ok"], true, "{append}");
     assert_eq!(append["data"]["file"], "binary-fixture-2026-09-13.md");
@@ -550,5 +551,89 @@ fn real_cli_binary_appends_reads_and_distills_thought_streams() {
     assert_eq!(
         learnings["data"]["learnings"][0]["source_fixtures"][0],
         "binary-fixture-2026-09-13.md"
+    );
+}
+
+#[test]
+fn closure_runs_the_return_pass_and_refuses_undistilled_fixtures() {
+    let world = world();
+    let now = at("2026-10-08T12:00:00Z");
+    ensure(&world, None, now);
+    let policy = execute_at(world.path(), "policy", &json!({}), now).unwrap();
+    let allocation = run(
+        &world,
+        "allocate",
+        &json!({"task_ref": "task:return-pass", "purpose": "the return-pass closure contract", "expected_policy_revision": policy["revision"]}),
+        AGENT,
+        now,
+    )
+    .unwrap();
+    let now_ref = allocation["now_ref"].as_str().unwrap().to_string();
+
+    let revision = |at_now: u64| -> Value {
+        let read = execute_at(
+            world.path(),
+            "now_read",
+            &json!({"now_ref": now_ref}),
+            at_now,
+        )
+        .unwrap();
+        read["revision"]["revision"].clone()
+    };
+
+    run(
+        &world,
+        "thoughts_append",
+        &json!({"now_ref":now_ref,"slug":"deferred-thread","day":"2026-10-08",
+            "actor":"agent:test","actor_kind":"agent",
+            "content":"a deferred thread the task never integrated",
+                "reading": "T4"}),
+        AGENT,
+        now + 10,
+    )
+    .unwrap();
+
+    let refused = run(
+        &world,
+        "now_lifecycle",
+        &json!({"now_ref":now_ref,"expected_revision":revision(now + 10),
+            "expected_policy_revision":policy["revision"],"lifecycle":"closed"}),
+        AGENT,
+        now + 20,
+    )
+    .unwrap_err();
+    let error = refused.to_string();
+    assert!(error.contains("not distilled into learnings"), "{error}");
+    assert!(error.contains("deferred-thread"), "{error}");
+
+    run(
+        &world,
+        "learnings_distill",
+        &json!({"now_ref":now_ref,"slug":"return-pass-learning","day":"2026-10-08",
+            "actor":"agent:test","actor_kind":"agent",
+            "content":"the deferred thread is integrated toward the next task",
+            "source_fixtures":["deferred-thread-2026-10-08.md"]}),
+        AGENT,
+        now + 30,
+    )
+    .unwrap();
+
+    let closed = run(
+        &world,
+        "now_lifecycle",
+        &json!({"now_ref":now_ref,"expected_revision":revision(now + 30),
+            "expected_policy_revision":policy["revision"],"lifecycle":"closed"}),
+        AGENT,
+        now + 40,
+    )
+    .unwrap();
+    assert_eq!(closed["return_pass"]["t_fixtures"], 1);
+    assert_eq!(closed["return_pass"]["learnings"], 1);
+    assert_eq!(
+        closed["return_pass"]["undistilled"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
     );
 }

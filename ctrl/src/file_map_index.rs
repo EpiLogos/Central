@@ -8,7 +8,7 @@ use std::{
     io,
 };
 pub(crate) fn refresh(scope: &Scope, embeddings: bool) -> io::Result<Value> {
-    let backend = Backend::new(&scope.root);
+    let backend = Backend::for_scope(scope);
     backend.prepare()?;
     let mut index = scope.index()?;
     let mut records = backend.records()?;
@@ -332,7 +332,7 @@ pub(crate) fn search(all: &[Scope], input: &Value) -> io::Result<Value> {
         let query = effective.as_str();
         for scope in chosen.iter().copied() {
             let index = scope.index()?;
-            let backend = Backend::new(&scope.root);
+            let backend = Backend::for_scope(scope);
             if !backend.present() {
                 absences.push(format!("{}: map not initialized", scope.world));
                 continue;

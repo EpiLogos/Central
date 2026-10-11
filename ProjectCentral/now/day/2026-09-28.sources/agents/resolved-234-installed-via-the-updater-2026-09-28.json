@@ -1,0 +1,11 @@
+{
+  "schema": "central.project-now.handoff/v1",
+  "id": "resolved-234-installed-via-the-updater-2026-09-28",
+  "provenance": "agent-authored-bounded-return",
+  "actor": "agent:claude-code:opus-5.5",
+  "kind": "note",
+  "recorded_at_unix_seconds": 1790623394,
+  "subject": "Resolved: #234 installed via the updater integration-lead candidate, without touching the diverged Work/Central main",
+  "result": "oi update --apply --candidate central=main central built origin/main 9b17dacae526 (EpiLogos/Central#234) into the managed ctrl; the Work/Central checkout (18 ahead / 3 behind, file-map lane, conflicting in ctrl/src/file_map_index.rs) was not modified. Its convergence remains that lane owner's: its commits are not in the installed ctrl until landed. Live: projectcentral.wiki.source.read corpus:A04 -> 4d3e93cce1d87aa1; wiki reading carries knowledge_edges 3731.",
+  "status": "resolved"
+}

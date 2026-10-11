@@ -1,0 +1,16 @@
+{
+  "schema": "central.project-now.handoff/v1",
+  "id": "r5-sourcehorizon-transaction-repair-qualified-2026-10-01",
+  "provenance": "agent-authored-bounded-return",
+  "actor": "codex:01a080d5-4ab8-77d2-ba2a-314a46f807d2",
+  "kind": "handoff",
+  "recorded_at_unix_seconds": 1790892754,
+  "subject": "R5 source-horizon transaction repair qualified for guardian two-file commit",
+  "result": "On registered env-3 Central lane agent/central-20261001-2256 at base 2a604574, exact candidate blobs ctrl/src/source_horizon.rs=00fdec933577b8f8e848e432ca981d0e8d3c3ff5 and ctrl/tests/source_change_horizon.rs=3d3380546614fe1de316bbbf3ff8f164a9b08f1e passed cargo test --manifest-path ctrl/Cargo.toml --test source_change_horizon -- --nocapture --test-threads=1: 14/14, including 64/64 concurrent acknowledgement retention and 32 concurrent root actions. rustfmt --check and git diff --check pass. Guardian owns Git: independently review, stage and commit only those two files; exclude seven restored documentation/account paths and guardian-owned ctrl/tests/wiki_publication.rs. Publish through Central PR protocol, then return commit/PR for managed ctrl install and original Nara 242 replay.",
+  "status": "carried",
+  "carried_from_days": [
+    "2026-10-01",
+    "2026-10-02",
+    "2026-10-03"
+  ]
+}

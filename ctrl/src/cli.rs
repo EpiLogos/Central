@@ -5,6 +5,8 @@ use crate::projectcentral_ops::register_projectcentral_actions;
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::RootOptions;
 use central_connector_sdk::{ConnectorContext, ConnectorRegistry};
+#[cfg(feature = "cli-git-sync")]
+use central_git_sync_connector::GitSynchronizerConnector;
 use central_reference_connectors::create_default_connector_registry;
 use serde_json::{json, Value};
 use std::env;
@@ -1203,7 +1205,17 @@ pub fn run_cli_with_surface(
     environment: &CliEnvironment,
     surface: &mut dyn TerminalSurface,
 ) -> CliExecution {
-    let connectors = create_default_connector_registry();
+    // The shipped cut composes git-sync (--features cli-git-sync) so
+    // GitState-backed reads (central.git.census) answer on every platform
+    // through the CLI, not only under a desktop host surface. Off by default:
+    // the default dependency tree never carries the Connector (boundary
+    // guard), and library embedders keep the lean registry.
+    #[cfg_attr(not(feature = "cli-git-sync"), allow(unused_mut))]
+    let mut connectors = create_default_connector_registry();
+    #[cfg(feature = "cli-git-sync")]
+    connectors
+        .register(GitSynchronizerConnector::new())
+        .expect("git-sync Connector manifest is valid");
     let connector_context = ConnectorContext::current();
     run_cli_with_runtime(args, environment, surface, &connectors, &connector_context)
 }

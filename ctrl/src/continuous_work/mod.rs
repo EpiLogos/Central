@@ -3,6 +3,7 @@
 pub mod authority;
 pub mod documents;
 mod extended;
+pub mod field;
 mod history;
 pub mod migration;
 pub mod placement;
@@ -81,6 +82,11 @@ pub fn execute_with_token_at(
             // only the frozen allocation basis. Read-only over the existing
             // receiving ledger — it allocates nothing and adds no new store.
             let returns = temporal::composed_returns(&scope, &record.now_ref, &record.source_ref)?;
+            // Payload violations in T, so a working agent sees bulky evidence
+            // it left there while it still works. Walks this clearing's T only.
+            let violations = placement::now_destination(&scope, &reading.source.path)
+                .and_then(|t| placement::t_payload_violations(&t))
+                .unwrap_or_else(|error| json!({"unreadable": error.to_string()}));
             match input.get("with_placement") {
                 Some(Value::Bool(true)) => {
                     // Current acting facts are explicitly requested. Ordinary
@@ -94,6 +100,7 @@ pub fn execute_with_token_at(
                     result["schema"] = json!("central.now-reading/v1");
                     result["placement_included"] = json!(true);
                     result["returns"] = Value::Array(returns);
+                    result["t_payload_violations"] = violations;
                     result
                         .as_object_mut()
                         .expect("native reading object")
@@ -101,13 +108,14 @@ pub fn execute_with_token_at(
                     Ok(result)
                 }
                 None | Some(Value::Bool(false)) => Ok(
-                    json!({"schema":"central.now-reading/v1","record":record,"source":reading.source,"revision":reading.revision,"returns":returns,"automatic_agent_or_model_invocation":false,
+                    json!({"schema":"central.now-reading/v1","record":record,"source":reading.source,"revision":reading.revision,"returns":returns,"t_payload_violations":violations,"automatic_agent_or_model_invocation":false,
                         "pointer_note":"Records are pointers, not authority: follow the governing guidance, and search the native surface before building anything new."}),
                 ),
                 _ => Err(invalid("with_placement must be a boolean")),
             }
         }
         "now_children" => placement::children(&scope, input),
+        "now_field" => field::field(&scope, input, now),
         "now_list" => Ok(json!({
             "schema": "central.now-listing/v1",
             "records": placement::list_now(&scope, input)?,
@@ -234,6 +242,7 @@ handler!(
     "workcell_root"
 );
 handler!(now_children_action, "central.now.children", "now_children");
+handler!(now_field_action, "central.now.field", "now_field");
 handler!(time_action, "central.time.policy", "time_policy");
 handler!(
     time_occurrences_action,
@@ -344,6 +353,7 @@ pub fn register_actions(registry: &mut ActionRegistry) {
         ("central.now.allocate", "Allocate an agent NOW clearing", "Idempotently allocate one source-owned NOW and T destination per task; preserve ordinary authorised repository writes. parent_now_ref hangs the clearing as a child of an allocated NOW in this scope or the root scope; workcell_ref declares the Workcell it is placed on.", true, allocate_action, &[("task_ref","string",true),("purpose","string",true),("expected_policy_revision","string",true),("participant_refs","array",false),("source_refs","array",false),("work_refs","array",false),("parent_now_ref","string",false),("workcell_ref","string",false)]),
         ("central.now.workcell-root", "Ensure a Workcell's root NOW", "Idempotently ensure the one root NOW of a Workcell in the root register (task central:task:control:root:workcell-root:<workcell_ref>); child NOWs placed on the Workcell hang from it. Root register only; expected_policy_revision is checked when given.", true, workcell_root_action, &[("workcell_ref","string",true),("expected_policy_revision","string",false)]),
         ("central.now.children", "List a NOW's child NOWs", "List every clearing whose parent_now_ref is this NOW, uncapped: a root NOW's children across the root register and every Project, a Project NOW's children in its Project. Unreadable Projects are named in unscanned. Read-only.", false, now_children_action, &[("now_ref","string",true)]),
+        ("central.now.field", "Read the composed NOW field", "One composed activity reading over every Workcell-root NOW: the root and its child NOWs from this register, the local cell's material census/instances/status and Gateway status from their native owners with observation time and honest unavailability, the declared machine binding joining them, and the Day-rollover horizon. Unavailable owners are named, never fabricated; census panes carry no NOW membership. Read-only.", false, now_field_action, &[("workcell_refs","array",false),("include_material","boolean",false),("include_gateway","boolean",false)]),
         ("central.work.validate", "Validate current task write placement", "Revalidate policy, NOW and destination anchors. Return a usable NOW retry destination; do not claim OS enforcement.", false, validate_action, &[("now_ref","string",true),("expected_now_revision","string",true),("expected_policy_revision","string",true),("destination","string",true),("expected_destination_anchor","object",false)]),
         ("central.now.read", "Read allocated NOW source", "Read exact NOW identity, lifecycle and source revision; optionally include current native placement without allocating or re-entering the task.", false, now_read_action, &[("now_ref","string",true),("with_placement","boolean",false)]),
         ("central.now.list", "List allocated NOWs by participant", "List the World's allocated NOW clearings with identity, lifecycle and source revision, optionally filtered to records carrying any of the given participant refs; read-only.", false, now_list_action, &[("participant_refs","array",false)]),
@@ -356,7 +366,7 @@ pub fn register_actions(registry: &mut ActionRegistry) {
         ("central.now.obligations", "Retain NOW obligations", "Append exact native obligation SourceRefs without silently dropping outstanding work.", true, now_obligations_action, &[("now_ref","string",true),("expected_revision","string",true),("obligation_refs","array",true),("expected_authority_revision","string",false)]),
         ("central.temporal.source-history", "Read native temporal source history", "Read SourceRef snapshots from the existing native file-history owner store.", false, history_action, &[("source_ref","string",true),("limit","integer",false),("before","integer",false)]),
         ("central.now.thoughts.read", "Read a NOW's raw contemplative stream", "Walk one NOW clearing's T/ fixtures — dated, attributed, each with revision; content by explicit request. Pre-law fixtures list as nonconforming, never hidden. Read-only.", false, thoughts_read_action, &[("now_ref","string",true),("include_content","boolean",false),("limit","integer",false)]),
-        ("central.now.thoughts.append", "Append a raw contemplative fixture", "Write one dated, attributed markdown fixture into the NOW's T/ stream. The writing is forward-facing: raw and in the moment, but clean plain statements, not tech jargon. Caller-supplied local civil day; declared actor attribution; optional working-thought reading (T0 Question, T1 Trace, T2 Challenge, T3 Pattern, T4 Discovery, T5 Insight, T0-prime Assumption, T1-prime Lacuna, T2-prime Affordance, T3-prime Anomaly, T4-prime Concealment, T5-prime Integration); active NOWs only; identical bytes are an idempotent re-append.", true, thoughts_append_action, &[("now_ref","string",true),("slug","string",true),("day","string",true),("actor","string",true),("actor_kind","string",true),("content","string",true),("agent_session_ref","string",false),("reading","string",false)]),
+        ("central.now.thoughts.append", "Append a raw contemplative fixture", "Write one dated, attributed markdown fixture into the NOW's T/ stream. The writing is forward-facing: raw and in the moment, but clean plain statements, not tech jargon. Caller-supplied local civil day; declared actor attribution; optional working-thought reading (T0 Question, T1 Trace, T2 Challenge, T3 Pattern, T4 Discovery, T5 Insight, T0-prime Assumption, T1-prime Lacuna, T2-prime Affordance, T3-prime Anomaly, T4-prime Concealment, T5-prime Integration); active NOWs only; identical bytes are an idempotent re-append.", true, thoughts_append_action, &[("now_ref","string",true),("slug","string",true),("day","string",true),("actor","string",true),("actor_kind","string",true),("content","string",true),("agent_session_ref","string",false),("reading","string",true)]),
         ("central.now.learnings.read", "Read a NOW's distilled learnings", "Walk the NOW's T-prime/ learnings, each naming the T fixture(s) it was parsed from; without now_ref, list learnings across every allocated clearing in scope. Read-only.", false, learnings_read_action, &[("now_ref","string",false),("include_content","boolean",false),("limit","integer",false)]),
         ("central.now.learnings.distill", "Distill a learning into T-prime", "Write one learning distilled from named T fixtures — every named fixture must exist in this NOW's T/ and rides the learning's front-matter linkage. A learning states plainly what the raw stream means: the integrate-toward-renewed-ground act. Optional working-thought reading (same twelve as thoughts.append). Active NOWs only.", true, learnings_distill_action, &[("now_ref","string",true),("slug","string",true),("day","string",true),("actor","string",true),("actor_kind","string",true),("content","string",true),("source_fixtures","array",true),("agent_session_ref","string",false),("reading","string",false)]),
     ]);

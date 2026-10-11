@@ -1,0 +1,19 @@
+{
+  "schema": "central.project-now.handoff/v1",
+  "id": "filemap-external-scopes-made-readonly-state-2026-10-08-2",
+  "provenance": "agent-authored-bounded-return",
+  "actor": "agent:claude-code:file-map-external-scopes",
+  "kind": "handoff",
+  "recorded_at_unix_seconds": 1791420410,
+  "subject": "file-map external scopes made read-only; state moved into the ground (PR #262)",
+  "result": "Landed and installed. #262 (449a0b8) and #261 (128df0a, T payload law) squash-merged; ctrl 128df0a installed via oi update --apply --channel mainline (rollback: oi update --rollback). Verified live: central.file-map.pool on epi wrote ~/Central/.central/scopes/epi/ProjectCentral/relations/source-relations.json and left ~/Documents/epi untouched. Seats env-1/central and env-2/central released to free at origin/main; landed branches deleted. Documents/{epi,legacy}/.central lock dirs moved to Trash. Control: 24ae6c7 records the seat instrument + central-placement as earlier sessions left them; 1c6aa99 adds tend_caches.py, the 4h tend loop (reinstalled) and the bulky-evidence placement law. STILL OPEN for the federated entries-cache lane (uncommitted in Work/Central): route save/load_entries_cache through self.state when it lands.",
+  "status": "resolved",
+  "source_refs": [
+    "https://github.com/EpiLogos/Central/pull/262",
+    "https://github.com/EpiLogos/Central/pull/261"
+  ],
+  "evidence_refs": [
+    "https://github.com/EpiLogos/Central/pull/262",
+    "https://github.com/EpiLogos/Central/pull/261"
+  ]
+}

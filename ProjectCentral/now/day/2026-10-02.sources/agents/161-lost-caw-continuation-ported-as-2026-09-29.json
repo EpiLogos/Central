@@ -1,0 +1,16 @@
+{
+  "schema": "central.project-now.handoff/v1",
+  "id": "161-lost-caw-continuation-ported-as-2026-09-29",
+  "provenance": "agent-authored-bounded-return",
+  "actor": "agent:claude-code:opus-5.5",
+  "kind": "handoff",
+  "recorded_at_unix_seconds": 1790681671,
+  "subject": "#161 lost CAW continuation ported as PR #238 (stacked on #236); isolated lane caw-continuation/central",
+  "result": "PR https://github.com/EpiLogos/Central/pull/238 ports document reconcile/restore/notes/entry.insert, artifacts[] draft Returns, disclosure rechecks, inclusion clocks, 8 continuation tests; fixes Flow external-reconcile losing exact bytes since #177. Aperture and display_role relabel deliberately not ported (evidence in PR). Base is #236 branch: retarget to main after #236 merges, then land and run `seat release caw-continuation central --retire`. Separate finding for owner: env-2/central register says land/core-fields-20260925 is unmerged owner-held, but its tree is byte-identical to #230 merge 5026825 (landed 2026-09-25); seat instrument refuses release of occupied-foreign-lane, so owner must reclassify/release. Its untracked .factory/ and ProjectCentral/user/telos/README.md are tool stamps.",
+  "status": "carried",
+  "carried_from_days": [
+    "2026-09-29",
+    "2026-09-30",
+    "2026-10-01"
+  ]
+}

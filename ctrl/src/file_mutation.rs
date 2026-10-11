@@ -2741,7 +2741,8 @@ mod record_publication_tests {
         let refused =
             crate::file_map::safe_member(&source_fixture.root, "records", true).unwrap_err();
         assert_eq!(refused.kind(), io::ErrorKind::InvalidInput);
-        let backend = crate::file_map_backend::Backend::new(&physical_source);
+        let backend =
+            crate::file_map_backend::Backend::with_state(&physical_source, &physical_source);
         let version = backend
             .version()
             .expect("actual native bkmr executable prerequisite");

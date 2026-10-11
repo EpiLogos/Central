@@ -51,7 +51,7 @@ jobs:
         with:
           cache-on-failure: true
       - name: Build locked native artifact
-        run: cargo build --locked --release --target '${{ matrix.target }}' --package ctrl --bin ctrl
+        run: cargo build --locked --release --target '${{ matrix.target }}' --features cli-git-sync --package ctrl --bin ctrl
       - name: Package exact-main build artifact
         shell: bash
         run: |
