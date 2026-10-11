@@ -29,20 +29,6 @@ pub const ACCEPT: &str = "agent-profile.accept";
 pub const ROSTER: &str = "agent-profile.roster";
 const SCHEMA: &str = "central.agent-profile-acceptance/v1";
 
-/// One pinned Agent-self source recorded on an acceptance: a Central source ref
-/// plus the exact-content digest the pinned file verified against when the human
-/// accepted. Refs only: the bytes are never copied into the receipt. Wire shape
-/// ported from the owner self-integration line
-/// (`feat/agent-self-integration-20261007`, `ctrl/src/agent_profile.rs`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AgentSelfSourcePin {
-    /// A Central source ref in the `central:source:{world_ref}:{relpath}` form
-    /// the source horizon produces.
-    pub reference: String,
-    /// `sha256:` plus the lowercase hex sha256 of the exact UTF-8 bytes.
-    pub content_digest: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Acceptance {

@@ -472,6 +472,7 @@ fn real_cli_express_review_accept_with_self_pins() {
         accepted["data"]["acceptance"]["relational_logos"],
         binding["relational_logos"]
     );
+}
 /// The owner's self-integration line (`feat/agent-self-integration-20261007`,
 /// Central commit `93aa397`) records the verified self-definition pins on
 /// acceptance receipts. Such receipts are immutable personal evidence on the
