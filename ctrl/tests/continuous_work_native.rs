@@ -387,7 +387,7 @@ fn thought_streams_append_distill_and_refuse_inactive_tasks() {
             "project":"one","now_ref":now_ref,"slug":"session-return",
             "day":"2026-09-13","actor":"agent:test","actor_kind":"agent",
             "agent_session_ref":"sess:native","content":"Raw contemplative fixture.",
-        }),
+            "reading": "T4"}),
         200,
     )
     .unwrap();
@@ -455,6 +455,7 @@ fn thought_streams_append_distill_and_refuse_inactive_tasks() {
         let mut input = json!({
             "project":"one","now_ref":now_ref,"slug":"still-writing",
             "day":"2026-09-13","actor":"agent:test","actor_kind":"agent",
+            "reading":"T2",
             "content":"must refuse",
         });
         if operation == "learnings_distill" {
@@ -488,7 +489,7 @@ fn thought_streams_append_distill_and_refuse_inactive_tasks() {
             "project":"one","now_ref":now_ref,"slug":"re-entered",
             "day":"2026-09-13","actor":"agent:test","actor_kind":"agent",
             "content":"After explicit re-entry.",
-        }),
+            "reading": "T4"}),
         304,
     )
     .is_ok());
@@ -527,7 +528,7 @@ fn real_cli_binary_appends_reads_and_distills_thought_streams() {
     let now_ref = allocation["data"]["now_ref"].as_str().unwrap().to_owned();
     let append = invoke(
         "central.now.thoughts.append",
-        json!({"now_ref":now_ref,"slug":"binary-fixture","day":"2026-09-13","actor":"agent:test","actor_kind":"agent","content":"Written through the real binary."}),
+        json!({"now_ref":now_ref,"slug":"binary-fixture","day":"2026-09-13","actor":"agent:test","actor_kind":"agent","reading":"T5","content":"Written through the real binary."}),
     );
     assert_eq!(append["ok"], true, "{append}");
     assert_eq!(append["data"]["file"], "binary-fixture-2026-09-13.md");
@@ -580,7 +581,8 @@ fn closure_runs_the_return_pass_and_refuses_undistilled_fixtures() {
         "thoughts_append",
         &json!({"now_ref":now_ref,"slug":"deferred-thread","day":"2026-10-08",
             "actor":"agent:test","actor_kind":"agent",
-            "content":"a deferred thread the task never integrated"}),
+            "content":"a deferred thread the task never integrated",
+                "reading": "T4"}),
         AGENT,
         now + 10,
     )
