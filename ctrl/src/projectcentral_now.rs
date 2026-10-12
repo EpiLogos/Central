@@ -1193,9 +1193,8 @@ fn snapshot_day_sources(
         let _ = fs::remove_dir_all(&snapshot_root);
         return Err(error);
     }
-    // The NOW clearings' contemplative streams (T fixtures and T-prime
-    // learnings) ride the close like every other fixture: byte-exact copy,
-    // taken before anything is cleaned.
+    // The NOW clearings' T-prime learnings ride the close byte-exact; raw T
+    // fixtures are counted, not copied (T/ is scratch — the T payload rule).
     let clearings_root = project_root.join(continuous_work_clearings_dir(project_root));
     let streams = match snapshot_streams(&clearings_root, &snapshot_root, day) {
         Ok(streams) => streams,
@@ -2428,14 +2427,16 @@ mod tests {
         assert_eq!(report.streams[0].fixtures, 1);
         assert_eq!(report.streams[0].learnings, 1);
         let snapshot_dir = project.join(&report.day_sources).join("clearings");
+        // Raw T/ fixtures are scratch: counted, never copied into day sources.
+        assert!(!snapshot_dir.join("test-clearing-id").join("T").exists());
         assert_eq!(
             fs::read_to_string(
                 snapshot_dir
                     .join("test-clearing-id")
-                    .join("T/raw-fixture-2026-08-19.md")
+                    .join("T-prime/learning-2026-08-19.md")
             )
             .unwrap(),
-            "---\n{\"schema\":\"central.t-fixture/v1\"}\n---\nraw body\n"
+            "---\n{\"schema\":\"central.t-learning/v1\"}\n---\nlearning body\n"
         );
         assert!(project
             .join(&report.day_sources)

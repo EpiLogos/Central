@@ -523,9 +523,24 @@ fn copy_dir_recursive(source: &Path, destination: &Path) -> io::Result<usize> {
     Ok(copied)
 }
 
-/// Snapshot every clearing's T/ and T-prime/ into the day's source snapshot.
-/// Byte-exact retention before anything is cleaned; the close never removes
-/// stream material — the streams outlive the day like every other fixture.
+fn count_files_recursive(source: &Path) -> io::Result<usize> {
+    let mut count = 0;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            count += count_files_recursive(&entry.path())?;
+        } else {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+/// Snapshot every clearing's T-prime/ learnings into the day's source
+/// snapshot, byte-exact, and count its raw T/ fixtures without copying them.
+/// T/ is scratch (Central #261: the T payload rule): its bytes stay in the
+/// clearing, where tending sweeps them, and never enter a repository's day
+/// sources. The close never removes stream material.
 pub(crate) fn snapshot_streams(
     scope_prefix_clearings: &Path,
     snapshot_root: &Path,
@@ -546,13 +561,17 @@ pub(crate) fn snapshot_streams(
     for clearing in clearings {
         let clearing_root = scope_prefix_clearings.join(&clearing);
         let mut counts = [0usize; 2];
-        for (index, name) in [T_DIR, T_PRIME_DIR].into_iter().enumerate() {
-            if clearing_root.join(name).is_dir() {
-                counts[index] = copy_dir_recursive(
-                    &clearing_root.join(name),
-                    &snapshot_root.join("clearings").join(&clearing).join(name),
-                )?;
-            }
+        if clearing_root.join(T_DIR).is_dir() {
+            counts[0] = count_files_recursive(&clearing_root.join(T_DIR))?;
+        }
+        if clearing_root.join(T_PRIME_DIR).is_dir() {
+            counts[1] = copy_dir_recursive(
+                &clearing_root.join(T_PRIME_DIR),
+                &snapshot_root
+                    .join("clearings")
+                    .join(&clearing)
+                    .join(T_PRIME_DIR),
+            )?;
         }
         if counts[0] == 0 && counts[1] == 0 {
             continue;
@@ -1138,7 +1157,7 @@ mod tests {
     }
 
     #[test]
-    fn stream_snapshot_copies_both_streams_byte_exact() {
+    fn stream_snapshot_copies_learnings_and_counts_raw_fixtures() {
         let temp = world();
         let root = temp.path();
         let allocation = allocated(root, None, "task:snapshot");
@@ -1171,11 +1190,18 @@ mod tests {
             .unwrap()
             .path()
             .join("T/snapshotted-fixture-2026-09-13.md");
-        let copy = snapshot_root
+        // Raw T/ fixtures are counted, never copied into day sources.
+        assert!(original.is_file());
+        assert!(!snapshot_root
             .join("clearings")
             .join(&snapshots[0].clearing)
-            .join("T/snapshotted-fixture-2026-09-13.md");
-        assert_eq!(fs::read(original).unwrap(), fs::read(copy).unwrap());
+            .join("T")
+            .exists());
+        assert!(snapshot_root
+            .join("clearings")
+            .join(&snapshots[0].clearing)
+            .join("T-prime")
+            .is_dir());
         let index: Value = serde_json::from_str(
             &fs::read_to_string(snapshot_root.join("clearings.json")).unwrap(),
         )
