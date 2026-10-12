@@ -1,0 +1,462 @@
+{
+  "attention": [
+    {
+      "kind": "detached_head",
+      "path": "/Users/admin/Central/worktrees/env-1/central",
+      "repo": "Work/Central"
+    },
+    {
+      "branch": null,
+      "kind": "unattributed_worktree",
+      "path": "/Users/admin/Central/worktrees/env-1/central",
+      "repo": "Work/Central"
+    },
+    {
+      "kind": "detached_head",
+      "path": "/Users/admin/Central/worktrees/env-2/central",
+      "repo": "Work/Central"
+    },
+    {
+      "branch": null,
+      "kind": "unattributed_worktree",
+      "path": "/Users/admin/Central/worktrees/env-2/central",
+      "repo": "Work/Central"
+    },
+    {
+      "branch": "feat/agent-self-integration-20261007",
+      "kind": "unattributed_worktree",
+      "path": "/Users/admin/Central/worktrees/env-3/central",
+      "repo": "Work/Central"
+    },
+    {
+      "branch": "agent/central-control-retrieval-20261002",
+      "checked_out": false,
+      "kind": "local_only_branch",
+      "repo": "Work/Central"
+    },
+    {
+      "branch": "agent/central-root-native-admission-20261004",
+      "checked_out": false,
+      "kind": "local_only_branch",
+      "repo": "Work/Central"
+    },
+    {
+      "branch": "backup/local-main-pre-convergence-20260929",
+      "checked_out": false,
+      "kind": "local_only_branch",
+      "repo": "Work/Central"
+    },
+    {
+      "branch": "backup/local-main-pre-convergence-20260929",
+      "days_idle": 14,
+      "kind": "stale_branch",
+      "repo": "Work/Central"
+    },
+    {
+      "branch": "chore/fmt-clippy-clean",
+      "checked_out": false,
+      "kind": "local_only_branch",
+      "repo": "Work/Central"
+    },
+    {
+      "branch": "chore/fmt-clippy-clean",
+      "days_idle": 16,
+      "kind": "stale_branch",
+      "repo": "Work/Central"
+    },
+    {
+      "branch": "feat/agent-self-integration-20261007",
+      "checked_out": true,
+      "kind": "local_only_branch",
+      "repo": "Work/Central"
+    },
+    {
+      "branch": "feat/caw-continuation-port-20260929",
+      "checked_out": false,
+      "kind": "local_only_branch",
+      "repo": "Work/Central"
+    },
+    {
+      "branch": "feat/document-source-create-20260925",
+      "checked_out": false,
+      "kind": "local_only_branch",
+      "repo": "Work/Central"
+    },
+    {
+      "branch": "feat/document-source-create-20260925",
+      "days_idle": 15,
+      "kind": "stale_branch",
+      "repo": "Work/Central"
+    },
+    {
+      "branch": "feat/gitstate-cli-default",
+      "checked_out": false,
+      "kind": "local_only_branch",
+      "repo": "Work/Central"
+    },
+    {
+      "branch": "feat/personal-history-intake-20260929",
+      "checked_out": false,
+      "kind": "local_only_branch",
+      "repo": "Work/Central"
+    },
+    {
+      "branch": "feat/plural-flow-append-20260930",
+      "checked_out": false,
+      "kind": "local_only_branch",
+      "repo": "Work/Central"
+    },
+    {
+      "branch": "fix/product-ground-telos-folder",
+      "checked_out": false,
+      "kind": "local_only_branch",
+      "repo": "Work/Central"
+    },
+    {
+      "branch": "fix/receiving-uncertain-recovery-20260929",
+      "checked_out": false,
+      "kind": "local_only_branch",
+      "repo": "Work/Central"
+    },
+    {
+      "branch": "integration/expressive-character-20260926",
+      "checked_out": false,
+      "kind": "local_only_branch",
+      "repo": "Work/Central"
+    },
+    {
+      "branch": "integration/expressive-character-20260926",
+      "days_idle": 14,
+      "kind": "stale_branch",
+      "repo": "Work/Central"
+    },
+    {
+      "branch": "intelligence-arm/situate-matrix-readings-20260924",
+      "checked_out": false,
+      "kind": "local_only_branch",
+      "repo": "Work/Central"
+    },
+    {
+      "branch": "intelligence-arm/situate-matrix-readings-20260924",
+      "days_idle": 16,
+      "kind": "stale_branch",
+      "repo": "Work/Central"
+    },
+    {
+      "branch": "main",
+      "checked_out": true,
+      "kind": "local_only_branch",
+      "repo": "Work/Central"
+    },
+    {
+      "branch": "repair/65-registered-worktree-placement",
+      "checked_out": false,
+      "kind": "local_only_branch",
+      "repo": "Work/Central"
+    },
+    {
+      "branch": "repair/65-registered-worktree-placement",
+      "days_idle": 16,
+      "kind": "stale_branch",
+      "repo": "Work/Central"
+    },
+    {
+      "branch": "ui/cradle-reconciliation-20260924",
+      "checked_out": false,
+      "kind": "local_only_branch",
+      "repo": "Work/Central"
+    },
+    {
+      "branch": "ui/cradle-reconciliation-20260924",
+      "days_idle": 16,
+      "kind": "stale_branch",
+      "repo": "Work/Central"
+    }
+  ],
+  "generated_at": "2026-10-10T23:01:22.583273+00:00",
+  "repos": [
+    {
+      "bare": false,
+      "branches": [
+        {
+          "ahead": null,
+          "behind": null,
+          "checked_out_in": [],
+          "last_commit_at": "2026-10-03T11:39:12+01:00",
+          "local_only": true,
+          "name": "agent/central-control-retrieval-20261002",
+          "upstream": "origin/agent/central-control-retrieval-20261002"
+        },
+        {
+          "ahead": 7,
+          "behind": 13,
+          "checked_out_in": [],
+          "last_commit_at": "2026-10-04T14:57:19+01:00",
+          "local_only": true,
+          "name": "agent/central-root-native-admission-20261004",
+          "upstream": "origin/main"
+        },
+        {
+          "ahead": null,
+          "behind": null,
+          "checked_out_in": [],
+          "last_commit_at": "2026-09-26T13:54:05+01:00",
+          "local_only": true,
+          "name": "backup/local-main-pre-convergence-20260929",
+          "upstream": null
+        },
+        {
+          "ahead": null,
+          "behind": null,
+          "checked_out_in": [],
+          "last_commit_at": "2026-09-24T23:10:22+01:00",
+          "local_only": true,
+          "name": "chore/fmt-clippy-clean",
+          "upstream": "origin/chore/fmt-clippy-clean"
+        },
+        {
+          "ahead": 2,
+          "behind": 9,
+          "checked_out_in": [
+            "/Users/admin/Central/worktrees/env-3/central"
+          ],
+          "last_commit_at": "2026-10-07T16:36:03+01:00",
+          "local_only": true,
+          "name": "feat/agent-self-integration-20261007",
+          "upstream": "origin/main"
+        },
+        {
+          "ahead": null,
+          "behind": null,
+          "checked_out_in": [],
+          "last_commit_at": "2026-09-29T12:33:50+01:00",
+          "local_only": true,
+          "name": "feat/caw-continuation-port-20260929",
+          "upstream": "origin/feat/caw-continuation-port-20260929"
+        },
+        {
+          "ahead": null,
+          "behind": null,
+          "checked_out_in": [],
+          "last_commit_at": "2026-09-25T16:20:03+01:00",
+          "local_only": true,
+          "name": "feat/document-source-create-20260925",
+          "upstream": "origin/feat/document-source-create-20260925"
+        },
+        {
+          "ahead": null,
+          "behind": null,
+          "checked_out_in": [],
+          "last_commit_at": "2026-10-08T09:50:05+01:00",
+          "local_only": false,
+          "name": "feat/file-map-backend-simplify",
+          "upstream": "origin/feat/file-map-backend-simplify"
+        },
+        {
+          "ahead": null,
+          "behind": null,
+          "checked_out_in": [],
+          "last_commit_at": "2026-10-08T05:21:05+01:00",
+          "local_only": true,
+          "name": "feat/gitstate-cli-default",
+          "upstream": "origin/feat/gitstate-cli-default"
+        },
+        {
+          "ahead": null,
+          "behind": null,
+          "checked_out_in": [],
+          "last_commit_at": "2026-10-09T00:22:18+01:00",
+          "local_only": false,
+          "name": "feat/now-return-pass",
+          "upstream": "origin/feat/now-return-pass"
+        },
+        {
+          "ahead": null,
+          "behind": null,
+          "checked_out_in": [],
+          "last_commit_at": "2026-10-06T22:45:49+01:00",
+          "local_only": true,
+          "name": "feat/personal-history-intake-20260929",
+          "upstream": "origin/feat/personal-history-intake-20260929"
+        },
+        {
+          "ahead": null,
+          "behind": null,
+          "checked_out_in": [],
+          "last_commit_at": "2026-09-30T14:46:02+01:00",
+          "local_only": true,
+          "name": "feat/plural-flow-append-20260930",
+          "upstream": "origin/feat/plural-flow-append-20260930"
+        },
+        {
+          "ahead": null,
+          "behind": null,
+          "checked_out_in": [],
+          "last_commit_at": "2026-09-29T10:21:48+01:00",
+          "local_only": true,
+          "name": "fix/product-ground-telos-folder",
+          "upstream": "origin/fix/product-ground-telos-folder"
+        },
+        {
+          "ahead": null,
+          "behind": null,
+          "checked_out_in": [],
+          "last_commit_at": "2026-09-29T12:31:25+01:00",
+          "local_only": true,
+          "name": "fix/receiving-uncertain-recovery-20260929",
+          "upstream": "origin/fix/receiving-uncertain-recovery-20260929"
+        },
+        {
+          "ahead": null,
+          "behind": null,
+          "checked_out_in": [],
+          "last_commit_at": "2026-09-26T20:42:38+01:00",
+          "local_only": true,
+          "name": "integration/expressive-character-20260926",
+          "upstream": null
+        },
+        {
+          "ahead": null,
+          "behind": null,
+          "checked_out_in": [],
+          "last_commit_at": "2026-09-24T23:09:42+01:00",
+          "local_only": true,
+          "name": "intelligence-arm/situate-matrix-readings-20260924",
+          "upstream": "origin/intelligence-arm/situate-matrix-readings-20260924"
+        },
+        {
+          "ahead": null,
+          "behind": null,
+          "checked_out_in": [],
+          "last_commit_at": "2026-10-05T09:50:37+01:00",
+          "local_only": false,
+          "name": "land/core-fields-20260925",
+          "upstream": "origin/land/core-fields-20260925"
+        },
+        {
+          "ahead": 1,
+          "behind": null,
+          "checked_out_in": [
+            "/Users/admin/Central/Work/Central"
+          ],
+          "last_commit_at": "2026-10-09T01:38:15+01:00",
+          "local_only": true,
+          "name": "main",
+          "upstream": "origin/main"
+        },
+        {
+          "ahead": null,
+          "behind": null,
+          "checked_out_in": [],
+          "last_commit_at": "2026-09-24T23:10:22+01:00",
+          "local_only": true,
+          "name": "repair/65-registered-worktree-placement",
+          "upstream": "origin/repair/65-registered-worktree-placement"
+        },
+        {
+          "ahead": null,
+          "behind": null,
+          "checked_out_in": [],
+          "last_commit_at": "2026-09-24T23:09:39+01:00",
+          "local_only": true,
+          "name": "ui/cradle-reconciliation-20260924",
+          "upstream": "origin/ui/cradle-reconciliation-20260924"
+        }
+      ],
+      "default_branch": "main",
+      "dirty_paths": null,
+      "head_branch": "main",
+      "head_sha": "94498815d831f65245ab8851d4595dbefda90230",
+      "remote": "https://github.com/EpiLogos/Central",
+      "repo": "Work/Central",
+      "repo_root": "/Users/admin/Central/Work/Central",
+      "unborn": false,
+      "unmerged_tips": [
+        "agent/central-control-retrieval-20261002",
+        "agent/central-root-native-admission-20261004",
+        "backup/local-main-pre-convergence-20260929",
+        "chore/fmt-clippy-clean",
+        "feat/agent-self-integration-20261007",
+        "feat/caw-continuation-port-20260929",
+        "feat/document-source-create-20260925",
+        "feat/gitstate-cli-default",
+        "feat/personal-history-intake-20260929",
+        "feat/plural-flow-append-20260930",
+        "fix/product-ground-telos-folder",
+        "fix/receiving-uncertain-recovery-20260929",
+        "integration/expressive-character-20260926",
+        "intelligence-arm/situate-matrix-readings-20260924",
+        "main",
+        "repair/65-registered-worktree-placement",
+        "ui/cradle-reconciliation-20260924"
+      ],
+      "worktrees": [
+        {
+          "ahead": 1,
+          "bare": false,
+          "behind": null,
+          "branch": "main",
+          "detached": false,
+          "dirty_files": 17,
+          "lane": "unattributed",
+          "last_commit_at": "2026-10-09T01:38:15+01:00",
+          "locked": false,
+          "path": "/Users/admin/Central/Work/Central",
+          "prunable": false
+        },
+        {
+          "ahead": null,
+          "bare": false,
+          "behind": null,
+          "branch": null,
+          "detached": true,
+          "dirty_files": 1,
+          "lane": "unattributed",
+          "last_commit_at": "2026-10-08T05:27:22+01:00",
+          "locked": false,
+          "path": "/Users/admin/Central/worktrees/env-1/central",
+          "prunable": false
+        },
+        {
+          "ahead": null,
+          "bare": false,
+          "behind": null,
+          "branch": null,
+          "detached": true,
+          "dirty_files": 1,
+          "lane": "unattributed",
+          "last_commit_at": "2026-10-08T01:29:43+01:00",
+          "locked": false,
+          "path": "/Users/admin/Central/worktrees/env-2/central",
+          "prunable": false
+        },
+        {
+          "ahead": 2,
+          "bare": false,
+          "behind": 9,
+          "branch": "feat/agent-self-integration-20261007",
+          "detached": false,
+          "dirty_files": null,
+          "lane": "unattributed",
+          "last_commit_at": "2026-10-07T16:36:03+01:00",
+          "locked": false,
+          "path": "/Users/admin/Central/worktrees/env-3/central",
+          "prunable": false
+        }
+      ]
+    }
+  ],
+  "schema": "central.git-census/v1",
+  "scope": [
+    "Work/Central"
+  ],
+  "summary": {
+    "attention_items": 29,
+    "branches": 20,
+    "local_only_branches": 17,
+    "repos_censused": 1,
+    "repos_errored": 0,
+    "unattributed_worktrees": 3,
+    "worktrees": 4
+  }
+}

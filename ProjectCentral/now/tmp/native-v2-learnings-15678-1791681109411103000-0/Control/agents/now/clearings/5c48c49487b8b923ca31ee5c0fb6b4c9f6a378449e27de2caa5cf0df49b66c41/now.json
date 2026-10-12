@@ -1,0 +1,18 @@
+{
+  "schema": "central.now-clearing/v1",
+  "now_ref": "central:now:control:root:5c48c49487b8b923ca31ee5c0fb6b4c9f6a378449e27de2caa5cf0df49b66c41",
+  "source_ref": "central:source:control:root:Control/agents/now/clearings/5c48c49487b8b923ca31ee5c0fb6b4c9f6a378449e27de2caa5cf0df49b66c41/now.json",
+  "scope_ref": "control:root",
+  "task_ref": "task:legacy-learning",
+  "purpose": "bounded implementation",
+  "participant_refs": [
+    "agent:test"
+  ],
+  "source_refs": [],
+  "policy_revision_at_allocation": "central.content-fnv1a64/v1:1986:8ad93269f7c50f01",
+  "created_at_unix_seconds": 100,
+  "lifecycle": "active",
+  "obligations": [],
+  "continuation_refs": [],
+  "archive_ref": null
+}

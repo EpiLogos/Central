@@ -1,0 +1,124 @@
+{
+  "schema": "central.source-change-horizon/v1",
+  "world_ref": "control:root",
+  "cursor": 2,
+  "sources": {
+    "central:source:control:root:Control/agents/now/clearings/5c48c49487b8b923ca31ee5c0fb6b4c9f6a378449e27de2caa5cf0df49b66c41/now.json": {
+      "binding": {
+        "ref": "central:source:control:root:Control/agents/now/clearings/5c48c49487b8b923ca31ee5c0fb6b4c9f6a378449e27de2caa5cf0df49b66c41/now.json",
+        "path": "Control/agents/now/clearings/5c48c49487b8b923ca31ee5c0fb6b4c9f6a378449e27de2caa5cf0df49b66c41/now.json",
+        "roles": [
+          "now-clearing"
+        ],
+        "provenance": "agent-maintained",
+        "standing": "current-development-state",
+        "treatment": "generated-derived",
+        "agent_retrieval_allowed": true
+      },
+      "revision": {
+        "revision": "central.content-fnv1a64/v1:690:9ea7045d137dd57d",
+        "byte_len": 690
+      }
+    },
+    "central:source:control:root:Control/agents/now/clearings/792853a6475137fe2ab0c8f629a59a6c4057f225560ba3c328433a99d8469f31/now.json": {
+      "binding": {
+        "ref": "central:source:control:root:Control/agents/now/clearings/792853a6475137fe2ab0c8f629a59a6c4057f225560ba3c328433a99d8469f31/now.json",
+        "path": "Control/agents/now/clearings/792853a6475137fe2ab0c8f629a59a6c4057f225560ba3c328433a99d8469f31/now.json",
+        "roles": [
+          "now-clearing"
+        ],
+        "provenance": "agent-maintained",
+        "standing": "current-development-state",
+        "treatment": "generated-derived",
+        "agent_retrieval_allowed": true
+      },
+      "revision": {
+        "revision": "central.content-fnv1a64/v1:795:2d4aa970cd7719f6",
+        "byte_len": 795
+      }
+    },
+    "central:source:control:root:Control/agents/wiki/wiki.json": {
+      "binding": {
+        "ref": "central:source:control:root:Control/agents/wiki/wiki.json",
+        "path": "Control/agents/wiki/wiki.json",
+        "roles": [
+          "agent-wiki-source"
+        ],
+        "provenance": "agent-maintained",
+        "standing": "unspecified",
+        "treatment": "control-agent-wiki",
+        "agent_retrieval_allowed": true
+      },
+      "revision": {
+        "revision": "central.content-fnv1a64/v1:280:36d199b6666c9bd9",
+        "byte_len": 280
+      }
+    },
+    "central:source:control:root:Control/user/placement-policy.json": {
+      "binding": {
+        "ref": "central:source:control:root:Control/user/placement-policy.json",
+        "path": "Control/user/placement-policy.json",
+        "roles": [
+          "work-placement-policy"
+        ],
+        "provenance": "human-adopted",
+        "standing": "architecture-contract",
+        "treatment": "projectcentral-user",
+        "agent_retrieval_allowed": true
+      },
+      "revision": {
+        "revision": "central.content-fnv1a64/v1:426:a6b42678c8e85388",
+        "byte_len": 426
+      }
+    }
+  },
+  "changes": [
+    {
+      "schema": "central.source-change/v1",
+      "change_ref": "central:change:control:root:1",
+      "cursor": 1,
+      "world_ref": "control:root",
+      "source_ref": "central:source:control:root:Control/agents/now/clearings/5c48c49487b8b923ca31ee5c0fb6b4c9f6a378449e27de2caa5cf0df49b66c41/now.json",
+      "source_path": "Control/agents/now/clearings/5c48c49487b8b923ca31ee5c0fb6b4c9f6a378449e27de2caa5cf0df49b66c41/now.json",
+      "source_roles": [
+        "now-clearing"
+      ],
+      "provenance": "agent-maintained",
+      "standing": "current-development-state",
+      "treatment": "generated-derived",
+      "agent_retrieval_allowed": true,
+      "before_revision": null,
+      "after_revision": "central.content-fnv1a64/v1:690:9ea7045d137dd57d",
+      "kind": "added",
+      "observed_at_unix_seconds": 1791681118,
+      "provider": "central.filesystem-reconcile/v1",
+      "actor": "central.now.allocate",
+      "actor_kind": "native-operation"
+    },
+    {
+      "schema": "central.source-change/v1",
+      "change_ref": "central:change:control:root:2",
+      "cursor": 2,
+      "world_ref": "control:root",
+      "source_ref": "central:source:control:root:Control/agents/now/clearings/792853a6475137fe2ab0c8f629a59a6c4057f225560ba3c328433a99d8469f31/now.json",
+      "source_path": "Control/agents/now/clearings/792853a6475137fe2ab0c8f629a59a6c4057f225560ba3c328433a99d8469f31/now.json",
+      "source_roles": [
+        "now-clearing"
+      ],
+      "provenance": "agent-maintained",
+      "standing": "current-development-state",
+      "treatment": "generated-derived",
+      "agent_retrieval_allowed": true,
+      "before_revision": null,
+      "after_revision": "central.content-fnv1a64/v1:795:2d4aa970cd7719f6",
+      "kind": "added",
+      "observed_at_unix_seconds": 1791681118,
+      "provider": "central.filesystem-reconcile/v1",
+      "actor": "central.now.allocate",
+      "actor_kind": "native-operation"
+    }
+  ],
+  "consumer_cursors": {},
+  "provider": "central.filesystem-reconcile/v1",
+  "reconciled_at_unix_seconds": 1791681118
+}

@@ -1,0 +1,24 @@
+{
+  "schema": "central.now-clearing/v2",
+  "now_ref": "central:now:control:root:792853a6475137fe2ab0c8f629a59a6c4057f225560ba3c328433a99d8469f31",
+  "source_ref": "central:source:control:root:Control/agents/now/clearings/792853a6475137fe2ab0c8f629a59a6c4057f225560ba3c328433a99d8469f31/now.json",
+  "scope_ref": "control:root",
+  "task_ref": "task:lane-learning",
+  "purpose": "bounded native learning read",
+  "participant_refs": [
+    "agent:test"
+  ],
+  "source_refs": [],
+  "policy_revision_at_allocation": "central.content-fnv1a64/v1:1986:8ad93269f7c50f01",
+  "created_at_unix_seconds": 100,
+  "lifecycle": "active",
+  "obligations": [],
+  "continuation_refs": [],
+  "archive_ref": null,
+  "work_refs": [
+    {
+      "repo": "Work/one",
+      "branch": "techne/learning-reader"
+    }
+  ]
+}
