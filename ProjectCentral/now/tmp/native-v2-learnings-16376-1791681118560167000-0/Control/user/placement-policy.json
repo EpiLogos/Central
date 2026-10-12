@@ -1,0 +1,22 @@
+{
+  "authority_refs": [],
+  "enforcement": "harness-interception",
+  "expires_at_unix_seconds": 9999,
+  "lease_seconds": 300,
+  "protected": [],
+  "required_coverage": [
+    "filesystem"
+  ],
+  "schema": "central.work-placement-policy/v1",
+  "scope_ref": "control:root",
+  "writable": [
+    {
+      "class": "repository",
+      "path": "Work/one"
+    },
+    {
+      "class": "repository",
+      "path": "Work/two"
+    }
+  ]
+}
