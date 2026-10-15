@@ -814,12 +814,15 @@ pub(crate) fn read_now(
     scan_now(scope)?
         .into_iter()
         .find(|(record, _)| record.now_ref == reference)
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                "NOW ref is not allocated in this World",
-            )
-        })
+        .ok_or_else(now_not_allocated)
+}
+/// The refusal for a NOW ref no clearing in this scope carries — one error,
+/// shared by every reader that looks a ref up in a scan.
+pub(crate) fn now_not_allocated() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        "NOW ref is not allocated in this World",
+    )
 }
 /// The listing row of one clearing. Horizon fields appear only on records
 /// that carry them, so a listing of standalone clearings is unchanged.

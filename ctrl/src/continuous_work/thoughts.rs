@@ -35,11 +35,17 @@ pub const T_PRIME_DIR: &str = "T-prime";
 pub const T_FIXTURE_SCHEMA: &str = "central.t-fixture/v1";
 pub const T_LEARNING_SCHEMA: &str = "central.t-learning/v1";
 pub const THOUGHTS_READING_SCHEMA: &str = "central.thoughts-reading/v1";
+pub const THOUGHTS_BATCH_READING_SCHEMA: &str = "central.thoughts-batch-reading/v1";
+/// The single Action every batch item answers as.
+pub const THOUGHTS_READ_ACTION: &str = "central.now.thoughts.read";
 pub const LEARNINGS_READING_SCHEMA: &str = "central.learnings-reading/v1";
 
 const DEFAULT_READ_LIMIT: usize = 256;
 const MAX_READ_LIMIT: usize = 4096;
 const MAX_SOURCE_FIXTURES: usize = 256;
+/// The most clearings one batch read names. The same bound as one stream's
+/// fixture limit; the real register holds about a hundred clearings.
+const MAX_BATCH_REFS: usize = MAX_READ_LIMIT;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContemplativeFrontMatter {
@@ -352,6 +358,70 @@ pub(crate) fn thoughts_read(scope: &Scope, input: &Value) -> io::Result<Value> {
     let (record, reading) = placement::read_now(scope, text(input, "now_ref")?)?;
     let limit = read_limit(input)?;
     let include_content = matches!(input.get("include_content"), Some(Value::Bool(true)));
+    thoughts_reading(scope, &record, &reading, limit, include_content)
+}
+
+/// Many clearings' streams in one call. The register is scanned once — the
+/// same scan, identity law and first-binding rule `read_now` applies on every
+/// single read — and each requested ref is then answered by the single read's
+/// own code and wrapped in the single Action's own result envelope, so an item
+/// carries the same fields and values `central.now.thoughts.read` returns for
+/// that ref.
+/// One item's refusal stays in its item. A fault before the items (the
+/// request itself, or a register scan every single read would fail on)
+/// refuses the whole call.
+pub(crate) fn thoughts_read_batch(scope: &Scope, input: &Value) -> io::Result<Value> {
+    let now_refs = match input.get("now_refs") {
+        Some(Value::Array(refs)) if !refs.is_empty() && refs.len() <= MAX_BATCH_REFS => refs,
+        _ => {
+            return Err(invalid(format!(
+                "now_refs must be an array of 1..={MAX_BATCH_REFS} NOW refs"
+            )))
+        }
+    };
+    let limit = read_limit(input)?;
+    let include_content = matches!(input.get("include_content"), Some(Value::Bool(true)));
+    let clearings = placement::scan_now(scope)?;
+    let items: Vec<Value> = now_refs
+        .iter()
+        .map(|requested| {
+            let answer = (|| {
+                // The single read's own input check, on the single read's own input shape.
+                let single = json!({ "now_ref": requested });
+                let reference = text(&single, "now_ref")?;
+                let (record, reading) = clearings
+                    .iter()
+                    .find(|(record, _)| record.now_ref == reference)
+                    .ok_or_else(placement::now_not_allocated)?;
+                thoughts_reading(scope, record, reading, limit, include_content)
+            })();
+            let envelope = super::action_result(THOUGHTS_READ_ACTION, answer);
+            json!({ "now_ref": requested, "result": envelope })
+        })
+        .collect();
+    let answered = items
+        .iter()
+        .filter(|item| item["result"]["ok"] == Value::Bool(true))
+        .count();
+    Ok(json!({
+        "schema": THOUGHTS_BATCH_READING_SCHEMA,
+        "scope_ref": scope.world_ref,
+        "requested": items.len(),
+        "answered": answered,
+        "refused": items.len() - answered,
+        "items": items,
+        "automatic_agent_or_model_invocation": false,
+    }))
+}
+
+/// One clearing's thought-stream reading, the single read's answer.
+fn thoughts_reading(
+    scope: &Scope,
+    record: &NowRecord,
+    reading: &source::SourceReading,
+    limit: usize,
+    include_content: bool,
+) -> io::Result<Value> {
     let dir = stream_destination(scope, &reading.source.path, false)?;
     let (rows, total) = list_stream(scope, &dir, limit, include_content)?;
     Ok(json!({

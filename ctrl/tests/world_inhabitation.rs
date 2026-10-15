@@ -972,17 +972,147 @@ fn native_existing_project_missing_ancestor_never_becomes_target_absence_or_lose
         false
     );
     assert_eq!(fs::read(&path).unwrap(), before);
-    let absent = world.invoke(
+    // Project two declares no World: it inherits the root lineage by
+    // convention, and one's exclusion of the sealed source stays one's.
+    let inherited = world.invoke(
         "central.world.effective-sources",
         json!({"scope":"project","project":"two","world_ref":"project:test/two"}),
     );
-    assert_eq!(absent["error"]["code"], "central.world_declaration_absent");
-    assert_eq!(absent["error"]["details"]["world_ref"], "project:test/two");
+    assert_eq!(inherited["ok"], true, "{inherited}");
+    assert_eq!(inherited["data"]["inherited_root_lineage"], true);
+    assert_eq!(inherited["data"]["sources"][0]["state"], "available");
+    assert_eq!(
+        inherited["data"]["sources"][0]["propagation_path"],
+        json!(["control:root", "project:test/two"])
+    );
     let retained_root = world.invoke(
         "central.world.effective-sources",
         json!({"scope":"root","world_ref":"control:root"}),
     );
     assert_eq!(retained_root["ok"], true);
+}
+
+/// A Project that declares no World inherits control:root by convention —
+/// the reading `central.world.here` reports — and `effective-sources` answers
+/// that lineage, exactly as an authored `{parent: control:root, sources: [],
+/// excluded_sources: []}` record would, saying it was inherited. Absence the
+/// convention does not cover still refuses with the absent code.
+#[test]
+fn native_project_declaring_no_world_answers_the_inherited_root_lineage() {
+    let world = World::new(&[]);
+    let sources = |project: &str, world_ref: &str| {
+        world.invoke(
+            "central.world.effective-sources",
+            json!({"scope":"project","project":project,"world_ref":world_ref}),
+        )
+    };
+    // No root declaration: there is no lineage to inherit, so absence refuses.
+    let undeclared_root = sources("one", "project:test/one");
+    assert_eq!(
+        undeclared_root["error"]["code"], "central.world_declaration_absent",
+        "{undeclared_root}"
+    );
+    assert_eq!(
+        undeclared_root["error"]["details"]["world_ref"],
+        "project:test/one"
+    );
+
+    let root = world.invoke(
+        "central.world-relations.save",
+        json!({"scope":"root","record":{"schema":"central.world-relations/v1","ref":"control:root",
+            "revision":"root-r1","parent":null,"excluded_sources":[],"sources":[
+                {"ref":"central:source:control:root:identity","revision":"1",
+                 "authority":"human-authored","treatment":"canonical"},
+                {"ref":"central:source:control:root:agents","revision":"1",
+                 "authority":"agent-maintained","treatment":"agent-maintained"}]}}),
+    );
+    assert_eq!(root["ok"], true, "{root}");
+    let store_dir = world
+        .root()
+        .join("Work/one/ProjectCentral/relations/worlds");
+    assert!(!store_dir.exists());
+
+    // world.here reads the convention for project one ...
+    let here = world.here(&world.root().join("Work/one/src"));
+    assert_eq!(here["world_record"]["state"], "absent", "{here}");
+    assert!(here["world_record"]["detail"]
+        .as_str()
+        .unwrap()
+        .contains("inherits control:root by convention"));
+    // ... and effective-sources answers it.
+    let inherited = sources("one", "project:test/one");
+    assert_eq!(inherited["ok"], true, "{inherited}");
+    let data = &inherited["data"];
+    assert_eq!(data["world_ref"], "project:test/one");
+    assert_eq!(data["inherited_root_lineage"], true);
+    assert_eq!(data["inheritance"]["state"], "absent");
+    assert_eq!(data["inheritance"]["parent"], "control:root");
+    assert_eq!(
+        data["inheritance"]["source"],
+        "Work/one/ProjectCentral/relations/worlds"
+    );
+    for source in data["sources"].as_array().unwrap() {
+        assert_eq!(source["state"], "available");
+        assert_eq!(source["effective_source_world"], "control:root");
+        assert_eq!(
+            source["propagation_path"],
+            json!(["control:root", "project:test/one"])
+        );
+        assert_eq!(source["provenance"][0]["world"], "control:root");
+    }
+    assert_eq!(data["sources"].as_array().unwrap().len(), 2);
+    // A read: nothing was written to the Project's world store.
+    assert!(!store_dir.exists());
+
+    // The same answer an authored empty child record gives.
+    let authored = world.invoke(
+        "central.world-relations.save",
+        json!({"scope":"project","project":"two","record":{"schema":"central.world-relations/v1",
+            "ref":"project:test/two","revision":"two-r1","parent":"control:root",
+            "sources":[],"excluded_sources":[]}}),
+    );
+    assert_eq!(authored["ok"], true, "{authored}");
+    let declared = sources("two", "project:test/two");
+    assert_eq!(declared["ok"], true, "{declared}");
+    assert_eq!(declared["data"]["inherited_root_lineage"], false);
+    assert!(declared["data"].get("inheritance").is_none());
+    let mut as_one = declared["data"]["sources"].clone();
+    for source in as_one.as_array_mut().unwrap() {
+        source["propagation_path"] = json!(["control:root", "project:test/one"]);
+    }
+    assert_eq!(as_one, data["sources"]);
+
+    // Absence the convention does not cover still refuses as before:
+    // a ref that is not the Project's own identity ...
+    let elsewhere = sources("one", "project:test/elsewhere");
+    assert_eq!(
+        elsewhere["error"]["code"], "central.world_declaration_absent",
+        "{elsewhere}"
+    );
+    // ... the Project's identity asked at the root register ...
+    let at_root = world.invoke(
+        "central.world.effective-sources",
+        json!({"scope":"root","world_ref":"project:test/one"}),
+    );
+    assert_eq!(
+        at_root["error"]["code"], "central.world_declaration_absent",
+        "{at_root}"
+    );
+    // ... and a Project whose store declares a World, just not its own.
+    fs::remove_file(
+        RelationRecordStore::worlds_in_project(world.root().join("Work/two"))
+            .source_path("project:test/two")
+            .unwrap(),
+    )
+    .unwrap();
+    world.write(
+        "Work/two/ProjectCentral/relations/worlds/world-stale.json",
+        &json!({"schema":"central.world-relations/v1","ref":"project:TWO","revision":"w1","parent":"control:root","sources":[]}),
+    );
+    let here = world.here(&world.root().join("Work/two/src"));
+    assert_eq!(here["world_record"]["state"], "mismatch", "{here}");
+    let mismatched = sources("two", "project:test/two");
+    assert_eq!(mismatched["ok"], false, "{mismatched}");
 }
 
 #[test]

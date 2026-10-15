@@ -554,6 +554,171 @@ fn real_cli_binary_appends_reads_and_distills_thought_streams() {
     );
 }
 
+/// Allocate root clearings and append one fixture per (clearing, slug).
+fn batch_fixture(world: &World) -> (String, String) {
+    let policy = execute_at(world.path(), "policy", &json!({}), 100).unwrap();
+    let allocate = |task: &str| {
+        execute_at(
+            world.path(),
+            "allocate",
+            &json!({"task_ref":task,"purpose":"batch thought read","expected_policy_revision":policy["revision"]}),
+            100,
+        )
+        .unwrap()["now_ref"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let first = allocate("task:batch-one");
+    let second = allocate("task:batch-two");
+    for (now_ref, slug) in [
+        (&first, "first-thought"),
+        (&first, "second-thought"),
+        (&second, "other-thought"),
+    ] {
+        execute_at(
+            world.path(),
+            "thoughts_append",
+            &json!({"now_ref":now_ref,"slug":slug,"day":"2026-10-15","actor":"agent:test",
+                "actor_kind":"agent","content":format!("{slug} in plain words"),"reading":"T1"}),
+            200,
+        )
+        .unwrap();
+    }
+    (first, second)
+}
+#[test]
+fn thought_batch_answers_each_clearing_as_its_single_read_and_keeps_refusals_in_their_item() {
+    let world = world();
+    let (first, second) = batch_fixture(&world);
+    let requested = json!([first, "now:never-allocated", second, "", first]);
+    let batch = execute_at(
+        world.path(),
+        "thoughts_read_batch",
+        &json!({"now_refs":requested,"include_content":true,"limit":1}),
+        201,
+    )
+    .unwrap();
+    assert_eq!(batch["schema"], "central.thoughts-batch-reading/v1");
+    assert_eq!(batch["scope_ref"], "control:root");
+    assert_eq!(batch["automatic_agent_or_model_invocation"], false);
+    assert_eq!(
+        (&batch["requested"], &batch["answered"], &batch["refused"]),
+        (&json!(5), &json!(3), &json!(2))
+    );
+    let items = batch["items"].as_array().unwrap();
+    for (index, item) in items.iter().enumerate() {
+        assert_eq!(item["now_ref"], requested[index], "request order");
+    }
+    // Each answered item is the single read's own envelope around the single
+    // read's own answer, duplicates included.
+    for (index, now_ref) in [(0, &first), (2, &second), (4, &first)] {
+        let single = execute_at(
+            world.path(),
+            "thoughts_read",
+            &json!({"now_ref":now_ref,"include_content":true,"limit":1}),
+            201,
+        )
+        .unwrap();
+        assert_eq!(
+            items[index]["result"],
+            json!({"ok":true,"status":"success","action":"central.now.thoughts.read","data":single}),
+            "item {index}"
+        );
+    }
+    assert_eq!(items[0]["result"]["data"]["total"], 2);
+    assert_eq!(items[0]["result"]["data"]["truncated"], true);
+    assert_eq!(items[2]["result"]["data"]["total"], 1);
+    // Refusals stay in their item, with the single read's code and words.
+    let unknown = execute_at(
+        world.path(),
+        "thoughts_read",
+        &json!({"now_ref":"now:never-allocated"}),
+        201,
+    )
+    .unwrap_err();
+    assert_eq!(unknown.kind(), io::ErrorKind::NotFound);
+    let refused = &items[1]["result"];
+    assert_eq!(refused["ok"], false);
+    assert_eq!(refused["status"], "unavailable_capability");
+    assert_eq!(refused["action"], "central.now.thoughts.read");
+    assert_eq!(refused["error"]["code"], "source_or_scope_unavailable");
+    assert_eq!(refused["error"]["message"], unknown.to_string());
+    let blank = execute_at(world.path(), "thoughts_read", &json!({"now_ref":""}), 201).unwrap_err();
+    assert_eq!(items[3]["result"]["status"], "invalid_input");
+    assert_eq!(
+        items[3]["result"]["error"]["code"],
+        "invalid_native_source_or_request"
+    );
+    assert_eq!(items[3]["result"]["error"]["message"], blank.to_string());
+    // A fault in the request itself refuses the whole call.
+    for input in [
+        json!({}),
+        json!({"now_refs":[]}),
+        json!({"now_refs":first}),
+        json!({"now_refs":vec![first.clone(); 4097]}),
+        json!({"now_refs":[first],"limit":0}),
+    ] {
+        assert_eq!(
+            execute_at(world.path(), "thoughts_read_batch", &input, 201)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput,
+            "{input}"
+        );
+    }
+}
+#[test]
+fn real_cli_batch_items_equal_the_single_action_envelopes() {
+    let world = world();
+    let (first, second) = batch_fixture(&world);
+    let invoke = |action: &str, input: Value| {
+        let output = Command::new(env!("CARGO_BIN_EXE_ctrl"))
+            .args([
+                "--json",
+                "--root",
+                world.path().to_str().unwrap(),
+                "action",
+                "run",
+                action,
+                &input.to_string(),
+            ])
+            .env_remove("CENTRAL_NATIVE_TOKEN")
+            .output()
+            .unwrap();
+        serde_json::from_slice::<Value>(&output.stdout).unwrap_or_else(|error| {
+            panic!(
+                "{error}: {} / {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )
+        })
+    };
+    let requested = [first.as_str(), "now:never-allocated", second.as_str(), ""];
+    let batch = invoke(
+        "central.now.thoughts.read-batch",
+        json!({"now_refs":requested,"include_content":true}),
+    );
+    assert_eq!(batch["ok"], true, "{batch}");
+    assert_eq!(batch["action"], "central.now.thoughts.read-batch");
+    for (index, now_ref) in requested.iter().enumerate() {
+        let single = invoke(
+            "central.now.thoughts.read",
+            json!({"now_ref":now_ref,"include_content":true}),
+        );
+        assert_eq!(
+            batch["data"]["items"][index]["result"], single,
+            "item {index} answers as the single Action"
+        );
+    }
+    let missing = invoke("central.now.thoughts.read-batch", json!({}));
+    assert_eq!(missing["status"], "invalid_input", "{missing}");
+    assert!(missing["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("now_refs"));
+}
+
 #[test]
 fn closure_runs_the_return_pass_and_refuses_undistilled_fixtures() {
     let world = world();
