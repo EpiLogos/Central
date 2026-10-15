@@ -15,6 +15,7 @@ use crate::agent_set_store::{RelationRecordKind, RelationRecordStore, RelationRe
 use crate::projectcentral::read_project_manifest;
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
+use crate::source_horizon::CONTROL_WORLD_REF;
 use crate::world::{
     AgentSetMember, AgentSetRecord, AgentSetRef, AgentSetRegistry, WorldError, WorldGraph,
     WORLD_DECLARATION_ABSENT_CODE,
@@ -295,15 +296,30 @@ fn resolve_store(
     input: &Value,
     context: &ActionExecutionContext<'_>,
 ) -> Result<RelationRecordStore, ActionResult> {
+    resolve_store_and_identity(action, kind, input, context).map(|(store, _)| store)
+}
+
+/// The requested register's store and, at project scope, the World ref the
+/// Project's own manifest derives (`project:<project_id>`) — the identity
+/// `central.world.here` reads for the same Project.
+fn resolve_store_and_identity(
+    action: &str,
+    kind: RelationRecordKind,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> Result<(RelationRecordStore, Option<String>), ActionResult> {
     let scope = required_scope(action, input)?;
     let root = resolve_central_root(context.root_options).map_err(|message| {
         ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None)
     })?;
     match scope.as_str() {
-        "root" => Ok(match kind {
-            RelationRecordKind::AgentSet => RelationRecordStore::agent_sets_at_root(root.path),
-            RelationRecordKind::World => RelationRecordStore::worlds_at_root(root.path),
-        }),
+        "root" => Ok((
+            match kind {
+                RelationRecordKind::AgentSet => RelationRecordStore::agent_sets_at_root(root.path),
+                RelationRecordKind::World => RelationRecordStore::worlds_at_root(root.path),
+            },
+            None,
+        )),
         "project" => {
             let project = optional(input, "project")
                 .ok_or_else(|| invalid(action, "scope `project` requires `project`".into()))?;
@@ -369,12 +385,18 @@ fn resolve_store(
                     ),
                 ));
             }
-            Ok(match kind {
-                RelationRecordKind::AgentSet => {
-                    RelationRecordStore::agent_sets_in_project(project_root)
-                }
-                RelationRecordKind::World => RelationRecordStore::worlds_in_project(project_root),
-            })
+            let identity = format!("project:{}", manifest.project_id);
+            Ok((
+                match kind {
+                    RelationRecordKind::AgentSet => {
+                        RelationRecordStore::agent_sets_in_project(project_root)
+                    }
+                    RelationRecordKind::World => {
+                        RelationRecordStore::worlds_in_project(project_root)
+                    }
+                },
+                Some(identity),
+            ))
         }
         other => Err(invalid(
             action,
@@ -786,19 +808,21 @@ fn world_effective_sources(
     context: &ActionExecutionContext<'_>,
 ) -> ActionResult {
     let action = WORLD_EFFECTIVE_SOURCES_ACTION;
-    let store = match resolve_store(action, RelationRecordKind::World, input, context) {
-        Ok(store) => store,
-        Err(failure) => return failure,
-    };
+    let (store, project_identity) =
+        match resolve_store_and_identity(action, RelationRecordKind::World, input, context) {
+            Ok(resolved) => resolved,
+            Err(failure) => return failure,
+        };
     let world_ref = match optional(input, "world_ref") {
         Some(world_ref) => world_ref,
         None => return invalid(action, "`world_ref` is required".into()),
     };
     let mut graph = WorldGraph::default();
-    let root_store = match root_path(context, action) {
-        Ok(path) => RelationRecordStore::worlds_at_root(path),
+    let central_root = match root_path(context, action) {
+        Ok(path) => path,
         Err(failure) => return failure,
     };
+    let root_store = RelationRecordStore::worlds_at_root(&central_root);
     for record in match root_store.load_typed::<crate::world::WorldRecord>() {
         Ok(records) => records,
         Err(error) => return store_failure(action, error),
@@ -811,6 +835,7 @@ fn world_effective_sources(
         Ok(records) => records,
         Err(error) => return store_failure(action, error),
     };
+    let project_declares_nothing = store.is_project_scope() && records.is_empty();
     for record in records {
         if let Err(error) = graph.insert(record) {
             return invalid(action, error.to_string());
@@ -820,18 +845,57 @@ fn world_effective_sources(
         Ok(value) => value,
         Err(error) => return invalid(action, error.to_string()),
     };
+    // The convention `central.world.here` reports: a Project whose own world
+    // store declares nothing at all inherits control:root. Its effective
+    // sources are then exactly those of an authored record naming control:root
+    // as parent with no sources and no exclusions — so the answer is the root
+    // lineage, carried one hop to the Project, and says it was inherited.
+    // The convention applies only to the identity the Project's manifest
+    // derives, and only when the root itself declares a lineage to inherit.
+    // Any other missing ref — an unknown ref, a ref the store does not hold
+    // beside records it does, or a Project under an undeclared root — is
+    // still absence and still refuses below.
+    let root_ref = crate::world::WorldRef(CONTROL_WORLD_REF.to_owned());
+    let inherited = project_declares_nothing
+        && project_identity.as_deref() == Some(world_ref.as_str())
+        && graph.get(&target).is_none()
+        && graph.get(&root_ref).is_some();
+    if inherited {
+        let convention =
+            crate::world::WorldRecord::new(target.clone(), "convention", Some(root_ref.clone()));
+        if let Err(error) = graph.insert(convention) {
+            return invalid(action, error.to_string());
+        }
+    }
     match graph.effective_sources(&target) {
+        Ok(sources) if inherited => {
+            let dir = store.source_dir();
+            let source = dir
+                .strip_prefix(&central_root)
+                .unwrap_or(&dir)
+                .display()
+                .to_string();
+            ActionResult::success(
+                action,
+                json!({
+                    "world_ref": world_ref, "sources": sources, "inherited_root_lineage": true,
+                    "inheritance": {
+                        "state": "absent", "parent": CONTROL_WORLD_REF, "source": source,
+                        "detail": format!("no world record is authored at {source}; the World inherits {CONTROL_WORLD_REF} by convention"),
+                    },
+                }),
+            )
+        }
         Ok(sources) => ActionResult::success(
             action,
-            json!({ "world_ref": world_ref, "sources": sources }),
+            json!({ "world_ref": world_ref, "sources": sources, "inherited_root_lineage": false }),
         ),
-        // A World ref with no authored record at all is *absent*, not invalid:
-        // it is the ordinary state of a project that declares no world of its
-        // own, and the answer to it is to apply the root lineage by convention.
-        // Naming it in the error code lets a consumer tell that apart from a
-        // declaration it could not read, which must never widen what a turn
-        // receives. Requested absence carries its existing `invalid_input`
-        // status; broken ancestry is unavailable and never permits fallback.
+        // A World ref with no authored record that the convention above did
+        // not answer is *absent*, not invalid. Naming it in the error code
+        // lets a consumer tell that apart from a declaration it could not
+        // read, which must never widen what a turn receives. Requested
+        // absence carries its existing `invalid_input` status; broken
+        // ancestry is unavailable and never permits fallback.
         Err(error) => match &error {
             WorldError::MissingWorld(missing)
                 if missing == &target && graph.get(&target).is_none() =>

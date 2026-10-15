@@ -8,13 +8,15 @@ pub const AGENT_SET_SCHEMA: &str = "central.agent-set/v1";
 
 /// Error code for a World ref that has no authored record at all.
 ///
-/// This is *absence*, not malformed input: it is the ordinary state of a
-/// project that declares no world of its own, and the answer to it is to
-/// inherit the root lineage by convention. It shares the `invalid_input`
-/// status with every genuinely malformed request, so the distinction is
-/// carried in the code — a consumer that cannot tell absence from
-/// unreadability must guess from prose, and an unreadable declaration must
-/// never widen what a turn receives the way an absent one may.
+/// This is *absence*, not malformed input. The ordinary absence — a Project
+/// whose own world store declares nothing — inherits the root lineage by
+/// convention, and `central.world.effective-sources` answers that lineage
+/// itself (`inherited_root_lineage: true`). This code is worn by the absence
+/// the convention does not cover. It shares the `invalid_input` status with
+/// every genuinely malformed request, so the distinction is carried in the
+/// code — a consumer that cannot tell absence from unreadability must guess
+/// from prose, and an unreadable declaration must never widen what a turn
+/// receives the way an absent one may.
 pub const WORLD_DECLARATION_ABSENT_CODE: &str = "central.world_declaration_absent";
 
 /// Canonical schema for the correction block that a corrective agent-set

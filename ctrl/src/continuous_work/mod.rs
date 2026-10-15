@@ -123,6 +123,7 @@ pub fn execute_with_token_at(
             "pointer_note":"Records are pointers, not authority: follow the governing guidance, and search the native surface before building anything new."
         })),
         "thoughts_read" => thoughts::thoughts_read(&scope, input),
+        "thoughts_read_batch" => thoughts::thoughts_read_batch(&scope, input),
         "thoughts_append" => thoughts::thoughts_append(&scope, input, now),
         "learnings_read" => thoughts::learnings_read(&scope, input),
         "learnings_distill" => thoughts::learnings_distill(&scope, input, now),
@@ -171,6 +172,12 @@ fn execute(
         let token = std::env::var("CENTRAL_NATIVE_TOKEN").ok();
         execute_with_token_at(&root.path, operation, input, token.as_deref(), now)
     })();
+    action_result(action, result)
+}
+/// The one mapping from a native operation's outcome to its Action result
+/// envelope. A batch answers each of its items through this same mapping, so
+/// an item's envelope is exactly the one its single Action would return.
+pub(crate) fn action_result(action: &str, result: io::Result<Value>) -> ActionResult {
     match result {
         Ok(value) if value.get("allowed") == Some(&Value::Bool(false)) => {
             ActionResult::failure_coded(
@@ -277,6 +284,11 @@ handler!(
     "thoughts_read"
 );
 handler!(
+    thoughts_read_batch_action,
+    "central.now.thoughts.read-batch",
+    "thoughts_read_batch"
+);
+handler!(
     thoughts_append_action,
     "central.now.thoughts.append",
     "thoughts_append"
@@ -366,6 +378,7 @@ pub fn register_actions(registry: &mut ActionRegistry) {
         ("central.now.obligations", "Retain NOW obligations", "Append exact native obligation SourceRefs without silently dropping outstanding work.", true, now_obligations_action, &[("now_ref","string",true),("expected_revision","string",true),("obligation_refs","array",true),("expected_authority_revision","string",false)]),
         ("central.temporal.source-history", "Read native temporal source history", "Read SourceRef snapshots from the existing native file-history owner store.", false, history_action, &[("source_ref","string",true),("limit","integer",false),("before","integer",false)]),
         ("central.now.thoughts.read", "Read a NOW's raw contemplative stream", "Walk one NOW clearing's T/ fixtures — dated, attributed, each with revision; content by explicit request. Pre-law fixtures list as nonconforming, never hidden. Read-only.", false, thoughts_read_action, &[("now_ref","string",true),("include_content","boolean",false),("limit","integer",false)]),
+        ("central.now.thoughts.read-batch", "Read many NOWs' raw contemplative streams", "One register scan, then each requested now_ref answered exactly as central.now.thoughts.read answers it — that Action's whole result envelope, success or refusal — in request order (central.thoughts-batch-reading/v1). One clearing's refusal (unknown ref, outside the agent aperture, unreadable stream) is that item's envelope and never sinks the others; a request, scope or register fault refuses the whole call, as it would refuse every single read. limit and include_content apply to every item. Read-only.", false, thoughts_read_batch_action, &[("now_refs","array",true),("include_content","boolean",false),("limit","integer",false)]),
         ("central.now.thoughts.append", "Append a raw contemplative fixture", "Write one dated, attributed markdown fixture into the NOW's T/ stream. The writing is forward-facing: raw and in the moment, but clean plain statements, not tech jargon. Caller-supplied local civil day; declared actor attribution; optional working-thought reading (T0 Question, T1 Trace, T2 Challenge, T3 Pattern, T4 Discovery, T5 Insight, T0-prime Assumption, T1-prime Lacuna, T2-prime Affordance, T3-prime Anomaly, T4-prime Concealment, T5-prime Integration); active NOWs only; identical bytes are an idempotent re-append.", true, thoughts_append_action, &[("now_ref","string",true),("slug","string",true),("day","string",true),("actor","string",true),("actor_kind","string",true),("content","string",true),("agent_session_ref","string",false),("reading","string",true)]),
         ("central.now.learnings.read", "Read a NOW's distilled learnings", "Walk the NOW's T-prime/ learnings, each naming the T fixture(s) it was parsed from; without now_ref, list learnings across every allocated clearing in scope. Read-only.", false, learnings_read_action, &[("now_ref","string",false),("include_content","boolean",false),("limit","integer",false)]),
         ("central.now.learnings.distill", "Distill a learning into T-prime", "Write one learning distilled from named T fixtures — every named fixture must exist in this NOW's T/ and rides the learning's front-matter linkage. A learning states plainly what the raw stream means: the integrate-toward-renewed-ground act. Optional working-thought reading (same twelve as thoughts.append). Active NOWs only.", true, learnings_distill_action, &[("now_ref","string",true),("slug","string",true),("day","string",true),("actor","string",true),("actor_kind","string",true),("content","string",true),("source_fixtures","array",true),("agent_session_ref","string",false),("reading","string",false)]),
