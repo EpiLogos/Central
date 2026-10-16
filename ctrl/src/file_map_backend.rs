@@ -162,9 +162,14 @@ impl Backend {
         // The end-of-options delimiter keeps a query beginning '-' as data.
         if !query.is_empty() || hybrid {
             let rendered = if hybrid {
-                // The hybrid path re-ranks through its embedding query, which
-                // wants the caller's own words, not FTS5 syntax.
-                query.to_string()
+                // bkmr's hybrid search fuses an FTS5 arm with an embedding
+                // arm and hands both the same string, so a hyphenated term
+                // reaches FTS5 as column syntax here too
+                // (`hsearch "now-context"` fails with "no such column:
+                // context" and takes the whole map search with it). Only the
+                // terms FTS5 would read as syntax are quoted, so ordinary
+                // words still reach the embedding arm as the caller wrote them.
+                fts5_quote_unsafe_terms(query)
             } else {
                 // Full-text search hands the query to SQLite FTS5, where a
                 // bare hyphen is column syntax: `aikit-knowledge-work-coverage-spec`
@@ -187,6 +192,31 @@ pub(crate) fn fts5_quote(query: &str) -> String {
         .split_whitespace()
         .filter(|term| !term.is_empty())
         .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Quote only the whitespace-separated terms that FTS5 would read as syntax.
+/// An FTS5 bareword is made of letters, digits, underscores and non-ASCII
+/// characters; one trailing `*` keeps its meaning as a prefix query. Anything
+/// else (`now-context`, `col:term`, a lone `*`, a term carrying `"`) becomes a
+/// double-quoted literal with embedded quotes doubled. Plain words pass
+/// through unchanged, so a query that worked before is rendered as it was.
+pub(crate) fn fts5_quote_unsafe_terms(query: &str) -> String {
+    query
+        .split_whitespace()
+        .map(|term| {
+            let stem = term.strip_suffix('*').unwrap_or(term);
+            let bareword = !stem.is_empty()
+                && stem
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '_' || !c.is_ascii());
+            if bareword {
+                term.to_string()
+            } else {
+                format!("\"{}\"", term.replace('"', "\"\""))
+            }
+        })
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -382,8 +412,35 @@ fn invoke(
 
 #[cfg(test)]
 mod tests {
-    use super::fts5_quote;
+    use super::{fts5_quote, fts5_quote_unsafe_terms};
     use crate::file_map_backend::Backend;
+
+    #[test]
+    fn the_hybrid_query_quotes_a_hyphenated_term_and_leaves_plain_words_alone() {
+        assert_eq!(fts5_quote_unsafe_terms("now-context"), "\"now-context\"");
+        assert_eq!(
+            fts5_quote_unsafe_terms("Redis now-context"),
+            "Redis \"now-context\""
+        );
+        assert_eq!(
+            fts5_quote_unsafe_terms("redis now context"),
+            "redis now context"
+        );
+        assert_eq!(fts5_quote_unsafe_terms("jev_redis kev0"), "jev_redis kev0");
+    }
+
+    #[test]
+    fn the_hybrid_query_keeps_a_prefix_star_and_quotes_other_syntax() {
+        assert_eq!(fts5_quote_unsafe_terms("kev*"), "kev*");
+        assert_eq!(fts5_quote_unsafe_terms("*"), "\"*\"");
+        assert_eq!(fts5_quote_unsafe_terms("col:term"), "\"col:term\"");
+        assert_eq!(
+            fts5_quote_unsafe_terms("say \"hi\" bimbā"),
+            "say \"\"\"hi\"\"\" bimbā"
+        );
+        assert_eq!(fts5_quote_unsafe_terms("   "), "");
+        assert_eq!(fts5_quote_unsafe_terms(""), "");
+    }
 
     #[test]
     fn a_hyphenated_query_is_quoted_per_term_not_raw_column_syntax() {
@@ -463,6 +520,49 @@ mod tests {
         assert!(
             !hits.is_empty(),
             "the hyphenated query finds the record it names"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The same regression on the hybrid path, which fed the raw query to
+    /// FTS5 until `fts5_quote_unsafe_terms`: `hsearch "now-context"` failed
+    /// with `no such column: context`. Same gate as the full-text lane.
+    #[test]
+    fn a_hyphenated_hybrid_query_returns_hits_instead_of_an_fts_failure() {
+        if std::env::var("CENTRAL_FILE_MAP_BKMR_CONFORMANCE").as_deref() != Ok("real") {
+            eprintln!("set CENTRAL_FILE_MAP_BKMR_CONFORMANCE=real to run the real-bkmr regression");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "ctrl-file-map-hybrid-regression-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = std::fs::canonicalize(dir).unwrap();
+        let backend = Backend::with_state(&dir, &dir);
+        backend.prepare().expect("real bkmr prepares an index");
+        backend
+            .run(&[
+                "add".into(),
+                "https://map.local/now-context-delivery".into(),
+                "--title".into(),
+                "now-context delivery".into(),
+                "--description".into(),
+                "prepared now-context delivery for a participant".into(),
+                "--no-web".into(),
+                "--no-embed".into(),
+            ])
+            .expect("real bkmr adds the record");
+        let hits = backend
+            .search("now-context", &[], true, 10)
+            .expect("a hyphenated hybrid query must not fail FTS syntax");
+        assert!(
+            !hits.is_empty(),
+            "the hyphenated hybrid query finds the record it names"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
