@@ -958,6 +958,27 @@ fn reconcile(
     bindings: Vec<SourceBinding>,
     attributions: &BTreeMap<String, SourceWriteAttribution>,
 ) -> io::Result<ReconcileReport> {
+    reconcile_state(world_root, state_path, world_ref, bindings, attributions)
+        .map(|(report, _)| report)
+}
+
+/// Reconcile a horizon and keep the reconciled state: the report every caller
+/// receives, and the horizon exactly as this reconciliation left it (its
+/// `reconciled_at_unix_seconds` is this reconciliation's).
+///
+/// The state file is rewritten only when what it records changed — a new
+/// horizon, a recorded change, a changed observed source or a migrated World
+/// identity. A reconciliation that finds the ground as recorded leaves the
+/// file untouched, so the file's `reconciled_at_unix_seconds` is when the
+/// stored horizon was last written; every report still carries the time of
+/// its own reconciliation.
+fn reconcile_state(
+    world_root: &Path,
+    state_path: &Path,
+    world_ref: &str,
+    bindings: Vec<SourceBinding>,
+    attributions: &BTreeMap<String, SourceWriteAttribution>,
+) -> io::Result<(ReconcileReport, SourceHorizonState)> {
     let _horizon = crate::source_safety::lock(world_root, SOURCE_HORIZON_LOCK)?;
     let current = observe_bindings(world_root, bindings)?;
     let now = unix_seconds();
@@ -973,6 +994,7 @@ fn reconcile(
         provider: SOURCE_HORIZON_PROVIDER.to_owned(),
         reconciled_at_unix_seconds: now,
     });
+    let mut migrated = false;
     if state.world_ref != world_ref {
         if is_legacy_project_identity(&state.world_ref, world_ref) {
             // The same Project under the pre-2026-09-14 identity grammar
@@ -980,6 +1002,7 @@ fn reconcile(
             // The manifest's rename is authored; the derived horizon follows
             // it, keeping its cursors, consumer acknowledgements and changes.
             state.world_ref = world_ref.to_owned();
+            migrated = true;
         } else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -1046,15 +1069,22 @@ fn reconcile(
             new_changes.push(change);
         }
     }
+    let recorded =
+        initialized || migrated || !new_changes.is_empty() || state.sources != current;
     state.sources = current;
     state.reconciled_at_unix_seconds = now;
-    write_state(state_path, &state)?;
+    if recorded {
+        write_state(state_path, &state)?;
+    }
     let horizon = public_horizon(&state, None);
-    Ok(ReconcileReport {
-        initialized,
-        new_changes,
-        horizon,
-    })
+    Ok((
+        ReconcileReport {
+            initialized,
+            new_changes,
+            horizon,
+        },
+        state,
+    ))
 }
 
 pub fn reconcile_project_sources(project_root: &Path) -> io::Result<ReconcileReport> {
@@ -1069,9 +1099,16 @@ pub fn reconcile_project_source_writes(
     project_root: &Path,
     attributions: &BTreeMap<String, SourceWriteAttribution>,
 ) -> io::Result<ReconcileReport> {
+    reconcile_project_state(project_root, attributions).map(|(report, _)| report)
+}
+
+fn reconcile_project_state(
+    project_root: &Path,
+    attributions: &BTreeMap<String, SourceWriteAttribution>,
+) -> io::Result<(ReconcileReport, SourceHorizonState)> {
     let manifest = read_project_manifest(project_root)?;
     let world_ref = format!("project:{}", manifest.project_id);
-    reconcile(
+    reconcile_state(
         project_root,
         &project_root.join(PROJECT_HORIZON_STATE),
         &world_ref,
@@ -1096,15 +1133,9 @@ pub fn read_project_change_horizon(
 ) -> io::Result<SourceHorizon> {
     // Reading the current horizon is also the correctness reconciliation path. This makes direct
     // external edits available without a manual sync command while keeping all mutation under
-    // derived .central state and never invoking an Agent/model.
-    let report = reconcile_project_sources(project_root)?;
-    let state = load_state(&project_root.join(PROJECT_HORIZON_STATE))?.ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            "source horizon state was not created",
-        )
-    })?;
-    let _ = report;
+    // derived .central state and never invoking an Agent/model. The horizon read is the one
+    // this reconciliation produced, whether or not it had anything to write.
+    let (_, state) = reconcile_project_state(project_root, &BTreeMap::new())?;
     Ok(public_horizon(&state, since))
 }
 

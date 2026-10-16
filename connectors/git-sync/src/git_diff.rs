@@ -329,8 +329,13 @@ mod tests {
     use std::{
         fs,
         path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
         time::{SystemTime, UNIX_EPOCH},
     };
+    /// Tests run in parallel in one process, and a clock that resolves only
+    /// microseconds names two repositories created in the same tick alike;
+    /// the sequence keeps every repository's directory its own.
+    static NEXT_REPO: AtomicU64 = AtomicU64::new(0);
     struct Repo(PathBuf);
     impl Drop for Repo {
         fn drop(&mut self) {
@@ -353,14 +358,15 @@ mod tests {
     }
     fn repo() -> Repo {
         let path = std::env::temp_dir().join(format!(
-            "central-diff-{}-{}",
+            "central-diff-{}-{}-{}",
             std::process::id(),
+            NEXT_REPO.fetch_add(1, Ordering::Relaxed),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
         ));
-        fs::create_dir_all(&path).unwrap();
+        fs::create_dir(&path).unwrap();
         run(&path, &["init", "-q"]);
         run(&path, &["config", "user.name", "Diff proof"]);
         run(&path, &["config", "user.email", "proof@example.invalid"]);
