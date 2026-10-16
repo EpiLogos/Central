@@ -20,13 +20,15 @@ pub fn read_control_change_horizon(
     central_root: &std::path::Path,
     since: Option<u64>,
 ) -> std::io::Result<SourceHorizon> {
-    reconcile_control_sources(central_root)?;
-    let state = load_state(&central_root.join(CONTROL_HORIZON_STATE))?.ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "Control source horizon state was not created",
-        )
-    })?;
+    // The state as this read reconciled it, not as last written: the file is written only when something changed
+    // (source_horizon.rs), so reloading it would report the last write's time as this read's.
+    let (_, state) = reconcile_state(
+        central_root,
+        &central_root.join(CONTROL_HORIZON_STATE),
+        CONTROL_WORLD_REF,
+        control_source_bindings(central_root)?,
+        &std::collections::BTreeMap::new(),
+    )?;
     Ok(public_horizon(&state, since))
 }
 
