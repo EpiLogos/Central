@@ -179,7 +179,7 @@ impl Backend {
             };
             args.extend(["--".into(), rendered]);
         }
-        records(&self.run(&args)?)
+        search_records(&self.run(&args)?, hybrid)
     }
 }
 
@@ -269,6 +269,18 @@ pub(crate) fn record_revision(value: &Value) -> io::Result<String> {
     Ok(crate::source_safety::content_revision_bytes(
         &serde_json::to_vec(&row)?,
     ))
+}
+
+/// What a search printed, as records. bkmr's hybrid search with `--np` and no
+/// hits prints its "No bookmarks found" notice to stderr and nothing to stdout
+/// (exit 0), where full-text search prints `[]`. For the hybrid path an empty
+/// stdout is therefore an empty answer; for full-text it is still a failure,
+/// as is any other output that is not a JSON array.
+fn search_records(text: &str, hybrid: bool) -> io::Result<Vec<Value>> {
+    if hybrid && text.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    records(text)
 }
 
 fn records(text: &str) -> io::Result<Vec<Value>> {
@@ -414,6 +426,24 @@ fn invoke(
 mod tests {
     use super::{fts5_quote, fts5_quote_unsafe_terms};
     use crate::file_map_backend::Backend;
+
+    #[test]
+    fn a_hybrid_search_with_no_hits_is_an_empty_answer_not_a_parse_failure() {
+        use super::search_records;
+        // bkmr 7.6.7: stdout is empty, the notice goes to stderr, exit 0.
+        assert!(search_records("", true).unwrap().is_empty());
+        assert!(search_records("\n", true).unwrap().is_empty());
+        assert!(search_records("[]\n", true).unwrap().is_empty());
+    }
+
+    #[test]
+    fn empty_output_is_still_a_failure_for_full_text_and_other_prose_everywhere() {
+        use super::search_records;
+        // Full-text search always prints a JSON array, so nothing at all is wrong.
+        assert!(search_records("", false).is_err());
+        assert!(search_records("Error: something broke", true).is_err());
+        assert!(search_records("No bookmarks found", true).is_err());
+    }
 
     #[test]
     fn the_hybrid_query_quotes_a_hyphenated_term_and_leaves_plain_words_alone() {
@@ -564,6 +594,10 @@ mod tests {
             !hits.is_empty(),
             "the hyphenated hybrid query finds the record it names"
         );
+        let none = backend
+            .search("unmatched-zzqqxx", &[], true, 10)
+            .expect("a hybrid query with no hits is an empty answer, not a failure");
+        assert!(none.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
