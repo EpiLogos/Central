@@ -514,6 +514,141 @@ pub(crate) fn insert_tree_bindings(
     Ok(seen)
 }
 
+/// The NOW field of each register, relative to its world root.
+pub(crate) const ROOT_NOW_DIR: &str = "Control/agents/now";
+pub(crate) const PROJECT_NOW_DIR: &str = "ProjectCentral/now";
+
+/// Record families of a NOW field, each a directory whose shallow files are
+/// records. Clearings are the one nested family: `clearings/<id>/now.json`.
+const NOW_RECORD_FAMILIES: [&str; 3] = ["agents", "day", "flows"];
+const NOW_RECORD_EXTENSIONS: [&str; 4] = ["json", "md", "txt", "html"];
+
+/// Is `member` (a normalised path relative to the world root) a NOW record of
+/// that register? The one definition behind the roster, resolve-by-ref and the
+/// listing: a file at its family's record depth, `agents/<file>`, `day/<file>`,
+/// `flows/<file>` or `clearings/<id>/now.json`. Anything deeper is evidence
+/// (`day/<date>.sources/`, a clearing's `T/`) and `tmp/` is scratch; none of it
+/// is a record, so none of it is a Source.
+pub(crate) fn is_now_record_member(world_ref: &str, member: &str) -> bool {
+    let base = if world_ref == CONTROL_WORLD_REF {
+        ROOT_NOW_DIR
+    } else {
+        PROJECT_NOW_DIR
+    };
+    let Some(rest) = member
+        .strip_prefix(base)
+        .and_then(|rest| rest.strip_prefix('/'))
+    else {
+        return false;
+    };
+    match rest.split('/').collect::<Vec<_>>().as_slice() {
+        [family, file] if NOW_RECORD_FAMILIES.contains(family) => record_typed_name(file),
+        ["clearings", id, "now.json"] => !id.is_empty() && !id.starts_with('.'),
+        _ => false,
+    }
+}
+
+fn record_typed_name(name: &str) -> bool {
+    !name.starts_with('.')
+        && name != AGENT_RETRIEVAL_DENY_MARKER
+        && Path::new(name)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| NOW_RECORD_EXTENSIONS.contains(&ext))
+}
+
+/// The retrieval-only binding of one NOW record.
+pub(crate) fn now_record_binding(
+    world_ref: &str,
+    relative: &str,
+    agent_retrieval_allowed: bool,
+) -> SourceBinding {
+    SourceBinding {
+        source_ref: source_ref(world_ref, relative),
+        path: relative.to_owned(),
+        roles: vec!["now-record".to_owned()],
+        provenance: "agent-maintained".to_owned(),
+        standing: "unspecified".to_owned(),
+        treatment: "retain-native-in-place".to_owned(),
+        agent_retrieval_allowed,
+    }
+}
+
+/// Retrieval-only bindings for the NOW records of one register.
+///
+/// Placement is the authorisation, so there is no registration step: the
+/// bindings are computed from the filesystem each time, and a record that is
+/// distilled, pruned or archived leaves the roster by leaving its folder.
+///
+/// These are not ground relations, carry no native-ownership role of their own
+/// and take no part in the source change horizon, so NOW churn raises no
+/// source-change events. A registered relation for the same path keeps its own
+/// identity and roles.
+pub(crate) fn now_record_bindings(
+    world_root: &Path,
+    world_ref: &str,
+) -> io::Result<Vec<SourceBinding>> {
+    let now_rel = if world_ref == CONTROL_WORLD_REF {
+        ROOT_NOW_DIR
+    } else {
+        PROJECT_NOW_DIR
+    };
+    let now_dir = world_root.join(now_rel);
+    let mut files: Vec<PathBuf> = Vec::new();
+    for family in NOW_RECORD_FAMILIES {
+        shallow_record_files(&now_dir.join(family), world_root, &mut files)?;
+    }
+    if let Ok(clearings) = fs::read_dir(now_dir.join("clearings")) {
+        let mut ids = clearings.collect::<Result<Vec<_>, _>>()?;
+        ids.sort_by_key(|entry| entry.file_name());
+        for id in ids {
+            if id.file_type()?.is_dir() && !id.file_name().to_string_lossy().starts_with('.') {
+                let record = id.path().join("now.json");
+                if fs::symlink_metadata(&record).is_ok_and(|m| m.file_type().is_file())
+                    && safe_regular_file(world_root, &record)?
+                {
+                    files.push(record);
+                }
+            }
+        }
+    }
+    let mut bindings = Vec::with_capacity(files.len());
+    for file in files {
+        let relative = normalize_relative(file.strip_prefix(world_root).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, "source escaped its world root")
+        })?);
+        debug_assert!(is_now_record_member(world_ref, &relative));
+        bindings.push(now_record_binding(
+            world_ref,
+            &relative,
+            retrieval_allowed(world_root, &file),
+        ));
+    }
+    Ok(bindings)
+}
+
+/// The regular, record-typed files directly inside `dir`. An absent directory
+/// has none. Symlinks, subdirectories, dotfiles, locks and the retrieval-deny
+/// marker are never records.
+fn shallow_record_files(dir: &Path, world_root: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
+    let Ok(read) = fs::read_dir(dir) else {
+        return Ok(());
+    };
+    let mut entries = read.collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        if !record_typed_name(&entry.file_name().to_string_lossy()) || !entry.file_type()?.is_file()
+        {
+            continue;
+        }
+        let path = entry.path();
+        if safe_regular_file(world_root, &path)? {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
 fn read_relations_file(
     path: &Path,
     schema: &str,
@@ -1787,5 +1922,157 @@ mod retrieval_tests {
         // A fresh physical observation has its own admitted root basis; this
         // does not adopt a Source identity or grant a writer authority.
         assert!(retrieval_creation_admission(&alias, &requested).unwrap());
+    }
+}
+
+#[cfg(test)]
+mod now_record_tests {
+    use super::*;
+
+    struct Ground(PathBuf);
+    impl Ground {
+        fn new() -> Self {
+            let scratch = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ProjectCentral/now/tmp");
+            fs::create_dir_all(&scratch).unwrap();
+            let path = scratch.join(format!(
+                "now-records-{}-{}-{}",
+                std::process::id(),
+                unix_seconds(),
+                NEXT_STATE_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+        fn file(&self, relative: &str) {
+            let path = self.0.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"{}").unwrap();
+        }
+        fn paths(&self, world_ref: &str) -> Vec<String> {
+            let mut paths: Vec<String> = now_record_bindings(&self.0, world_ref)
+                .unwrap()
+                .into_iter()
+                .map(|binding| binding.path)
+                .collect();
+            paths.sort();
+            paths
+        }
+    }
+    impl Drop for Ground {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn root_records_are_the_shallow_files_of_each_family_and_nothing_deeper() {
+        let ground = Ground::new();
+        for record in [
+            "agents/handoff.json",
+            "agents/note.md",
+            "day/2026-10-01.md",
+            "flows/flow.md",
+            "flows/flow.html",
+            "clearings/c1/now.json",
+            "clearings/c2/now.json",
+        ] {
+            ground.file(&format!("Control/agents/now/{record}"));
+        }
+        for not_record in [
+            "agents/.hidden.json",
+            "agents/session.lock",
+            "agents/binary.bin",
+            "agents/sub/deep.json",
+            "day/2026-10-01.sources/evidence.json",
+            "flows/evidence/dir/x.json",
+            "clearings/c1/T/plan.md",
+            "clearings/c3/notes.md",
+            "tmp/scratch.json",
+            "preserved/old.json",
+            "user/u.md",
+            "README.md",
+        ] {
+            ground.file(&format!("Control/agents/now/{not_record}"));
+        }
+        let expected: Vec<String> = [
+            "agents/handoff.json",
+            "agents/note.md",
+            "clearings/c1/now.json",
+            "clearings/c2/now.json",
+            "day/2026-10-01.md",
+            "flows/flow.html",
+            "flows/flow.md",
+        ]
+        .iter()
+        .map(|record| format!("Control/agents/now/{record}"))
+        .collect();
+        assert_eq!(ground.paths(CONTROL_WORLD_REF), expected);
+    }
+
+    #[test]
+    fn a_project_register_uses_its_own_now_directory_and_world() {
+        let ground = Ground::new();
+        ground.file("ProjectCentral/now/agents/h.json");
+        ground.file("ProjectCentral/now/day/d.md");
+        ground.file("ProjectCentral/now/tmp/t.json");
+        ground.file("ProjectCentral/now/day/d.sources/e.json");
+        ground.file("Control/agents/now/agents/root-only.json");
+        assert_eq!(
+            ground.paths("project:Demo"),
+            vec![
+                "ProjectCentral/now/agents/h.json".to_owned(),
+                "ProjectCentral/now/day/d.md".to_owned()
+            ]
+        );
+        let bindings = now_record_bindings(&ground.0, "project:Demo").unwrap();
+        assert!(bindings
+            .iter()
+            .all(|b| b.source_ref.starts_with("central:source:project:Demo:")));
+        assert!(bindings
+            .iter()
+            .all(|b| b.roles == ["now-record"] && b.agent_retrieval_allowed));
+    }
+
+    #[test]
+    fn a_pruned_record_leaves_the_roster_and_no_register_is_needed() {
+        let ground = Ground::new();
+        ground.file("ProjectCentral/now/agents/a.json");
+        ground.file("ProjectCentral/now/agents/b.json");
+        assert_eq!(ground.paths("project:Demo").len(), 2);
+        fs::remove_file(ground.0.join("ProjectCentral/now/agents/a.json")).unwrap();
+        assert_eq!(
+            ground.paths("project:Demo"),
+            vec!["ProjectCentral/now/agents/b.json".to_owned()]
+        );
+        fs::remove_dir_all(ground.0.join("ProjectCentral/now")).unwrap();
+        assert!(ground.paths("project:Demo").is_empty());
+    }
+
+    #[test]
+    fn symlinks_never_become_records_and_the_deny_marker_withholds_a_family() {
+        use std::os::unix::fs::symlink;
+        let ground = Ground::new();
+        ground.file("ProjectCentral/now/agents/real.json");
+        ground.file("elsewhere/target.json");
+        symlink(
+            ground.0.join("elsewhere/target.json"),
+            ground.0.join("ProjectCentral/now/agents/link.json"),
+        )
+        .unwrap();
+        assert_eq!(
+            ground.paths("project:Demo"),
+            vec!["ProjectCentral/now/agents/real.json".to_owned()]
+        );
+        fs::write(
+            ground.0.join("ProjectCentral/now/agents").join(AGENT_RETRIEVAL_DENY_MARKER),
+            b"",
+        )
+        .unwrap();
+        let bindings = now_record_bindings(&ground.0, "project:Demo").unwrap();
+        assert_eq!(bindings.len(), 1, "the marker file itself is not a record");
+        assert!(
+            !bindings[0].agent_retrieval_allowed,
+            "the owner's deny marker withholds the whole family"
+        );
     }
 }

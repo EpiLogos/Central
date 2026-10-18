@@ -1240,6 +1240,58 @@ mod binding_read_tests {
     }
 
     #[test]
+    fn now_records_are_in_the_roster_by_placement_and_leave_it_when_pruned() {
+        let fixture = Fixture::new();
+        let record = fixture.root.join("Control/agents/now/agents/handoff.json");
+        let scratch = fixture.root.join("Control/agents/now/tmp/scratch.json");
+        let evidence = fixture.root.join("Control/agents/now/day/d.sources/e.json");
+        for path in [&record, &scratch, &evidence] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"{\"kind\":\"handoff\"}").unwrap();
+        }
+        let roster = |fixture: &Fixture| -> Vec<String> {
+            let inspected = execute(&fixture.root, "inspect", &json!({"resources":true})).unwrap();
+            inspected["result"]["resources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| entry["source"]["path"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        let paths = roster(&fixture);
+        assert!(paths.contains(&"Control/agents/now/agents/handoff.json".to_owned()));
+        assert!(
+            !paths.iter().any(|p| p.contains("now/tmp/")),
+            "scratch is not a record"
+        );
+        assert!(
+            !paths.iter().any(|p| p.contains(".sources/")),
+            "evidence is not a record"
+        );
+        assert!(
+            paths.contains(&"Control/user/note.md".to_owned()),
+            "registered sources stay"
+        );
+        // The record resolves by its path-derived identity with no registration.
+        let reference =
+            source_horizon::source_ref("control:root", "Control/agents/now/agents/handoff.json");
+        let resolved = execute(
+            &fixture.root,
+            "resolve",
+            &json!({"source_ref":reference,"binding_only":true}),
+        )
+        .unwrap();
+        assert_eq!(
+            resolved["result"]["source"]["roles"],
+            json!(["now-record"]),
+            "resolved: {resolved}"
+        );
+        // Pruning the record releases it.
+        fs::remove_file(&record).unwrap();
+        assert!(!roster(&fixture).contains(&"Control/agents/now/agents/handoff.json".to_owned()));
+    }
+
+    #[test]
     fn registered_native_skill_keeps_manifest_authored_binding_without_body_revision_in_metadata_mode(
     ) {
         let fixture = Fixture::new();
