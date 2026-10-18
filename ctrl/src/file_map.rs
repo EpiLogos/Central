@@ -496,17 +496,31 @@ fn inspect(all: &[Scope], input: &Value) -> io::Result<Value> {
         for chosen in &choices {
             // Serve from the refresh-time enumeration snapshot when present;
             // the live walk is refresh-scale work (see entries cache).
-            let scoped: Vec<crate::file_map_catalog::Entry> = {
+            let mut scoped: Vec<crate::file_map_catalog::Entry> = {
                 let cached = chosen.load_entries_cache().ok().flatten();
                 match cached.filter(|items| !items.is_empty()) {
                     Some(items) => items,
                     None => {
-                        let items = entries(chosen)?;
+                        let mut items = entries(chosen)?;
+                        // NOW records change constantly: the snapshot never holds them.
+                        items.retain(|entry| !crate::file_map_catalog::is_now_record_entry(entry));
                         let _ = chosen.save_entries_cache(&items);
                         items
                     }
                 }
             };
+            // NOW records are always read live and overlaid on the snapshot. A
+            // registered relation for the same path keeps its own entry.
+            scoped.retain(|entry| !crate::file_map_catalog::is_now_record_entry(entry));
+            let known: BTreeSet<String> = scoped
+                .iter()
+                .map(|entry| entry.source.source_ref.clone())
+                .collect();
+            scoped.extend(
+                crate::file_map_catalog::now_entries(chosen)?
+                    .into_iter()
+                    .filter(|entry| !known.contains(&entry.source.source_ref)),
+            );
             for entry in scoped {
                 if input["federated"] != true
                     && chosen.world != scope.world
@@ -1286,9 +1300,22 @@ mod binding_read_tests {
             json!(["now-record"]),
             "resolved: {resolved}"
         );
-        // Pruning the record releases it.
+        // A record written after the first inspect (which saved the snapshot) is
+        // visible at once: NOW records are read live, never from the snapshot.
+        let later = fixture.root.join("Control/agents/now/agents/later.json");
+        fs::write(&later, b"{\"kind\":\"handoff\"}").unwrap();
+        assert!(roster(&fixture).contains(&"Control/agents/now/agents/later.json".to_owned()));
+        let snapshot = fs::read_to_string(fixture.root.join(".central/bkmr/entries-cache.json"))
+            .unwrap_or_default();
+        assert!(
+            !snapshot.contains("now/agents/"),
+            "the snapshot never holds NOW records"
+        );
+        // Pruning a record releases it, snapshot or not.
         fs::remove_file(&record).unwrap();
-        assert!(!roster(&fixture).contains(&"Control/agents/now/agents/handoff.json".to_owned()));
+        let after = roster(&fixture);
+        assert!(!after.contains(&"Control/agents/now/agents/handoff.json".to_owned()));
+        assert!(after.contains(&"Control/agents/now/agents/later.json".to_owned()));
     }
 
     #[test]

@@ -1329,6 +1329,31 @@ pub(crate) fn entries(scope: &Scope) -> io::Result<Vec<Entry>> {
             &mut sources,
         )?;
     }
+    finish_entries(scope, &ground, sources)
+}
+
+/// The NOW records of one scope as roster entries, computed from the filesystem
+/// right now. They change constantly, so they are never served from the
+/// refresh-time snapshot: a reader overlays these on whatever the snapshot holds.
+pub(crate) fn now_entries(scope: &Scope) -> io::Result<Vec<Entry>> {
+    let ground = scope.ground()?;
+    let sources = source_horizon::now_record_bindings(&scope.root, &scope.world)?
+        .into_iter()
+        .map(|binding| (binding.source_ref.clone(), binding))
+        .collect();
+    finish_entries(scope, &ground, sources)
+}
+
+/// True for an entry that is a live-only NOW record (never part of a snapshot).
+pub(crate) fn is_now_record_entry(entry: &Entry) -> bool {
+    entry.source.roles.iter().any(|role| role == "now-record")
+}
+
+fn finish_entries(
+    scope: &Scope,
+    ground: &MapGround,
+    sources: BTreeMap<String, SourceBinding>,
+) -> io::Result<Vec<Entry>> {
     if sources.len() > MAX_ENTRIES {
         return Err(invalid("File map exceeds the 1000000-source bound"));
     }
