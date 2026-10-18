@@ -9,6 +9,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs, io,
     path::{Component, Path, PathBuf},
+    rc::Rc,
 };
 
 pub const SCHEMA: &str = "central.file-map/v1";
@@ -254,6 +255,70 @@ pub(crate) fn read_failure_details(error: &io::Error) -> Value {
         json!({"kind":format!("{:?}",cause.kind()),"raw_os_error":cause.raw_os_error(),"message":cause.to_string()})
     }})
 }
+/// One batch phase's observations of per-scope declarations: each scope's
+/// relations document and Project manifest, observed once for the phase.
+#[derive(Default)]
+struct ObservationPhase {
+    documents: BTreeMap<(PathBuf, String), Rc<(Value, String)>>,
+    manifests: BTreeMap<PathBuf, (crate::projectcentral::ProjectCentralManifest, String)>,
+    declarations: BTreeMap<(String, PathBuf, PathBuf), Rc<ScopeDeclarations>>,
+}
+thread_local! {
+    static OBSERVATION_PHASE: std::cell::RefCell<Option<ObservationPhase>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `phase` with every scope's declarations observed at most once.
+///
+/// A single `resolve` re-observes every participating scope's relations
+/// document and Project manifest on each lookup — five or more lookups per
+/// Source, each across every scope — and its in-phase cross-checks compare
+/// those repeated observations. A batch resolving many Sources would repeat
+/// that World observation per Source (0.3 s each on the 18 Oct 2026 ground).
+/// Inside a phase these declarations are observed once; the guarantee moves
+/// to the phase's edges: the batch brackets each phase with
+/// `ownership_bases`, which observes exactly these documents fresh, so a
+/// declaration that changes during a phase refuses the batch. Per-Source
+/// observations — skill metadata, retrieval markers, payloads — are never
+/// held. Outside a phase nothing is held, so every other read is unchanged.
+pub(crate) fn within_observation_phase<T>(phase: impl FnOnce() -> T) -> T {
+    struct Restore(Option<ObservationPhase>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let outer = self.0.take();
+            OBSERVATION_PHASE.with(|held| {
+                held.replace(outer);
+            });
+        }
+    }
+    let _restore =
+        Restore(OBSERVATION_PHASE.with(|held| held.replace(Some(ObservationPhase::default()))));
+    phase()
+}
+
+fn phase_document(
+    root: &Path,
+    member: &str,
+    observe: impl FnOnce() -> io::Result<(Value, String)>,
+) -> io::Result<Rc<(Value, String)>> {
+    let key = (root.to_path_buf(), member.to_owned());
+    let held = OBSERVATION_PHASE.with(|held| {
+        held.borrow()
+            .as_ref()
+            .and_then(|phase| phase.documents.get(&key).cloned())
+    });
+    if let Some(held) = held {
+        return Ok(held);
+    }
+    let observed = Rc::new(observe()?);
+    OBSERVATION_PHASE.with(|held| {
+        if let Some(phase) = held.borrow_mut().as_mut() {
+            phase.documents.insert(key, Rc::clone(&observed));
+        }
+    });
+    Ok(observed)
+}
+
 fn metadata_document(root: &Path, member: &str) -> io::Result<(Value, String)> {
     let owner = ReadRoot::capture(root)?;
     let path = safe_member(&owner.canonical, member, false)?;
@@ -286,6 +351,25 @@ fn metadata_document(root: &Path, member: &str) -> io::Result<(Value, String)> {
     Ok((doc, content_revision_bytes(&bytes)))
 }
 fn observed_project_manifest(
+    root: &Path,
+) -> io::Result<(crate::projectcentral::ProjectCentralManifest, String)> {
+    let held = OBSERVATION_PHASE.with(|held| {
+        held.borrow()
+            .as_ref()
+            .and_then(|phase| phase.manifests.get(root).cloned())
+    });
+    if let Some(held) = held {
+        return Ok(held);
+    }
+    let observed = observe_project_manifest(root)?;
+    OBSERVATION_PHASE.with(|held| {
+        if let Some(phase) = held.borrow_mut().as_mut() {
+            phase.manifests.insert(root.to_path_buf(), observed.clone());
+        }
+    });
+    Ok(observed)
+}
+fn observe_project_manifest(
     root: &Path,
 ) -> io::Result<(crate::projectcentral::ProjectCentralManifest, String)> {
     let owner = ReadRoot::capture(root)?;
@@ -448,6 +532,15 @@ impl Scope {
         }
     }
     pub(crate) fn observed_document(&self) -> io::Result<(Value, String)> {
+        self.shared_document()
+            .map(|observed| (observed.0.clone(), observed.1.clone()))
+    }
+    /// The validated relations document, held for a batch phase.
+    fn shared_document(&self) -> io::Result<Rc<(Value, String)>> {
+        let (root, member) = (self.relations_root(), self.relations_path());
+        phase_document(root, member, || self.observe_document())
+    }
+    fn observe_document(&self) -> io::Result<(Value, String)> {
         let (doc, basis) = metadata_document(self.relations_root(), self.relations_path())?;
         if !doc.is_null() {
             let (schema, id) = if self.world == "control:root" {
@@ -479,7 +572,7 @@ impl Scope {
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
     pub fn basis(&self) -> io::Result<String> {
-        self.observed_document().map(|(_, basis)| basis)
+        self.shared_document().map(|observed| observed.1.clone())
     }
     pub fn save(&self, ground: &MapGround, mut doc: Value) -> io::Result<()> {
         if doc.is_null() {
@@ -805,11 +898,40 @@ impl BindingCandidate {
 /// Complete explicit/adopted/resource metadata stays independent of bulk
 /// fallback discovery. The selected native owner operation supplies semantics
 /// only for a member capable of matching this request.
-fn source_candidates(
-    scope: &Scope,
-    reference: Option<&str>,
-    location: Option<&Path>,
-) -> io::Result<Vec<BindingCandidate>> {
+/// One scope's declared Sources as unselected candidates, with what selection
+/// reads beside them: the relations document and its basis, the map ground
+/// and the Project manifest.
+pub(crate) struct ScopeDeclarations {
+    doc: Value,
+    basis: String,
+    ground: MapGround,
+    manifest: Option<crate::projectcentral::ProjectCentralManifest>,
+    /// Each declaration with its route; None where the route is malformed, so
+    /// selection re-derives the route's own error in declaration order.
+    declared: Vec<(BindingCandidate, Option<PathBuf>)>,
+}
+
+/// Observe a scope's declarations — held for a batch phase, fresh otherwise.
+fn scope_declarations(scope: &Scope) -> io::Result<Rc<ScopeDeclarations>> {
+    let key = (scope.world.clone(), scope.root.clone(), scope.state.clone());
+    let held = OBSERVATION_PHASE.with(|held| {
+        held.borrow()
+            .as_ref()
+            .and_then(|phase| phase.declarations.get(&key).cloned())
+    });
+    if let Some(held) = held {
+        return Ok(held);
+    }
+    let observed = Rc::new(observe_scope_declarations(scope)?);
+    OBSERVATION_PHASE.with(|held| {
+        if let Some(phase) = held.borrow_mut().as_mut() {
+            phase.declarations.insert(key, Rc::clone(&observed));
+        }
+    });
+    Ok(observed)
+}
+
+fn observe_scope_declarations(scope: &Scope) -> io::Result<ScopeDeclarations> {
     let (doc, basis) = scope
         .observed_document()
         .map_err(|error| read_failure(error, "unknown", "declaration_metadata", "unavailable"))?;
@@ -852,26 +974,43 @@ fn source_candidates(
         }
     }
     if let Some(rows) = doc["relations"].as_array() {
+        // Each declaration's SourceRefs by normal member key, so a relation
+        // row replaces whatever is declared at its path without re-keying
+        // every declaration per row (quadratic in the relations document).
+        let mut at_key: Option<BTreeMap<PathBuf, BTreeSet<String>>> = None;
         for row in rows {
             let mut value = row.clone();
             value["agent_retrieval_allowed"] = json!(true);
             let binding: SourceBinding = serde_json::from_value(value)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
             let key = crate::source_safety::normal_member_key(&binding.path)?;
-            let replaced = declarations
-                .iter()
-                .filter_map(|(reference, current)| {
-                    match crate::source_safety::normal_member_key(&current.path) {
-                        Ok(current) if current == key => Some(Ok(reference.clone())),
-                        Ok(_) => None,
-                        Err(error) => Some(Err(error)),
+            let at_key = match &mut at_key {
+                Some(at_key) => at_key,
+                None => {
+                    let mut keyed = BTreeMap::<PathBuf, BTreeSet<String>>::new();
+                    for (reference, current) in &declarations {
+                        keyed
+                            .entry(crate::source_safety::normal_member_key(&current.path)?)
+                            .or_default()
+                            .insert(reference.clone());
                     }
-                })
-                .collect::<io::Result<Vec<_>>>()?;
-            for reference in replaced {
+                    at_key.insert(keyed)
+                }
+            };
+            for reference in at_key.remove(&key).unwrap_or_default() {
                 declarations.remove(&reference);
             }
-            declarations.insert(binding.source_ref.clone(), binding);
+            let reference = binding.source_ref.clone();
+            if let Some(previous) = declarations.insert(reference.clone(), binding) {
+                let previous = crate::source_safety::normal_member_key(&previous.path)?;
+                if let Some(references) = at_key.get_mut(&previous) {
+                    references.remove(&reference);
+                    if references.is_empty() {
+                        at_key.remove(&previous);
+                    }
+                }
+            }
+            at_key.entry(key).or_default().insert(reference);
         }
     }
     for (reference, resource) in &ground.resources {
@@ -913,21 +1052,55 @@ fn source_candidates(
     if declarations.len() > MAX_ENTRIES {
         return Err(invalid("File map exceeds the 1000000-source bound"));
     }
+    let declared = declarations
+        .into_values()
+        .map(|source| {
+            let candidate = BindingCandidate {
+                scope: scope.clone(),
+                resource: ground.resources.get(&source.source_ref).cloned(),
+                source,
+                relation_revision: basis.clone(),
+                selection_metadata_basis: None,
+            };
+            let path = candidate.path().ok();
+            (candidate, path)
+        })
+        .collect();
+    Ok(ScopeDeclarations {
+        doc,
+        basis,
+        ground,
+        manifest,
+        declared,
+    })
+}
+
+fn source_candidates(
+    scope: &Scope,
+    reference: Option<&str>,
+    location: Option<&Path>,
+) -> io::Result<Vec<BindingCandidate>> {
+    let declarations = scope_declarations(scope)?;
+    let ScopeDeclarations {
+        doc,
+        basis,
+        ground,
+        manifest,
+        declared,
+    } = &*declarations;
     let mut selected = BTreeMap::<String, BindingCandidate>::new();
-    for source in declarations.into_values() {
-        let mut candidate = BindingCandidate {
-            scope: scope.clone(),
-            resource: ground.resources.get(&source.source_ref).cloned(),
-            source,
-            relation_revision: basis.clone(),
-            selection_metadata_basis: None,
+    for (declared, path) in declared {
+        // Every declared route must be well-formed.
+        let path = match path {
+            Some(path) => path.clone(),
+            None => declared.path()?,
         };
-        let path = candidate.path()?; // Every declared route must be well-formed.
-        if !reference.is_some_and(|reference| reference == candidate.source.source_ref)
+        if !reference.is_some_and(|reference| reference == declared.source.source_ref)
             && !location.is_some_and(|location| location == path.as_path())
         {
             continue;
         }
+        let mut candidate = declared.clone();
         if let Ok(member) = path.strip_prefix(&scope.root) {
             let member = member
                 .to_str()
@@ -1005,7 +1178,7 @@ fn source_candidates(
             }
         }
     }
-    if scope.basis()? != basis {
+    if scope.basis()? != *basis {
         return Err(conflict(
             "Source declarations changed during ownership observation",
         ));
