@@ -397,6 +397,14 @@ fn should_skip_dir(name: &str) -> bool {
     )
 }
 
+/// Files an operating system writes beside a person's own: never Source.
+/// macOS Finder leaves a binary `.DS_Store` in every folder it opens; on
+/// 18 Oct 2026 hybrid file-map search ranked `Control/user/.DS_Store` first
+/// for an unrelated query, and such files only fail admission as not text.
+fn is_system_artifact(name: &std::ffi::OsStr) -> bool {
+    name == ".DS_Store"
+}
+
 pub(crate) fn collect_files(
     root: &Path,
     world_root: &Path,
@@ -421,6 +429,7 @@ pub(crate) fn collect_files(
             }
         } else if file_type.is_file()
             && entry.file_name() != AGENT_RETRIEVAL_DENY_MARKER
+            && !is_system_artifact(&entry.file_name())
             && safe_regular_file(world_root, &path)?
         {
             files.push(path);
@@ -1448,6 +1457,20 @@ mod retrieval_tests {
     }
     impl Drop for Ground {
         fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
+    }
+
+    #[test]
+    fn a_finder_ds_store_is_never_collected_as_source() {
+        let ground = Ground::new();
+        let root = &ground.0;
+        let user = root.join("Control/user/notes");
+        fs::create_dir_all(&user).unwrap();
+        fs::write(user.join("source.md"), b"retained source").unwrap();
+        fs::write(user.join(".DS_Store"), b"\0\0\0\x01Bud1").unwrap();
+        fs::write(root.join("Control/user/.DS_Store"), b"\0\0\0\x01Bud1").unwrap();
+        let mut files = Vec::new();
+        collect_files(&root.join("Control/user"), root, 0, &mut files).unwrap();
+        assert_eq!(files, vec![user.join("source.md")]);
     }
 
     #[test]
