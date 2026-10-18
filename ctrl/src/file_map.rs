@@ -719,6 +719,9 @@ fn selected_metadata_basis(
 }
 
 pub fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
+    if op == "resolve-batch" {
+        return execute_resolve_batch(root, input);
+    }
     let read_root = if matches!(op, "resolve" | "locate") {
         Some(ReadRoot::capture(root)?)
     } else {
@@ -892,6 +895,204 @@ pub fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
         json!({"schema":SCHEMA,"operation":op,"result":data,"automatic_agent_or_model_invocation":false}),
     )
 }
+/// At most this many Sources are resolved by one batch.
+const MAX_BATCH_SOURCES: usize = 256;
+/// Serialized readings one batch answers before deferring the rest. A
+/// single Source is read eagerly up to 4 MiB, so a batch answers at most this
+/// plus one Source — inside a caller's capture (AIKit captures 16 MiB a
+/// stream). The first reading is always answered.
+const MAX_BATCH_BYTES: usize = 6 * 1024 * 1024;
+
+/// `resolve` for many Sources in one owner read. A search answers with up to
+/// a whole candidate pool, and each single `resolve` composes every
+/// participating scope twice and re-reads its Source: on 18 Oct 2026 AIKit
+/// admitted 177 hybrid hits for one root search through 177 `resolve`
+/// processes, 40 s. Here the World checks — participating scopes, read
+/// roots, ownership declarations — are made once for the batch, and each
+/// Source keeps its own: selected metadata retained, read, re-qualified and
+/// compared exactly as a single `resolve` does. A failure that belongs to one
+/// Source is that entry's refusal, in the codes `resolve` answers with; a
+/// World change refuses the batch. Entries answer in the order asked; past
+/// the byte budget the rest are `deferred`, unread, for the caller to ask
+/// again.
+fn execute_resolve_batch(root: &Path, input: &Value) -> io::Result<Value> {
+    if input.get("source_ref").is_some() {
+        return Err(invalid(
+            "resolve-batch takes source_refs; source_ref is a single resolve",
+        ));
+    }
+    let references = input["source_refs"]
+        .as_array()
+        .ok_or_else(|| invalid("source_refs must be a list of SourceRefs"))?;
+    if references.is_empty() || references.len() > MAX_BATCH_SOURCES {
+        return Err(invalid(format!(
+            "source_refs names 1 to {MAX_BATCH_SOURCES} Sources"
+        )));
+    }
+    let mut seen = BTreeSet::new();
+    let mut requests = Vec::with_capacity(references.len());
+    for reference in references {
+        let reference = reference
+            .as_str()
+            .ok_or_else(|| invalid("source_refs must be a list of SourceRefs"))?;
+        if !seen.insert(reference) {
+            return Err(invalid(format!("{reference} is named twice")));
+        }
+        let mut single = input.clone();
+        let fields = single
+            .as_object_mut()
+            .ok_or_else(|| invalid("resolve-batch input must be an object"))?;
+        fields.remove("source_refs");
+        fields.insert("source_ref".into(), json!(reference));
+        binding_only(&single)?;
+        requests.push((reference.to_owned(), single));
+    }
+
+    let read_root = ReadRoot::capture(root)?;
+    let root = root.canonicalize()?;
+    let all = scopes(&root)?;
+    selected(&all, input)?;
+    let read_roots = all
+        .iter()
+        .map(|scope| ReadRoot::capture(&scope.root))
+        .collect::<io::Result<Vec<_>>>()?;
+    let retained_bases = ownership_bases(&all)?;
+    read_root.validate()?;
+    for owner in &read_roots {
+        owner.validate()?;
+    }
+    if ownership_bases(&all)? != retained_bases {
+        return Err(conflict("Native declarations changed before selected read"));
+    }
+
+    enum Entry {
+        Read(Option<(String, String, Option<String>)>, Value),
+        Refused(io::Error),
+        Deferred,
+    }
+    let entries = within_observation_phase(|| -> io::Result<Vec<Entry>> {
+        let mut entries = Vec::with_capacity(requests.len());
+        let mut answered_bytes = 0usize;
+        for (_, single) in &requests {
+            if answered_bytes >= MAX_BATCH_BYTES {
+                entries.push(Entry::Deferred);
+                continue;
+            }
+            let read = selected_metadata_basis(&all, "resolve", single)
+                .and_then(|retained| Ok((retained, resolve(&all, single)?)));
+            entries.push(match read {
+                Ok((retained, data)) => {
+                    answered_bytes += serde_json::to_vec(&data)?.len();
+                    Entry::Read(retained, data)
+                }
+                Err(error) => Entry::Refused(error),
+            });
+        }
+        Ok(entries)
+    })?;
+
+    #[cfg(test)]
+    {
+        let checkpoint =
+            BEFORE_READ_ACKNOWLEDGEMENT.with(|checkpoint| checkpoint.borrow_mut().take());
+        if let Some(checkpoint) = checkpoint {
+            checkpoint();
+        }
+    }
+    read_root.validate()?;
+    for owner in &read_roots {
+        owner.validate()?;
+    }
+    let current = scopes(&root)?;
+    if current.len() != all.len()
+        || current.iter().zip(&all).any(|(current, retained)| {
+            current.world != retained.world
+                || current.root != retained.root
+                || current.project != retained.project
+        })
+    {
+        return Err(conflict("Participating owner scopes changed during read"));
+    }
+    if ownership_bases(&current)? != retained_bases {
+        return Err(conflict(
+            "Native ownership declarations changed before acknowledgement",
+        ));
+    }
+    let qualify = |single: &Value,
+                   retained: &Option<(String, String, Option<String>)>,
+                   data: &Value|
+     -> io::Result<()> {
+        if &selected_metadata_basis(&current, "resolve", single)? != retained {
+            return Err(conflict(
+                "Selected native metadata changed before acknowledgement",
+            ));
+        }
+        let qualified = resolve(&current, single)?;
+        if &selected_metadata_basis(&current, "resolve", single)? != retained {
+            return Err(conflict(
+                "Selected native metadata changed during final qualification",
+            ));
+        }
+        if &qualified != data {
+            return Err(conflict(
+                "Native read result changed before acknowledgement",
+            ));
+        }
+        Ok(())
+    };
+    let readings: Vec<Value> = within_observation_phase(|| {
+        requests
+            .iter()
+            .zip(entries)
+            .map(|((reference, single), entry)| match entry {
+                Entry::Read(retained, data) => match qualify(single, &retained, &data) {
+                    Ok(()) => json!({"source_ref": reference, "reading": data}),
+                    Err(error) => refusal(reference, &error),
+                },
+                Entry::Refused(error) => refusal(reference, &error),
+                Entry::Deferred => json!({"source_ref": reference, "deferred": true}),
+            })
+            .collect()
+    });
+    for owner in &read_roots {
+        owner.validate()?;
+    }
+    if ownership_bases(&current)? != retained_bases {
+        return Err(conflict(
+            "Native ownership declarations changed during final qualification",
+        ));
+    }
+    read_root.validate()?;
+    Ok(json!({
+        "schema": SCHEMA,
+        "operation": "resolve-batch",
+        "result": {"readings": readings},
+        "automatic_agent_or_model_invocation": false
+    }))
+}
+
+/// One Source's refusal inside a batch, in the code and details a single
+/// `resolve` refuses with.
+fn refusal(reference: &str, error: &io::Error) -> Value {
+    json!({
+        "source_ref": reference,
+        "refusal": {
+            "code": failure_code(error),
+            "message": error.to_string(),
+            "details": read_failure_details(error),
+        }
+    })
+}
+
+fn failure_code(error: &io::Error) -> &'static str {
+    match error.kind() {
+        io::ErrorKind::NotFound => "central.file_map_not_found",
+        io::ErrorKind::PermissionDenied => "central.file_map_denied",
+        io::ErrorKind::AlreadyExists => "central.file_map_conflict",
+        _ => "central.file_map_failure",
+    }
+}
+
 fn action(op: &str, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
     let id = format!("central.file-map.{op}");
     let result = crate::root::resolve_central_root(context.root_options)
@@ -906,14 +1107,9 @@ fn action(op: &str, input: &Value, context: &ActionExecutionContext<'_>) -> Acti
         Err(e) => ActionResult::failure_coded(
             Some(&id),
             ResultStatus::InvalidInput,
-            match e.kind() {
-                io::ErrorKind::NotFound => "central.file_map_not_found",
-                io::ErrorKind::PermissionDenied => "central.file_map_denied",
-                io::ErrorKind::AlreadyExists => "central.file_map_conflict",
-                _ => "central.file_map_failure",
-            },
+            failure_code(&e),
             e.to_string(),
-            if matches!(op, "resolve" | "locate") {
+            if matches!(op, "resolve" | "locate" | "resolve-batch") {
                 Some(read_failure_details(&e))
             } else {
                 None
@@ -935,6 +1131,7 @@ pub fn register(registry: &mut ActionRegistry) {
         "refresh",
         "search",
         "resolve",
+        "resolve-batch",
         "link",
         "move-plan",
         "move-apply",
@@ -958,6 +1155,7 @@ pub fn register(registry: &mut ActionRegistry) {
             "refresh" => |_, i, c| action("refresh", i, c),
             "search" => |_, i, c| action("search", i, c),
             "resolve" => |_, i, c| action("resolve", i, c),
+            "resolve-batch" => |_, i, c| action("resolve-batch", i, c),
             _ => |_, i, c| action("link", i, c),
         };
         let mut inputs: Vec<_> = [
@@ -1007,7 +1205,16 @@ pub fn register(registry: &mut ActionRegistry) {
             selection: None,
         })
         .collect();
-        if matches!(op, "resolve" | "locate") {
+        if op == "resolve-batch" {
+            inputs.push(ActionInputDefinition {
+                name: "source_refs".into(),
+                input_type: "array".into(),
+                required: true,
+                choices: None,
+                selection: None,
+            });
+        }
+        if matches!(op, "resolve" | "locate" | "resolve-batch") {
             inputs.push(ActionInputDefinition {
                 name: "binding_only".into(),
                 input_type: "boolean".into(),
@@ -1016,7 +1223,7 @@ pub fn register(registry: &mut ActionRegistry) {
                 selection: None,
             });
         }
-        registry.register(ActionDescriptor{id:format!("central.file-map.{op}"),title:format!("File map {op}"),description:"Persistent bkmr file map; source and placement meaning remain in Central. Reads never rebuild the owner's database or execute openers. Writes require current source-relations revision.".into(),inputs,output:ActionOutputDefinition{output_type:SCHEMA.into()},mutation_class:if matches!(op,"inspect"|"search"|"resolve"|"locate"|"projection-read"|"skill-tree"){MutationClass::ReadOnly}else{MutationClass::LocallyMutating},preview_supported:false,required_ports:vec![],availability:ActionAvailability{available:true,reason:None}},handler).expect("unique file map Action");
+        registry.register(ActionDescriptor{id:format!("central.file-map.{op}"),title:format!("File map {op}"),description:"Persistent bkmr file map; source and placement meaning remain in Central. Reads never rebuild the owner's database or execute openers. Writes require current source-relations revision.".into(),inputs,output:ActionOutputDefinition{output_type:SCHEMA.into()},mutation_class:if matches!(op,"inspect"|"search"|"resolve"|"resolve-batch"|"locate"|"projection-read"|"skill-tree"){MutationClass::ReadOnly}else{MutationClass::LocallyMutating},preview_supported:false,required_ports:vec![],availability:ActionAvailability{available:true,reason:None}},handler).expect("unique file map Action");
     }
 }
 
@@ -1090,6 +1297,136 @@ mod binding_read_tests {
                     panic!("{message}");
                 }
             }
+        }
+    }
+
+    impl Fixture {
+        /// Declare one more retained Source beside the fixture's note.
+        fn add_source(&self, name: &str, body: &[u8]) -> String {
+            let path = format!("Control/user/{name}");
+            fs::write(self.root.join(&path), body).unwrap();
+            let reference = format!("opaque:fixture:{name}");
+            let mut value: Value =
+                serde_json::from_slice(&fs::read(&self.relations).unwrap()).unwrap();
+            value["relations"].as_array_mut().unwrap().push(json!({
+                "ref":reference,"path":path,"roles":["agent-governance-source"],
+                "provenance":"unresolved","standing":"unspecified",
+                "treatment":"retain-native-in-place"
+            }));
+            fs::write(&self.relations, serde_json::to_vec(&value).unwrap()).unwrap();
+            reference
+        }
+    }
+
+    #[test]
+    fn a_batch_answers_each_source_as_its_single_resolve_does_in_the_order_asked() {
+        let fixture = Fixture::new();
+        let other = fixture.add_source("other.md", b"other body\n");
+        let batch = execute(
+            &fixture.root,
+            "resolve-batch",
+            &json!({"source_refs":[&other,"opaque:fixture:absent","opaque:fixture:note"],"content":true}),
+        )
+        .unwrap();
+        assert_eq!(batch["operation"], "resolve-batch");
+        let readings = batch["result"]["readings"].as_array().unwrap();
+        assert_eq!(readings.len(), 3);
+        for (index, reference) in [(0, other.as_str()), (2, "opaque:fixture:note")] {
+            let single = execute(
+                &fixture.root,
+                "resolve",
+                &json!({"source_ref":reference,"content":true}),
+            )
+            .unwrap();
+            assert_eq!(readings[index]["source_ref"], reference);
+            assert_eq!(readings[index]["reading"], single["result"]);
+        }
+        assert_eq!(readings[0]["reading"]["content"], "other body\n");
+        assert_eq!(readings[1]["source_ref"], "opaque:fixture:absent");
+        assert_eq!(readings[1]["refusal"]["code"], "central.file_map_not_found");
+        assert!(readings[1].get("reading").is_none());
+        assert_eq!(readings[2]["reading"]["content"], "retained actual body\n");
+    }
+
+    #[test]
+    fn a_source_changed_before_acknowledgement_refuses_only_its_own_entry() {
+        let fixture = Fixture::new();
+        let other = fixture.add_source("other.md", b"other body\n");
+        let source = fixture.source.clone();
+        fixture.checkpoint(move || fs::write(source, "changed actual body\n").unwrap());
+        let batch = execute(
+            &fixture.root,
+            "resolve-batch",
+            &json!({"source_refs":["opaque:fixture:note",&other],"content":true}),
+        )
+        .unwrap();
+        let readings = batch["result"]["readings"].as_array().unwrap();
+        assert_eq!(readings[0]["refusal"]["code"], "central.file_map_conflict");
+        assert!(readings[0].get("reading").is_none());
+        assert_eq!(readings[1]["reading"]["content"], "other body\n");
+    }
+
+    #[test]
+    fn a_world_change_before_acknowledgement_refuses_the_whole_batch() {
+        let fixture = Fixture::new();
+        let path = fixture.relations.clone();
+        fixture.checkpoint(move || {
+            let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            value["relations"][0]["standing"] = json!("changed-observed-standing");
+            fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
+        });
+        assert_eq!(
+            execute(
+                &fixture.root,
+                "resolve-batch",
+                &json!({"source_refs":["opaque:fixture:note"],"content":true}),
+            )
+            .unwrap_err()
+            .kind(),
+            io::ErrorKind::AlreadyExists
+        );
+    }
+
+    #[test]
+    fn a_batch_past_its_byte_budget_defers_the_rest_unread() {
+        let fixture = Fixture::new();
+        let half = vec![b'a'; MAX_BATCH_BYTES / 2 + 1];
+        let (first, second) = (
+            fixture.add_source("first.txt", &half),
+            fixture.add_source("second.txt", &half),
+        );
+        let batch = execute(
+            &fixture.root,
+            "resolve-batch",
+            &json!({"source_refs":[&first,&second,"opaque:fixture:note"],"content":true}),
+        )
+        .unwrap();
+        let readings = batch["result"]["readings"].as_array().unwrap();
+        assert!(readings[0]["reading"]["content"].is_string());
+        assert!(readings[1]["reading"]["content"].is_string());
+        assert_eq!(
+            readings[2],
+            json!({"source_ref":"opaque:fixture:note","deferred":true})
+        );
+    }
+
+    #[test]
+    fn a_batch_names_each_source_once_and_never_a_single_source_ref() {
+        let fixture = Fixture::new();
+        for input in [
+            json!({"source_refs":[]}),
+            json!({"source_refs":"opaque:fixture:note"}),
+            json!({"source_refs":["opaque:fixture:note","opaque:fixture:note"]}),
+            json!({"source_refs":["opaque:fixture:note"],"source_ref":"opaque:fixture:note"}),
+            json!({"source_refs":["opaque:fixture:note"],"binding_only":true,"content":true}),
+        ] {
+            assert_eq!(
+                execute(&fixture.root, "resolve-batch", &input)
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::InvalidInput,
+                "{input}"
+            );
         }
     }
 
