@@ -1205,6 +1205,21 @@ pub fn register(registry: &mut ActionRegistry) {
             selection: None,
         })
         .collect();
+        if op == "inspect" {
+            // Read by `inspect` but never declared, so they only worked because
+            // undeclared inputs pass through: `resources` asks for the Source
+            // roster, and `path_prefixes` (absolute paths) keeps the roster to
+            // the subtrees a consumer needs instead of the whole pooled world.
+            for (name, input_type) in [("resources", "boolean"), ("path_prefixes", "array")] {
+                inputs.push(ActionInputDefinition {
+                    name: name.into(),
+                    input_type: input_type.into(),
+                    required: false,
+                    choices: None,
+                    selection: None,
+                });
+            }
+        }
         if op == "resolve-batch" {
             inputs.push(ActionInputDefinition {
                 name: "source_refs".into(),
@@ -1588,6 +1603,28 @@ mod binding_read_tests {
         assert_eq!(fs::read(&fixture.source).unwrap(), before);
         assert_eq!(fs::metadata(&fixture.source).unwrap().ino(), inode);
         assert_eq!(fs::read(&fixture.relations).unwrap(), declaration);
+    }
+
+    #[test]
+    fn inspect_declares_the_inputs_it_reads() {
+        let mut registry = ActionRegistry::default();
+        register(&mut registry);
+        let inspect = registry.get("central.file-map.inspect").unwrap();
+        let declared = |name: &str| {
+            inspect
+                .inputs
+                .iter()
+                .find(|input| input.name == name)
+                .map(|input| (input.input_type.clone(), input.required))
+        };
+        assert_eq!(declared("resources"), Some(("boolean".into(), false)));
+        assert_eq!(declared("path_prefixes"), Some(("array".into(), false)));
+        // They belong to inspect alone.
+        let search = registry.get("central.file-map.search").unwrap();
+        assert!(search
+            .inputs
+            .iter()
+            .all(|input| input.name != "path_prefixes"));
     }
 
     #[test]
