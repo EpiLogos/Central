@@ -1106,7 +1106,7 @@ fn source_candidates(
                 .to_str()
                 .ok_or_else(|| invalid("Native source member is not UTF-8"))?;
             let (native, metadata_basis) =
-                selected_native_binding(scope, member, &doc, manifest.as_ref())?;
+                selected_native_binding(scope, member, doc, manifest.as_ref())?;
             if let Some(native) = native {
                 if native.source_ref != candidate.source.source_ref {
                     return Err(read_refusal(
@@ -1135,7 +1135,7 @@ fn source_candidates(
     if let Some(member) = nominated {
         if relative(&member).is_ok() {
             let (native, metadata_basis) =
-                selected_native_binding(scope, &member, &doc, manifest.as_ref())?;
+                selected_native_binding(scope, &member, doc, manifest.as_ref())?;
             let native = native.or_else(|| {
                 if !ground.content_pool.enabled
                     || ground
