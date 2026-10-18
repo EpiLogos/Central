@@ -1136,6 +1136,23 @@ fn source_candidates(
         if relative(&member).is_ok() {
             let (native, metadata_basis) =
                 selected_native_binding(scope, &member, doc, manifest.as_ref())?;
+            // NOW records are retrievable by placement: a member with the record
+            // shape of a NOW family resolves by its path-derived identity with no
+            // registration, exactly as `entries()` lists it.
+            let native = native.or_else(|| {
+                let normal = crate::source_safety::normal_member_key(&member).ok()?;
+                let path = normal.to_str()?;
+                let on_disk = scope.root.join(path);
+                (source_horizon::is_now_record_member(&scope.world, path)
+                    && fs::symlink_metadata(&on_disk).is_ok_and(|m| m.file_type().is_file()))
+                .then(|| {
+                    source_horizon::now_record_binding(
+                        &scope.world,
+                        path,
+                        source_horizon::retrieval_allowed(&scope.root, &on_disk),
+                    )
+                })
+            });
             let native = native.or_else(|| {
                 if !ground.content_pool.enabled
                     || ground
@@ -1453,6 +1470,12 @@ pub(crate) fn entries(scope: &Scope) -> io::Result<Vec<Entry>> {
         .into_iter()
         .map(|s| (s.source_ref.clone(), s))
         .collect();
+    // NOW records are retrievable by placement: live, shallow, scratch and
+    // evidence excluded, never part of the change horizon. A registered
+    // relation for the same path keeps its own identity.
+    for binding in source_horizon::now_record_bindings(&scope.root, &scope.world)? {
+        sources.entry(binding.source_ref.clone()).or_insert(binding);
+    }
     for (reference, resource) in &ground.resources {
         sources.entry(reference.clone()).or_insert(SourceBinding {
             source_ref: reference.clone(),
@@ -1479,6 +1502,31 @@ pub(crate) fn entries(scope: &Scope) -> io::Result<Vec<Entry>> {
             &mut sources,
         )?;
     }
+    finish_entries(scope, &ground, sources)
+}
+
+/// The NOW records of one scope as roster entries, computed from the filesystem
+/// right now. They change constantly, so they are never served from the
+/// refresh-time snapshot: a reader overlays these on whatever the snapshot holds.
+pub(crate) fn now_entries(scope: &Scope) -> io::Result<Vec<Entry>> {
+    let ground = scope.ground()?;
+    let sources = source_horizon::now_record_bindings(&scope.root, &scope.world)?
+        .into_iter()
+        .map(|binding| (binding.source_ref.clone(), binding))
+        .collect();
+    finish_entries(scope, &ground, sources)
+}
+
+/// True for an entry that is a live-only NOW record (never part of a snapshot).
+pub(crate) fn is_now_record_entry(entry: &Entry) -> bool {
+    entry.source.roles.iter().any(|role| role == "now-record")
+}
+
+fn finish_entries(
+    scope: &Scope,
+    ground: &MapGround,
+    sources: BTreeMap<String, SourceBinding>,
+) -> io::Result<Vec<Entry>> {
     if sources.len() > MAX_ENTRIES {
         return Err(invalid("File map exceeds the 1000000-source bound"));
     }
