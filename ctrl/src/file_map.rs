@@ -547,6 +547,19 @@ fn inspect(all: &[Scope], input: &Value) -> io::Result<Value> {
     } else {
         None
     };
+    let mut provider = json!({"available":available,"version":version.as_ref().ok().map(|v|v.trim()),
+        "tested_version":native::VERSION,"fulltext":available,"hybrid":hybrid,"semantic":hybrid,
+        "embedding_model":native::embedding_model(),
+        "reason":version.err().map(|e|e.to_string())});
+    // Opt-in: `semantic` says the embedder is configured, not that vectors exist.
+    // `embedding` reads what the selected scope's meaning index actually holds.
+    if input["embedding_coverage"] == true && backend.present() {
+        provider["embedding"] = match backend.embedding_coverage() {
+            Ok(coverage) => coverage.to_json(&native::embedding_model()),
+            Err(error) => json!({"model":native::embedding_model(),"state":"unknown",
+                "reason":error.to_string()}),
+        };
+    }
     Ok(
         json!({"native_record":native_record,"world_ref":scope.world,"revision":scope.basis()?,
         "scopes":all.iter().map(|s| {
@@ -554,10 +567,7 @@ fn inspect(all: &[Scope], input: &Value) -> io::Result<Value> {
             json!({"world_ref":s.world,"project":s.project,"path":s.root,"content_pool":pooled})
         }).collect::<Vec<_>>(),
         "resources":resources,"links":scope.ground()?.links,"database":backend.db(),
-        "provider":{"available":available,"version":version.as_ref().ok().map(|v|v.trim()),
-        "tested_version":native::VERSION,"fulltext":available,"hybrid":hybrid,"semantic":hybrid,
-        "embedding_model":native::embedding_model(),
-        "reason":version.err().map(|e|e.to_string())}}),
+        "provider":provider}),
     )
 }
 
@@ -1210,7 +1220,11 @@ pub fn register(registry: &mut ActionRegistry) {
             // undeclared inputs pass through: `resources` asks for the Source
             // roster, and `path_prefixes` (absolute paths) keeps the roster to
             // the subtrees a consumer needs instead of the whole pooled world.
-            for (name, input_type) in [("resources", "boolean"), ("path_prefixes", "array")] {
+            for (name, input_type) in [
+                ("resources", "boolean"),
+                ("path_prefixes", "array"),
+                ("embedding_coverage", "boolean"),
+            ] {
                 inputs.push(ActionInputDefinition {
                     name: name.into(),
                     input_type: input_type.into(),
@@ -1619,12 +1633,31 @@ mod binding_read_tests {
         };
         assert_eq!(declared("resources"), Some(("boolean".into(), false)));
         assert_eq!(declared("path_prefixes"), Some(("array".into(), false)));
+        assert_eq!(
+            declared("embedding_coverage"),
+            Some(("boolean".into(), false))
+        );
         // They belong to inspect alone.
         let search = registry.get("central.file-map.search").unwrap();
         assert!(search
             .inputs
             .iter()
             .all(|input| input.name != "path_prefixes"));
+    }
+
+    #[test]
+    fn embedding_coverage_is_read_only_when_asked_and_only_from_an_initialised_map() {
+        let fixture = Fixture::new();
+        let plain = execute(&fixture.root, "inspect", &json!({"resources":false})).unwrap();
+        assert!(plain["result"]["provider"].get("embedding").is_none());
+        // Asked, but no map is initialised here: nothing to read, nothing invented.
+        let asked = execute(
+            &fixture.root,
+            "inspect",
+            &json!({"resources":false,"embedding_coverage":true}),
+        )
+        .unwrap();
+        assert!(asked["result"]["provider"].get("embedding").is_none());
     }
 
     #[test]
