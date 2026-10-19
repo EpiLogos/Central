@@ -161,7 +161,14 @@ fn binding_only(input: &Value) -> io::Result<bool> {
     }
     Ok(selected)
 }
-fn read_admission(all: &[Scope], candidate: &BindingCandidate, input: &Value) -> io::Result<()> {
+/// `excluded` is the requesting World's exclusion set when the caller holds
+/// it for the read; None reads it for this Source, as a single resolve does.
+fn read_admission(
+    all: &[Scope],
+    candidate: &BindingCandidate,
+    input: &Value,
+    excluded: Option<&BTreeSet<String>>,
+) -> io::Result<()> {
     let scope = selected(all, input)?;
     if input["project"].is_string()
         && scope.world != candidate.scope.world
@@ -177,9 +184,12 @@ fn read_admission(all: &[Scope], candidate: &BindingCandidate, input: &Value) ->
             "withheld",
         ));
     }
-    if !context_allows(all, scope, &candidate.source.source_ref)
-        .map_err(|error| read_failure(error, "known", "context_admission", "unavailable"))?
-    {
+    let admitted = match excluded {
+        Some(excluded) => policy_allows(excluded, &candidate.source.source_ref),
+        None => context_allows(all, scope, &candidate.source.source_ref)
+            .map_err(|error| read_failure(error, "known", "context_admission", "unavailable"))?,
+    };
+    if !admitted {
         return Err(read_refusal(
             io::ErrorKind::PermissionDenied,
             "Source excluded by requesting World's effective source relations",
@@ -289,6 +299,18 @@ fn locate(all: &[Scope], input: &Value) -> io::Result<Value> {
     ))
 }
 pub(crate) fn resolve(all: &[Scope], input: &Value) -> io::Result<Value> {
+    resolve_within(all, input, None).map(|(_, value)| value)
+}
+/// The selected native metadata one read was taken under, as
+/// `selected_metadata_basis` names it: owning World, Source and selection basis.
+type SelectedBasis = Option<(String, String, Option<String>)>;
+/// `resolve` with the requesting World's exclusion set held by the caller. The
+/// selection basis is the one its first binding observed, before any read.
+fn resolve_within(
+    all: &[Scope],
+    input: &Value,
+    excluded: Option<&BTreeSet<String>>,
+) -> io::Result<(SelectedBasis, Value)> {
     let metadata_only = binding_only(input)?;
     let reference = text(input, "source_ref")?;
     let candidate = match binding_by_ref(all, reference)? {
@@ -299,7 +321,10 @@ pub(crate) fn resolve(all: &[Scope], input: &Value) -> io::Result<Value> {
                 return Err(conflict("Source ownership changed during observation"));
             }
             return if metadata_only {
-                Ok(json!({"ownership":"unregistered","binding_only":true,"source_ref":reference}))
+                Ok((
+                    None,
+                    json!({"ownership":"unregistered","binding_only":true,"source_ref":reference}),
+                ))
             } else {
                 Err(io::Error::new(
                     io::ErrorKind::NotFound,
@@ -308,7 +333,12 @@ pub(crate) fn resolve(all: &[Scope], input: &Value) -> io::Result<Value> {
             };
         }
     };
-    read_admission(all, &candidate, input)?;
+    let retained = (
+        candidate.scope.world.clone(),
+        candidate.source.source_ref.clone(),
+        candidate.selection_metadata_basis.clone(),
+    );
+    read_admission(all, &candidate, input, excluded)?;
     let mut entry = candidate.observe()?;
     let original_metadata = entry.clone();
     let mut value = if metadata_only {
@@ -402,7 +432,7 @@ pub(crate) fn resolve(all: &[Scope], input: &Value) -> io::Result<Value> {
             "unavailable",
         )
     })?;
-    read_admission(all, &current, input)?;
+    read_admission(all, &current, input, excluded)?;
     let mut observed = current.observe()?;
     if current.scope.world != candidate.scope.world
         || current.scope.root != candidate.scope.root
@@ -433,7 +463,7 @@ pub(crate) fn resolve(all: &[Scope], input: &Value) -> io::Result<Value> {
             return Err(conflict("Source binding changed during read"));
         }
     }
-    Ok(value)
+    Ok((Some(retained), value))
 }
 fn inspect(all: &[Scope], input: &Value) -> io::Result<Value> {
     let scope = selected(all, input)?;
@@ -984,11 +1014,13 @@ const MAX_BATCH_BYTES: usize = 6 * 1024 * 1024;
 /// participating scope twice and re-reads its Source: on 18 Oct 2026 AIKit
 /// admitted 177 hybrid hits for one root search through 177 `resolve`
 /// processes, 40 s. Here the World checks — participating scopes, read
-/// roots, ownership declarations — are made once for the batch, and each
+/// roots, ownership declarations, and the requesting World's exclusions — are
+/// made once for the batch, each checked again at acknowledgement, and each
 /// Source keeps its own: selected metadata retained, read, re-qualified and
-/// compared exactly as a single `resolve` does. A failure that belongs to one
-/// Source is that entry's refusal, in the codes `resolve` answers with; a
-/// World change refuses the batch. Entries answer in the order asked; past
+/// compared exactly as a single `resolve` does, its admission checked against
+/// the exclusion set. A failure that belongs to one Source is that entry's
+/// refusal, in the codes `resolve` answers with; a World change refuses the
+/// batch. Entries answer in the order asked; past
 /// the byte budget the rest are `deferred`, unread, for the caller to ask
 /// again.
 fn execute_resolve_batch(root: &Path, input: &Value) -> io::Result<Value> {
@@ -1040,6 +1072,10 @@ fn execute_resolve_batch(root: &Path, input: &Value) -> io::Result<Value> {
     if ownership_bases(&all)? != retained_bases {
         return Err(conflict("Native declarations changed before selected read"));
     }
+    // The requesting World's exclusions depend on no Source, so the batch reads
+    // them once, here, and once more at acknowledgement. Each Source still
+    // checks its own admission against the set.
+    let held_exclusions = context_exclusions(&all, selected(&all, input)?).ok();
 
     enum Entry {
         Read(Option<(String, String, Option<String>)>, Value),
@@ -1054,8 +1090,7 @@ fn execute_resolve_batch(root: &Path, input: &Value) -> io::Result<Value> {
                 entries.push(Entry::Deferred);
                 continue;
             }
-            let read = selected_metadata_basis(&all, "resolve", single)
-                .and_then(|retained| Ok((retained, resolve(&all, single)?)));
+            let read = resolve_within(&all, single, held_exclusions.as_ref());
             entries.push(match read {
                 Ok((retained, data)) => {
                     answered_bytes += serde_json::to_vec(&data)?.len();
@@ -1094,6 +1129,18 @@ fn execute_resolve_batch(root: &Path, input: &Value) -> io::Result<Value> {
             "Native ownership declarations changed before acknowledgement",
         ));
     }
+    // Acknowledged against the set the readings were admitted under. If the
+    // World changed between the two readings, the batch is refused; if either
+    // reading failed, each Source reads its own, so it is refused as a single
+    // resolve would refuse it.
+    let acknowledged_exclusions = match &held_exclusions {
+        Some(held) => match context_exclusions(&current, selected(&current, input)?) {
+            Ok(acknowledged) if acknowledged == *held => Some(held),
+            Ok(_) => return Err(conflict("World source relations changed during read")),
+            Err(_) => None,
+        },
+        None => None,
+    };
     let qualify = |single: &Value,
                    retained: &Option<(String, String, Option<String>)>,
                    data: &Value|
@@ -1103,7 +1150,7 @@ fn execute_resolve_batch(root: &Path, input: &Value) -> io::Result<Value> {
                 "Selected native metadata changed before acknowledgement",
             ));
         }
-        let qualified = resolve(&current, single)?;
+        let (_, qualified) = resolve_within(&current, single, acknowledged_exclusions)?;
         if &selected_metadata_basis(&current, "resolve", single)? != retained {
             return Err(conflict(
                 "Selected native metadata changed during final qualification",
@@ -1325,6 +1372,8 @@ pub fn register(registry: &mut ActionRegistry) {
 #[cfg(test)]
 mod binding_read_tests {
     use super::*;
+    use crate::agent_set_store::RelationRecordStore;
+    use crate::world::WORLD_RELATION_SCHEMA;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1411,6 +1460,63 @@ mod binding_read_tests {
             fs::write(&self.relations, serde_json::to_vec(&value).unwrap()).unwrap();
             reference
         }
+
+        /// Project `alpha` beside the ground, with a kept and an excluded Source
+        /// in its human aperture. The ground's World declares the excluded one;
+        /// the Project's World excludes it when `exclude` is set.
+        fn project_alpha(&self, exclude: bool) -> (PathBuf, String, String) {
+            let project = self.root.join("Work/alpha");
+            fs::create_dir_all(project.join("ProjectCentral/user")).unwrap();
+            fs::write(project.join("ProjectCentral/project.json"), serde_json::to_vec(&json!({
+                "schema":"central.project/v1","project_id":"alpha","human_source":"ProjectCentral/user",
+                "wiki":{"profile":"okf-wiki/v1","source":"ProjectCentral/agents/wiki/wiki.json"}
+            })).unwrap()).unwrap();
+            fs::write(
+                project.join("ProjectCentral/user/kept.md"),
+                b"kept project body\n",
+            )
+            .unwrap();
+            fs::write(
+                project.join("ProjectCentral/user/excluded.md"),
+                b"excluded project body\n",
+            )
+            .unwrap();
+            let bindings = source_horizon::project_source_bindings(&project).unwrap();
+            let reference = |path: &str| {
+                bindings
+                    .iter()
+                    .find(|binding| binding.path == path)
+                    .unwrap()
+                    .source_ref
+                    .clone()
+            };
+            let (kept, excluded) = (
+                reference("ProjectCentral/user/kept.md"),
+                reference("ProjectCentral/user/excluded.md"),
+            );
+            RelationRecordStore::worlds_at_root(&self.root)
+                .save(
+                    &json!({"schema":WORLD_RELATION_SCHEMA,"ref":"control:root","revision":"r1","parent":null,
+                        "sources":[{"ref":excluded,"revision":"e1","authority":"human-authored","treatment":"canonical"}]}),
+                    None,
+                )
+                .unwrap();
+            if exclude {
+                project_world_excluding(&project, &excluded);
+            }
+            (project, kept, excluded)
+        }
+    }
+
+    /// The Project World `alpha`, a child of the ground, excluding one Source.
+    fn project_world_excluding(project: &Path, excluded: &str) {
+        RelationRecordStore::worlds_in_project(project)
+            .save(
+                &json!({"schema":WORLD_RELATION_SCHEMA,"ref":"project:alpha","revision":"p1","parent":"control:root",
+                    "sources":[],"excluded_sources":[excluded]}),
+                None,
+            )
+            .unwrap();
     }
 
     #[test]
@@ -1523,6 +1629,182 @@ mod binding_read_tests {
                 "{input}"
             );
         }
+    }
+
+    #[test]
+    fn a_source_the_requesting_world_excludes_is_refused_as_a_single_resolve_refuses_it() {
+        let fixture = Fixture::new();
+        let (_, kept, excluded) = fixture.project_alpha(true);
+        let batch = execute(
+            &fixture.root,
+            "resolve-batch",
+            &json!({"project":"alpha","source_refs":[&excluded,&kept],"content":true}),
+        )
+        .unwrap();
+        let readings = batch["result"]["readings"].as_array().unwrap();
+        let single = execute(
+            &fixture.root,
+            "resolve",
+            &json!({"project":"alpha","source_ref":excluded,"content":true}),
+        )
+        .unwrap_err();
+        assert_eq!(single.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(readings[0]["refusal"]["code"], "central.file_map_denied");
+        assert_eq!(
+            readings[0]["refusal"]["details"],
+            read_failure_details(&single)
+        );
+        assert!(readings[0].get("reading").is_none());
+        assert_eq!(readings[1]["reading"]["content"], "kept project body\n");
+    }
+
+    #[test]
+    fn a_world_exclusion_change_before_acknowledgement_refuses_the_whole_batch() {
+        let fixture = Fixture::new();
+        let (project, kept, excluded) = fixture.project_alpha(false);
+        let excluded_at_checkpoint = excluded.clone();
+        fixture.checkpoint(move || project_world_excluding(&project, &excluded_at_checkpoint));
+        assert_eq!(
+            execute(
+                &fixture.root,
+                "resolve-batch",
+                &json!({"project":"alpha","source_refs":[&kept,&excluded],"content":true}),
+            )
+            .unwrap_err()
+            .kind(),
+            io::ErrorKind::AlreadyExists
+        );
+    }
+
+    #[test]
+    fn an_unreadable_world_record_refuses_each_source_as_a_single_resolve_does() {
+        let fixture = Fixture::new();
+        let (project, kept, _) = fixture.project_alpha(false);
+        let store = RelationRecordStore::worlds_in_project(&project);
+        fs::create_dir_all(store.source_dir()).unwrap();
+        fs::write(
+            store.source_path("project:alpha").unwrap(),
+            b"{ not a world record",
+        )
+        .unwrap();
+        let single = execute(
+            &fixture.root,
+            "resolve",
+            &json!({"project":"alpha","source_ref":kept,"content":true}),
+        )
+        .unwrap_err();
+        let batch = execute(
+            &fixture.root,
+            "resolve-batch",
+            &json!({"project":"alpha","source_refs":[&kept],"content":true}),
+        )
+        .unwrap();
+        let refusal = &batch["result"]["readings"][0]["refusal"];
+        assert_eq!(refusal["code"], failure_code(&single));
+        assert_eq!(refusal["details"], read_failure_details(&single));
+        assert!(batch["result"]["readings"][0].get("reading").is_none());
+    }
+
+    #[test]
+    fn a_selected_skill_whose_metadata_changes_before_acknowledgement_refuses_only_its_entry() {
+        let fixture = Fixture::new();
+        let skill = fixture.root.join("Control/user/skills/actual");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(skill.join("SKILL.md"), b"actual selected Skill body").unwrap();
+        let metadata = skill.join("skill.json");
+        fs::write(
+            &metadata,
+            serde_json::to_vec(&json!({"schema":"central.skill/v1","name":"actual",
+                "scope":"control-user","standing":"active","provenance":"human-authored",
+                "retained":{"value":"before"}}))
+            .unwrap(),
+        )
+        .unwrap();
+        let reference =
+            source_horizon::source_ref("control:root", "Control/user/skills/actual/SKILL.md");
+        fixture.checkpoint(move || {
+            let mut doc: Value = serde_json::from_slice(&fs::read(&metadata).unwrap()).unwrap();
+            doc["retained"]["value"] = json!("after");
+            fs::write(&metadata, serde_json::to_vec(&doc).unwrap()).unwrap();
+        });
+        let batch = execute(
+            &fixture.root,
+            "resolve-batch",
+            &json!({"source_refs":[&reference,"opaque:fixture:note"],"content":true}),
+        )
+        .unwrap();
+        let readings = batch["result"]["readings"].as_array().unwrap();
+        assert_eq!(readings[0]["refusal"]["code"], "central.file_map_conflict");
+        assert!(readings[0].get("reading").is_none());
+        assert_eq!(readings[1]["reading"]["content"], "retained actual body\n");
+    }
+
+    #[test]
+    fn an_unchanged_selected_skill_reads_in_a_batch_as_its_single_resolve_does() {
+        let fixture = Fixture::new();
+        let skill = fixture.root.join("Control/user/skills/actual");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(skill.join("SKILL.md"), b"actual selected Skill body").unwrap();
+        fs::write(
+            skill.join("skill.json"),
+            serde_json::to_vec(&json!({"schema":"central.skill/v1","name":"actual",
+                "scope":"control-user","standing":"active","provenance":"human-authored"}))
+            .unwrap(),
+        )
+        .unwrap();
+        let reference =
+            source_horizon::source_ref("control:root", "Control/user/skills/actual/SKILL.md");
+        let single = execute(
+            &fixture.root,
+            "resolve",
+            &json!({"source_ref":reference,"content":true}),
+        )
+        .unwrap();
+        let batch = execute(
+            &fixture.root,
+            "resolve-batch",
+            &json!({"source_refs":[&reference],"content":true}),
+        )
+        .unwrap();
+        assert_eq!(batch["result"]["readings"][0]["reading"], single["result"]);
+        assert_eq!(
+            batch["result"]["readings"][0]["reading"]["content"],
+            "actual selected Skill body"
+        );
+    }
+
+    #[test]
+    fn a_batch_binds_a_declared_skill_by_its_declaration_not_its_fallback_manifest() {
+        let fixture = Fixture::new();
+        let skill = fixture.root.join("Control/user/skills/selected");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(
+            skill.join("SKILL.md"),
+            b"retained selected native Source body",
+        )
+        .unwrap();
+        fs::write(
+            skill.join("skill.json"),
+            b"actual malformed unoverridden Skill metadata",
+        )
+        .unwrap();
+        let mut doc: Value =
+            serde_json::from_slice(&fs::read(&fixture.relations).unwrap()).unwrap();
+        doc["relations"][0]["path"] = json!("Control/user/skills/selected/SKILL.md");
+        fs::write(&fixture.relations, serde_json::to_vec(&doc).unwrap()).unwrap();
+        let single = execute(&fixture.root, "resolve", &fixture.request(true)).unwrap();
+        let batch = execute(
+            &fixture.root,
+            "resolve-batch",
+            &json!({"source_refs":["opaque:fixture:note"],"binding_only":true}),
+        )
+        .unwrap();
+        let reading = &batch["result"]["readings"][0]["reading"];
+        assert_eq!(reading, &single["result"]);
+        assert_eq!(
+            reading["source"]["roles"],
+            json!(["agent-governance-source"])
+        );
     }
 
     #[test]

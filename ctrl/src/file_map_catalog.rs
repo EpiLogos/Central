@@ -904,6 +904,35 @@ pub(crate) struct ScopeDeclarations {
     /// Each declaration with its route; None where the route is malformed, so
     /// selection re-derives the route's own error in declaration order.
     declared: Vec<(BindingCandidate, Option<PathBuf>)>,
+    /// `doc` parsed on first selection and kept with the observation, so each
+    /// Source of a held phase binds against one parse of the same document.
+    parsed: std::cell::OnceCell<Option<source_horizon::ParsedRelations>>,
+}
+
+impl ScopeDeclarations {
+    /// The observed relations document, parsed as its scope's grammar requires.
+    fn parsed_relations(&self) -> io::Result<Option<&source_horizon::ParsedRelations>> {
+        if self.parsed.get().is_none() {
+            let parsed = if self.doc.is_null() {
+                None
+            } else if let Some(manifest) = &self.manifest {
+                Some(source_horizon::parse_declared_relations(
+                    &self.doc,
+                    source_horizon::GROUND_RELATIONS_SCHEMA,
+                    &manifest.project_id,
+                )?)
+            } else {
+                Some(source_horizon::parse_declared_relations(
+                    &self.doc,
+                    source_horizon::CONTROL_GROUND_RELATIONS_SCHEMA,
+                    source_horizon::CONTROL_WORLD_REF,
+                )?)
+            };
+            // Only this call fills the cell, and only once: the check above holds.
+            let _ = self.parsed.set(parsed);
+        }
+        Ok(self.parsed.get().and_then(Option::as_ref))
+    }
 }
 
 /// Observe a scope's declarations — held for a batch phase, fresh otherwise.
@@ -1067,6 +1096,7 @@ fn observe_scope_declarations(scope: &Scope) -> io::Result<ScopeDeclarations> {
         ground,
         manifest,
         declared,
+        parsed: std::cell::OnceCell::new(),
     })
 }
 
@@ -1077,11 +1107,10 @@ fn source_candidates(
 ) -> io::Result<Vec<BindingCandidate>> {
     let declarations = scope_declarations(scope)?;
     let ScopeDeclarations {
-        doc,
         basis,
         ground,
-        manifest,
         declared,
+        ..
     } = &*declarations;
     let mut selected = BTreeMap::<String, BindingCandidate>::new();
     for (declared, path) in declared {
@@ -1100,8 +1129,7 @@ fn source_candidates(
             let member = member
                 .to_str()
                 .ok_or_else(|| invalid("Native source member is not UTF-8"))?;
-            let (native, metadata_basis) =
-                selected_native_binding(scope, member, doc, manifest.as_ref())?;
+            let (native, metadata_basis) = selected_native_binding(scope, member, &declarations)?;
             if let Some(native) = native {
                 if native.source_ref != candidate.source.source_ref {
                     return Err(read_refusal(
@@ -1129,8 +1157,7 @@ fn source_candidates(
     };
     if let Some(member) = nominated {
         if relative(&member).is_ok() {
-            let (native, metadata_basis) =
-                selected_native_binding(scope, &member, doc, manifest.as_ref())?;
+            let (native, metadata_basis) = selected_native_binding(scope, &member, &declarations)?;
             // NOW records are retrievable by placement: a member with the record
             // shape of a NOW family resolves by its path-derived identity with no
             // registration, exactly as `entries()` lists it.
@@ -1212,24 +1239,17 @@ fn nominated_member(scope: &Scope, reference: &str) -> Option<String> {
 fn selected_native_binding(
     scope: &Scope,
     member: &str,
-    doc: &Value,
-    manifest: Option<&crate::projectcentral::ProjectCentralManifest>,
+    declarations: &ScopeDeclarations,
 ) -> io::Result<(Option<SourceBinding>, Option<String>)> {
-    let member = crate::source_safety::normal_member_key(member)?;
-    let member = member
+    let member_key = crate::source_safety::normal_member_key(member)?;
+    let member = member_key
         .to_str()
         .ok_or_else(|| invalid("Native member is not UTF-8"))?;
-    let explicitly_bound = doc["relations"].as_array().is_some_and(|rows| {
-        rows.iter().any(|row| {
-            row["path"].as_str().is_some_and(|path| {
-                crate::source_safety::normal_member_key(path)
-                    .is_ok_and(|key| key == Path::new(member))
-            })
-        })
-    });
+    let relations = declarations.parsed_relations()?;
+    let explicitly_bound = relations.is_some_and(|relations| relations.declares(&member_key));
     let skill_path = if explicitly_bound {
         None
-    } else if let Some(manifest) = manifest {
+    } else if let Some(manifest) = &declarations.manifest {
         crate::control_skills::project_skill_manifest_path(&manifest.human_source, member)?
     } else {
         crate::control_skills::control_skill_manifest_path(member)?
@@ -1261,9 +1281,8 @@ fn selected_native_binding(
     } else {
         None
     };
-    let relations = (!doc.is_null()).then_some(doc);
-    let source = if let Some(manifest) = manifest {
-        source_horizon::project_binding_for_observed_path(
+    let source = if let Some(manifest) = &declarations.manifest {
+        source_horizon::project_binding_for_parsed_path(
             manifest,
             member,
             relations,
@@ -1271,7 +1290,7 @@ fn selected_native_binding(
             true,
         )?
     } else {
-        source_horizon::control_binding_for_observed_path(member, relations, skill.as_ref(), true)?
+        source_horizon::control_binding_for_parsed_path(member, relations, skill.as_ref(), true)?
     };
     Ok((source, selection_basis))
 }

@@ -219,6 +219,53 @@ struct GroundRelation {
     treatment: String,
 }
 
+/// A validated relations document, indexed by member, for a caller that
+/// resolves many Sources against the same observed declaration. Validation
+/// rejects duplicate refs and paths, so each member names at most one row.
+#[derive(Debug, Clone)]
+pub(crate) struct ParsedRelations {
+    file: GroundRelationsFile,
+    by_member: BTreeMap<PathBuf, usize>,
+}
+
+impl ParsedRelations {
+    fn new(file: GroundRelationsFile) -> io::Result<Self> {
+        let by_member = file
+            .relations
+            .iter()
+            .enumerate()
+            .map(|(index, relation)| {
+                Ok((
+                    crate::source_safety::normal_member_key(&relation.path)?,
+                    index,
+                ))
+            })
+            .collect::<io::Result<_>>()?;
+        Ok(Self { file, by_member })
+    }
+
+    /// Whether an accepted relation declares this normal member.
+    pub(crate) fn declares(&self, member_key: &Path) -> bool {
+        self.by_member.contains_key(member_key)
+    }
+
+    fn relation(&self, member_key: &Path) -> Option<&GroundRelation> {
+        self.by_member
+            .get(member_key)
+            .map(|&index| &self.file.relations[index])
+    }
+}
+
+/// The same validation as `validate_relations_value`, kept for reuse: a
+/// batch parses each observed document once instead of once per Source.
+pub(crate) fn parse_declared_relations(
+    value: &Value,
+    schema: &str,
+    expected_id: &str,
+) -> io::Result<ParsedRelations> {
+    ParsedRelations::new(parse_relations_value(value, schema, expected_id)?)
+}
+
 fn unix_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -881,15 +928,33 @@ pub(crate) fn project_binding_for_observed_path(
     relations: Option<&Value>, skill_manifest: Option<&crate::control_skills::SkillManifest>,
     agent_retrieval_allowed: bool,
 ) -> io::Result<Option<SourceBinding>> {
+    let declared = relations
+        .map(|value| parse_declared_relations(value, GROUND_RELATIONS_SCHEMA, &manifest.project_id))
+        .transpose()?;
+    project_binding_for_parsed_path(
+        manifest,
+        path,
+        declared.as_ref(),
+        skill_manifest,
+        agent_retrieval_allowed,
+    )
+}
+
+/// `project_binding_for_observed_path` over a declaration the caller parsed once.
+pub(crate) fn project_binding_for_parsed_path(
+    manifest: &crate::projectcentral::ProjectCentralManifest,
+    path: &str,
+    declared: Option<&ParsedRelations>,
+    skill_manifest: Option<&crate::control_skills::SkillManifest>,
+    agent_retrieval_allowed: bool,
+) -> io::Result<Option<SourceBinding>> {
     let validation = manifest.validate();
     if !validation.valid { return Err(io::Error::new(io::ErrorKind::InvalidData, validation.errors.join("; "))); }
     let member = crate::source_safety::normal_member_key(path)?;
-    let declared = relations.map(|value| parse_relations_value(value, GROUND_RELATIONS_SCHEMA, &manifest.project_id)).transpose()?;
-    for relation in declared.into_iter().flat_map(|file| file.relations) {
-        if crate::source_safety::normal_member_key(&relation.path)? != member { continue; }
-        return Ok(Some(SourceBinding { source_ref:relation.source_ref, path:relation.path,
-            roles:relation.roles, provenance:relation.provenance, standing:relation.standing,
-            treatment:relation.treatment, agent_retrieval_allowed }));
+    if let Some(relation) = declared.and_then(|declared| declared.relation(&member)) {
+        return Ok(Some(SourceBinding { source_ref:relation.source_ref.clone(), path:relation.path.clone(),
+            roles:relation.roles.clone(), provenance:relation.provenance.clone(), standing:relation.standing.clone(),
+            treatment:relation.treatment.clone(), agent_retrieval_allowed }));
     }
     let world = format!("project:{}", manifest.project_id);
     if let Some(binding) = crate::control_skills::project_skill_binding(&world, &manifest.human_source,
