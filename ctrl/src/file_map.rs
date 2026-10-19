@@ -732,6 +732,9 @@ pub fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
     if op == "resolve-batch" {
         return execute_resolve_batch(root, input);
     }
+    if op == "refresh" && input["federated"] == true && input["project"].is_null() {
+        return refresh_world(root, input);
+    }
     let read_root = if matches!(op, "resolve" | "locate") {
         Some(ReadRoot::capture(root)?)
     } else {
@@ -905,6 +908,69 @@ pub fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
         json!({"schema":SCHEMA,"operation":op,"result":data,"automatic_agent_or_model_invocation":false}),
     )
 }
+/// `refresh` for every participating scope: the world's upkeep as one call.
+/// Each scope is refreshed by the same locked, validated `refresh` a single
+/// scope gets, so one that cannot refresh (a bkmr row edited by hand, a
+/// vanished external root) is reported in its own entry and the others still
+/// are. Central knows its scopes, including the external ones no `central.world`
+/// listing names, so a caller never has to enumerate or spell them.
+fn refresh_world(root: &Path, input: &Value) -> io::Result<Value> {
+    let all = scopes(&root.canonicalize()?)?;
+    let embeddings = input["embeddings"] == true;
+    let reports = refresh_each(&all, |scope| {
+        execute(
+            root,
+            "refresh",
+            &json!({"project": scope.world, "embeddings": embeddings}),
+        )
+        .map(|done| done["result"].clone())
+    });
+    let failed = reports.iter().filter(|report| report["ok"] != true).count();
+    Ok(json!({
+        "schema": SCHEMA,
+        "operation": "refresh",
+        "result": {
+            "federated": true,
+            "scopes": reports,
+            "refreshed": reports.len() - failed,
+            "failed": failed,
+        },
+        "automatic_agent_or_model_invocation": false,
+    }))
+}
+
+/// One report per scope, in scope order, whatever each refresh answers.
+fn refresh_each(
+    all: &[Scope],
+    mut refresh_one: impl FnMut(&Scope) -> io::Result<Value>,
+) -> Vec<Value> {
+    all.iter()
+        .map(|scope| {
+            let began = std::time::Instant::now();
+            let outcome = refresh_one(scope);
+            let seconds = (began.elapsed().as_secs_f64() * 10.0).round() / 10.0;
+            match outcome {
+                Ok(done) => json!({
+                    "world_ref": scope.world,
+                    "project": scope.project,
+                    "ok": true,
+                    "entries": done["entries"],
+                    "changes": done["changes"].as_array().map_or(0, Vec::len),
+                    "diagnostics": done["diagnostics"],
+                    "seconds": seconds,
+                }),
+                Err(error) => json!({
+                    "world_ref": scope.world,
+                    "project": scope.project,
+                    "ok": false,
+                    "error": error.to_string(),
+                    "seconds": seconds,
+                }),
+            }
+        })
+        .collect()
+}
+
 /// At most this many Sources are resolved by one batch.
 const MAX_BATCH_SOURCES: usize = 256;
 /// Serialized readings one batch answers before deferring the rest. A
@@ -1690,6 +1756,93 @@ mod binding_read_tests {
             })
             .count();
         assert_eq!(pooled["result"]["pooled_sources"], json!(pooled_in_roster));
+    }
+
+    #[test]
+    fn a_world_refresh_reports_every_scope_and_one_failure_stops_none() {
+        let fixture = Fixture::new();
+        let all = scopes(&fixture.root.canonicalize().unwrap()).unwrap();
+        assert!(!all.is_empty());
+        // A second scope makes the order and the independence observable.
+        let mut two = all.clone();
+        let mut other = all[0].clone();
+        other.world = "project:Other".into();
+        other.project = Some("Other".into());
+        two.push(other);
+        let mut asked = Vec::new();
+        let reports = refresh_each(&two, |scope| {
+            asked.push(scope.world.clone());
+            if scope.world == "project:Other" {
+                Err(io::Error::other(
+                    "Managed indexed description was edited in bkmr",
+                ))
+            } else {
+                Ok(json!({"entries": 3, "changes": ["added:a", "added:b"], "diagnostics": []}))
+            }
+        });
+        assert_eq!(
+            asked,
+            vec![all[0].world.clone(), "project:Other".to_owned()]
+        );
+        assert_eq!(reports[0]["ok"], true);
+        assert_eq!(reports[0]["entries"], 3);
+        assert_eq!(reports[0]["changes"], 2);
+        assert_eq!(reports[1]["ok"], false);
+        assert_eq!(
+            reports[1]["error"],
+            "Managed indexed description was edited in bkmr"
+        );
+        assert_eq!(reports[1]["project"], "Other");
+    }
+
+    /// The whole call against the real bkmr (`CENTRAL_FILE_MAP_BKMR_CONFORMANCE=real`;
+    /// CI runners carry no bkmr): every scope of the disposable root is
+    /// refreshed by one `federated` call, and a second call changes nothing.
+    #[test]
+    fn a_federated_refresh_initialises_the_world_and_a_second_one_is_quiet() {
+        if std::env::var("CENTRAL_FILE_MAP_BKMR_CONFORMANCE").as_deref() != Ok("real") {
+            eprintln!("set CENTRAL_FILE_MAP_BKMR_CONFORMANCE=real to run the real-bkmr regression");
+            return;
+        }
+        let fixture = Fixture::new();
+        let first = execute(
+            &fixture.root,
+            "refresh",
+            &json!({"federated": true, "embeddings": false}),
+        )
+        .unwrap();
+        let result = &first["result"];
+        assert_eq!(result["federated"], true, "{first}");
+        assert_eq!(result["failed"], 0, "{first}");
+        let scopes = result["scopes"].as_array().unwrap();
+        assert!(!scopes.is_empty());
+        assert!(scopes.iter().all(|scope| scope["ok"] == true), "{first}");
+        assert!(scopes[0]["entries"].as_u64().unwrap() > 0, "{first}");
+        let second = execute(
+            &fixture.root,
+            "refresh",
+            &json!({"federated": true, "embeddings": false}),
+        )
+        .unwrap();
+        for scope in second["result"]["scopes"].as_array().unwrap() {
+            assert_eq!(scope["changes"], 0, "{second}");
+        }
+    }
+
+    #[test]
+    fn a_world_refresh_is_asked_for_by_federated_without_a_project() {
+        let mut registry = ActionRegistry::default();
+        register(&mut registry);
+        let refresh = registry.get("central.file-map.refresh").unwrap();
+        for name in ["federated", "embeddings"] {
+            assert!(
+                refresh
+                    .inputs
+                    .iter()
+                    .any(|input| input.name == name && input.input_type == "boolean"),
+                "{name} is a declared input of refresh"
+            );
+        }
     }
 
     #[test]
