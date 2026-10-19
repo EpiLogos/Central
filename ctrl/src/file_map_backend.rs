@@ -1,5 +1,5 @@
 //! bkmr's CLI, not a second search engine. Every invocation selects one DB.
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::os::unix::{fs::PermissionsExt, process::CommandExt};
 use std::{
     fs, io,
@@ -25,6 +25,107 @@ pub(crate) fn embedding_model() -> String {
         .ok()
         .filter(|model| !model.trim().is_empty())
         .unwrap_or_else(|| "BGESmallENV15".into())
+}
+
+/// A scope's meaning-index coverage as `bkmr info` reports it. Every field is
+/// what bkmr said; one it did not say is `None`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct EmbeddingCoverage {
+    /// Dimensions of the configured embedder.
+    pub dimensions: Option<u64>,
+    /// Dimensions the vector table was created with.
+    pub vector_dimensions: Option<u64>,
+    /// Rows in the vector table.
+    pub vectors: Option<u64>,
+    /// Bookmarks bkmr counts as embedded, of those it counts as embeddable.
+    pub embedded: Option<u64>,
+    pub embeddable: Option<u64>,
+}
+
+impl EmbeddingCoverage {
+    /// `ready` (every embeddable row has a vector), `partial`, `empty` (no vectors
+    /// at all), `mismatched` (the vector table is not the embedder's size, so no
+    /// query vector can match it), `nothing-to-embed`, or `unknown` (bkmr did not
+    /// say enough).
+    pub fn state(&self) -> &'static str {
+        if let (Some(embedder), Some(table)) = (self.dimensions, self.vector_dimensions) {
+            if embedder != table {
+                return "mismatched";
+            }
+        }
+        let (Some(embedded), Some(embeddable)) = (self.embedded, self.embeddable) else {
+            return "unknown";
+        };
+        if embeddable == 0 {
+            return "nothing-to-embed";
+        }
+        let vectors = self.vectors.unwrap_or(embedded);
+        if vectors == 0 {
+            "empty"
+        } else if embedded >= embeddable && vectors >= embeddable {
+            "ready"
+        } else {
+            "partial"
+        }
+    }
+    pub fn to_json(&self, model: &str) -> Value {
+        json!({"model":model,"dimensions":self.dimensions,"vector_dimensions":self.vector_dimensions,
+            "vectors":self.vectors,"embedded":self.embedded,"embeddable":self.embeddable,
+            "state":self.state()})
+    }
+}
+
+/// Read the coverage lines of `bkmr info` (ANSI escapes ignored):
+/// `Embedder: Embeddings enabled (dimensions: 384)`,
+/// `Embedded: 453 of 453 embeddable bookmarks` and
+/// `Vector table: vec_bookmarks (384 dims, 453 rows)` (`(empty)` for a table
+/// with no rows, which then names no dimensions).
+pub(crate) fn parse_embedding_coverage(info: &str) -> EmbeddingCoverage {
+    let mut plain = String::with_capacity(info.len());
+    let mut chars = info.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            if chars.next() == Some('[') {
+                for next in chars.by_ref() {
+                    if ('@'..='~').contains(&next) {
+                        break;
+                    }
+                }
+            }
+        } else {
+            plain.push(c);
+        }
+    }
+    let number_after = |line: &str, marker: &str| -> Option<u64> {
+        let rest = &line[line.find(marker)? + marker.len()..];
+        let digits: String = rest
+            .trim_start()
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        digits.parse().ok()
+    };
+    let mut coverage = EmbeddingCoverage::default();
+    for line in plain.lines().map(str::trim) {
+        if line.starts_with("Embedder:") {
+            coverage.dimensions = number_after(line, "dimensions:");
+        } else if line.starts_with("Embedded:") {
+            coverage.embedded = number_after(line, "Embedded:");
+            coverage.embeddable = number_after(line, " of ");
+        } else if line.starts_with("Vector table:") {
+            let inside = line.split('(').nth(1).unwrap_or_default();
+            if inside.trim_start().starts_with("empty") {
+                coverage.vectors = Some(0);
+            } else {
+                coverage.vector_dimensions = number_after(inside, "");
+                coverage.vectors = line
+                    .split(',')
+                    .nth(1)
+                    .and_then(|rest| number_after(rest, ""));
+            }
+        }
+    }
+    coverage
 }
 
 pub(crate) struct Backend {
@@ -54,6 +155,13 @@ impl Backend {
     }
     pub fn version(&self) -> io::Result<String> {
         invoke(&["--version".into()], None, None, DEFAULT_TIMEOUT_SECS)
+    }
+    /// What the scope's meaning index actually holds, read from bkmr's own
+    /// `info`. The provider's `semantic` flag says the embedder is configured;
+    /// this says whether vectors exist (on 16 Oct 2026 a wrong-sized, empty vector
+    /// table sat behind a `semantic: true`).
+    pub fn embedding_coverage(&self) -> io::Result<EmbeddingCoverage> {
+        Ok(parse_embedding_coverage(&self.run(&["info".into()])?))
     }
     pub fn prepare(&self) -> io::Result<()> {
         super::file_map::safe_directory(&self.state, Path::new(".central/bkmr/home/.config/bkmr"))?;
@@ -424,8 +532,89 @@ fn invoke(
 
 #[cfg(test)]
 mod tests {
-    use super::{fts5_quote, fts5_quote_unsafe_terms};
+    use super::{fts5_quote, fts5_quote_unsafe_terms, parse_embedding_coverage};
     use crate::file_map_backend::Backend;
+
+    fn info(embedder: &str, embedded: &str, table: &str) -> String {
+        format!(
+            "\x1b[1mbkmr\x1b[0m\n  Embedder: {embedder}\n  Embedded: {embedded}\n  Vector table: {table}\n"
+        )
+    }
+
+    #[test]
+    fn a_fully_embedded_index_reads_ready() {
+        let coverage = parse_embedding_coverage(&info(
+            "Embeddings enabled (dimensions: 384)",
+            "453 of 453 embeddable bookmarks",
+            "vec_bookmarks (384 dims, 453 rows)",
+        ));
+        assert_eq!(coverage.dimensions, Some(384));
+        assert_eq!(coverage.vector_dimensions, Some(384));
+        assert_eq!(coverage.vectors, Some(453));
+        assert_eq!(coverage.embedded, Some(453));
+        assert_eq!(coverage.embeddable, Some(453));
+        assert_eq!(coverage.state(), "ready");
+    }
+
+    #[test]
+    fn an_empty_vector_table_names_no_dimensions_and_reads_empty() {
+        let coverage = parse_embedding_coverage(&info(
+            "Embeddings enabled (dimensions: 384)",
+            "0 of 453 embeddable bookmarks",
+            "vec_bookmarks (empty)",
+        ));
+        assert_eq!(coverage.vector_dimensions, None);
+        assert_eq!(coverage.vectors, Some(0));
+        assert_eq!(coverage.state(), "empty");
+    }
+
+    #[test]
+    fn missing_vectors_read_partial_or_empty() {
+        let partial = parse_embedding_coverage(&info(
+            "Embeddings enabled (dimensions: 384)",
+            "100 of 453 embeddable bookmarks",
+            "vec_bookmarks (384 dims, 100 rows)",
+        ));
+        assert_eq!(partial.state(), "partial");
+        let empty = parse_embedding_coverage(&info(
+            "Embeddings enabled (dimensions: 384)",
+            "0 of 453 embeddable bookmarks",
+            "vec_bookmarks (384 dims, 0 rows)",
+        ));
+        assert_eq!(empty.state(), "empty");
+    }
+
+    /// The 16 Oct 2026 incident: a 768-d vector table behind a 384-d embedder
+    /// stayed silently unusable behind `semantic: true`.
+    #[test]
+    fn a_vector_table_the_embedder_cannot_match_reads_mismatched() {
+        let coverage = parse_embedding_coverage(&info(
+            "Embeddings enabled (dimensions: 384)",
+            "0 of 453 embeddable bookmarks",
+            "vec_bookmarks (768 dims, 0 rows)",
+        ));
+        assert_eq!(coverage.state(), "mismatched");
+    }
+
+    #[test]
+    fn an_index_with_nothing_to_embed_or_an_unreadable_info_is_not_a_guess() {
+        let nothing = parse_embedding_coverage(&info(
+            "Embeddings enabled (dimensions: 384)",
+            "0 of 0 embeddable bookmarks",
+            "vec_bookmarks (384 dims, 0 rows)",
+        ));
+        assert_eq!(nothing.state(), "nothing-to-embed");
+        assert_eq!(parse_embedding_coverage("").state(), "unknown");
+        assert_eq!(
+            parse_embedding_coverage("Error: no such table").state(),
+            "unknown"
+        );
+        // A line that names no number leaves its field absent rather than zero.
+        let blank = parse_embedding_coverage("Embedded: unavailable\nVector table: absent\n");
+        assert_eq!(blank.embedded, None);
+        assert_eq!(blank.vectors, None);
+        assert_eq!(blank.state(), "unknown");
+    }
 
     #[test]
     fn a_hybrid_search_with_no_hits_is_an_empty_answer_not_a_parse_failure() {
@@ -598,6 +787,47 @@ mod tests {
             .search("unmatched-zzqqxx", &[], true, 10)
             .expect("a hybrid query with no hits is an empty answer, not a failure");
         assert!(none.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// bkmr's own `info` must stay readable by `parse_embedding_coverage`:
+    /// a rewording in a bkmr release would otherwise turn every scope's
+    /// reading into `unknown` without a test noticing. Same gate as above.
+    #[test]
+    fn the_real_info_output_parses_into_a_coverage_state() {
+        if std::env::var("CENTRAL_FILE_MAP_BKMR_CONFORMANCE").as_deref() != Ok("real") {
+            eprintln!("set CENTRAL_FILE_MAP_BKMR_CONFORMANCE=real to run the real-bkmr regression");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "ctrl-file-map-coverage-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = std::fs::canonicalize(dir).unwrap();
+        let backend = Backend::with_state(&dir, &dir);
+        backend.prepare().expect("real bkmr prepares an index");
+        backend
+            .run(&[
+                "add".into(),
+                "coverage probe text".into(),
+                "--title".into(),
+                "coverage probe".into(),
+                "--type".into(),
+                "text".into(),
+                "--no-web".into(),
+            ])
+            .expect("real bkmr adds and embeds the record");
+        let coverage = backend.embedding_coverage().expect("info runs");
+        assert_eq!(coverage.embeddable, Some(1), "{coverage:?}");
+        assert_eq!(coverage.embedded, Some(1), "{coverage:?}");
+        assert_eq!(coverage.vectors, Some(1), "{coverage:?}");
+        assert_eq!(coverage.dimensions, coverage.vector_dimensions);
+        assert_eq!(coverage.state(), "ready", "{coverage:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
