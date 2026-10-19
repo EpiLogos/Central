@@ -1646,6 +1646,53 @@ mod binding_read_tests {
     }
 
     #[test]
+    fn a_pooled_scope_rosters_text_and_not_bytes_or_tool_state() {
+        let fixture = Fixture::new();
+        for (relative, bytes) in [
+            ("scratch/idea.md", &b"text"[..]),
+            ("scratch/figure.png", b"\x89PNG"),
+            ("scratch/tool.pyc", b"\0"),
+            (".gitnexus/parse-cache/a.json", b"{}"),
+        ] {
+            let path = fixture.root.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        }
+        let pooled = execute(&fixture.root, "pool", &json!({"enable":true})).unwrap();
+        let paths: Vec<String> = execute(&fixture.root, "inspect", &json!({"resources":true}))
+            .unwrap()["result"]["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["source"]["path"].as_str().unwrap().to_owned())
+            .collect();
+        assert!(paths.contains(&"scratch/idea.md".to_owned()), "{paths:?}");
+        for left_out in [
+            "scratch/figure.png",
+            "scratch/tool.pyc",
+            ".gitnexus/parse-cache/a.json",
+        ] {
+            assert!(
+                !paths.contains(&left_out.to_owned()),
+                "{left_out} in {paths:?}"
+            );
+        }
+        // The count `pool` reports is the pooled roster, not the files on disk.
+        let pooled_in_roster = execute(&fixture.root, "inspect", &json!({"resources":true}))
+            .unwrap()["result"]["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| {
+                entry["source"]["roles"]
+                    .as_array()
+                    .is_some_and(|roles| roles.iter().any(|role| role == "content-pool"))
+            })
+            .count();
+        assert_eq!(pooled["result"]["pooled_sources"], json!(pooled_in_roster));
+    }
+
+    #[test]
     fn embedding_coverage_is_read_only_when_asked_and_only_from_an_initialised_map() {
         let fixture = Fixture::new();
         let plain = execute(&fixture.root, "inspect", &json!({"resources":false})).unwrap();

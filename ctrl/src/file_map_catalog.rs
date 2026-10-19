@@ -758,14 +758,9 @@ pub(crate) fn pool(all: &[Scope], input: &Value) -> io::Result<Value> {
     let mut pooled = 0usize;
     if enable {
         let mut sources: BTreeMap<String, SourceBinding> = BTreeMap::new();
-        pooled = source_horizon::insert_tree_bindings(
-            &scope.root,
+        pooled = source_horizon::insert_pool_bindings(
             &scope.root,
             &scope.world,
-            &["content-pool"],
-            "pooled",
-            "scope-content",
-            "pooled-content",
             &ground.content_pool.exclude,
             &mut sources,
         )?;
@@ -1490,14 +1485,9 @@ pub(crate) fn entries(scope: &Scope) -> io::Result<Vec<Entry>> {
     if ground.content_pool.enabled {
         // Declared sources keep their identity; the pool fills the rest of
         // the scope's readable content under one pooled provenance.
-        source_horizon::insert_tree_bindings(
-            &scope.root,
+        source_horizon::insert_pool_bindings(
             &scope.root,
             &scope.world,
-            &["content-pool"],
-            "pooled",
-            "scope-content",
-            "pooled-content",
             &ground.content_pool.exclude,
             &mut sources,
         )?;
