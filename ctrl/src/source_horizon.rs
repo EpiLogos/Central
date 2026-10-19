@@ -390,11 +390,59 @@ fn safe_regular_file(world_root: &Path, path: &Path) -> io::Result<bool> {
     Ok(canonical_file.starts_with(canonical_root))
 }
 
+/// Directories no scan descends into: version control, build output, and the
+/// state or vendored bytes a tool keeps for itself. None of it is something a
+/// person wrote or an agent should retrieve, and all of it churns: a GitNexus
+/// parse cache or a package store rewrites itself on every index or install,
+/// which left the pooled maps permanently "stale index; refresh required".
 fn should_skip_dir(name: &str) -> bool {
     matches!(
         name,
-        ".git" | ".central" | "target" | "node_modules" | ".next" | "dist" | "build"
+        ".git"
+            | ".central"
+            | "target"
+            | "node_modules"
+            | ".next"
+            | "dist"
+            | "build"
+            | ".gitnexus"
+            | ".pnpm-store"
+            | "__pycache__"
+            | ".venv"
+            | "venv"
+            | ".cache"
+            | ".mypy_cache"
+            | ".pytest_cache"
+            | ".ruff_cache"
+            | ".tox"
+            | ".obsidian"
+            | ".idea"
     )
+}
+
+/// Extensions of files that hold bytes, not text: media, archives, compiled
+/// output, office containers, databases, fonts. A Source is read as text, so
+/// a pooled file with one of these can only fail admission when a search hit
+/// on it is read (`Source is not text`): 7 of 176 candidate hits did on
+/// 19 Oct 2026, and AIKit reported them as an unreadable origin. The pool
+/// leaves them out; reading one by path (`content_encoding: base64`) is
+/// unchanged.
+const NON_TEXT_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "webp", "tif", "tiff", "bmp", "heic", "ico", "icns", "psd", "raw",
+    "mp3", "wav", "flac", "aac", "m4a", "ogg", "mp4", "mov", "m4v", "mkv", "avi", "webm", "zip",
+    "gz", "tgz", "bz2", "xz", "7z", "rar", "tar", "dmg", "iso", "pyc", "pyo", "o", "a", "so",
+    "dylib", "dll", "exe", "class", "jar", "wasm", "node", "pdf", "doc", "docx", "ppt", "pptx",
+    "xls", "xlsx", "key", "pages", "numbers", "db", "sqlite", "sqlite3", "lbug", "ttf", "otf",
+    "woff", "woff2",
+];
+
+/// Whether a pooled file can be read as text, from its name alone: the pool is
+/// enumerated on every roster build, so it cannot afford to open each file.
+pub(crate) fn holds_text(relative: &str) -> bool {
+    Path::new(relative)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_none_or(|ext| !NON_TEXT_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
 }
 
 /// Files an operating system writes beside a person's own: never Source.
@@ -480,6 +528,47 @@ pub(crate) fn insert_tree_bindings(
     exclude: &[String],
     bindings: &mut BTreeMap<String, SourceBinding>,
 ) -> io::Result<usize> {
+    insert_admitted_bindings(
+        world_root, scan_root, world_ref, roles, provenance, standing, treatment, exclude,
+        bindings, |_| true,
+    )
+}
+
+/// A scope's content pool: everything readable under the scope's root that is
+/// not declared, excluded or a file that holds bytes rather than text.
+pub(crate) fn insert_pool_bindings(
+    world_root: &Path,
+    world_ref: &str,
+    exclude: &[String],
+    bindings: &mut BTreeMap<String, SourceBinding>,
+) -> io::Result<usize> {
+    insert_admitted_bindings(
+        world_root,
+        world_root,
+        world_ref,
+        &["content-pool"],
+        "pooled",
+        "scope-content",
+        "pooled-content",
+        exclude,
+        bindings,
+        holds_text,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_admitted_bindings(
+    world_root: &Path,
+    scan_root: &Path,
+    world_ref: &str,
+    roles: &[&str],
+    provenance: &str,
+    standing: &str,
+    treatment: &str,
+    exclude: &[String],
+    bindings: &mut BTreeMap<String, SourceBinding>,
+    admit: impl Fn(&str) -> bool,
+) -> io::Result<usize> {
     let mut files = Vec::new();
     collect_files(scan_root, world_root, 0, &mut files)?;
     let wiki_source = if world_ref == CONTROL_WORLD_REF
@@ -502,6 +591,7 @@ pub(crate) fn insert_tree_bindings(
             is_canonical_wiki_publication_lock(Path::new(&relative), source)
         });
         if publication_lock
+            || !admit(&relative)
             || exclude
                 .iter()
                 .any(|excluded| excluded_relative(&relative, excluded))
@@ -1606,6 +1696,74 @@ mod retrieval_tests {
         let mut files = Vec::new();
         collect_files(&root.join("Control/user"), root, 0, &mut files).unwrap();
         assert_eq!(files, vec![user.join("source.md")]);
+    }
+
+    fn paths(bindings: &BTreeMap<String, SourceBinding>) -> Vec<String> {
+        bindings.values().map(|binding| binding.path.clone()).collect()
+    }
+
+    #[test]
+    fn the_pool_admits_text_and_leaves_out_bytes_and_tool_state() {
+        let ground = Ground::new();
+        let root = &ground.0;
+        for (relative, bytes) in [
+            ("notes/idea.md", &b"text"[..]),
+            ("src/tool.py", b"print()"),
+            ("Makefile", b"all:"),
+            ("notes/photo.png", b"\x89PNG"),
+            ("notes/SHOUT.PNG", b"\x89PNG"),
+            ("src/__pycache__/tool.cpython-313.pyc", b"\0"),
+            ("src/tool.pyc", b"\0"),
+            ("deck/pitch.pptx", b"PK"),
+            ("deck/brief.pdf", b"%PDF"),
+            ("media/take.mp4", b"\0"),
+            (".gitnexus/lbug", b"\0"),
+            (".gitnexus/parse-cache/a.json", b"{}"),
+            (".pnpm-store/v11/files/ab/exec", b"\0"),
+            ("vault/.obsidian/plugins/x/main.js", b"//"),
+        ] {
+            let path = root.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        }
+        let mut pooled = BTreeMap::new();
+        let counted = insert_pool_bindings(root, "project:p", &[], &mut pooled).unwrap();
+        let mut kept = paths(&pooled);
+        kept.sort();
+        assert_eq!(kept, vec!["Makefile", "notes/idea.md", "src/tool.py"]);
+        assert_eq!(counted, 3, "the count a pool reports is the roster it builds");
+    }
+
+    #[test]
+    fn the_text_rule_is_the_pool_s_alone_an_authored_tree_keeps_what_it_holds() {
+        let ground = Ground::new();
+        let root = &ground.0;
+        let tree = root.join("docs");
+        fs::create_dir_all(&tree).unwrap();
+        fs::write(tree.join("spec.md"), b"text").unwrap();
+        fs::write(tree.join("figure.png"), b"\x89PNG").unwrap();
+        let mut bindings = BTreeMap::new();
+        insert_tree_bindings(
+            root, &tree, "project:p", &["docs"], "authored", "unspecified", "retain",
+            &[], &mut bindings,
+        )
+        .unwrap();
+        let mut kept = paths(&bindings);
+        kept.sort();
+        assert_eq!(kept, vec!["docs/figure.png", "docs/spec.md"]);
+    }
+
+    #[test]
+    fn a_declared_exclusion_still_narrows_the_pool_further() {
+        let ground = Ground::new();
+        let root = &ground.0;
+        fs::create_dir_all(root.join("a")).unwrap();
+        fs::create_dir_all(root.join("b")).unwrap();
+        fs::write(root.join("a/one.md"), b"x").unwrap();
+        fs::write(root.join("b/two.md"), b"x").unwrap();
+        let mut pooled = BTreeMap::new();
+        insert_pool_bindings(root, "project:p", &["b".to_owned()], &mut pooled).unwrap();
+        assert_eq!(paths(&pooled), vec!["a/one.md"]);
     }
 
     #[test]
