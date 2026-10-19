@@ -417,6 +417,9 @@ fn should_skip_dir(name: &str) -> bool {
             | ".tox"
             | ".obsidian"
             | ".idea"
+            | ".turbo"
+            | ".svelte-kit"
+            | "DerivedData"
     )
 }
 
@@ -1721,6 +1724,8 @@ mod retrieval_tests {
             (".gitnexus/parse-cache/a.json", b"{}"),
             (".pnpm-store/v11/files/ab/exec", b"\0"),
             ("vault/.obsidian/plugins/x/main.js", b"//"),
+            ("app/.svelte-kit/output/a.js", b"//"),
+            ("app/DerivedData/Build/log.txt", b"x"),
         ] {
             let path = root.join(relative);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
