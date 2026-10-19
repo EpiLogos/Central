@@ -115,21 +115,34 @@ pub(crate) fn control_binding_for_observed_path(
     validate_project_member(path)?;
     let declared = relations
         .map(|value| {
-            parse_relations_value(value, CONTROL_GROUND_RELATIONS_SCHEMA, CONTROL_WORLD_REF)
+            parse_declared_relations(value, CONTROL_GROUND_RELATIONS_SCHEMA, CONTROL_WORLD_REF)
         })
         .transpose()?;
+    control_binding_for_parsed_path(
+        path,
+        declared.as_ref(),
+        skill_manifest,
+        agent_retrieval_allowed,
+    )
+}
+
+/// `control_binding_for_observed_path` over a declaration the caller parsed once.
+pub(crate) fn control_binding_for_parsed_path(
+    path: &str,
+    declared: Option<&ParsedRelations>,
+    skill_manifest: Option<&crate::control_skills::SkillManifest>,
+    agent_retrieval_allowed: bool,
+) -> std::io::Result<Option<SourceBinding>> {
+    validate_project_member(path)?;
     let member_key = crate::source_safety::normal_member_key(path)?;
-    for relation in declared.into_iter().flat_map(|file| file.relations) {
-        if crate::source_safety::normal_member_key(&relation.path)? != member_key {
-            continue;
-        }
+    if let Some(relation) = declared.and_then(|declared| declared.relation(&member_key)) {
         return Ok(Some(SourceBinding {
-            source_ref: relation.source_ref,
-            path: relation.path,
-            roles: relation.roles,
-            provenance: relation.provenance,
-            standing: relation.standing,
-            treatment: relation.treatment,
+            source_ref: relation.source_ref.clone(),
+            path: relation.path.clone(),
+            roles: relation.roles.clone(),
+            provenance: relation.provenance.clone(),
+            standing: relation.standing.clone(),
+            treatment: relation.treatment.clone(),
             agent_retrieval_allowed,
         }));
     }
