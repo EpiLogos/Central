@@ -7,13 +7,21 @@ updated: 2026-10-03
 ---
 # Native Central filesystem reading
 
-`central.files.list` and `central.files.read` expose actual filesystem material
-under the configured Central root. An ordinary Work directory needs no
+`central.files.list`, `central.files.read` and `central.files.read-batch` expose actual
+filesystem material under the configured Central root. An ordinary Work directory needs no
 ProjectCentral manifest, adoption, role assignment or inferred Project identity.
 These read-only actions neither reconcile a source horizon nor invoke an agent.
 A file reading also carries its existing native Source binding when Central
 already recognizes one, allowing a client to open that same editable source
 without manufacturing an adoption or inferring authority from the path.
+
+`central.files.read-batch {"locations":[...]}` reads up to 256 files in one call.
+Each location is answered exactly as `central.files.read` answers it — that
+action's whole result envelope, success or refusal — in request order, and one
+refusal never sinks the others. Reading a file under `Control/` finds its Source
+binding in the whole Control source table, which is expensive to derive; the
+batch derives it once (and each Project's table once) and every file looks its
+binding up. A caller holding several locations asks once.
 
 List a directory with `{"path":"Work/example/src"}`; omitting path lists the
 Central root. Each entry carries its exact name, kind, byte length, retrieval
