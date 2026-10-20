@@ -5,9 +5,7 @@ use crate::action::{
 use crate::projectcentral::read_project_manifest;
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
-use crate::source_horizon::{
-    collect_files, normalize_relative, retrieval_allowed, source_ref, SourceBinding,
-};
+use crate::source_horizon::{normalize_relative, source_ref, SourceBinding};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -864,11 +862,13 @@ pub(crate) fn insert_skill_bindings(
     bindings: &mut BTreeMap<String, SourceBinding>,
     explicit_members: &std::collections::BTreeSet<PathBuf>,
 ) -> io::Result<()> {
+    // One scan for every skill under this root: the world's root and the skills directory are judged once, not once per skill.
+    let mut scan = crate::source_horizon::ScanMemo::new(world_root);
     for name in child_directories(skills_root)? {
         let skill_dir = skills_root.join(&name);
         let mut metadata = None;
         let mut files = Vec::new();
-        collect_files(&skill_dir, world_root, 0, &mut files)?;
+        scan.collect_files(&skill_dir, 0, &mut files)?;
         for file in files {
             let relative = normalize_relative(file.strip_prefix(world_root).map_err(|_| {
                 io::Error::new(io::ErrorKind::InvalidData, "source escaped its world root")
@@ -894,7 +894,7 @@ pub(crate) fn insert_skill_bindings(
                     &relative,
                     provenance,
                     standing,
-                    retrieval_allowed(world_root, &file),
+                    scan.retrieval_allowed(&file),
                 ),
             );
         }
