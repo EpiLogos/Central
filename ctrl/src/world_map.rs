@@ -429,11 +429,33 @@ fn count_files(
     if depth > MAX_SCAN_DEPTH {
         return;
     }
+    for subdirectory in count_level(world_root, directory, excluded, wiki_source, count) {
+        count_files(
+            world_root,
+            &subdirectory,
+            depth + 1,
+            excluded,
+            wiki_source,
+            count,
+        );
+    }
+}
+
+/// The files directly in `directory`, added to `count`, and the subdirectories a count goes on into.
+fn count_level(
+    world_root: &Path,
+    directory: &Path,
+    excluded: &[&str],
+    wiki_source: Option<&str>,
+    count: &mut usize,
+) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(directory) else {
-        return;
+        return Vec::new();
     };
-    let mut entries = entries.collect::<Result<Vec<_>, _>>().unwrap_or_default();
-    entries.sort_by_key(|entry| entry.file_name());
+    // A directory whose listing fails part-way counts as empty, as it always did. The entries
+    // are counted, not presented, so they are not put in an order.
+    let entries = entries.collect::<Result<Vec<_>, _>>().unwrap_or_default();
+    let mut subdirectories = Vec::new();
     for entry in entries {
         let Ok(file_type) = entry.file_type() else {
             continue;
@@ -441,17 +463,11 @@ fn count_files(
         if file_type.is_symlink() {
             continue;
         }
-        let name = entry.file_name().to_string_lossy().into_owned();
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy();
         if file_type.is_dir() {
-            if !skipped_directory(&name) && !excluded.contains(&name.as_str()) {
-                count_files(
-                    world_root,
-                    &entry.path(),
-                    depth + 1,
-                    excluded,
-                    wiki_source,
-                    count,
-                );
+            if !skipped_directory(&name) && !excluded.contains(&&*name) {
+                subdirectories.push(entry.path());
             }
         } else if file_type.is_file() && name != AGENT_RETRIEVAL_DENY_MARKER {
             if wiki_source.is_some_and(|source| {
@@ -464,6 +480,67 @@ fn count_files(
             *count += 1;
         }
     }
+    subdirectories
+}
+
+/// How many walks of unrelated trees run at once.
+const WALKERS: usize = 8;
+
+/// `map` over `items`, up to `WALKERS` at a time, the answers in the order of `items`. The
+/// counts are walks of separate trees that wait on the file system and share nothing.
+fn in_parallel<T: Sync, R: Send>(items: &[T], map: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let answers: Vec<std::sync::Mutex<Option<R>>> =
+        items.iter().map(|_| std::sync::Mutex::new(None)).collect();
+    std::thread::scope(|scope| {
+        for _ in 0..WALKERS.min(items.len()) {
+            scope.spawn(|| loop {
+                let position = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(item) = items.get(position) else {
+                    break;
+                };
+                *answers[position]
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(map(item));
+            });
+        }
+    });
+    answers
+        .into_iter()
+        .map(|answer| {
+            answer
+                .into_inner()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .expect("every item is mapped")
+        })
+        .collect()
+}
+
+/// [`count_files`] from the top of one tree with its first-level directories walked at once:
+/// the same count, sooner.
+fn count_files_across(
+    world_root: &Path,
+    directory: &Path,
+    excluded: &[&str],
+    wiki_source: Option<&str>,
+) -> usize {
+    let mut count = 0;
+    let subdirectories = count_level(world_root, directory, excluded, wiki_source, &mut count);
+    count
+        + in_parallel(&subdirectories, |subdirectory| {
+            let mut walked = 0;
+            count_files(
+                world_root,
+                subdirectory,
+                1,
+                excluded,
+                wiki_source,
+                &mut walked,
+            );
+            walked
+        })
+        .into_iter()
+        .sum::<usize>()
 }
 
 fn source_area(central_root: &Path, relative: &str) -> SourceArea {
@@ -957,18 +1034,25 @@ fn map_projectcentral(
     }
 }
 
-fn map_project(central_root: &Path, work_root: &Path, name: &str) -> ProjectMap {
+fn map_project(central_root: &Path, work_root: &Path, name: &str, across: bool) -> ProjectMap {
     let project_root = work_root.join(name);
     let relative = format!("Work/{name}");
-    let mut source_files = 0;
-    count_files(
-        &project_root,
-        &project_root,
-        0,
-        &[PROJECTCENTRAL_DIR],
-        None,
-        &mut source_files,
-    );
+    // One Project's map walks its own tree at once; a map of every Project walks the
+    // Projects at once instead.
+    let source_files = if across {
+        count_files_across(&project_root, &project_root, &[PROJECTCENTRAL_DIR], None)
+    } else {
+        let mut source_files = 0;
+        count_files(
+            &project_root,
+            &project_root,
+            0,
+            &[PROJECTCENTRAL_DIR],
+            None,
+            &mut source_files,
+        );
+        source_files
+    };
     let projectcentral = map_projectcentral(central_root, &project_root, &relative);
     ProjectMap {
         name: name.to_owned(),
@@ -990,7 +1074,7 @@ fn map_work(central_root: &Path) -> io::Result<WorkMap> {
     }
     let mut entries = fs::read_dir(&work_root)?.collect::<Result<Vec<_>, _>>()?;
     entries.sort_by_key(|entry| entry.file_name());
-    let mut projects = Vec::new();
+    let mut names = Vec::new();
     let mut loose_files = 0;
     for entry in entries {
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -998,11 +1082,14 @@ fn map_work(central_root: &Path) -> io::Result<WorkMap> {
             continue;
         }
         if entry.file_type()?.is_dir() {
-            projects.push(map_project(central_root, &work_root, &name));
+            names.push(name);
         } else {
             loose_files += 1;
         }
     }
+    let projects = in_parallel(&names, |name| {
+        map_project(central_root, &work_root, name, false)
+    });
     Ok(WorkMap {
         path: "Work".to_owned(),
         exists: true,
@@ -1109,7 +1196,7 @@ pub fn map_project_world(central_root: &Path, name: &str) -> io::Result<ProjectW
         }
     };
 
-    let project = map_project(central_root, &work_root, &name);
+    let project = map_project(central_root, &work_root, &name, true);
     let sources = summarize_project_sources(&project_root);
 
     let mut siblings = Vec::new();
@@ -2177,6 +2264,85 @@ pub fn register_world_map_actions(registry: &mut ActionRegistry) {
 mod tests {
     use super::*;
     use crate::tempdir;
+
+    /// A tree the count treats differently in every corner: nested files, skipped and dotted directories, a deny marker, an
+    /// excluded top-level directory, a symlink to a directory and to a file, and an empty directory.
+    fn counted_tree(root: &Path) {
+        for directory in [
+            "a/b/c",
+            "a/node_modules/deep",
+            "a/.hidden",
+            "d/e",
+            "ProjectCentral/now",
+            "empty",
+            "target/x",
+        ] {
+            fs::create_dir_all(root.join(directory)).unwrap();
+        }
+        for file in [
+            "top.md",
+            "a/one.md",
+            "a/b/two.md",
+            "a/b/c/three.md",
+            "a/node_modules/skipped.md",
+            "a/node_modules/deep/skipped.md",
+            "a/.hidden/skipped.md",
+            "d/four.md",
+            "d/e/five.md",
+            "ProjectCentral/excluded.md",
+            "ProjectCentral/now/excluded.md",
+            "target/x/skipped.md",
+        ] {
+            fs::write(root.join(file), file).unwrap();
+        }
+        fs::write(root.join("d/e").join(AGENT_RETRIEVAL_DENY_MARKER), "").unwrap();
+        std::os::unix::fs::symlink(root.join("a"), root.join("link-to-dir")).unwrap();
+        std::os::unix::fs::symlink(root.join("top.md"), root.join("link-to-file")).unwrap();
+    }
+
+    #[test]
+    fn walking_the_first_level_at_once_counts_what_walking_in_turn_counts() {
+        let temp = tempdir().unwrap();
+        counted_tree(temp.path());
+        for excluded in [&[][..], &[PROJECTCENTRAL_DIR][..], &["a", "d"][..]] {
+            let mut in_turn = 0;
+            count_files(temp.path(), temp.path(), 0, excluded, None, &mut in_turn);
+            let at_once = count_files_across(temp.path(), temp.path(), excluded, None);
+            assert_eq!(at_once, in_turn, "excluding {excluded:?}");
+        }
+        // The files themselves: top, one, two, three, four, five (the marker, the symlinks, the skipped trees and the
+        // excluded Project ground are not counted).
+        assert_eq!(
+            count_files_across(temp.path(), temp.path(), &[PROJECTCENTRAL_DIR], None),
+            6
+        );
+        let mut deep = 0;
+        count_files(
+            temp.path(),
+            temp.path(),
+            MAX_SCAN_DEPTH,
+            &[PROJECTCENTRAL_DIR],
+            None,
+            &mut deep,
+        );
+        assert_eq!(
+            deep, 1,
+            "a walk starting at the depth bound reads only its own level"
+        );
+    }
+
+    #[test]
+    fn things_mapped_at_once_come_back_in_the_order_asked() {
+        let items: Vec<usize> = (0..100).collect();
+        let doubled = in_parallel(&items, |item| {
+            // Later items finish sooner, so an unordered collection would show.
+            std::thread::sleep(std::time::Duration::from_micros((100 - *item as u64) * 20));
+            item * 2
+        });
+        assert_eq!(doubled, (0..100).map(|item| item * 2).collect::<Vec<_>>());
+        assert!(in_parallel::<usize, usize>(&[], |item| *item).is_empty());
+        assert_eq!(in_parallel(&[7], |item| item + 1), vec![8]);
+    }
 
     #[test]
     fn missing_canonical_pieces_are_named_by_their_ground_relative_path() {
