@@ -1,6 +1,7 @@
 //! Native continuous-work operations over Central's existing source ownership.
 //! No personal installation, default-policy adoption, model call or shell rewrite.
 pub mod authority;
+mod day_moves;
 pub mod documents;
 mod extended;
 pub mod field;
@@ -131,6 +132,21 @@ pub fn execute_with_token_at(
         "time_occurrences" => temporal::time_occurrences(&scope, input),
         "day_read" => temporal::day_read(&scope, input),
         "source_history" => history::read(&scope, input),
+        "day_settings_read" => day_moves::settings_read(&scope),
+        "day_moves_read" => day_moves::moves_read(&scope, input, now),
+        "day_moves_due" => day_moves::moves_due(&scope, input, now),
+        operation if day_moves::authenticated_action(operation).is_some() => {
+            let principal = authority::authenticate(
+                &scope,
+                token,
+                day_moves::authenticated_action(operation).unwrap_or_default(),
+                input
+                    .get("expected_authority_revision")
+                    .and_then(Value::as_str),
+                now,
+            )?;
+            day_moves::authenticated_operation(&scope, operation, input, &principal, now)
+        }
         "day_ensure" | "day_lifecycle" | "now_lifecycle" | "now_obligations" => {
             let action = match operation {
                 "day_ensure" => "central.day.ensure",
@@ -384,7 +400,10 @@ pub fn register_actions(registry: &mut ActionRegistry) {
         ("central.now.learnings.distill", "Distill a learning into T-prime", "Write one learning distilled from named T fixtures — every named fixture must exist in this NOW's T/ and rides the learning's front-matter linkage. A learning states plainly what the raw stream means: the integrate-toward-renewed-ground act. Optional working-thought reading (same twelve as thoughts.append). Active NOWs only.", true, learnings_distill_action, &[("now_ref","string",true),("slug","string",true),("day","string",true),("actor","string",true),("actor_kind","string",true),("content","string",true),("source_fixtures","array",true),("agent_session_ref","string",false),("reading","string",false)]),
     ]);
     extended::register_actions(registry);
+    day_moves::register_actions(registry);
 }
 
+#[cfg(test)]
+mod day_moves_tests;
 #[cfg(test)]
 mod tests;

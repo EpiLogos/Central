@@ -270,7 +270,7 @@ fn ceil_div(value: i64, divisor: i64) -> i64 {
     value.div_euclid(divisor) + i64::from(value.rem_euclid(divisor) != 0)
 }
 
-fn parse_hh_mm(raw: &str) -> io::Result<(u32, u32)> {
+pub(crate) fn parse_hh_mm(raw: &str) -> io::Result<(u32, u32)> {
     let (hour, minute) = raw
         .split_once(':')
         .ok_or_else(|| invalid("daily time must be HH:MM"))?;
@@ -498,7 +498,7 @@ pub(crate) fn save_relations(scope: &Scope, relations: &Value, basis: &str) -> i
     }
     Ok(())
 }
-fn day_relation<'a>(relations: &'a Value, day_ref: &str) -> io::Result<&'a Value> {
+pub(crate) fn day_relation<'a>(relations: &'a Value, day_ref: &str) -> io::Result<&'a Value> {
     relations["relations"]
         .as_array()
         .ok_or_else(|| invalid("invalid relations"))?
@@ -544,7 +544,7 @@ fn reading(
         Value::Null
     };
     Ok(
-        json!({"schema":"central.day-reading/v1","day_ref":entry["temporal"]["day_ref"],"source":source.source,"revision":source.revision,"content":source.content,"temporal":entry["temporal"],"relations_revision":relation_basis,"today":relations["temporal"]["today"],"document_state":if document.is_null(){"uninitialised"}else{"ready"},"document":document,"automatic_agent_or_model_invocation":false}),
+        json!({"schema":"central.day-reading/v1","day_ref":entry["temporal"]["day_ref"],"source":source.source,"revision":source.revision,"content":source.content,"temporal":entry["temporal"],"relations_revision":relation_basis,"today":relations["temporal"]["today"],"tomorrow":relations["temporal"]["tomorrow"],"document_state":if document.is_null(){"uninitialised"}else{"ready"},"document":document,"automatic_agent_or_model_invocation":false}),
     )
 }
 pub fn day_read(scope: &Scope, input: &Value) -> io::Result<Value> {
@@ -562,27 +562,24 @@ pub fn day_read(scope: &Scope, input: &Value) -> io::Result<Value> {
     let entry = day_relation(&relations, reference)?;
     reading(scope, &relations, &basis, entry)
 }
-pub fn ensure_day(
+/// Open the Day of `civil_date`: its blank native source, its binding and its
+/// temporal relation entry, exactly once. A Day whose relation already stands is
+/// left as it is. Shared by `ensure_day` (today) and the two-Days operations
+/// (tomorrow), so one Day is never created by two different paths. The caller
+/// holds the source-mutation locks and saves the returned relations (the entry's
+/// temporal identity is in them, not yet on disk).
+pub(crate) fn open_day(
     scope: &Scope,
-    input: &Value,
-    principal: &Principal,
+    time: &TimeReading,
+    civil_date: &str,
     now: u64,
-) -> io::Result<Value> {
-    let time = time_policy(scope, now)?;
-    if text(input, "expected_time_policy_revision")? != time.revision {
-        return Err(conflict("civil-time policy changed before Day allocation"));
-    }
-    if !principal.is_human() && !time.policy.automatic_day_rollover {
-        return Err(denied(
-            "blank Day rollover is not authorised by the human's current time policy",
-        ));
-    }
-    let day_ref = format!("central:day:{}:{}", scope.world_ref, time.civil_date);
+) -> io::Result<(Value, String, String, bool)> {
+    let day_ref = format!("central:day:{}:{}", scope.world_ref, civil_date);
     let (mut relations, mut basis) = scope.relations()?;
     let mut created = false;
     if day_relation(&relations, &day_ref).is_err() {
         // Native blank text, not an invented original HTML-template payload.
-        let path = format!("{}/{}/day.md", scope.day_dir(), time.civil_date);
+        let path = format!("{}/{}/day.md", scope.day_dir(), civil_date);
         let had_bytes = match crate::source_safety::read(&scope.root, &path) {
             Ok(_) => true,
             Err(e) if e.kind() == io::ErrorKind::NotFound => false,
@@ -621,11 +618,29 @@ pub fn ensure_day(
                 "existing source already has a different temporal identity",
             ));
         }
-        entry["temporal"] = json!({"schema":"central.human-day/v1","day_ref":day_ref,"civil_date":time.civil_date,
+        entry["temporal"] = json!({"schema":"central.human-day/v1","day_ref":day_ref,"civil_date":civil_date,
             "timezone":time.policy.timezone,"created_at_unix_seconds":now,"lifecycle":"open",
             "time_policy_ref":time.source_ref,"time_policy_revision":time.revision,"project_day_refs":[],
             "template_fidelity":"native-blank-text-not-an-original-HTML-fixture","preexisting_bytes_retained":had_bytes});
     }
+    Ok((relations, basis, day_ref, created))
+}
+pub fn ensure_day(
+    scope: &Scope,
+    input: &Value,
+    principal: &Principal,
+    now: u64,
+) -> io::Result<Value> {
+    let time = time_policy(scope, now)?;
+    if text(input, "expected_time_policy_revision")? != time.revision {
+        return Err(conflict("civil-time policy changed before Day allocation"));
+    }
+    if !principal.is_human() && !time.policy.automatic_day_rollover {
+        return Err(denied(
+            "blank Day rollover is not authorised by the human's current time policy",
+        ));
+    }
+    let (mut relations, basis, day_ref, created) = open_day(scope, &time, &time.civil_date, now)?;
     let old_date = relations["temporal"]["today"]["civil_date"]
         .as_str()
         .unwrap_or("");
@@ -636,6 +651,16 @@ pub fn ensure_day(
         }
         relations["temporal"]["today"] =
             json!({"day_ref":day_ref,"civil_date":time.civil_date,"updated_at_unix_seconds":now});
+        // Tomorrow's Day, once today reaches its date, is today: the Day already
+        // exists and is not created again, and nothing is left calling it tomorrow.
+        let tomorrow_date = relations["temporal"]["tomorrow"]["civil_date"]
+            .as_str()
+            .map(str::to_owned);
+        if tomorrow_date.is_some_and(|date| date.as_str() <= time.civil_date.as_str()) {
+            if let Some(temporal) = relations["temporal"].as_object_mut() {
+                temporal.remove("tomorrow");
+            }
+        }
     }
     let entry = day_relation(&relations, &day_ref)?.clone();
     save_relations(scope, &relations, &basis)?;
@@ -657,24 +682,27 @@ pub fn ensure_day(
         .unwrap_or_else(|error| json!({"state":"unavailable","reason":error.to_string()}));
     Ok(result)
 }
-pub fn day_lifecycle(
+/// The one close/reopen of a human Day, checked on its content and relations
+/// revisions. Shared by `day_lifecycle` (the person's press) and the close carry
+/// (the Close move), which differ only in who may call, never in what closing is.
+pub(crate) fn change_lifecycle(
     scope: &Scope,
-    input: &Value,
-    principal: &Principal,
+    day_ref: &str,
+    expected_revision: &str,
+    expected_relations_revision: &str,
+    state: &str,
+    actor_ref: &str,
     now: u64,
-) -> io::Result<Value> {
-    principal.require_human()?;
+) -> io::Result<()> {
     let (mut relations, basis) = scope.relations()?;
-    if basis != text(input, "expected_relations_revision")? {
+    if basis != expected_relations_revision {
         return Err(conflict("Day metadata changed"));
     }
-    let reference = text(input, "day_ref")?;
-    let entry = day_relation(&relations, reference)?;
+    let entry = day_relation(&relations, day_ref)?;
     let current = scope.read(text(entry, "ref")?)?;
-    if current.revision.revision != text(input, "expected_revision")? {
+    if current.revision.revision != expected_revision {
         return Err(conflict("Day source changed"));
     }
-    let state = text(input, "lifecycle")?;
     if !matches!(state, "open" | "closed") {
         return Err(invalid(
             "Day lifecycle is open or closed; closing does not archive/delete source",
@@ -684,12 +712,29 @@ pub fn day_lifecycle(
         .as_array_mut()
         .ok_or_else(|| invalid("invalid relations"))?
         .iter_mut()
-        .find(|entry| entry["temporal"]["day_ref"] == reference)
+        .find(|entry| entry["temporal"]["day_ref"] == day_ref)
         .ok_or_else(|| invalid("Day relation disappeared"))?;
     entry["temporal"]["lifecycle"] = json!(state);
     entry["temporal"]["lifecycle_at_unix_seconds"] = json!(now);
-    entry["temporal"]["lifecycle_actor_ref"] = json!(principal.principal_ref);
-    save_relations(scope, &relations, &basis)?;
+    entry["temporal"]["lifecycle_actor_ref"] = json!(actor_ref);
+    save_relations(scope, &relations, &basis)
+}
+pub fn day_lifecycle(
+    scope: &Scope,
+    input: &Value,
+    principal: &Principal,
+    now: u64,
+) -> io::Result<Value> {
+    principal.require_human()?;
+    change_lifecycle(
+        scope,
+        text(input, "day_ref")?,
+        text(input, "expected_revision")?,
+        text(input, "expected_relations_revision")?,
+        text(input, "lifecycle")?,
+        &principal.principal_ref,
+        now,
+    )?;
     day_read(scope, input)
 }
 /// Every receiving Return item keyed to this NOW/source, paired with its
