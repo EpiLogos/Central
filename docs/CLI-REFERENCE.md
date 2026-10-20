@@ -29,6 +29,7 @@ The composed registry is deliberately discovered at runtime through `action.list
 |---|---|---|
 | `central.files.list` | list actual Central directories without adoption | `action run central.files.list` |
 | `central.files.read` | read a validated owner location as bounded UTF-8 text | `action run central.files.read` |
+| `central.files.read-batch` | read up to 256 owner locations in one call; each answered as `central.files.read` answers it, the source tables derived once | `action run central.files.read-batch` |
 | `central.files.write` | atomically replace ordinary text under owner CAS | `action run central.files.write` |
 | `central.files.create` | explicit first save into an existing owner directory, atomic no-overwrite admission | `action run central.files.create` |
 | `central.flow.append` | append one validated, idempotent contribution to a v0.4 Flow instance under `Control/user/flows/` through the same CAS; `operation_ref` is the idempotency identity (replay recovers, a different payload under it is refused); `verified` attribution needs a host-held `CENTRAL_NATIVE_TOKEN` grant, otherwise it is declared; a typed refusal is the error `code` and writes nothing | `action run central.flow.append` |

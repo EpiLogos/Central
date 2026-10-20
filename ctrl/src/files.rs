@@ -10,7 +10,8 @@ use crate::root::resolve_central_root;
 use crate::source_horizon::retrieval_allowed;
 use crate::source_safety::{content_revision_bytes, reject_symlink_components};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::os::unix::fs::MetadataExt;
 use std::{
     fs,
@@ -21,6 +22,15 @@ use std::{
 const MAX_TEXT_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_MATERIAL_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_DIRECTORY_ENTRIES: usize = 20_000;
+/// The most locations one `central.files.read-batch` answers.
+const MAX_BATCH_LOCATIONS: usize = 256;
+const BATCH_READING_SCHEMA: &str = "central.file-batch-reading/v1";
+/// Once the readings of a batch have carried this many bytes, the locations still to come are
+/// not read in that call (`batch_budget_reached`): a caller asks again for them, and the answer
+/// to one call stays bounded however many large files it names.
+const MAX_BATCH_RESPONSE_BYTES: u64 = 32 * 1024 * 1024;
+/// The code of an item the batch left for another call.
+pub const BATCH_BUDGET_REACHED: &str = "batch_budget_reached";
 
 /// The requested reading shape for `central.files.read`. Defaults to
 /// `Utf8`, which preserves the original text-only contract exactly.
@@ -206,18 +216,62 @@ fn file_project(root: &Path, relative: &str) -> Option<FileProject> {
         project_ref,
     })
 }
+/// The source tables a run of reads has already derived. A file under `Control/` is
+/// matched against the whole Control source table, and one under a Project against that
+/// Project's table; deriving a table is the expensive part of a read, so a batch derives
+/// each once and every file of it looks its binding up. A table that cannot be derived
+/// answers every file as no binding, as it does for a single read.
+#[derive(Default)]
+pub(crate) struct SourceTables {
+    control: Option<Option<Vec<crate::source_horizon::SourceBinding>>>,
+    projects: HashMap<PathBuf, Option<Vec<crate::source_horizon::SourceBinding>>>,
+}
+impl SourceTables {
+    fn control(&mut self, root: &Path) -> Option<&Vec<crate::source_horizon::SourceBinding>> {
+        self.control
+            .get_or_insert_with(|| {
+                #[cfg(test)]
+                CONTROL_TABLES_DERIVED.with(|count| count.set(count.get() + 1));
+                crate::source_horizon::control_source_bindings(root).ok()
+            })
+            .as_ref()
+    }
+    fn project(
+        &mut self,
+        project_root: PathBuf,
+    ) -> Option<&Vec<crate::source_horizon::SourceBinding>> {
+        self.projects
+            .entry(project_root)
+            .or_insert_with_key(|key| crate::source_horizon::project_source_bindings(key).ok())
+            .as_ref()
+    }
+}
+#[cfg(test)]
+thread_local! {
+    /// How many Control tables this thread has derived through `SourceTables`: the batch's
+    /// promise (one for any number of files) is counted, not timed.
+    static CONTROL_TABLES_DERIVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 pub(crate) fn participating_source(
     root: &Path,
     relative: &str,
+) -> Option<crate::source_horizon::SourceBinding> {
+    participating_source_in(root, relative, &mut SourceTables::default())
+}
+fn participating_source_in(
+    root: &Path,
+    relative: &str,
+    tables: &mut SourceTables,
 ) -> Option<crate::source_horizon::SourceBinding> {
     // Control is the root meta-Project's native authored ground, not an
     // ordinary unowned file merely because no child Project holds it.
     // Identity comes from the existing binding, never from its filename.
     if Path::new(relative).starts_with("Control") {
-        let binding = crate::source_horizon::control_source_bindings(root)
-            .ok()?
-            .into_iter()
-            .find(|binding| binding.path == relative)?;
+        let binding = tables
+            .control(root)?
+            .iter()
+            .find(|binding| binding.path == relative)?
+            .clone();
         // The ratified ordinary Flow-instance carrier already has its own
         // file CAS/history door. An aperture fallback must not reclassify it
         // after its first save and disable that door. Explicit document or
@@ -238,10 +292,11 @@ pub(crate) fn participating_source(
         .strip_prefix(&project.path)
         .ok()?
         .to_str()?;
-    crate::source_horizon::project_source_bindings(&root.join(&project.path))
-        .ok()?
-        .into_iter()
+    tables
+        .project(root.join(&project.path))?
+        .iter()
         .find(|binding| binding.path == within_project)
+        .cloned()
 }
 fn utf8(path: &Path) -> io::Result<&str> {
     path.to_str().ok_or_else(|| {
@@ -320,6 +375,14 @@ pub fn read_file(
     configured: &Path,
     location: &CentralPathRef,
     encoding: FileEncoding,
+) -> io::Result<FileReading> {
+    read_file_in(configured, location, encoding, &mut SourceTables::default())
+}
+fn read_file_in(
+    configured: &Path,
+    location: &CentralPathRef,
+    encoding: FileEncoding,
+    tables: &mut SourceTables,
 ) -> io::Result<FileReading> {
     let root = configured.canonicalize()?;
     let path = location.resolve(&root)?;
@@ -422,7 +485,7 @@ pub fn read_file(
         content,
         mime_hint,
         project: file_project(&root, &location.path),
-        source: participating_source(&root, &location.path),
+        source: participating_source_in(&root, &location.path, tables),
         automatic_agent_or_model_invocation: false,
     })
 }
@@ -456,7 +519,11 @@ fn result(input: &Value, context: &ActionExecutionContext<'_>, read: bool) -> Ac
     } else {
         "central.files.list"
     };
-    match run(input, context, read) {
+    answer(action, run(input, context, read))
+}
+/// An Action's result envelope for what it did or why it could not.
+fn answer(action: &str, outcome: io::Result<Value>) -> ActionResult {
+    match outcome {
         Ok(data) => ActionResult::success(action, data),
         Err(error) => ActionResult::failure(
             Some(action),
@@ -470,6 +537,74 @@ fn result(input: &Value, context: &ActionExecutionContext<'_>, read: bool) -> Ac
             None,
         ),
     }
+}
+/// `central.files.read-batch`: many files in one call. The root is resolved once and each
+/// source table is derived once for the whole batch, then every location is answered exactly
+/// as `central.files.read` answers it — its whole result envelope, success or refusal — in
+/// request order. One location's refusal is that item's envelope and never sinks the others;
+/// a fault in the request itself refuses the call, as it would refuse every single read.
+fn read_batch(input: &Value, context: &ActionExecutionContext<'_>) -> io::Result<Value> {
+    read_batch_within(input, context, MAX_BATCH_RESPONSE_BYTES)
+}
+fn read_batch_within(
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+    budget: u64,
+) -> io::Result<Value> {
+    let locations = match input.get("locations") {
+        Some(Value::Array(locations))
+            if !locations.is_empty() && locations.len() <= MAX_BATCH_LOCATIONS =>
+        {
+            locations
+        }
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "locations must be an array of 1..={MAX_BATCH_LOCATIONS} Central locations"
+                ),
+            ))
+        }
+    };
+    let encoding = FileEncoding::parse(input.get("encoding"))?;
+    let root = resolve_central_root(context.root_options)
+        .map_err(io::Error::other)?
+        .path;
+    let mut tables = SourceTables::default();
+    let mut carried = 0_u64;
+    let items: Vec<Value> = locations
+        .iter()
+        .map(|requested| {
+            if carried >= budget {
+                let left = ActionResult::failure_coded(
+                    Some("central.files.read"),
+                    ResultStatus::UnavailableCapability,
+                    BATCH_BUDGET_REACHED,
+                    "This batch has carried as much as one call carries; ask for this location in another call.",
+                    None,
+                );
+                return json!({ "location": requested, "result": left });
+            }
+            let outcome = serde_json::from_value::<CentralPathRef>(requested.clone())
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
+                .and_then(|location| read_file_in(&root, &location, encoding, &mut tables))
+                .inspect(|reading| carried += reading.content.len() as u64)
+                .and_then(|reading| serde_json::to_value(reading).map_err(io::Error::other));
+            json!({ "location": requested, "result": answer("central.files.read", outcome) })
+        })
+        .collect();
+    let answered = items
+        .iter()
+        .filter(|item| item["result"]["ok"] == Value::Bool(true))
+        .count();
+    Ok(json!({
+        "schema": BATCH_READING_SCHEMA,
+        "requested": items.len(),
+        "answered": answered,
+        "refused": items.len() - answered,
+        "items": items,
+        "automatic_agent_or_model_invocation": false,
+    }))
 }
 #[path = "file_resolution.rs"]
 mod resolution;
@@ -505,11 +640,162 @@ pub fn register_file_actions(registry: &mut ActionRegistry) {
             )
             .expect("Unique native filesystem actions");
     }
+    registry
+        .register(
+            ActionDescriptor {
+                id: "central.files.read-batch".into(),
+                title: "Read many native Central files".into(),
+                description: "One root resolution and one derivation of each source table, then each requested location answered exactly as central.files.read answers it — that Action's whole result envelope, success or refusal — in request order (central.file-batch-reading/v1). One location's refusal (outside the root, a symlink, retrieval-excluded, not a regular file, too large) is that item's envelope and never sinks the others; a fault in the request (no locations, more than 256, a bad encoding) refuses the whole call, as it would refuse every single read. encoding applies to every item. A batch that has carried 32 MiB leaves the locations still to come unread, each answered with code batch_budget_reached, for the caller to ask again. Read-only.".into(),
+                inputs: vec![
+                    ActionInputDefinition { name: "locations".into(), input_type: "array".into(), required: true, choices: None, selection: None },
+                    ActionInputDefinition { name: "encoding".into(), input_type: "string".into(), required: false, choices: Some(vec!["utf-8".into(), "base64".into()]), selection: None },
+                ],
+                output: ActionOutputDefinition { output_type: "central-file-batch-reading".into() },
+                mutation_class: MutationClass::ReadOnly,
+                preview_supported: false,
+                required_ports: vec![],
+                availability: ActionAvailability { available: true, reason: None },
+            },
+            |_, input, context| answer("central.files.read-batch", read_batch(input, context)),
+        )
+        .expect("Unique native filesystem actions");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_batch_derives_the_control_table_once_where_single_reads_derive_it_each_time() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        crate::root::initialize_central(root).unwrap();
+        let mut locations = Vec::new();
+        for name in ["a.md", "b.md", "c.md", "d.md"] {
+            fs::write(root.join("Control/user").join(name), name).unwrap();
+        }
+        let listing = list_files(root, "Control/user").unwrap();
+        for name in ["a.md", "b.md", "c.md", "d.md"] {
+            let entry = listing
+                .entries
+                .iter()
+                .find(|entry| entry.name == name)
+                .unwrap();
+            locations.push(serde_json::to_value(&entry.location).unwrap());
+        }
+        let options = crate::RootOptions {
+            explicit_root: Some(root.into()),
+            ..Default::default()
+        };
+        let connectors = crate::create_default_connector_registry();
+        let connector_context = crate::ConnectorContext::current();
+        let context = ActionExecutionContext {
+            root_options: &options,
+            connectors: &connectors,
+            connector_context: &connector_context,
+        };
+        let registry = crate::create_core_action_registry();
+        let derived = || CONTROL_TABLES_DERIVED.with(|count| count.get());
+        let before = derived();
+        let batch = registry.execute(
+            "central.files.read-batch",
+            &json!({ "locations": locations }),
+            &context,
+        );
+        assert!(batch.ok, "{batch:?}");
+        assert_eq!(batch.data.unwrap()["answered"], 4);
+        assert_eq!(derived() - before, 1, "one table for the whole batch");
+        let before = derived();
+        for location in &locations {
+            let single = registry.execute(
+                "central.files.read",
+                &json!({ "location": location }),
+                &context,
+            );
+            assert!(single.ok, "{single:?}");
+        }
+        assert_eq!(
+            derived() - before,
+            4,
+            "a single read derives it for each file"
+        );
+    }
+
+    #[test]
+    fn a_batch_that_has_carried_its_budget_leaves_the_rest_for_another_call() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        crate::root::initialize_central(root).unwrap();
+        for name in ["a.md", "b.md", "c.md", "d.md"] {
+            fs::write(root.join("Control/user").join(name), "0123456789").unwrap();
+        }
+        let listing = list_files(root, "Control/user").unwrap();
+        let locations: Vec<Value> = ["a.md", "b.md", "c.md", "d.md"]
+            .iter()
+            .map(|name| {
+                let entry = listing
+                    .entries
+                    .iter()
+                    .find(|entry| entry.name == *name)
+                    .unwrap();
+                serde_json::to_value(&entry.location).unwrap()
+            })
+            .collect();
+        let options = crate::RootOptions {
+            explicit_root: Some(root.into()),
+            ..Default::default()
+        };
+        let connectors = crate::create_default_connector_registry();
+        let connector_context = crate::ConnectorContext::current();
+        let context = ActionExecutionContext {
+            root_options: &options,
+            connectors: &connectors,
+            connector_context: &connector_context,
+        };
+        // 15 bytes: two files carry 20, so the third and fourth are left, in order, uncoded as reads.
+        let batch = read_batch_within(&json!({ "locations": locations }), &context, 15).unwrap();
+        let items = batch["items"].as_array().unwrap();
+        assert_eq!(items[0]["result"]["ok"], true);
+        assert_eq!(items[1]["result"]["ok"], true);
+        for item in &items[2..] {
+            assert_eq!(item["result"]["ok"], false, "{item}");
+            assert_eq!(
+                item["result"]["error"]["code"], BATCH_BUDGET_REACHED,
+                "{item}"
+            );
+        }
+        assert_eq!(batch["answered"], 2);
+        assert_eq!(batch["refused"], 2);
+        // Asking again for what was left answers it: the first location of a call is always read.
+        let rest = json!({ "locations": locations[2..].to_vec() });
+        let again = read_batch_within(&rest, &context, 15).unwrap();
+        assert_eq!(again["items"][0]["result"]["ok"], true);
+        assert_eq!(again["items"][1]["result"]["ok"], true);
+        // An ordinary budget reads all four.
+        let all = read_batch(&json!({ "locations": locations }), &context).unwrap();
+        assert_eq!(all["answered"], 4);
+    }
+
+    #[test]
+    fn a_run_of_reads_derives_each_source_table_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        crate::root::initialize_central(root).unwrap();
+        let mut tables = SourceTables::default();
+        let first = tables.control(root).unwrap() as *const Vec<_>;
+        let second = tables.control(root).unwrap() as *const Vec<_>;
+        assert!(
+            std::ptr::eq(first, second),
+            "the Control table is derived once"
+        );
+        let project = root.join("Work/Bare");
+        fs::create_dir_all(&project).unwrap();
+        let first = tables
+            .project(project.clone())
+            .map(|table| table as *const Vec<_>);
+        let second = tables.project(project).map(|table| table as *const Vec<_>);
+        assert_eq!(first, second, "a Project's table is derived once");
+    }
     use crate::{
         create_core_action_registry, create_default_connector_registry, ConnectorContext,
         RootOptions,
