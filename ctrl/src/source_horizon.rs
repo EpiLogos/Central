@@ -11,7 +11,7 @@ use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
@@ -437,6 +437,215 @@ fn safe_regular_file(world_root: &Path, path: &Path) -> io::Result<bool> {
     Ok(canonical_file.starts_with(canonical_root))
 }
 
+/// A refusal a scan has already met, kept so a directory is judged once and every file below it hears the same answer.
+#[derive(Clone)]
+struct Refusal(io::ErrorKind, String);
+
+impl Refusal {
+    fn of(error: io::Error) -> Self {
+        Self(error.kind(), error.to_string())
+    }
+    fn new(kind: io::ErrorKind, message: &str) -> Self {
+        Self(kind, message.to_owned())
+    }
+    fn error(&self) -> io::Error {
+        io::Error::new(self.0, self.1.clone())
+    }
+}
+
+/// Whether a directory, and everything above it up to the world's root, lets retrieval through.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Chain {
+    Open,
+    Withheld,
+}
+
+/// What one scan of a world's tree learns once and reuses. The scan asked the same questions of the same directories for every
+/// file below them: five canonicalisations of the world's root and a symlink check and a deny-marker check for each ancestor, per
+/// file — about twenty-five syscalls for each of the 625 Control sources, most of the 24 ms a `central.time.policy` read still spent
+/// after its quadratic key scan was gone (20 Oct measurement). Here each directory is judged once for the scan and each file costs its
+/// own `lstat`. The answers are those of `safe_regular_file` and of `retrieval_allowed`, with one difference the compatibility
+/// projection allows: the closing re-check that the root did not change (`check_root`) is not repeated for every file, because
+/// `retrieval_allowed` only records a flag on a binding — "a failed observation cannot grant readability; actual delivery uses the
+/// fallible API", which keeps its own check.
+pub(crate) struct ScanMemo<'a> {
+    world_root: &'a Path,
+    canonical_root: Option<Result<PathBuf, Refusal>>,
+    root_is_directory: Option<Result<(), Refusal>>,
+    chains: std::collections::HashMap<PathBuf, Result<Chain, Refusal>>,
+    canonical_dirs: std::collections::HashMap<PathBuf, Result<PathBuf, Refusal>>,
+}
+
+impl<'a> ScanMemo<'a> {
+    pub(crate) fn new(world_root: &'a Path) -> Self {
+        Self {
+            world_root,
+            canonical_root: None,
+            root_is_directory: None,
+            chains: std::collections::HashMap::new(),
+            canonical_dirs: std::collections::HashMap::new(),
+        }
+    }
+
+    fn canonical_root(&mut self) -> Result<PathBuf, Refusal> {
+        self.canonical_root
+            .get_or_insert_with(|| fs::canonicalize(self.world_root).map_err(Refusal::of))
+            .clone()
+    }
+
+    fn canonical_dir(&mut self, dir: &Path) -> Result<PathBuf, Refusal> {
+        if let Some(known) = self.canonical_dirs.get(dir) {
+            return known.clone();
+        }
+        let canonical = fs::canonicalize(dir).map_err(Refusal::of);
+        self.canonical_dirs.insert(dir.to_path_buf(), canonical.clone());
+        canonical
+    }
+
+    /// `safe_regular_file`, with the directory's canonical path read once. A file that is not a symlink canonicalises to its
+    /// directory's canonical path and its own name, so the containment test needs only the directory's.
+    pub(crate) fn safe_regular_file(&mut self, path: &Path) -> io::Result<bool> {
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Ok(false);
+        }
+        let canonical_root = self.canonical_root().map_err(|refusal| refusal.error())?;
+        let canonical_file = match (path.parent(), path.file_name()) {
+            (Some(parent), Some(name)) if name != "." && name != ".." => {
+                self.canonical_dir(parent).map_err(|refusal| refusal.error())?.join(name)
+            }
+            _ => fs::canonicalize(path)?,
+        };
+        Ok(canonical_file.starts_with(canonical_root))
+    }
+
+    fn marker(directory: &Path) -> Result<bool, Refusal> {
+        match fs::symlink_metadata(directory.join(AGENT_RETRIEVAL_DENY_MARKER)) {
+            Ok(metadata) if metadata.is_file() => Ok(true),
+            Ok(_) => Err(Refusal::new(
+                io::ErrorKind::PermissionDenied,
+                "Retrieval marker must be an unredirected regular file",
+            )),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(Refusal::of(error)),
+        }
+    }
+
+    /// The verdict on one directory below the root, given the verdict on its parent (the loop of `retrieval_path_admission` for a
+    /// component that is not the last): redirected, absent or unordinary material refuses; a deny marker withholds.
+    fn judge_directory(directory: &Path) -> Result<Chain, Refusal> {
+        let metadata = fs::symlink_metadata(directory).map_err(Refusal::of)?;
+        if metadata.file_type().is_symlink() || (!metadata.is_dir() && !metadata.is_file()) {
+            return Err(Refusal::new(io::ErrorKind::PermissionDenied, "Retrieval member is redirected or not ordinary material"));
+        }
+        if !metadata.is_dir() {
+            return Err(Refusal::new(io::ErrorKind::InvalidInput, "Retrieval parent is not a directory"));
+        }
+        Ok(if Self::marker(directory)? { Chain::Withheld } else { Chain::Open })
+    }
+
+    fn chain(&mut self, directory: &Path, canonical_root: &Path) -> Result<Chain, Refusal> {
+        if let Some(known) = self.chains.get(directory) {
+            return known.clone();
+        }
+        let verdict = if directory == canonical_root {
+            Self::marker(directory).map(|withheld| if withheld { Chain::Withheld } else { Chain::Open })
+        } else {
+            match directory.parent() {
+                Some(parent) => match self.chain(parent, canonical_root) {
+                    Ok(Chain::Open) => Self::judge_directory(directory),
+                    other => other,
+                },
+                None => Err(Refusal::new(io::ErrorKind::InvalidInput, "Retrieval source is outside its owner boundary")),
+            }
+        };
+        self.chains.insert(directory.to_path_buf(), verdict.clone());
+        verdict
+    }
+
+    /// `retrieval_admission` for a member of the world (never an absent suffix), each ancestor judged once for the scan.
+    fn admission(&mut self, source: &Path) -> io::Result<bool> {
+        let relative = source.strip_prefix(self.world_root).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidInput, "Retrieval source is outside its owner boundary")
+        })?;
+        if !relative.components().all(|part| matches!(part, Component::Normal(_))) {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "Retrieval source requires a normal member path"));
+        }
+        let canonical = self.canonical_root().map_err(|refusal| refusal.error())?;
+        let root_is_directory = self
+            .root_is_directory
+            .get_or_insert_with(|| match fs::symlink_metadata(&canonical) {
+                Ok(metadata) if metadata.is_dir() => Ok(()),
+                Ok(_) => Err(Refusal::new(io::ErrorKind::InvalidInput, "Retrieval owner root is not a directory")),
+                Err(error) => Err(Refusal::of(error)),
+            })
+            .clone();
+        root_is_directory.map_err(|refusal| refusal.error())?;
+        let Some(name) = relative.file_name() else {
+            // The root itself: only its own marker speaks.
+            return match self.chain(&canonical, &canonical).map_err(|refusal| refusal.error())? {
+                Chain::Open => Ok(true),
+                Chain::Withheld => Ok(false),
+            };
+        };
+        let directory = canonical.join(relative.parent().unwrap_or(Path::new("")));
+        if self.chain(&directory, &canonical).map_err(|refusal| refusal.error())? == Chain::Withheld {
+            return Ok(false);
+        }
+        let member = directory.join(name);
+        let metadata = match fs::symlink_metadata(&member) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(true),
+            Err(error) => return Err(error),
+        };
+        if metadata.file_type().is_symlink() || (!metadata.is_dir() && !metadata.is_file()) {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Retrieval member is redirected or not ordinary material"));
+        }
+        if metadata.is_dir() && Self::marker(&member).map_err(|refusal| refusal.error())? {
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    /// The compatibility projection (`retrieval_allowed`): a failed observation cannot grant readability.
+    pub(crate) fn retrieval_allowed(&mut self, source: &Path) -> bool {
+        self.admission(source).unwrap_or(false)
+    }
+
+    /// `collect_files` over this scan's memo.
+    pub(crate) fn collect_files(&mut self, root: &Path, depth: usize, files: &mut Vec<PathBuf>) -> io::Result<()> {
+        if depth > MAX_SCAN_DEPTH || !root.is_dir() {
+            return Ok(());
+        }
+        let mut entries = fs::read_dir(root)?.collect::<Result<Vec<_>, _>>()?;
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let path = entry.path();
+            let file_type = entry.file_type()?;
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if !should_skip_dir(&name) {
+                    self.collect_files(&path, depth + 1, files)?;
+                }
+            } else if file_type.is_file()
+                && entry.file_name() != AGENT_RETRIEVAL_DENY_MARKER
+                && !is_system_artifact(&entry.file_name())
+                && self.safe_regular_file(&path)?
+            {
+                files.push(path);
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Directories no scan descends into: version control, build output, and the
 /// state or vendored bytes a tool keeps for itself. None of it is something a
 /// person wrote or an agent should retrieve, and all of it churns: a GitNexus
@@ -503,37 +712,14 @@ fn is_system_artifact(name: &std::ffi::OsStr) -> bool {
     name == ".DS_Store"
 }
 
+#[cfg(test)]
 pub(crate) fn collect_files(
     root: &Path,
     world_root: &Path,
     depth: usize,
     files: &mut Vec<PathBuf>,
 ) -> io::Result<()> {
-    if depth > MAX_SCAN_DEPTH || !root.is_dir() {
-        return Ok(());
-    }
-    let mut entries = fs::read_dir(root)?.collect::<Result<Vec<_>, _>>()?;
-    entries.sort_by_key(|entry| entry.file_name());
-    for entry in entries {
-        let path = entry.path();
-        let file_type = entry.file_type()?;
-        if file_type.is_symlink() {
-            continue;
-        }
-        if file_type.is_dir() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if !should_skip_dir(&name) {
-                collect_files(&path, world_root, depth + 1, files)?;
-            }
-        } else if file_type.is_file()
-            && entry.file_name() != AGENT_RETRIEVAL_DENY_MARKER
-            && !is_system_artifact(&entry.file_name())
-            && safe_regular_file(world_root, &path)?
-        {
-            files.push(path);
-        }
-    }
-    Ok(())
+    ScanMemo::new(world_root).collect_files(root, depth, files)
 }
 
 // Collects a subtree's source bindings under one provenance/standing/treatment;
@@ -619,8 +805,9 @@ fn insert_admitted_bindings(
     bindings: &mut BTreeMap<String, SourceBinding>,
     admit: impl Fn(&str) -> bool,
 ) -> io::Result<usize> {
+    let mut scan = ScanMemo::new(world_root);
     let mut files = Vec::new();
-    collect_files(scan_root, world_root, 0, &mut files)?;
+    scan.collect_files(scan_root, 0, &mut files)?;
     let wiki_source = if world_ref == CONTROL_WORLD_REF
         && scan_root == world_root.join(ROOT_WIKI_DIR).as_path()
     {
@@ -650,15 +837,19 @@ fn insert_admitted_bindings(
         }
         seen += 1;
         let reference = source_ref(world_ref, &relative);
-        bindings.entry(reference.clone()).or_insert(SourceBinding {
-            source_ref: reference,
-            path: relative,
-            roles: roles.iter().map(|role| (*role).to_owned()).collect(),
-            provenance: provenance.to_owned(),
-            standing: standing.to_owned(),
-            treatment: treatment.to_owned(),
-            agent_retrieval_allowed: retrieval_allowed(world_root, &file),
-        });
+        // A source an earlier pass bound (a skill's files, before the Control/user aperture fallback walks them again) keeps its
+        // binding, so its admission is not observed a second time.
+        if let std::collections::btree_map::Entry::Vacant(slot) = bindings.entry(reference.clone()) {
+            slot.insert(SourceBinding {
+                source_ref: reference,
+                path: relative,
+                roles: roles.iter().map(|role| (*role).to_owned()).collect(),
+                provenance: provenance.to_owned(),
+                standing: standing.to_owned(),
+                treatment: treatment.to_owned(),
+                agent_retrieval_allowed: scan.retrieval_allowed(&file),
+            });
+        }
     }
     Ok(seen)
 }
@@ -977,6 +1168,45 @@ pub(crate) fn project_binding_for_parsed_path(
     Ok(None)
 }
 
+/// The bound members by comparison key (`normal_member_key` of a binding's path), so an explicit relation finds the bindings its
+/// path replaces by a lookup. The scan this stands in for re-keyed every binding for every relation — quadratic, and almost half of
+/// every Central action's time (a `central.time.policy` read spent 25 of its 55 ms there; 20 Oct measurement). The index is built when
+/// the first relation needs it, so a ground with no relations never keys a binding, and a binding whose path will not key still fails
+/// the walk at the same point, on the same first binding. A hit is checked against the binding standing at that ref now: a later
+/// relation may have overwritten a ref with another path, and a stale hit must not remove it.
+#[derive(Default)]
+struct MemberIndex(Option<HashMap<PathBuf, Vec<String>>>);
+
+impl MemberIndex {
+    /// Remove from `bindings` every binding whose path names the member `key`.
+    fn remove_members(&mut self, bindings: &mut BTreeMap<String, SourceBinding>, key: &PathBuf) -> io::Result<()> {
+        if self.0.is_none() {
+            let mut by_key = HashMap::<PathBuf, Vec<String>>::new();
+            for (reference, binding) in bindings.iter() {
+                by_key.entry(crate::source_safety::normal_member_key(&binding.path)?).or_default().push(reference.clone());
+            }
+            self.0 = Some(by_key);
+        }
+        let Some(references) = self.0.as_mut().and_then(|index| index.remove(key)) else { return Ok(()) };
+        for reference in references {
+            let standing = bindings.get(&reference)
+                .map(|binding| crate::source_safety::normal_member_key(&binding.path))
+                .transpose()?;
+            if standing.as_ref() == Some(key) {
+                bindings.remove(&reference);
+            }
+        }
+        Ok(())
+    }
+
+    /// Note a binding the caller put at `reference` for the member `key`.
+    fn inserted(&mut self, key: PathBuf, reference: &str) {
+        if let Some(index) = self.0.as_mut() {
+            index.entry(key).or_default().push(reference.to_owned());
+        }
+    }
+}
+
 pub fn project_source_bindings(project_root: &Path) -> io::Result<Vec<SourceBinding>> {
     let manifest = read_project_manifest(project_root)?;
     let validation = manifest.validate();
@@ -1030,24 +1260,22 @@ pub fn project_source_bindings(project_root: &Path) -> io::Result<Vec<SourceBind
         }
     }
 
+    let mut members = MemberIndex::default();
+    let mut scan = ScanMemo::new(project_root);
     for relation in relations {
         let relative = relation.path.clone();
         let path = project_root.join(&relative);
-        if !safe_regular_file(project_root, &path)? {
+        if !scan.safe_regular_file(&path)? {
             continue;
         }
         // An explicit recognised relation is the identity/standing authority for its path.
         // Remove the aperture fallback first so one physical source produces one logical change.
         let member_key = crate::source_safety::normal_member_key(&relative)?;
-        let mut replaced = Vec::new();
-        for (reference, binding) in &bindings {
-            if crate::source_safety::normal_member_key(&binding.path)? == member_key {
-                replaced.push(reference.clone());
-            }
-        }
-        for reference in replaced { bindings.remove(&reference); }
+        members.remove_members(&mut bindings, &member_key)?;
+        let reference = relation.source_ref.clone();
+        members.inserted(member_key, &reference);
         bindings.insert(
-            relation.source_ref.clone(),
+            reference,
             SourceBinding {
                 source_ref: relation.source_ref,
                 path: relative,
@@ -1055,7 +1283,7 @@ pub fn project_source_bindings(project_root: &Path) -> io::Result<Vec<SourceBind
                 provenance: relation.provenance,
                 standing: relation.standing,
                 treatment: relation.treatment,
-                agent_retrieval_allowed: retrieval_allowed(project_root, &path),
+                agent_retrieval_allowed: scan.retrieval_allowed(&path),
             },
         );
     }
@@ -1113,24 +1341,22 @@ pub fn control_source_bindings(central_root: &Path) -> io::Result<Vec<SourceBind
         )?;
     }
 
+    let mut members = MemberIndex::default();
+    let mut scan = ScanMemo::new(central_root);
     for relation in relations {
         let relative = relation.path.clone();
         let path = central_root.join(&relative);
-        if !safe_regular_file(central_root, &path)? {
+        if !scan.safe_regular_file(&path)? {
             continue;
         }
         // Same law as the project flow: an explicit recognised relation is the
         // identity/standing authority for its path; the tree fallback is replaced.
         let member_key = crate::source_safety::normal_member_key(&relative)?;
-        let mut replaced = Vec::new();
-        for (reference, binding) in &bindings {
-            if crate::source_safety::normal_member_key(&binding.path)? == member_key {
-                replaced.push(reference.clone());
-            }
-        }
-        for reference in replaced { bindings.remove(&reference); }
+        members.remove_members(&mut bindings, &member_key)?;
+        let reference = relation.source_ref.clone();
+        members.inserted(member_key, &reference);
         bindings.insert(
-            relation.source_ref.clone(),
+            reference,
             SourceBinding {
                 source_ref: relation.source_ref,
                 path: relative,
@@ -1138,7 +1364,7 @@ pub fn control_source_bindings(central_root: &Path) -> io::Result<Vec<SourceBind
                 provenance: relation.provenance,
                 standing: relation.standing,
                 treatment: relation.treatment,
-                agent_retrieval_allowed: retrieval_allowed(central_root, &path),
+                agent_retrieval_allowed: scan.retrieval_allowed(&path),
             },
         );
     }
@@ -2325,5 +2551,266 @@ mod now_record_tests {
             !bindings[0].agent_retrieval_allowed,
             "the owner's deny marker withholds the whole family"
         );
+    }
+}
+
+#[cfg(test)]
+mod member_index_tests {
+    use super::*;
+
+    fn binding(reference: &str, path: &str) -> SourceBinding {
+        SourceBinding {
+            source_ref: reference.to_owned(),
+            path: path.to_owned(),
+            roles: vec![],
+            provenance: "unresolved".into(),
+            standing: "unspecified".into(),
+            treatment: "test".into(),
+            agent_retrieval_allowed: true,
+        }
+    }
+
+    /// The scan the index replaced, verbatim: every relation re-keys every binding.
+    fn replace_by_scan(bindings: &mut BTreeMap<String, SourceBinding>, relative: &str, reference: &str) -> io::Result<()> {
+        let member_key = crate::source_safety::normal_member_key(relative)?;
+        let mut replaced = Vec::new();
+        for (existing, binding) in bindings.iter() {
+            if crate::source_safety::normal_member_key(&binding.path)? == member_key {
+                replaced.push(existing.clone());
+            }
+        }
+        for existing in replaced { bindings.remove(&existing); }
+        bindings.insert(reference.to_owned(), binding(reference, relative));
+        Ok(())
+    }
+
+    fn replace_by_index(index: &mut MemberIndex, bindings: &mut BTreeMap<String, SourceBinding>, relative: &str, reference: &str) -> io::Result<()> {
+        let member_key = crate::source_safety::normal_member_key(relative)?;
+        index.remove_members(bindings, &member_key)?;
+        index.inserted(member_key, reference);
+        bindings.insert(reference.to_owned(), binding(reference, relative));
+        Ok(())
+    }
+
+    fn tree(paths: &[(&str, &str)]) -> BTreeMap<String, SourceBinding> {
+        paths.iter().map(|(reference, path)| ((*reference).to_owned(), binding(reference, path))).collect()
+    }
+
+    /// The same relations, in the same order, over the same tree: the same bindings, or the same first error.
+    fn both(start: &[(&str, &str)], relations: &[(&str, &str)]) {
+        let (mut scanned, mut indexed) = (tree(start), tree(start));
+        let mut index = MemberIndex::default();
+        for (relative, reference) in relations {
+            let by_scan = replace_by_scan(&mut scanned, relative, reference);
+            let by_index = replace_by_index(&mut index, &mut indexed, relative, reference);
+            assert_eq!(by_scan.is_ok(), by_index.is_ok(), "{relative} -> {reference}: one refused, the other did not");
+            if let (Err(a), Err(b)) = (&by_scan, &by_index) { assert_eq!(a.kind(), b.kind()); return; }
+            assert_eq!(scanned, indexed, "after {relative} -> {reference}");
+        }
+    }
+
+    #[test]
+    fn the_index_replaces_exactly_what_the_scan_replaced() {
+        let fallback = [("c:a", "Control/user/a.md"), ("c:b", "Control/user/b.md"), ("c:b2", "Control/user/./b.md"), ("c:z", "Control/z.md")];
+        // A relation names a path the tree already binds (once, and twice through a spelling of it).
+        both(&fallback, &[("Control/user/a.md", "r:a")]);
+        both(&fallback, &[("Control/user/b.md", "r:b")]);
+        // A relation for a path nothing binds; then one for it again under another ref (the second replaces the first).
+        both(&fallback, &[("Control/new.md", "r:n1"), ("Control/new.md", "r:n2")]);
+        // A later relation overwrites a ref that stood for another path: the stale hit must not remove the new binding.
+        both(&fallback, &[("Control/user/a.md", "c:z"), ("Control/z.md", "r:z"), ("Control/user/a.md", "r:a2")]);
+        // The ref a relation takes is one the tree bound to the same member.
+        both(&fallback, &[("Control/user/a.md", "c:a"), ("Control/user/a.md", "c:a")]);
+        // Several relations in one pass, mixing all of it.
+        both(&fallback, &[("Control/user/b.md", "r:b"), ("Control/user/a.md", "c:b"), ("Control/user/b.md", "r:b3"), ("Control/z.md", "r:z")]);
+        // No relations, and no bindings.
+        both(&fallback, &[]);
+        both(&[], &[("Control/x.md", "r:x"), ("Control/x.md", "r:y")]);
+    }
+
+    #[test]
+    fn a_binding_whose_path_will_not_key_fails_the_walk_where_the_scan_did() {
+        // The scan never keyed a binding when there was no relation to compare; the index is built only when the first one needs it.
+        let bad = [("c:ok", "Control/ok.md"), ("c:bad", "../outside.md")];
+        let mut index = MemberIndex::default();
+        let mut bindings = tree(&bad);
+        let before = bindings.clone();
+        assert!(index.0.is_none() && bindings == before, "nothing is keyed before a relation asks");
+        assert!(replace_by_scan(&mut tree(&bad), "Control/ok.md", "r:ok").is_err());
+        assert!(replace_by_index(&mut index, &mut bindings, "Control/ok.md", "r:ok").is_err());
+        assert_eq!(bindings, before, "a refusal leaves the bindings as they stood");
+    }
+}
+
+#[cfg(test)]
+mod scan_memo_tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    /// A scratch ground outside the repository, removed on drop. Its path goes through a symlink where the platform has one
+    /// (macOS `/var` → `/private/var`), so the world root is not its own canonical path.
+    struct Ground(PathBuf);
+    impl Ground {
+        fn new(tag: &str) -> Self {
+            let path = std::env::temp_dir().join(format!("central-scan-memo-{tag}-{}-{}", std::process::id(), unix_seconds()));
+            let _ = fs::remove_dir_all(&path);
+            fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+        fn write(&self, relative: &str, content: &str) {
+            let path = self.0.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, content).unwrap();
+        }
+    }
+    impl Drop for Ground {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Every kind of thing a scan can meet.
+    fn anomalous(tag: &str) -> (Ground, PathBuf) {
+        let ground = Ground::new(tag);
+        let world = ground.0.join("world");
+        fs::create_dir_all(&world).unwrap();
+        let put = |relative: &str| {
+            let path = world.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, relative).unwrap();
+        };
+        put("Control/user/a.md");
+        put("Control/user/sub/b.md");
+        put("Control/user/sub/deeper/c.md");
+        put("Control/user/.DS_Store");
+        // A deny marker in the middle of a branch: it withholds that directory and everything below it.
+        put("Control/user/denied/.no-agent-retrieval");
+        put("Control/user/denied/d.md");
+        put("Control/user/denied/below/e.md");
+        // A marker that is a directory, not a regular file: a refusal, never silently open.
+        fs::create_dir_all(world.join("Control/user/oddmarker/.no-agent-retrieval")).unwrap();
+        put("Control/user/oddmarker/f.md");
+        // Redirections: a symlinked file, a symlinked directory inside the world, one that leaves it.
+        symlink(world.join("Control/user/a.md"), world.join("Control/user/link.md")).unwrap();
+        symlink(world.join("Control/user/sub"), world.join("Control/user/linkdir")).unwrap();
+        fs::create_dir_all(ground.0.join("outside")).unwrap();
+        fs::write(ground.0.join("outside/out.md"), "outside").unwrap();
+        symlink(ground.0.join("outside"), world.join("Control/escape")).unwrap();
+        // A marker at the root of a second world, to be checked on its own below.
+        put("Control/agents/now/x.json");
+        (ground, world)
+    }
+
+    /// The members the scan may ask about: everything under the world, symlinks and directories included.
+    fn everything(world: &Path) -> Vec<PathBuf> {
+        fn walk(directory: &Path, out: &mut Vec<PathBuf>) {
+            let mut entries: Vec<_> = fs::read_dir(directory).unwrap().map(|entry| entry.unwrap().path()).collect();
+            entries.sort();
+            for path in entries {
+                out.push(path.clone());
+                if path.is_dir() && !fs::symlink_metadata(&path).unwrap().file_type().is_symlink() {
+                    walk(&path, out);
+                }
+            }
+        }
+        let mut out = vec![world.to_path_buf()];
+        walk(world, &mut out);
+        out
+    }
+
+    #[test]
+    fn the_memo_answers_what_the_unmemoised_functions_answer() {
+        let (_ground, world) = anomalous("answers");
+        let mut memo = ScanMemo::new(&world);
+        for path in everything(&world) {
+            // Twice: the second answer comes from what the first learned, and must not change.
+            for round in 0..2 {
+                assert_eq!(
+                    memo.retrieval_allowed(&path),
+                    retrieval_allowed(&world, &path),
+                    "retrieval_allowed {} (round {round})",
+                    path.display()
+                );
+                let by_memo = memo.safe_regular_file(&path);
+                let by_function = safe_regular_file(&world, &path);
+                assert_eq!(by_memo.is_ok(), by_function.is_ok(), "safe_regular_file {} (round {round})", path.display());
+                if let (Ok(a), Ok(b)) = (&by_memo, &by_function) {
+                    assert_eq!(a, b, "safe_regular_file {} (round {round})", path.display());
+                }
+            }
+        }
+        // Spot-check that the fixture means what it says, so the equality above is not two copies of one wrong answer.
+        assert!(memo.retrieval_allowed(&world.join("Control/user/a.md")));
+        assert!(memo.retrieval_allowed(&world.join("Control/user/sub/deeper/c.md")));
+        assert!(!memo.retrieval_allowed(&world.join("Control/user/denied/d.md")), "a deny marker withholds its directory");
+        assert!(!memo.retrieval_allowed(&world.join("Control/user/denied/below/e.md")), "and everything below it");
+        assert!(!memo.retrieval_allowed(&world.join("Control/user/oddmarker/f.md")), "a marker that is not a regular file refuses");
+        assert!(!memo.retrieval_allowed(&world.join("Control/user/link.md")), "a symlinked file is redirected material");
+        assert!(!memo.safe_regular_file(&world.join("Control/user/link.md")).unwrap());
+        assert!(!memo.safe_regular_file(&world.join("Control/escape/out.md")).unwrap_or(false), "a file reached through a link out of the world is not safe");
+    }
+
+    #[test]
+    fn the_memo_collects_the_files_the_original_scan_collected() {
+        let (_ground, world) = anomalous("collect");
+        for scan_root in [world.join("Control/user"), world.join("Control"), world.join("Control/agents"), world.clone()] {
+            let mut by_memo = Vec::new();
+            ScanMemo::new(&world).collect_files(&scan_root, 0, &mut by_memo).unwrap();
+            let mut by_original = Vec::new();
+            collect_files_reference(&scan_root, &world, 0, &mut by_original).unwrap();
+            assert_eq!(by_memo, by_original, "{}", scan_root.display());
+            assert!(!by_memo.is_empty());
+        }
+    }
+
+    /// The scan as it stood before the memo, verbatim.
+    fn collect_files_reference(root: &Path, world_root: &Path, depth: usize, files: &mut Vec<PathBuf>) -> io::Result<()> {
+        if depth > MAX_SCAN_DEPTH || !root.is_dir() {
+            return Ok(());
+        }
+        let mut entries = fs::read_dir(root)?.collect::<Result<Vec<_>, _>>()?;
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let path = entry.path();
+            let file_type = entry.file_type()?;
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if !should_skip_dir(&name) {
+                    collect_files_reference(&path, world_root, depth + 1, files)?;
+                }
+            } else if file_type.is_file()
+                && entry.file_name() != AGENT_RETRIEVAL_DENY_MARKER
+                && !is_system_artifact(&entry.file_name())
+                && safe_regular_file(world_root, &path)?
+            {
+                files.push(path);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_root_that_is_not_a_directory_or_a_path_outside_the_world_refuses_as_before() {
+        let ground = Ground::new("refuses");
+        ground.write("file.md", "x");
+        let not_a_directory = ground.0.join("file.md");
+        let mut memo = ScanMemo::new(&not_a_directory);
+        assert_eq!(memo.admission(&not_a_directory.join("anything")).is_err(), retrieval_admission(&not_a_directory, &not_a_directory.join("anything")).is_err());
+        let world = ground.0.join("world");
+        fs::create_dir_all(&world).unwrap();
+        let mut memo = ScanMemo::new(&world);
+        let outside = ground.0.join("file.md");
+        assert!(memo.admission(&outside).is_err(), "outside its owner boundary");
+        assert!(retrieval_admission(&world, &outside).is_err());
+        assert!(!memo.retrieval_allowed(&outside));
+        // The root itself: only its own marker speaks.
+        assert_eq!(memo.admission(&world).unwrap(), retrieval_admission(&world, &world).unwrap());
+        fs::write(world.join(AGENT_RETRIEVAL_DENY_MARKER), "").unwrap();
+        let mut fresh = ScanMemo::new(&world);
+        assert_eq!(fresh.admission(&world).unwrap(), retrieval_admission(&world, &world).unwrap());
+        assert!(!fresh.retrieval_allowed(&world.join("x.md")), "a marker at the root withholds the whole world");
     }
 }
