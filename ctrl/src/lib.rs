@@ -251,7 +251,9 @@ pub use machine_account::{
     explain_account, AuthoredRoleSummary, DriftStatus, MachineAccount, MachineDriftEntry,
     MachineIdentity, MachineObservationRecord,
 };
-pub use personal::{create_personal_action_registry, register_personal_actions};
+pub use personal::{
+    create_personal_action_registry, register_personal_actions, register_personal_show_action,
+};
 pub use picker::{
     run_guided_action_picker, search_action_descriptors, NullTerminalSurface, StdioTerminalSurface,
     TerminalSurface,

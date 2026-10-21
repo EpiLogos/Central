@@ -499,7 +499,10 @@ fn control_apply_proposal_action(
     ActionResult::failure(Some("control.apply-proposal"),ResultStatus::UnavailableCapability,"Control acceptance requires a native human authority route; accepted_by_ref is attribution, not that authority",Some(json!({"accepted_by_ref":accepted_by_ref,"authored_source_mutated":false})))
 }
 
-pub fn register_personal_actions(registry: &mut ActionRegistry) {
+/// Install the person's ground reading, `personal.show` (read-only): the runtime catalogue installs it on its own
+/// (cli.rs `create_runtime_action_registry`), so the CLI, the macOS host and the O:I kernel reach it; the Control
+/// proposal actions stay with `register_personal_actions`, whose apply waits on a human-authority route.
+pub fn register_personal_show_action(registry: &mut ActionRegistry) {
     registry
         .register(
             descriptor(
@@ -512,6 +515,10 @@ pub fn register_personal_actions(registry: &mut ActionRegistry) {
             personal_show_action,
         )
         .expect("personal Action ids are valid");
+}
+
+pub fn register_personal_actions(registry: &mut ActionRegistry) {
+    register_personal_show_action(registry);
 
     let mut propose = descriptor(
         "control.propose-change",
@@ -655,6 +662,54 @@ mod tests {
         ));
         initialize_central(&root).unwrap();
         root
+    }
+
+    #[test]
+    fn personal_show_is_installed_in_the_runtime_catalogue_and_the_control_proposals_are_not() {
+        let registry = crate::cli::create_runtime_action_registry();
+        let show = registry
+            .get("personal.show")
+            .expect("personal.show installed");
+        assert_eq!(show.mutation_class, MutationClass::ReadOnly);
+        for library_only in [
+            "control.propose-change",
+            "control.review-proposal",
+            "control.apply-proposal",
+        ] {
+            assert!(
+                registry.get(library_only).is_none(),
+                "{library_only} stays library-only"
+            );
+        }
+        let root = root();
+        let options = RootOptions {
+            explicit_root: Some(root.clone()),
+            configured_root: None,
+            home: None,
+        };
+        let connectors = central_connector_sdk::ConnectorRegistry::default();
+        let connector_context = ConnectorContext {
+            platform: "test".into(),
+        };
+        let context = ActionExecutionContext {
+            root_options: &options,
+            connectors: &connectors,
+            connector_context: &connector_context,
+        };
+        let shown = registry.execute("personal.show", &json!({}), &context);
+        assert!(shown.ok, "{shown:?}");
+        let data = shown.data.unwrap();
+        assert_eq!(
+            data["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| entry["name"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["You", "Agents", "Machines", "Work"]
+        );
+        assert_eq!(data["profile_database"], false);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
