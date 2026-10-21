@@ -44,6 +44,20 @@ competing=[good('projectcentral.source.return',dict(proposal,expected_revision=c
 with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
     outcomes=list(pool.map(lambda ref:good('projectcentral.source.return_accept',{'project':'Proof','return_ref':ref,'expected_revision':cb,'acceptance':'human-accepted','accepted_by_ref':'human:test'}),competing))
 check(sum(r['outcome']=='accepted' for r in outcomes)==1 and sum(r['outcome']=='conflict' for r in outcomes)==4,'five native Return acceptance processes serialize one winner and four conflicts')
+# A comment asks for a different result (Approvals' Changes): kept on the pending Return, the source untouched, the decision still the owner's.
+ccurrent=good('projectcentral.source.read',{'project':'Proof','source_ref':source});cbytes=path.read_text()
+cref=good('projectcentral.source.return',dict(proposal,expected_revision=ccurrent['revision']['revision'],proposed_content='needs another pass\n'))['proposal']['return_ref']
+commented=good('projectcentral.source.return_comment',{'project':'Proof','return_ref':cref,'comment':'  Name the second source too.  ','commented_by_ref':'human:test'})
+check(commented['proposal']['status']=='pending' and [c['comment'] for c in commented['proposal']['comments']]==['Name the second source too.'] and commented['proposal']['comments'][0]['commented_by_ref']=='human:test' and not commented['authored_source_mutated'] and path.read_text()==cbytes,'a comment is kept on the pending Return and changes no source')
+again=good('projectcentral.source.return_comment',{'project':'Proof','return_ref':cref,'comment':'And date it.','commented_by_ref':'human:test'})
+check([c['comment'] for c in again['proposal']['comments']]==['Name the second source too.','And date it.'] and again['proposal']['comments'][0]['at_unix_ms']<=again['proposal']['comments'][1]['at_unix_ms'],'comments keep their order')
+check(good('projectcentral.source.returns',{'project':'Proof','limit':1})['entries'][0]['comments']==2,'the return list counts each Return comments')
+check(good('projectcentral.source.return_read',{'project':'Proof','return_ref':cref})['proposal']['comments'][1]['comment']=='And date it.','the agent reads the comments back')
+blank=run('projectcentral.source.return_comment',{'project':'Proof','return_ref':cref,'comment':'   ','commented_by_ref':'human:test'})
+check(not blank['ok'] and blank['status']=='invalid_input','an empty comment is refused')
+good('projectcentral.source.return_reject',{'project':'Proof','return_ref':cref})
+decided=run('projectcentral.source.return_comment',{'project':'Proof','return_ref':cref,'comment':'Too late.','commented_by_ref':'human:test'})
+check(not decided['ok'] and 'not pending' in decided['error']['message'] and path.read_text()==cbytes,'a decided Return takes no comment')
 # Authored human aperture: explicit acceptance text cannot grant authority.
 human=project/'ProjectCentral/user/authored.md';human.write_text('human ground')
 location=next(e['location'] for e in good('central.files.list',{'path':'Work/Proof/ProjectCentral/user'})['entries'] if e['name']=='authored.md')

@@ -38,7 +38,21 @@ struct SourceReturn {
     basis_source: Option<SourceBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     maintenance_authorization: Option<MaintenanceAuthorization>,
+    /// What a reviewer asked to change, oldest first (`return_comment`). A comment keeps the Return pending and changes no source;
+    /// its `commented_by_ref` is declared attribution, never human source authority.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    comments: Vec<ReturnComment>,
 }
+
+/// One reviewer's comment on a pending Return: what to change, who said so (declared), and when.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ReturnComment {
+    comment: String,
+    commented_by_ref: String,
+    at_unix_ms: u64,
+}
+/// A Return keeps at most this many comments; a longer review is a fresh proposal.
+const MAX_RETURN_COMMENTS: usize = 256;
 
 /// Historical operation attribution, never a deserializable native Principal
 /// and never permission to resend a retained proposal.
@@ -252,6 +266,7 @@ fn run(project: &Path, op: &str, input: &Value, central: &Path) -> io::Result<Va
                 None
             },
             maintenance_authorization: None,
+            comments: Vec::new(),
         };
         save(
             project,
@@ -308,7 +323,7 @@ fn run(project: &Path, op: &str, input: &Value, central: &Path) -> io::Result<Va
                 .unwrap();
             let r = load(project, &dir, &format!("{}{id}", prefix(project)?))?;
             let current = read_world_source(project, &r.source_ref)?;
-            entries.push(json!({"return_ref":r.return_ref,"source_ref":r.source_ref,"basis_revision":r.basis_revision,"status":r.status,"agent_session_ref":r.agent_session_ref,"current_revision":current.revision.revision}));
+            entries.push(json!({"return_ref":r.return_ref,"source_ref":r.source_ref,"basis_revision":r.basis_revision,"status":r.status,"agent_session_ref":r.agent_session_ref,"current_revision":current.revision.revision,"comments":r.comments.len()}));
             next = Some(name);
         }
         return Ok(
@@ -406,6 +421,54 @@ fn run(project: &Path, op: &str, input: &Value, central: &Path) -> io::Result<Va
     }
     if r.status != "pending" {
         return Err(invalid("Return is not pending"));
+    }
+    if op == "return_comment" {
+        // Approvals' Changes: ask the agent for a different result. The Return stays pending (Approve and Reject remain the
+        // owner's), the source is untouched, and the comment is kept on the Return for the agent's return_read.
+        let comment = input
+            .get("comment")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|comment| !comment.is_empty())
+            .ok_or_else(|| invalid("comment is required"))?;
+        if comment.len() > 16384 || comment.contains('\0') {
+            return Err(invalid(
+                "A comment must be bounded UTF-8 text (16384 bytes) without NUL",
+            ));
+        }
+        let by = text(input, "commented_by_ref")?;
+        if by.len() > 4096 {
+            return Err(invalid("commented_by_ref exceeds bounded size"));
+        }
+        if r.comments.len() >= MAX_RETURN_COMMENTS {
+            return Err(invalid(
+                "This Return keeps 256 comments already; ask for a fresh proposal",
+            ));
+        }
+        r.comments.push(ReturnComment {
+            comment: comment.into(),
+            commented_by_ref: by.into(),
+            at_unix_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(io::Error::other)?
+                .as_millis() as u64,
+        });
+        save(
+            project,
+            &dir,
+            &r,
+            crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+        )?;
+        return reading(project, &r).map_err(|error| {
+            crate::file_mutation::record_owner_error_with_ref(
+                error,
+                "source_return.after_comment_recording",
+                &r.return_ref,
+                Some(&r.source_ref),
+                Some(&r.basis_revision),
+                "source_not_changed_comment_record_acknowledged",
+            )
+        });
     }
     if op == "return_reject" {
         r.status = "rejected".into();
@@ -715,6 +778,10 @@ pub(crate) fn register(registry: &mut ActionRegistry) {
             "return_reject",
             (|_, i, c| action("return_reject", i, c)) as Handler,
         ),
+        (
+            "return_comment",
+            (|_, i, c| action("return_comment", i, c)) as Handler,
+        ),
     ] {
         let fields = match op {
             "return" => vec![
@@ -740,6 +807,12 @@ pub(crate) fn register(registry: &mut ActionRegistry) {
                 ("project", true),
                 ("return_ref", true),
                 ("acceptance", false),
+            ],
+            "return_comment" => vec![
+                ("project", true),
+                ("return_ref", true),
+                ("comment", true),
+                ("commented_by_ref", true),
             ],
             _ => vec![("project", true), ("return_ref", true)],
         };
