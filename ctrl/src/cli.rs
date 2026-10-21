@@ -1260,5 +1260,7 @@ pub fn create_runtime_action_registry() -> crate::action::ActionRegistry {
     crate::configuration::register_configuration_actions(&mut registry);
     // The person's notifications: personal.notify, kept with its delivery, and personal.notifications.list.
     crate::notification::register_notification_actions(&mut registry);
+    // The person's ground reading: personal.show (the Control proposal actions stay library-only).
+    crate::personal::register_personal_show_action(&mut registry);
     registry
 }

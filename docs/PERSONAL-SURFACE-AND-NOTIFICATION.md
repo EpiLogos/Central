@@ -11,6 +11,8 @@ This slice advances #51 and #52 without creating a personal-profile database or 
 - `control.review-proposal` — reads a proposal before acceptance;
 - `control.apply-proposal` — requires an explicit `accepted_by_ref` and only then writes the authored filesystem target.
 
+`personal.show` is also installed in the runtime catalogue on its own (`register_personal_show_action`, called by `create_runtime_action_registry`), so the CLI, the macOS host and the O:I kernel reach it. The three `control.*` proposal actions stay with the library registry: applying a proposal waits on a human-authority route.
+
 Proposal targets are bounded to `Control/user`, `Control/agents` and `Control/machines`; traversal paths are rejected. This is a proposal/acceptance path for durable preferences and context, not a learning loop. Direct filesystem edits remain visible because the authored files remain canonical.
 
 ## UserNotification Port
