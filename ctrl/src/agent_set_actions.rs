@@ -17,8 +17,8 @@ use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
 use crate::source_horizon::CONTROL_WORLD_REF;
 use crate::world::{
-    AgentSetMember, AgentSetRecord, AgentSetRef, AgentSetRegistry, WorldError, WorldGraph,
-    WORLD_DECLARATION_ABSENT_CODE,
+    AgentSetJoin, AgentSetMember, AgentSetRecord, AgentSetRef, AgentSetRegistry, WorldError,
+    WorldGraph, WORLD_DECLARATION_ABSENT_CODE,
 };
 
 pub const AGENT_SET_SAVE_ACTION: &str = "central.agent-set.save";
@@ -69,13 +69,22 @@ pub fn register_agent_set_actions(registry: &mut ActionRegistry) {
     let _ = registry.register(ActionDescriptor {
         id: AGENT_SET_PROPOSE_ACTION.into(),
         title: "Propose agent-set".into(),
-        description: "Propose a central.agent-set/v1 composition as generated source: typed members and orchestrator, create-only, stamped generated-proposal/unrecognised. Recognition stays with the human owner.".into(),
+        description: "Propose a central.agent-set/v1 composition as generated source: typed members, orchestrator and join, create-only, stamped generated-proposal/unrecognised. Recognition stays with the human owner.".into(),
         inputs: {
             let mut inputs = store_inputs("agent-set");
             inputs.push(input("ref", "string", true));
             inputs.push(input("revision", "string", true));
             inputs.push(input("members", "array<object>", true));
             inputs.push(input("orchestrator_agent_ref", "string", false));
+            inputs.push({
+                let mut join = input("join", "string", false);
+                join.choices = Some(
+                    ["none", "all", "first", "quorum", "weighted"]
+                        .map(String::from)
+                        .to_vec(),
+                );
+                join
+            });
             inputs.push(input("reason", "string", false));
             inputs
         },
@@ -726,16 +735,31 @@ fn agent_set_propose(
         Err(failure) => return failure,
     };
     let orchestrator = optional(input, "orchestrator_agent_ref");
+    let join = match optional(input, "join")
+        .map(|join| {
+            serde_json::from_value::<AgentSetJoin>(Value::String(join.clone())).map_err(|_| join)
+        })
+        .transpose()
+    {
+        Ok(join) => join,
+        Err(join) => {
+            return invalid(
+                action,
+                format!("`join` must be none, all, first, quorum or weighted, got {join:?}"),
+            )
+        }
+    };
     let reason = optional(input, "reason");
     let set_ref = match AgentSetRef::new(ref_.clone()) {
         Ok(set_ref) => set_ref,
         Err(error) => return invalid(action, error.to_string()),
     };
-    let record =
+    let mut record =
         match AgentSetRecord::proposed(set_ref, revision, members, orchestrator, action, reason) {
             Ok(record) => record,
             Err(error) => return invalid(action, format!("invalid agent-set proposal: {error}")),
         };
+    record.join = join;
     let record_json = match serde_json::to_value(&record) {
         Ok(value) => value,
         Err(error) => {
@@ -1473,6 +1497,86 @@ mod tests {
         assert_eq!(details["ref"], "oi-product-guardians");
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_agent_sets_join_is_saved_proposed_read_and_resolved_and_an_unknown_join_is_refused() {
+        let root = fixture_root();
+        let registry = registry();
+        let mut options = None;
+        let mut connectors = None;
+        let mut connector_context = None;
+        let context = context(&root, &mut options, &mut connectors, &mut connector_context);
+
+        // Saved with the record (the Agentset rack's Join writes it this way).
+        let saved = registry.execute(
+            AGENT_SET_SAVE_ACTION,
+            &json!({"scope": "root", "record": {"schema": "central.agent-set/v1", "ref": "docs-crew", "revision": "r1",
+                "members": [{"kind": "agent", "agent_ref": "agent/kite"}, {"kind": "agent", "agent_ref": "agent/cairn"}],
+                "join": "quorum"}}),
+            &context,
+        );
+        assert!(saved.ok, "{saved:?}");
+        let read = registry.execute(
+            AGENT_SET_READ_ACTION,
+            &json!({"scope": "root", "ref": "docs-crew"}),
+            &context,
+        );
+        assert_eq!(read.data.as_ref().unwrap()["record"]["join"], "quorum");
+        let resolved = registry.execute(
+            AGENT_SET_RESOLVE_ACTION,
+            &json!({"scope": "root", "ref": "docs-crew"}),
+            &context,
+        );
+        assert!(resolved.ok, "{resolved:?}");
+        assert_eq!(resolved.data.as_ref().unwrap()["join"], "quorum");
+
+        // Proposed with its join; a set with none authored carries none.
+        let proposed = registry.execute(
+            AGENT_SET_PROPOSE_ACTION,
+            &json!({"scope": "root", "ref": "review-pair", "revision": "r1",
+                "members": [{"kind": "agent", "agent_ref": "agent/flint"}], "join": "all"}),
+            &context,
+        );
+        assert!(proposed.ok, "{proposed:?}");
+        assert_eq!(proposed.data.as_ref().unwrap()["record"]["join"], "all");
+        let plain = registry.execute(
+            AGENT_SET_PROPOSE_ACTION,
+            &json!({"scope": "root", "ref": "plain-set", "revision": "r1",
+                "members": [{"kind": "agent", "agent_ref": "agent/lilt"}]}),
+            &context,
+        );
+        assert!(plain.data.as_ref().unwrap()["record"].get("join").is_none());
+
+        // A join that is none of the five is refused, saved or proposed, and nothing is written.
+        let bad_save = registry.execute(
+            AGENT_SET_SAVE_ACTION,
+            &json!({"scope": "root", "record": {"schema": "central.agent-set/v1", "ref": "odd-crew", "revision": "r1",
+                "members": [{"kind": "agent", "agent_ref": "agent/kite"}], "join": "sometimes"}}),
+            &context,
+        );
+        assert!(!bad_save.ok, "{bad_save:?}");
+        let bad_propose = registry.execute(
+            AGENT_SET_PROPOSE_ACTION,
+            &json!({"scope": "root", "ref": "odd-pair", "revision": "r1",
+                "members": [{"kind": "agent", "agent_ref": "agent/kite"}], "join": "sometimes"}),
+            &context,
+        );
+        assert!(!bad_propose.ok, "{bad_propose:?}");
+        assert!(bad_propose
+            .error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("`join` must be"));
+        for absent in ["odd-crew", "odd-pair"] {
+            let read = registry.execute(
+                AGENT_SET_READ_ACTION,
+                &json!({"scope": "root", "ref": absent}),
+                &context,
+            );
+            assert!(!read.ok, "{absent} was not written");
+        }
     }
 
     #[test]

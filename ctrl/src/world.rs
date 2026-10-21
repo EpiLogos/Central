@@ -498,6 +498,21 @@ fn validate_proposal_text(field: &str, value: &str) -> Result<(), WorldError> {
     Ok(())
 }
 
+/// How a set's members' returns combine into the set's one answer (O:I's Agentset rack `join`, Messages' groups `join`):
+/// `none` keeps one return, `all` waits for every member, `first` takes the first good return, `quorum` commits when enough
+/// members agree, `weighted` counts each return by its strength. Like the orchestrator, this is an authored relation, not a
+/// grant: it says how the set is meant to answer, and the runtime that combines returns (Software Factory's barrier, a harness's
+/// delegation) decides what it can honour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentSetJoin {
+    None,
+    All,
+    First,
+    Quorum,
+    Weighted,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentSetRecord {
     pub schema: String,
@@ -517,6 +532,10 @@ pub struct AgentSetRecord {
     /// orchestrates the product guardians without being one of them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub orchestrator_agent_ref: Option<String>,
+    /// How the members' returns combine. Absent means none is authored, which is the state of every
+    /// record written before this field existed. A relation, not a grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub join: Option<AgentSetJoin>,
     /// Provenance for a corrective revision. Absent on original authorship.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub correction: Option<AgentSetCorrection>,
@@ -535,6 +554,7 @@ impl AgentSetRecord {
             revision: revision.into(),
             members: Vec::new(),
             orchestrator_agent_ref: None,
+            join: None,
             correction: None,
             proposal: None,
         }
@@ -629,6 +649,9 @@ pub struct ResolvedAgentSet {
     /// relation, not a grant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub orchestrator_agent_ref: Option<String>,
+    /// The set's authored join, carried through as the orchestrator is. Absent when none is authored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub join: Option<AgentSetJoin>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -672,6 +695,7 @@ impl AgentSetRegistry {
             unavailable_agents,
             nested_sets: nested_sets.into_iter().collect(),
             orchestrator_agent_ref: root.orchestrator_agent_ref.clone(),
+            join: root.join,
         })
     }
 
