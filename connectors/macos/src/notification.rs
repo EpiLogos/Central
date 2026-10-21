@@ -47,6 +47,14 @@ impl UserNotification for MacOsNativeConnector {
                 "The AppleScript notification Connector does not support an explicit callback target.",
             ));
         }
+        // The machine rule that keeps cargo-driven processes from opening the
+        // real GUI holds for a posted notification as it does for open/reveal.
+        if super::native_surface_suppressed() {
+            return Err(PortError::provider(
+                "macOS notification suppressed: CENTRAL_NO_REAL_OPEN is set, so this process \
+                 (a cargo-driven test or dev run) may not post to the real Notification Center.",
+            ));
+        }
 
         let body = applescript_string(&input.body);
         let title = applescript_string(&input.title);

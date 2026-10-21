@@ -394,6 +394,22 @@ mod native_surface_suppression_tests {
             error.to_string().contains("suppressed"),
             "unexpected error: {error:?}"
         );
+        let posted = central_connector_sdk::UserNotification::deliver(
+            &connector,
+            &central_connector_sdk::NotificationRequest {
+                title: "Suppressed".into(),
+                body: String::new(),
+                subject_ref: None,
+                urgency: None,
+                category: None,
+                callback: None,
+                action_ref: None,
+                caller_ref: "test:suppression".into(),
+                provenance_refs: Vec::new(),
+            },
+        )
+        .expect_err("a suppressed process posts no notification");
+        assert!(posted.to_string().contains("suppressed"), "{posted:?}");
 
         // An empty value is a deliberate lift of the suppression, and an
         // injected executable is a test double, never the real GUI.

@@ -1200,22 +1200,42 @@ pub fn run_cli_with_runtime(
     }
 }
 
-pub fn run_cli_with_surface(
-    args: &[String],
-    environment: &CliEnvironment,
-    surface: &mut dyn TerminalSurface,
-) -> CliExecution {
+/// The Connector registry the CLI runs Actions against.
+pub fn create_cli_connector_registry() -> ConnectorRegistry {
     // The shipped cut composes git-sync (--features cli-git-sync) so
     // GitState-backed reads (central.git.census) answer on every platform
     // through the CLI, not only under a desktop host surface. Off by default:
     // the default dependency tree never carries the Connector (boundary
     // guard), and library embedders keep the lean registry.
-    #[cfg_attr(not(feature = "cli-git-sync"), allow(unused_mut))]
+    #[cfg_attr(
+        not(any(
+            feature = "cli-git-sync",
+            all(feature = "cli-macos-native", target_os = "macos")
+        )),
+        allow(unused_mut)
+    )]
     let mut connectors = create_default_connector_registry();
     #[cfg(feature = "cli-git-sync")]
     connectors
         .register(GitSynchronizerConnector::new())
         .expect("git-sync Connector manifest is valid");
+    // On macOS the shipped cut (--features cli-macos-native) also composes the
+    // person's host ports — NativeOpen, NativeReveal, UserNotification — so
+    // work.open, work.reveal and personal.notify answer through the CLI the
+    // kernel and agents call (cli_host_ports.rs). Off by default, as git-sync.
+    #[cfg(all(feature = "cli-macos-native", target_os = "macos"))]
+    connectors
+        .register(crate::cli_host_ports::CliHostPortsConnector::new())
+        .expect("CLI host ports Connector manifest is valid");
+    connectors
+}
+
+pub fn run_cli_with_surface(
+    args: &[String],
+    environment: &CliEnvironment,
+    surface: &mut dyn TerminalSurface,
+) -> CliExecution {
+    let connectors = create_cli_connector_registry();
     let connector_context = ConnectorContext::current();
     run_cli_with_runtime(args, environment, surface, &connectors, &connector_context)
 }
@@ -1238,5 +1258,7 @@ pub fn create_runtime_action_registry() -> crate::action::ActionRegistry {
     crate::system_disclosure::register_system_disclosure_action(&mut registry);
     crate::git_census::register_git_actions(&mut registry);
     crate::configuration::register_configuration_actions(&mut registry);
+    // The person's notifications: personal.notify, kept with its delivery, and personal.notifications.list.
+    crate::notification::register_notification_actions(&mut registry);
     registry
 }

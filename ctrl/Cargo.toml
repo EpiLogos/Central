@@ -19,6 +19,14 @@ native-ordinary-interruption-child = []
 # dependency optional and OFF by default — the default dependency tree never
 # carries it (enforced by the verify workflow boundary guard).
 cli-git-sync = ["dep:central-git-sync-connector"]
+# The shipped macOS cut composes the person's host ports (NativeOpen,
+# NativeReveal, UserNotification) from the macOS native Connector so
+# work.open, work.reveal and personal.notify answer through the CLI that the
+# O:I kernel and agents call (src/cli_host_ports.rs). Optional and OFF by
+# default like cli-git-sync: the default dependency tree never carries the
+# macOS extension package (verify workflow boundary guard), and on other
+# platforms the feature composes nothing.
+cli-macos-native = ["dep:central-macos-connectors"]
 
 [lib]
 name = "central_ctrl"
@@ -58,6 +66,10 @@ rusqlite = { version = "0.37", features = ["bundled", "backup"] }
 # composed by the shipped CLI via the cli-git-sync feature, optional for
 # library embedders.
 central-git-sync-connector = { path = "../connectors/git-sync", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The person's host ports for the shipped macOS CLI (cli-macos-native).
+central-macos-connectors = { path = "../connectors/macos", optional = true }
 
 [dev-dependencies]
 # Contract tests validate emitted documents against the frozen C0 JSON Schemas
