@@ -10,6 +10,8 @@ pub mod automation;
 pub mod central_computer;
 pub mod cli;
 pub mod cli_frontdoor;
+#[cfg(all(feature = "cli-macos-native", target_os = "macos"))]
+pub mod cli_host_ports;
 pub mod configuration;
 pub mod continuous_work;
 pub mod control;
@@ -30,6 +32,7 @@ pub mod local_endpoints;
 pub mod machine;
 pub mod machine_account;
 pub mod names;
+pub mod notification;
 pub mod pasu;
 pub mod personal;
 pub mod personal_history;

@@ -4,9 +4,8 @@ use crate::action::{
 };
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
-use central_connector_sdk::{NotificationRequest, PortErrorCode, USER_NOTIFICATION_PORT};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, to_value, Value};
+use serde_json::{json, Value};
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -55,7 +54,7 @@ fn descriptor(
     }
 }
 
-fn string_input(name: &str, required: bool) -> ActionInputDefinition {
+pub(crate) fn string_input(name: &str, required: bool) -> ActionInputDefinition {
     ActionInputDefinition {
         name: name.to_owned(),
         input_type: "string".to_owned(),
@@ -65,7 +64,11 @@ fn string_input(name: &str, required: bool) -> ActionInputDefinition {
     }
 }
 
-fn required_text(input: &Value, field: &str, action: &str) -> Result<String, ActionResult> {
+pub(crate) fn required_text(
+    input: &Value,
+    field: &str,
+    action: &str,
+) -> Result<String, ActionResult> {
     input
         .get(field)
         .and_then(Value::as_str)
@@ -82,7 +85,7 @@ fn required_text(input: &Value, field: &str, action: &str) -> Result<String, Act
         })
 }
 
-fn optional_text(input: &Value, field: &str) -> Option<String> {
+pub(crate) fn optional_text(input: &Value, field: &str) -> Option<String> {
     input
         .get(field)
         .and_then(Value::as_str)
@@ -91,7 +94,7 @@ fn optional_text(input: &Value, field: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn refs(input: &Value, field: &str, action: &str) -> Result<Vec<String>, ActionResult> {
+pub(crate) fn refs(input: &Value, field: &str, action: &str) -> Result<Vec<String>, ActionResult> {
     let Some(value) = input.get(field) else {
         return Ok(Vec::new());
     };
@@ -168,99 +171,6 @@ fn personal_show_action(
             "silent_preference_learning": false,
         }),
     )
-}
-
-fn notification_failure(
-    action: &str,
-    error: central_connector_sdk::PortError,
-    diagnostics: Value,
-) -> ActionResult {
-    let status = match error.code {
-        PortErrorCode::InvalidInput => ResultStatus::InvalidInput,
-        PortErrorCode::UnsupportedEnvironment
-        | PortErrorCode::MissingDependency
-        | PortErrorCode::CapabilityUnavailable => ResultStatus::UnavailableCapability,
-        _ => ResultStatus::ConnectorFailure,
-    };
-    ActionResult::failure(
-        Some(action),
-        status,
-        error.message.clone(),
-        Some(
-            json!({ "port": USER_NOTIFICATION_PORT.id, "provider_error": error, "diagnostics": diagnostics }),
-        ),
-    )
-}
-
-fn personal_notify_action(
-    _registry: &ActionRegistry,
-    input: &Value,
-    context: &ActionExecutionContext<'_>,
-) -> ActionResult {
-    let title = optional_text(input, "title").unwrap_or_default();
-    let body = optional_text(input, "body").unwrap_or_default();
-    let caller_ref = match required_text(input, "caller_ref", "personal.notify") {
-        Ok(value) => value,
-        Err(result) => return result,
-    };
-    let provenance_refs = match refs(input, "provenance_refs", "personal.notify") {
-        Ok(value) => value,
-        Err(result) => return result,
-    };
-    let request = NotificationRequest {
-        title,
-        body,
-        subject_ref: optional_text(input, "subject_ref"),
-        urgency: optional_text(input, "urgency"),
-        category: optional_text(input, "category"),
-        callback: optional_text(input, "callback"),
-        action_ref: optional_text(input, "action_ref"),
-        caller_ref,
-        provenance_refs,
-    };
-    if let Err(error) = request.validate() {
-        return notification_failure("personal.notify", error, json!({}));
-    }
-
-    let resolution = context
-        .connectors
-        .resolve(&USER_NOTIFICATION_PORT, context.connector_context);
-    let diagnostics = to_value(&resolution.diagnostics).expect("Connector diagnostics serialise");
-    let Some(connector) = resolution.connector else {
-        return ActionResult::failure(
-            Some("personal.notify"),
-            ResultStatus::UnavailableCapability,
-            format!(
-                "No eligible Connector implements {}.",
-                USER_NOTIFICATION_PORT.id
-            ),
-            Some(json!({ "port": USER_NOTIFICATION_PORT.id, "diagnostics": diagnostics })),
-        );
-    };
-    let Some(notification) = connector.user_notification() else {
-        return ActionResult::failure(
-            Some("personal.notify"),
-            ResultStatus::ConnectorFailure,
-            format!(
-                "Selected Connector does not expose {} implementation.",
-                USER_NOTIFICATION_PORT.id
-            ),
-            Some(
-                json!({ "port": USER_NOTIFICATION_PORT.id, "connector": connector.manifest().id, "diagnostics": diagnostics }),
-            ),
-        );
-    };
-    match notification.deliver(&request) {
-        Ok(delivery) => ActionResult::success(
-            "personal.notify",
-            json!({
-                "delivery": delivery,
-                "notification_delivery_is_human_acknowledgement": false,
-                "diagnostics": diagnostics,
-            }),
-        ),
-        Err(error) => notification_failure("personal.notify", error, diagnostics),
-    }
 }
 
 fn safe_control_target(root: &Path, target: &str) -> Result<PathBuf, String> {
@@ -603,28 +513,6 @@ pub fn register_personal_actions(registry: &mut ActionRegistry) {
         )
         .expect("personal Action ids are valid");
 
-    let mut notify = descriptor(
-        "personal.notify",
-        "Notify user",
-        "Request a provider-neutral user notification while keeping delivery distinct from human acknowledgement or approval.",
-        MutationClass::ExternallyMutating,
-        "notification-delivery",
-    );
-    notify.inputs = vec![
-        string_input("title", false),
-        string_input("body", false),
-        string_input("subject_ref", false),
-        string_input("urgency", false),
-        string_input("category", false),
-        string_input("callback", false),
-        string_input("action_ref", false),
-        string_input("caller_ref", true),
-    ];
-    notify.required_ports = vec![USER_NOTIFICATION_PORT.id.to_owned()];
-    registry
-        .register(notify, personal_notify_action)
-        .expect("personal Action ids are valid");
-
     let mut propose = descriptor(
         "control.propose-change",
         "Propose Control change",
@@ -673,6 +561,8 @@ pub fn register_personal_actions(registry: &mut ActionRegistry) {
 pub fn create_personal_action_registry() -> ActionRegistry {
     let mut registry = create_core_action_registry();
     register_personal_actions(&mut registry);
+    // The person's notifications are installed in the runtime catalogue too (cli.rs create_runtime_action_registry).
+    crate::notification::register_notification_actions(&mut registry);
     registry
 }
 
@@ -683,8 +573,8 @@ mod tests {
     use central_connector_sdk::{
         CapabilityProbe, Connector, ConnectorContext, ConnectorManifest, ConnectorPortDeclaration,
         NotificationAuthorizationState, NotificationCapabilities, NotificationCapabilityRequest,
-        NotificationDelivery, NotificationDeliveryState, PortContract, PortError, UserNotification,
-        CONNECTOR_API_VERSION,
+        NotificationDelivery, NotificationDeliveryState, NotificationRequest, PortContract,
+        PortError, UserNotification, CONNECTOR_API_VERSION, USER_NOTIFICATION_PORT,
     };
 
     struct NotificationFixture {
