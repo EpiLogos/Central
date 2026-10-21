@@ -613,12 +613,96 @@ fn work_matches<'a>(items: &'a [WorkItem], query: &str) -> Vec<&'a WorkItem> {
         .collect()
 }
 
+/// The two homes a path may name, as the root keeps them: the person's Control and their Work.
+const PATH_HOMES: [&str; 2] = ["Control", "Work"];
+
+/// A file or folder named by its Central-relative path — a page's file (`Control/user/flows/today.html`), a world's folder
+/// (`Work/O-I/ProjectCentral/user`) — as the root's own path refs name them (`central.path-ref/v1` `path`). It must stand inside
+/// the root's Control or Work, name no `..`, and exist; a link that leads outside that home is refused. Reading only: nothing is
+/// made or moved.
+fn select_path(
+    action_id: &str,
+    query: String,
+    context: &ActionExecutionContext<'_>,
+) -> Result<SelectedWork, ActionResult> {
+    let refuse = |message: String| {
+        ActionResult::failure(
+            Some(action_id),
+            ResultStatus::InvalidInput,
+            message,
+            Some(json!({ "query": query })),
+        )
+    };
+    let root = resolve_central_root(context.root_options)
+        .map_err(|message| {
+            ActionResult::failure(Some(action_id), ResultStatus::InvalidInput, message, None)
+        })?
+        .path;
+    let relative = Path::new(query.trim_end_matches('/'));
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(refuse(format!(
+            "{query} is no path inside the Central root: name it relative to the root, without `..`."
+        )));
+    }
+    let home = relative
+        .components()
+        .next()
+        .and_then(|component| component.as_os_str().to_str())
+        .filter(|first| PATH_HOMES.contains(first));
+    let Some(home) = home else {
+        return Err(refuse(format!(
+            "{query} stands outside the root's Control and Work: only what is yours there opens or shows."
+        )));
+    };
+    let target = match std::fs::canonicalize(root.join(relative)) {
+        Ok(target) => target,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(refuse(format!(
+                "Nothing stands at {query} in the Central root."
+            )))
+        }
+        Err(error) => return Err(refuse(format!("{query} cannot be read: {error}"))),
+    };
+    let within = std::fs::canonicalize(root.join(home))
+        .map(|home| target.starts_with(home))
+        .unwrap_or(false);
+    if !within {
+        return Err(refuse(format!(
+            "{query} leads outside the root's {home} (a link points elsewhere)."
+        )));
+    }
+    let name = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(home)
+        .to_owned();
+    Ok(SelectedWork {
+        query,
+        match_kind: "path",
+        item: WorkItem { name, path: target },
+        root,
+        diagnostics: ConnectorDiagnostics {
+            eligible: Vec::new(),
+            ineligible: Vec::new(),
+            selected_connector: None,
+        },
+    })
+}
+
 fn select_work(
     action_id: &str,
     input: &Value,
     context: &ActionExecutionContext<'_>,
 ) -> Result<SelectedWork, ActionResult> {
     let query = required_text(input, "query", action_id)?;
+    // A Work item's name is one directory's name; a query with a `/` names a file or folder by its path.
+    if query.contains('/') {
+        return select_path(action_id, query, context);
+    }
     let discovered = discover_work(action_id, context)?;
     let normalized = query.to_lowercase();
     let exact = discovered
@@ -991,7 +1075,7 @@ pub fn create_core_action_registry() -> ActionRegistry {
     let mut work_open = descriptor(
         "work.open",
         "Open Work item",
-        "Resolve one ordinary Work directory, then open it through the provider-neutral NativeOpen Port.",
+        "Resolve one ordinary Work directory, or a file or folder by its Central-relative path under Control or Work (a page's file, a world's folder), then open it through the provider-neutral NativeOpen Port.",
         MutationClass::ExternallyMutating,
         "work-item-open",
     );
@@ -1007,7 +1091,7 @@ pub fn create_core_action_registry() -> ActionRegistry {
     let mut work_reveal = descriptor(
         "work.reveal",
         "Reveal Work item",
-        "Resolve one ordinary Work directory, then reveal it through the provider-neutral NativeReveal Port.",
+        "Resolve one ordinary Work directory, or a file or folder by its Central-relative path under Control or Work (a page's file, a world's folder), then reveal it through the provider-neutral NativeReveal Port.",
         MutationClass::ExternallyMutating,
         "work-item-reveal",
     );

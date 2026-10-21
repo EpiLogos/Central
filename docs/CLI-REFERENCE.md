@@ -73,8 +73,8 @@ The composed registry is deliberately discovered at runtime through `action.list
 | `machine.verify` | verify authored intent against fresh observation; verifies a projects-`main` policy when given an AIKit reading | `machine verify <role> [--projection-reading <file.json>]` |
 | `work.list` | discover ordinary Work directories | `work list` |
 | `work.search` | search discovered Work by name | `work search <query>` |
-| `work.open` | open a Work item through `NativeOpen` | `work open <query>`, `open <query>` |
-| `work.reveal` | reveal a Work item through `NativeReveal` | `work reveal <query>` |
+| `work.open` | open a Work item, or a file or folder by its Central-relative path under `Control/` or `Work/` (a page's file, a world's folder), through `NativeOpen` | `work open <query>`, `open <query>` |
+| `work.reveal` | reveal a Work item, or a file or folder by its Central-relative path under `Control/` or `Work/`, through `NativeReveal` | `work reveal <query>` |
 | `projectcentral.inspect` | inspect ProjectCentral without mutating Project source | `action run projectcentral.inspect` |
 | `projectcentral.doctor` | verify ProjectCentral structure and bindings | `action run projectcentral.doctor` |
 | `projectcentral.init` | initialise ProjectCentral for an existing Project | `action run projectcentral.init` |

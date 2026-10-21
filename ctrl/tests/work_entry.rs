@@ -237,3 +237,77 @@ fn ambiguous_and_missing_work_selection_return_structured_invalid_input_before_n
         0
     );
 }
+
+#[test]
+fn a_pages_file_and_a_worlds_folder_open_and_show_by_their_central_paths() {
+    let root = temporary_directory("paths").join("Central");
+    initialize_central(&root).unwrap();
+    let flows = root.join("Control").join("user").join("flows");
+    fs::create_dir_all(&flows).unwrap();
+    fs::write(flows.join("today.html"), "<p>today</p>").unwrap();
+    let world = root
+        .join("Work")
+        .join("O-I")
+        .join("ProjectCentral")
+        .join("user");
+    fs::create_dir_all(&world).unwrap();
+    let before = fs::read_dir(root.join(".central")).unwrap().count();
+
+    // A page's file, by the path its location names.
+    let open = execute(
+        &root,
+        "work.open",
+        json!({ "query": "Control/user/flows/today.html" }),
+    );
+    assert_eq!(open.status, ResultStatus::Success, "{open:?}");
+    let data = open.data.as_ref().unwrap();
+    assert_eq!(data["match"], "path");
+    assert_eq!(data["item"]["name"], "today.html");
+    assert_eq!(
+        data["item"]["path"],
+        fs::canonicalize(flows.join("today.html"))
+            .unwrap()
+            .to_str()
+            .unwrap()
+    );
+    assert_eq!(data["native"]["port"], NATIVE_OPEN_PORT.id);
+
+    // A world's folder, with or without its trailing slash.
+    let reveal = execute(
+        &root,
+        "work.reveal",
+        json!({ "query": "Work/O-I/ProjectCentral/user/" }),
+    );
+    assert_eq!(reveal.status, ResultStatus::Success, "{reveal:?}");
+    assert_eq!(reveal.data.as_ref().unwrap()["item"]["name"], "user");
+    assert_eq!(
+        reveal.data.as_ref().unwrap()["native"]["port"],
+        NATIVE_REVEAL_PORT.id
+    );
+
+    // A Work item's name still selects the Work item.
+    let item = execute(&root, "work.open", json!({ "query": "O-I" }));
+    assert_eq!(item.data.as_ref().unwrap()["match"], "exact");
+
+    // Outside the root's Control and Work, above the root, absolute, missing, or led outside by a link: refused in words.
+    let outside = temporary_directory("outside");
+    fs::write(outside.join("secret.txt"), "not yours here").unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("Work").join("escape")).unwrap();
+    for (query, words) in [
+        ("../outside/secret.txt", "without `..`"),
+        ("/etc/hosts", "without `..`"),
+        (".central/state.json", "outside the root's Control and Work"),
+        ("Control/user/flows/missing.html", "Nothing stands at"),
+        ("Work/escape/secret.txt", "leads outside the root's Work"),
+    ] {
+        let refused = execute(&root, "work.open", json!({ "query": query }));
+        assert_eq!(refused.status, ResultStatus::InvalidInput, "{query}");
+        let message = &refused.error.as_ref().unwrap().message;
+        assert!(message.contains(words), "{query}: {message}");
+    }
+    assert_eq!(
+        fs::read_dir(root.join(".central")).unwrap().count(),
+        before,
+        "opening and showing write nothing"
+    );
+}
