@@ -253,42 +253,52 @@ impl Backend {
                 "Persistent bkmr map is not initialized",
             ));
         }
-        // bkmr's hybrid path feeds the limit straight into a sqlite-vec knn
-        // query, which rejects k above 4096. Full-text search has no such
-        // ceiling, so only the hybrid invocation is capped.
-        let limit = if hybrid { limit.min(100) } else { limit };
-        let mut args = vec![
-            if hybrid { "hsearch" } else { "search" }.into(),
-            "--json".into(),
-            "--np".into(),
-            "--limit".into(),
-            limit.to_string(),
-        ];
-        if !tags.is_empty() {
-            args.extend(["--tags".into(), tags.join(",")]);
-        }
-        // The end-of-options delimiter keeps a query beginning '-' as data.
-        if !query.is_empty() || hybrid {
-            let rendered = if hybrid {
-                // bkmr's hybrid search fuses an FTS5 arm with an embedding
-                // arm and hands both the same string, so a hyphenated term
-                // reaches FTS5 as column syntax here too
-                // (`hsearch "now-context"` fails with "no such column:
-                // context" and takes the whole map search with it). Only the
-                // terms FTS5 would read as syntax are quoted, so ordinary
-                // words still reach the embedding arm as the caller wrote them.
-                fts5_quote_unsafe_terms(query)
-            } else {
-                // Full-text search hands the query to SQLite FTS5, where a
-                // bare hyphen is column syntax: `aikit-knowledge-work-coverage-spec`
-                // failed the whole map search with "no such column: knowledge".
-                // Quoted terms read as the literals they are.
-                fts5_quote(query)
-            };
-            args.extend(["--".into(), rendered]);
-        }
+        let (args, hybrid) = search_args(query, tags, hybrid, limit);
         search_records(&self.run(&args)?, hybrid)
     }
+}
+
+/// The bkmr argv for one search, and whether it runs as a hybrid search. An
+/// empty (or all-whitespace) query is no text filter: bkmr would hand FTS5 an
+/// empty match (`fts5: syntax error near ""`) and fail, so the search runs as
+/// a plain listing narrowed by tags only, in either mode.
+fn search_args(query: &str, tags: &[String], hybrid: bool, limit: usize) -> (Vec<String>, bool) {
+    let hybrid = hybrid && !query.trim().is_empty();
+    // bkmr's hybrid path feeds the limit straight into a sqlite-vec knn
+    // query, which rejects k above 4096. Full-text search has no such
+    // ceiling, so only the hybrid invocation is capped.
+    let limit = if hybrid { limit.min(100) } else { limit };
+    let mut args: Vec<String> = vec![
+        if hybrid { "hsearch" } else { "search" }.into(),
+        "--json".into(),
+        "--np".into(),
+        "--limit".into(),
+        limit.to_string(),
+    ];
+    if !tags.is_empty() {
+        args.extend(["--tags".into(), tags.join(",")]);
+    }
+    if !query.trim().is_empty() {
+        // The end-of-options delimiter keeps a query beginning '-' as data.
+        let rendered = if hybrid {
+            // bkmr's hybrid search fuses an FTS5 arm with an embedding
+            // arm and hands both the same string, so a hyphenated term
+            // reaches FTS5 as column syntax here too
+            // (`hsearch "now-context"` fails with "no such column:
+            // context" and takes the whole map search with it). Only the
+            // terms FTS5 would read as syntax are quoted, so ordinary
+            // words still reach the embedding arm as the caller wrote them.
+            fts5_quote_unsafe_terms(query)
+        } else {
+            // Full-text search hands the query to SQLite FTS5, where a
+            // bare hyphen is column syntax: `aikit-knowledge-work-coverage-spec`
+            // failed the whole map search with "no such column: knowledge".
+            // Quoted terms read as the literals they are.
+            fts5_quote(query)
+        };
+        args.extend(["--".into(), rendered]);
+    }
+    (args, hybrid)
 }
 
 /// FTS5-quote each whitespace-separated term: every term becomes a double-
@@ -532,13 +542,31 @@ fn invoke(
 
 #[cfg(test)]
 mod tests {
-    use super::{fts5_quote, fts5_quote_unsafe_terms, parse_embedding_coverage};
+    use super::{fts5_quote, fts5_quote_unsafe_terms, parse_embedding_coverage, search_args};
     use crate::file_map_backend::Backend;
 
     fn info(embedder: &str, embedded: &str, table: &str) -> String {
         format!(
             "\x1b[1mbkmr\x1b[0m\n  Embedder: {embedder}\n  Embedded: {embedded}\n  Vector table: {table}\n"
         )
+    }
+
+    #[test]
+    fn empty_query_is_no_text_filter_in_every_mode() {
+        for hybrid in [false, true] {
+            for query in ["", "   "] {
+                let (args, ran_hybrid) = search_args(query, &["a".into()], hybrid, 500);
+                assert!(!ran_hybrid, "{query:?} hybrid={hybrid}");
+                assert_eq!(args[0], "search");
+                assert!(!args.iter().any(|a| a == "--"), "{args:?}");
+                assert!(args.iter().any(|a| a == "a"), "tags still narrow: {args:?}");
+                assert!(args.iter().any(|a| a == "500"), "{args:?}");
+            }
+        }
+        let (args, ran_hybrid) = search_args("now-context", &[], true, 500);
+        assert!(ran_hybrid);
+        assert_eq!(args[0], "hsearch");
+        assert_eq!(args.last().unwrap(), "\"now-context\"");
     }
 
     #[test]
