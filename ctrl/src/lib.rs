@@ -221,14 +221,14 @@ pub use control_skills::{
     SKILL_MANIFEST_SCHEMA,
 };
 pub use development_field::{
-    ensure_project_self, ensure_root_self, inspect_project_development_field,
+    ensure_project_docs, ensure_root_self, inspect_project_development_field,
     inspect_root_development_field, read_machine_oi_suite_policy,
     register_development_field_actions, DevelopmentFieldReading, DevelopmentSourceRelations,
     ExBinding, ExReading, MachineOiSuitePolicyReading, ResolvedDevelopmentSource,
     SelfApertureReading, SelfApertureStatus, SelfEnsureReceipt, TierBinding, TierReading,
     UnboundSelfSource, UxBinding, UxReading, DEVELOPMENT_READING_SCHEMA,
-    DEVELOPMENT_RELATIONS_SCHEMA, OI_SUITE_POLICY_BINDING_KIND, PROJECT_DEVELOPMENT_RELATIONS,
-    PROJECT_SELF_DIR, ROOT_DEVELOPMENT_RELATIONS, ROOT_SELF_DIR,
+    DEVELOPMENT_RELATIONS_SCHEMA, LEGACY_PROJECT_SELF_DIR, OI_SUITE_POLICY_BINDING_KIND,
+    PROJECT_DEVELOPMENT_RELATIONS, PROJECT_DOCS_DIR, ROOT_DEVELOPMENT_RELATIONS, ROOT_SELF_DIR,
 };
 pub use engineering_ground::{
     register_engineering_ground_actions, render_engineering_ground, write_engineering_ground,

@@ -112,8 +112,9 @@ mod unix_tests {
         assert!(macos.get("projectcentral.source.read").is_some());
         assert!(macos.get("projectcentral.source.write").is_some());
         assert!(macos.get("central.self.inspect").is_some());
+        assert!(macos.get("projectcentral.docs.inspect").is_some());
+        assert!(macos.get("projectcentral.docs.retain-tier").is_some());
         assert!(macos.get("projectcentral.self.inspect").is_some());
-        assert!(macos.get("projectcentral.self.retain-tier").is_some());
         assert!(macos.get("machine.oi-suite-policy").is_some());
         assert!(macos.get("control.skills.inspect").is_some());
         assert!(macos.get("control.skills.retire").is_some());
