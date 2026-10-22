@@ -30,7 +30,14 @@ use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const ROOT_SELF_DIR: &str = "Control/self";
-pub const PROJECT_SELF_DIR: &str = "ProjectCentral/self";
+/// A Project's own account of itself on the six tiers, which are the offices
+/// of its documentation.
+pub const PROJECT_DOCS_DIR: &str = "ProjectCentral/docs";
+/// The retired home of the Project aperture. Inspect names it as a legacy
+/// state; its files are not listed, nothing is written to it, nothing is moved.
+pub const LEGACY_PROJECT_SELF_DIR: &str = "ProjectCentral/self";
+const PROJECT_DOCS_ACTION_PREFIX: &str = "projectcentral.docs.";
+const LEGACY_PROJECT_SELF_ACTION_PREFIX: &str = "projectcentral.self.";
 pub const ROOT_DEVELOPMENT_RELATIONS: &str = "Control/relations/development-field.json";
 pub const PROJECT_DEVELOPMENT_RELATIONS: &str = "ProjectCentral/relations/development-field.json";
 pub const DEVELOPMENT_RELATIONS_SCHEMA: &str = "central.development-field-sources/v1";
@@ -44,6 +51,9 @@ const MAX_SELF_DEPTH: usize = 16;
 pub enum SelfApertureStatus {
     Present,
     LegacyMigratableAbsence,
+    /// Project scale only: the aperture is absent from `ProjectCentral/docs`
+    /// while the retired `ProjectCentral/self` directory is present.
+    LegacySelfAperture,
     InvalidBrokenSourceState,
     AmbiguousSourceRelation,
 }
@@ -404,33 +414,45 @@ fn inspect_scope(
     world_root: &Path,
     scope_ref: &str,
     self_prefix: &str,
+    legacy_prefix: Option<&str>,
     relation_source: &str,
     source_bindings: io::Result<Vec<SourceBinding>>,
 ) -> io::Result<DevelopmentFieldReading> {
     let self_path = world_root.join(self_prefix);
     let relation_path = world_root.join(relation_source);
     let metadata = fs::symlink_metadata(&self_path);
+    // A retired aperture directory (an ordinary directory, not a symlink) is
+    // named, never read as this aperture and never moved.
+    let legacy = legacy_prefix.filter(|legacy| {
+        fs::symlink_metadata(world_root.join(legacy)).is_ok_and(|metadata| metadata.is_dir())
+    });
     let mut issues = Vec::new();
-    let mut status = match metadata {
-        Err(error) if error.kind() == io::ErrorKind::NotFound && !relation_path.exists() => {
+    let mut status = match (metadata, legacy) {
+        (Err(error), Some(legacy)) if error.kind() == io::ErrorKind::NotFound => {
+            issues.push(format!(
+                "{legacy} is the retired home of this Project's documentation aperture, which is now {self_prefix}. Nothing has been moved: projectcentral.docs.ensure creates {self_prefix}, and sources under {legacy} are moved by hand."
+            ));
+            SelfApertureStatus::LegacySelfAperture
+        }
+        (Err(error), _) if error.kind() == io::ErrorKind::NotFound && !relation_path.exists() => {
             SelfApertureStatus::LegacyMigratableAbsence
         }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+        (Err(error), _) if error.kind() == io::ErrorKind::NotFound => {
             issues.push(
                 "Development Field relations exist while the self-description aperture is absent."
                     .to_owned(),
             );
             SelfApertureStatus::InvalidBrokenSourceState
         }
-        Err(error) => return Err(error),
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+        (Err(error), _) => return Err(error),
+        (Ok(metadata), _) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
             issues.push(
                 "self-description aperture must be an ordinary directory, not a file or symlink"
                     .to_owned(),
             );
             SelfApertureStatus::InvalidBrokenSourceState
         }
-        Ok(_) => SelfApertureStatus::Present,
+        (Ok(_), _) => SelfApertureStatus::Present,
     };
 
     let relations = match read_relations(&relation_path, scope_ref) {
@@ -585,6 +607,7 @@ pub fn inspect_root_development_field(central_root: &Path) -> io::Result<Develop
         central_root,
         CONTROL_WORLD_REF,
         ROOT_SELF_DIR,
+        None,
         ROOT_DEVELOPMENT_RELATIONS,
         control_source_bindings(central_root),
     )
@@ -604,7 +627,8 @@ pub fn inspect_project_development_field(
     inspect_scope(
         project_root,
         &format!("project:{}", manifest.project_id),
-        PROJECT_SELF_DIR,
+        PROJECT_DOCS_DIR,
+        Some(LEGACY_PROJECT_SELF_DIR),
         PROJECT_DEVELOPMENT_RELATIONS,
         project_source_bindings(project_root),
     )
@@ -643,18 +667,20 @@ pub fn ensure_root_self(central_root: &Path) -> io::Result<SelfEnsureReceipt> {
     })
 }
 
-pub fn ensure_project_self(project_root: &Path) -> io::Result<SelfEnsureReceipt> {
+/// Creates `ProjectCentral/docs` when absent. A legacy `ProjectCentral/self`
+/// is left exactly where it is.
+pub fn ensure_project_docs(project_root: &Path) -> io::Result<SelfEnsureReceipt> {
     let manifest = read_project_manifest(project_root)?;
     let before = inspect_project_development_field(project_root)?
         .self_aperture
         .status;
-    ensure_self(project_root, PROJECT_SELF_DIR)?;
+    ensure_self(project_root, PROJECT_DOCS_DIR)?;
     let after = inspect_project_development_field(project_root)?
         .self_aperture
         .status;
     Ok(SelfEnsureReceipt {
         scope_ref: format!("project:{}", manifest.project_id),
-        path: PROJECT_SELF_DIR.to_owned(),
+        path: PROJECT_DOCS_DIR.to_owned(),
         previous_status: before,
         current_status: after,
         documentation_moved: false,
@@ -1167,7 +1193,7 @@ fn project_inspect_action(
     input: &Value,
     context: &ActionExecutionContext<'_>,
 ) -> ActionResult {
-    const ACTION: &str = "projectcentral.self.inspect";
+    const ACTION: &str = "projectcentral.docs.inspect";
     let root = match project_context(ACTION, input, context) {
         Ok(root) => root,
         Err(result) => return result,
@@ -1207,12 +1233,12 @@ fn project_ensure_action(
     input: &Value,
     context: &ActionExecutionContext<'_>,
 ) -> ActionResult {
-    const ACTION: &str = "projectcentral.self.ensure";
+    const ACTION: &str = "projectcentral.docs.ensure";
     let root = match project_context(ACTION, input, context) {
         Ok(root) => root,
         Err(result) => return result,
     };
-    ensure_project_self(&root)
+    ensure_project_docs(&root)
         .map(|receipt| {
             ActionResult::success(
                 ACTION,
@@ -1384,7 +1410,7 @@ fn project_source_create_action(
     input: &Value,
     context: &ActionExecutionContext<'_>,
 ) -> ActionResult {
-    const ACTION: &str = "projectcentral.self.source.create";
+    const ACTION: &str = "projectcentral.docs.source.create";
     let root = match project_context(ACTION, input, context) {
         Ok(root) => root,
         Err(result) => return result,
@@ -1433,11 +1459,11 @@ fn project_source_create_action(
     }
     let result = (|| {
         let _mutation = lock_development_action(&root, true, input, context)?;
-        let relative = create_text_source(&root, PROJECT_SELF_DIR, &member, content)?;
+        let relative = create_text_source(&root, PROJECT_DOCS_DIR, &member, content)?;
         let completion = (|| {
             let mut roles = vec![
                 "self-description-source".to_owned(),
-                "project-self-source-aperture".to_owned(),
+                "project-docs-source-aperture".to_owned(),
             ];
             if let Some(tier) = tier {
                 roles.push(format!("document-tier-{tier}"));
@@ -1594,7 +1620,7 @@ fn project_tier_action(
     input: &Value,
     context: &ActionExecutionContext<'_>,
 ) -> ActionResult {
-    const ACTION: &str = "projectcentral.self.tier.relate";
+    const ACTION: &str = "projectcentral.docs.tier.relate";
     let root = match project_context(ACTION, input, context) {
         Ok(root) => root,
         Err(result) => return result,
@@ -1618,7 +1644,7 @@ fn project_retain_tier_action(
     input: &Value,
     context: &ActionExecutionContext<'_>,
 ) -> ActionResult {
-    const ACTION: &str = "projectcentral.self.retain-tier";
+    const ACTION: &str = "projectcentral.docs.retain-tier";
     let root = match project_context(ACTION, input, context) {
         Ok(root) => root,
         Err(result) => return result,
@@ -1822,7 +1848,7 @@ fn project_ux_action(
     input: &Value,
     context: &ActionExecutionContext<'_>,
 ) -> ActionResult {
-    const ACTION: &str = "projectcentral.self.ux.relate";
+    const ACTION: &str = "projectcentral.docs.ux.relate";
     let root = match project_context(ACTION, input, context) {
         Ok(root) => root,
         Err(result) => return result,
@@ -1880,7 +1906,7 @@ fn project_ex_action(
     input: &Value,
     context: &ActionExecutionContext<'_>,
 ) -> ActionResult {
-    const ACTION: &str = "projectcentral.self.ex.relate";
+    const ACTION: &str = "projectcentral.docs.ex.relate";
     if let Err(result) = ex_authority(input, ACTION) {
         return result;
     }
@@ -1946,7 +1972,7 @@ fn project_resolve_action(
     input: &Value,
     context: &ActionExecutionContext<'_>,
 ) -> ActionResult {
-    const ACTION: &str = "projectcentral.self.resolve";
+    const ACTION: &str = "projectcentral.docs.resolve";
     let reference = match required(input, "ref", ACTION) {
         Ok(value) => value,
         Err(result) => return result,
@@ -2101,19 +2127,49 @@ pub fn register_development_field_actions(registry: &mut ActionRegistry) {
         (descriptor("central.self.ex.relate", "Relate root EX source", "Bind an observed-evidence source with human authorship/adoption to ex_ref and linked ux_refs. Agent-only calls cannot promote an experiential report.", MutationClass::LocallyMutating, "development-field-reading", ex_inputs()), root_ex_action),
         (descriptor("central.self.resolve", "Resolve root Development Field ref", "Resolve one ux_ref, ex_ref or linked SourceRef through Central's source/provenance/revision model.", MutationClass::ReadOnly, "development-field-reference", vec![text_input("ref", true)]), root_resolve_action),
         (descriptor("machine.oi-suite-policy", "Inspect machine O:I suite policy intent", "Read the authored opaque oi-suite-policy binding on a machine role. Installed-suite receipts and material executable observations remain owned outside Central.", MutationClass::ReadOnly, "machine-oi-suite-policy-reading", vec![text_input("role", true)]), machine_policy_action),
-        (descriptor("projectcentral.self.inspect", "Inspect Project self-description field", "Read the Project self aperture, tier bindings, UX/EX relations and their live source provenance/revisions without path reconstruction or source payload disclosure.", MutationClass::ReadOnly, "development-field-reading", vec![project()]), project_inspect_action),
-        (descriptor("projectcentral.self.ensure", "Ensure Project self-description aperture", "Add ProjectCentral/self when absent without moving native documentation, matrices, Skills, Methods, Wiki, governance or NOW.", MutationClass::LocallyMutating, "self-aperture-ensure-receipt", vec![project()]), project_ensure_action),
-        ({ let mut inputs=vec![project()]; inputs.extend(source_create_inputs()); descriptor("projectcentral.self.source.create", "Create Project self-description source", "Create one bounded source under ProjectCentral/self and record its explicit provenance/standing relation; location alone never confers human authorship.", MutationClass::LocallyMutating, "development-field-reading", inputs) }, project_source_create_action),
-        ({ let mut inputs=vec![project()]; inputs.extend(tier_inputs()); descriptor("projectcentral.self.tier.relate", "Relate Project source to document tier", "Bind a participating Project SourceRef to stable tier 0..5 with optional canonical label/path supplied by authored source.", MutationClass::LocallyMutating, "development-field-reading", inputs) }, project_tier_action),
-        ({ let inputs=vec![project(), text_input("source", true), ActionInputDefinition { name:"tier".to_owned(), input_type:"integer".to_owned(), required:true, choices:None, selection:None }, text_input("provenance", true), text_input("standing", true), text_input("canonical_label", false), text_input("canonical_path", false), text_input("acceptance", true)]; descriptor("projectcentral.self.retain-tier", "Relate retained native source into Project tier", "Record an accepted Project ground relation for an existing native source, retain its bytes/path in place, and bind its canonical SourceRef into stable tier 0..5.", MutationClass::LocallyMutating, "development-field-reading", inputs) }, project_retain_tier_action),
-        ({ let mut inputs=vec![project()]; inputs.extend(ux_inputs()); descriptor("projectcentral.self.ux.relate", "Relate Project UX source", "Bind a human-authored/adopted intended-experience source to ux_ref and tier 1 while preserving source standing/revision.", MutationClass::LocallyMutating, "development-field-reading", inputs) }, project_ux_action),
-        ({ let mut inputs=vec![project()]; inputs.extend(ex_inputs()); descriptor("projectcentral.self.ex.relate", "Relate Project EX source", "Bind a human-authored/adopted observed-evidence report to ex_ref, linked ux_refs and artifact/evidence refs. Agent-only calls are refused.", MutationClass::LocallyMutating, "development-field-reading", inputs) }, project_ex_action),
-        (descriptor("projectcentral.self.resolve", "Resolve Project Development Field ref", "Resolve one Project ux_ref, ex_ref or linked SourceRef through live Central source/provenance/revision relations.", MutationClass::ReadOnly, "development-field-reference", vec![project(), text_input("ref", true)]), project_resolve_action),
+    ];
+    let project_registrations: Vec<(ActionDescriptor, Handler)> = vec![
+        (descriptor("projectcentral.docs.inspect", "Inspect Project documentation aperture", "Read the Project documentation aperture (ProjectCentral/docs), its six tier bindings, UX/EX relations and their live source provenance/revisions without path reconstruction or source payload disclosure.", MutationClass::ReadOnly, "development-field-reading", vec![project()]), project_inspect_action),
+        (descriptor("projectcentral.docs.ensure", "Ensure Project documentation aperture", "Add ProjectCentral/docs when absent without moving native documentation, matrices, Skills, Methods, Wiki, governance or NOW; a legacy ProjectCentral/self stays where it is.", MutationClass::LocallyMutating, "self-aperture-ensure-receipt", vec![project()]), project_ensure_action),
+        ({ let mut inputs=vec![project()]; inputs.extend(source_create_inputs()); descriptor("projectcentral.docs.source.create", "Create Project documentation source", "Create one bounded source under ProjectCentral/docs and record its explicit provenance/standing relation; location alone never confers human authorship.", MutationClass::LocallyMutating, "development-field-reading", inputs) }, project_source_create_action),
+        ({ let mut inputs=vec![project()]; inputs.extend(tier_inputs()); descriptor("projectcentral.docs.tier.relate", "Relate Project source to document tier", "Bind a participating Project SourceRef to stable tier 0..5 with optional canonical label/path supplied by authored source.", MutationClass::LocallyMutating, "development-field-reading", inputs) }, project_tier_action),
+        ({ let inputs=vec![project(), text_input("source", true), ActionInputDefinition { name:"tier".to_owned(), input_type:"integer".to_owned(), required:true, choices:None, selection:None }, text_input("provenance", true), text_input("standing", true), text_input("canonical_label", false), text_input("canonical_path", false), text_input("acceptance", true)]; descriptor("projectcentral.docs.retain-tier", "Relate retained native source into Project tier", "Record an accepted Project ground relation for an existing native source, retain its bytes/path in place, and bind its canonical SourceRef into stable tier 0..5.", MutationClass::LocallyMutating, "development-field-reading", inputs) }, project_retain_tier_action),
+        ({ let mut inputs=vec![project()]; inputs.extend(ux_inputs()); descriptor("projectcentral.docs.ux.relate", "Relate Project UX source", "Bind a human-authored/adopted intended-experience source to ux_ref and tier 1 while preserving source standing/revision.", MutationClass::LocallyMutating, "development-field-reading", inputs) }, project_ux_action),
+        ({ let mut inputs=vec![project()]; inputs.extend(ex_inputs()); descriptor("projectcentral.docs.ex.relate", "Relate Project EX source", "Bind a human-authored/adopted observed-evidence report to ex_ref, linked ux_refs and artifact/evidence refs. Agent-only calls are refused.", MutationClass::LocallyMutating, "development-field-reading", inputs) }, project_ex_action),
+        (descriptor("projectcentral.docs.resolve", "Resolve Project Development Field ref", "Resolve one Project ux_ref, ex_ref or linked SourceRef through live Central source/provenance/revision relations.", MutationClass::ReadOnly, "development-field-reference", vec![project(), text_input("ref", true)]), project_resolve_action),
     ];
     for (descriptor, handler) in registrations {
         registry
             .register(descriptor, handler)
             .expect("Development Field Action ids are valid and unique");
+    }
+    // Each Project documentation Action also answers under its retired
+    // projectcentral.self.* id: the same handler, so the same result, until the
+    // callers that still bind those ids have moved.
+    for (descriptor, handler) in project_registrations {
+        let alias = legacy_self_alias(&descriptor);
+        registry
+            .register(descriptor, handler)
+            .expect("Development Field Action ids are valid and unique");
+        registry
+            .register(alias, handler)
+            .expect("Development Field Action ids are valid and unique");
+    }
+}
+
+fn legacy_self_alias(canonical: &ActionDescriptor) -> ActionDescriptor {
+    let operation = canonical
+        .id
+        .strip_prefix(PROJECT_DOCS_ACTION_PREFIX)
+        .expect("Project documentation Actions carry the projectcentral.docs. prefix");
+    ActionDescriptor {
+        id: format!("{LEGACY_PROJECT_SELF_ACTION_PREFIX}{operation}"),
+        title: format!("{} (deprecated alias)", canonical.title),
+        description: format!(
+            "Deprecated alias of {}. {}",
+            canonical.id, canonical.description
+        ),
+        ..canonical.clone()
     }
 }
 
@@ -2135,17 +2191,17 @@ mod tests {
     }
 
     #[test]
-    fn legacy_project_is_valid_but_self_absence_is_migratable() {
+    fn legacy_project_is_valid_but_docs_absence_is_migratable() {
         let (_temp, _central, project) = project_fixture();
         let reading = inspect_project_development_field(&project).unwrap();
         assert_eq!(
             reading.self_aperture.status,
             SelfApertureStatus::LegacyMigratableAbsence
         );
-        let receipt = ensure_project_self(&project).unwrap();
+        let receipt = ensure_project_docs(&project).unwrap();
         assert_eq!(receipt.current_status, SelfApertureStatus::Present);
         assert!(!receipt.documentation_moved);
-        assert!(project.join(PROJECT_SELF_DIR).is_dir());
+        assert!(project.join(PROJECT_DOCS_DIR).is_dir());
     }
 
     #[test]
@@ -2190,11 +2246,11 @@ mod tests {
     }
 
     #[test]
-    fn unbound_file_near_self_gains_no_human_authority() {
+    fn unbound_file_in_docs_gains_no_human_authority() {
         let (_temp, _central, project) = project_fixture();
-        ensure_project_self(&project).unwrap();
+        ensure_project_docs(&project).unwrap();
         fs::write(
-            project.join(PROJECT_SELF_DIR).join("account.html"),
+            project.join(PROJECT_DOCS_DIR).join("account.html"),
             "generated",
         )
         .unwrap();
@@ -2279,5 +2335,236 @@ mod tests {
     fn agent_only_ex_authority_is_refused() {
         let input = json!({"actor_kind":"agent","agent_session_ref":"agent-session:1","acceptance":"human-accepted"});
         assert!(ex_authority(&input, "test.ex").is_err());
+    }
+
+    fn development_registry() -> ActionRegistry {
+        let mut registry = ActionRegistry::default();
+        register_development_field_actions(&mut registry);
+        registry
+    }
+
+    fn run(registry: &ActionRegistry, central: &Path, action: &str, input: Value) -> ActionResult {
+        let root_options = crate::root::RootOptions {
+            explicit_root: Some(central.to_path_buf()),
+            ..Default::default()
+        };
+        let connectors = central_connector_sdk::ConnectorRegistry::default();
+        let connector_context = central_connector_sdk::ConnectorContext {
+            platform: "development-field-fixture".into(),
+        };
+        let context = ActionExecutionContext {
+            root_options: &root_options,
+            connectors: &connectors,
+            connector_context: &connector_context,
+        };
+        registry.execute(action, &input, &context)
+    }
+
+    const PROJECT_OPERATIONS: [&str; 8] = [
+        "inspect",
+        "ensure",
+        "source.create",
+        "tier.relate",
+        "retain-tier",
+        "ux.relate",
+        "ex.relate",
+        "resolve",
+    ];
+
+    #[test]
+    fn docs_actions_write_and_read_the_project_documentation_aperture() {
+        let (_temp, central, project) = project_fixture();
+        let registry = development_registry();
+        let inspected = run(
+            &registry,
+            &central,
+            "projectcentral.docs.inspect",
+            json!({"project": "example"}),
+        );
+        assert!(inspected.ok, "{inspected:?}");
+        let aperture = &inspected.data.as_ref().unwrap()["self_aperture"];
+        assert_eq!(aperture["path"], "ProjectCentral/docs");
+        assert_eq!(aperture["status"], "legacy-migratable-absence");
+
+        let ensured = run(
+            &registry,
+            &central,
+            "projectcentral.docs.ensure",
+            json!({"project": "example"}),
+        );
+        assert!(ensured.ok, "{ensured:?}");
+        assert_eq!(
+            ensured.data.as_ref().unwrap()["path"],
+            "ProjectCentral/docs"
+        );
+        assert_eq!(ensured.data.as_ref().unwrap()["current_status"], "present");
+        assert!(project.join("ProjectCentral/docs").is_dir());
+        assert!(!project.join("ProjectCentral/self").exists());
+
+        let created = run(
+            &registry,
+            &central,
+            "projectcentral.docs.source.create",
+            json!({
+                "project": "example",
+                "path": "vision.md",
+                "content": "what the project is for",
+                "provenance": "human-authored",
+                "standing": "authored-human-position",
+                "actor_kind": "human",
+                "acceptance": "human-accepted",
+                "tier": 1
+            }),
+        );
+        assert!(created.ok, "{created:?}");
+        assert_eq!(
+            fs::read_to_string(project.join("ProjectCentral/docs/vision.md")).unwrap(),
+            "what the project is for"
+        );
+        let reading = created.data.unwrap();
+        let source = &reading["tier_bindings"][0]["sources"][0];
+        assert_eq!(reading["tier_bindings"][0]["tier"], 1);
+        assert_eq!(source["path"], "ProjectCentral/docs/vision.md");
+        assert_eq!(source["retained_native"], false);
+        let source_ref = source["ref"].as_str().unwrap().to_owned();
+        assert!(source_ref.ends_with(":ProjectCentral/docs/vision.md"));
+
+        let resolved = run(
+            &registry,
+            &central,
+            "projectcentral.docs.resolve",
+            json!({"project": "example", "ref": source_ref}),
+        );
+        assert!(resolved.ok, "{resolved:?}");
+        assert_eq!(resolved.data.unwrap()["tier"], 1);
+    }
+
+    #[test]
+    fn retired_self_ids_answer_as_deprecated_aliases_of_docs_ids() {
+        let (_temp, central, project) = project_fixture();
+        let registry = development_registry();
+        for operation in PROJECT_OPERATIONS {
+            let canonical_id = format!("projectcentral.docs.{operation}");
+            let alias_id = format!("projectcentral.self.{operation}");
+            let canonical = registry
+                .get(&canonical_id)
+                .unwrap_or_else(|| panic!("missing {canonical_id}"));
+            let alias = registry
+                .get(&alias_id)
+                .unwrap_or_else(|| panic!("missing {alias_id}"));
+            assert!(
+                alias
+                    .description
+                    .starts_with(&format!("Deprecated alias of {canonical_id}.")),
+                "{alias_id}: {}",
+                alias.description
+            );
+            assert!(!canonical.description.contains("Deprecated"));
+            assert_eq!(alias.inputs, canonical.inputs, "{alias_id} inputs");
+            assert_eq!(alias.output, canonical.output, "{alias_id} output");
+            assert_eq!(alias.mutation_class, canonical.mutation_class);
+        }
+
+        // The alias writes the new aperture, never the retired one.
+        let ensured = run(
+            &registry,
+            &central,
+            "projectcentral.self.ensure",
+            json!({"project": "example"}),
+        );
+        assert!(ensured.ok, "{ensured:?}");
+        assert!(project.join("ProjectCentral/docs").is_dir());
+        assert!(!project.join("ProjectCentral/self").exists());
+
+        // One handler, one result.
+        let input = json!({"project": "example"});
+        for operation in ["inspect", "ensure"] {
+            assert_eq!(
+                run(
+                    &registry,
+                    &central,
+                    &format!("projectcentral.self.{operation}"),
+                    input.clone()
+                ),
+                run(
+                    &registry,
+                    &central,
+                    &format!("projectcentral.docs.{operation}"),
+                    input.clone()
+                ),
+                "{operation}"
+            );
+        }
+        let refused = json!({"project": "example", "ref": "ux:example:none"});
+        assert_eq!(
+            run(
+                &registry,
+                &central,
+                "projectcentral.self.resolve",
+                refused.clone()
+            ),
+            run(&registry, &central, "projectcentral.docs.resolve", refused)
+        );
+
+        // The root scale keeps its own ids and has no docs or alias form.
+        assert!(registry.get("central.self.inspect").is_some());
+        assert!(registry.get("central.docs.inspect").is_none());
+    }
+
+    #[test]
+    fn legacy_self_aperture_is_named_and_nothing_moves() {
+        let (_temp, central, project) = project_fixture();
+        let legacy = project.join("ProjectCentral/self");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("account.md"), "older account").unwrap();
+        let registry = development_registry();
+
+        let inspected = run(
+            &registry,
+            &central,
+            "projectcentral.docs.inspect",
+            json!({"project": "example"}),
+        );
+        assert!(inspected.ok, "{inspected:?}");
+        let aperture = inspected.data.unwrap()["self_aperture"].clone();
+        assert_eq!(aperture["status"], "legacy-self-aperture");
+        assert_eq!(aperture["path"], "ProjectCentral/docs");
+        assert_eq!(aperture["exists"], false);
+        let issues = aperture["issues"].to_string();
+        assert!(issues.contains("ProjectCentral/self"), "{issues}");
+        assert!(issues.contains("ProjectCentral/docs"), "{issues}");
+        assert_eq!(aperture["unbound_sources"], json!([]));
+        assert!(!project.join("ProjectCentral/docs").exists());
+
+        let ensured = run(
+            &registry,
+            &central,
+            "projectcentral.docs.ensure",
+            json!({"project": "example"}),
+        );
+        assert!(ensured.ok, "{ensured:?}");
+        let receipt = ensured.data.unwrap();
+        assert_eq!(receipt["previous_status"], "legacy-self-aperture");
+        assert_eq!(receipt["current_status"], "present");
+        assert_eq!(receipt["documentation_moved"], false);
+        assert!(project.join("ProjectCentral/docs").is_dir());
+        assert_eq!(
+            fs::read_dir(project.join("ProjectCentral/docs"))
+                .unwrap()
+                .count(),
+            0
+        );
+        assert_eq!(
+            fs::read_to_string(legacy.join("account.md")).unwrap(),
+            "older account"
+        );
+
+        // The root scale has no legacy reading: Control/self is its home.
+        let root = inspect_root_development_field(&central).unwrap();
+        assert_eq!(root.self_aperture.path, "Control/self");
+        assert_ne!(
+            serde_json::to_value(root.self_aperture.status).unwrap(),
+            "legacy-self-aperture"
+        );
     }
 }

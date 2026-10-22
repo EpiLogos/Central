@@ -4,20 +4,20 @@ Status: implementation contract for Central S1 (`EpiLogos/Central#136`), reconci
 
 Central owns durable source identity, filesystem aperture, source revision, provenance/standing and authored machine intent. It does not own Wiki cognition, Factory developmental execution, Git semantics, Workcell material actuality, Actuation, or O:I suite selection.
 
-## Self-description aperture
+## Self-description and documentation apertures
 
 The additive source homes are:
 
 ```text
 Control/self/**
-Work/<project>/ProjectCentral/self/**
+Work/<project>/ProjectCentral/docs/**
 ```
 
-`self/**` is what the scoped World or Project says it is. It remains distinct from ordinary human writing (`user/**`), Agent governance, Agent Wiki source, Skills, Methods and the temporal NOW/DAY field. Creating the directory does not create an authored document.
+`Control/self/**` is what the World says it is; it also holds the Agent selves and Nara identities. `ProjectCentral/docs/**` is what a Project says it is: its own account of itself on the six tiers, which is its documentation. Both remain distinct from ordinary human writing (`user/**`), Agent governance, Agent Wiki source, Skills, Methods and the temporal NOW/DAY field. Creating the directory does not create an authored document.
 
-A file acquires no human authority merely by being placed below `self/`. An unbound file is disclosed as unresolved location-only source. Generated accounts, HTML or matrices therefore remain generated/unresolved until an explicit source relation says otherwise.
+A file acquires no human authority merely by being placed below either aperture. An unbound file is disclosed as unresolved location-only source. Generated accounts, HTML or matrices therefore remain generated/unresolved until an explicit source relation says otherwise.
 
-Existing Project documents need not move into `ProjectCentral/self`. `projectcentral.self.retain-tier` records an accepted source relation and keeps the native bytes/path in place.
+Existing Project documents need not move into `ProjectCentral/docs`. `projectcentral.docs.retain-tier` records an accepted source relation and keeps the native bytes/path in place.
 
 ## Six stable tier identities
 
@@ -33,6 +33,8 @@ The semantic offices used for validation/readability are:
 4  implementation / active development / operational form
 5  evidence / returned reality / Recognition pressure
 ```
+
+At Project scale the six tiers are the offices of the Project's documentation. The document kinds (Vision, Design, Mockup, Architecture, capability matrix, evidence) sit on these offices as tags: the kind says what a document is, the tier says which office it serves.
 
 These offices do not imply six files. Each tier may bind zero or more canonical Central `SourceRef`s. Readings resolve current provenance, standing and revision from the source owner rather than copying them into the Development Field relation ledger.
 
@@ -51,20 +53,23 @@ A `ux_ref` binds intended human experience to an already human-authored/adopted 
 
 An `ex_ref` binds actual human experiential return to an already human-authored/adopted source carrying `observed-evidence` standing. EX may name linked `ux_ref`s and artifact/evidence refs, but does not copy their payloads. EX is automatically related to tier `5`.
 
-`central.self.ex.relate` and `projectcentral.self.ex.relate` refuse Agent-only promotion: the call must declare a human actor, contain no `agent_session_ref`, and explicitly acknowledge `human-accepted`. More importantly, the source must already resolve through Central with human-authored or human-adopted provenance. A generated/Agent/observed file cannot become human experiential truth because it sits near self-description source.
+`central.self.ex.relate` and `projectcentral.docs.ex.relate` refuse Agent-only promotion: the call must declare a human actor, contain no `agent_session_ref`, and explicitly acknowledge `human-accepted`. More importantly, the source must already resolve through Central with human-authored or human-adopted provenance. A generated/Agent/observed file cannot become human experiential truth because it sits near self-description or documentation source.
 
 ## Doctor and additive migration
 
-`central.self.inspect` and `projectcentral.self.inspect` report one of:
+`central.self.inspect` and `projectcentral.docs.inspect` report one of:
 
 ```text
 present
 legacy-migratable-absence
+legacy-self-aperture          (Project scale only)
 invalid-broken-source-state
 ambiguous-source-relation
 ```
 
-Legacy absence is non-fatal. `central.self.ensure` and `projectcentral.self.ensure` only create the missing aperture; they do not move documentation or matrices. Broken directories/symlinks or malformed relation carriers are invalid. Relations whose `SourceRef`s no longer resolve are ambiguous and require source reconciliation/human judgement rather than silent rebinding.
+Legacy absence is non-fatal. `central.self.ensure` and `projectcentral.docs.ensure` only create the missing aperture; they do not move documentation or matrices. Broken directories/symlinks or malformed relation carriers are invalid. Relations whose `SourceRef`s no longer resolve are ambiguous and require source reconciliation/human judgement rather than silent rebinding.
+
+The Project aperture was first named `ProjectCentral/self`. A Project that still has `ProjectCentral/self` and no `ProjectCentral/docs` inspects as `legacy-self-aperture`: the reading names `ProjectCentral/docs` as the aperture's home, does not list the old directory's files, and moves nothing. `projectcentral.docs.ensure` creates `ProjectCentral/docs` only; sources under the old directory are moved by hand.
 
 Ordinary `central.init` retains the pre-S1 root floor and does not create or require `Control/self`; the S1 ensure Actions own that additive aperture. An otherwise valid old root therefore stays valid until the aperture is explicitly introduced.
 
@@ -81,17 +86,19 @@ central.self.ux.relate
 central.self.ex.relate
 central.self.resolve
 
-projectcentral.self.inspect
-projectcentral.self.ensure
-projectcentral.self.source.create
-projectcentral.self.retain-tier
-projectcentral.self.tier.relate
-projectcentral.self.ux.relate
-projectcentral.self.ex.relate
-projectcentral.self.resolve
+projectcentral.docs.inspect
+projectcentral.docs.ensure
+projectcentral.docs.source.create
+projectcentral.docs.retain-tier
+projectcentral.docs.tier.relate
+projectcentral.docs.ux.relate
+projectcentral.docs.ex.relate
+projectcentral.docs.resolve
 
 machine.oi-suite-policy
 ```
+
+Each `projectcentral.docs.<x>` Action also answers under its first id, `projectcentral.self.<x>`, as a deprecated alias: the same handler, inputs and result, writing to `ProjectCentral/docs`. Its descriptor reads "Deprecated alias of projectcentral.docs.<x>". The aliases remain until the callers that still bind those ids have moved to the new ones.
 
 The inspect/resolve readings expose source refs, paths, provenance, standing and exact current content revision while withholding source payloads. Consumers therefore do not need to infer arbitrary filesystem conventions.
 
@@ -122,7 +129,7 @@ S1 does not bulk move existing docs or capability matrices, create Development F
 
 ## Serialization of native Self mutations
 
-Native root/Project Self source creation and tier/UX/EX/retain-tier mutation
+Native root self and Project documentation source creation and tier/UX/EX/retain-tier mutation
 entrances hold the existing native Source-mutation locks across their original
 read/modify/write and completion paths. The owner resolves the actual Scope,
 checks material root affiliation, and retains the established root-before-Project
