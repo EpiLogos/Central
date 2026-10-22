@@ -431,9 +431,12 @@ fn action_list_has_human_and_structured_cli_renderings() {
         .contains("central.self.inspect\tInspect root self-description field"));
     assert!(human
         .output
-        .contains("projectcentral.self.inspect\tInspect Project self-description field"));
+        .contains("projectcentral.docs.inspect\tInspect Project documentation aperture"));
     assert!(human.output.contains(
-        "projectcentral.self.retain-tier\tRelate retained native source into Project tier"
+        "projectcentral.docs.retain-tier\tRelate retained native source into Project tier"
+    ));
+    assert!(human.output.contains(
+        "projectcentral.self.inspect\tInspect Project documentation aperture (deprecated alias)"
     ));
     assert!(human
         .output
@@ -575,6 +578,15 @@ fn action_list_has_human_and_structured_cli_renderings() {
         "central.self.ux.relate",
         "central.self.ex.relate",
         "central.self.resolve",
+        "projectcentral.docs.inspect",
+        "projectcentral.docs.ensure",
+        "projectcentral.docs.source.create",
+        "projectcentral.docs.tier.relate",
+        "projectcentral.docs.retain-tier",
+        "projectcentral.docs.ux.relate",
+        "projectcentral.docs.ex.relate",
+        "projectcentral.docs.resolve",
+        // Deprecated aliases of the projectcentral.docs.* ids.
         "projectcentral.self.inspect",
         "projectcentral.self.ensure",
         "projectcentral.self.source.create",
