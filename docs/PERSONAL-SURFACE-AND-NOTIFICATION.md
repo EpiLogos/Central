@@ -8,10 +8,11 @@ This slice advances #51 and #52 without creating a personal-profile database or 
 
 - `personal.show` — projects the actual authored roots as `You → Control/user`, `Agents → Control/agents`, `Machines → Control/machines`, `Work → Work`;
 - `control.propose-change` — writes explicit proposal material only under derived `.central/proposals` state and does not mutate authored Control source;
-- `control.review-proposal` — reads a proposal before acceptance;
-- `control.apply-proposal` — requires an explicit `accepted_by_ref` and only then writes the authored filesystem target.
+- `control.review-proposal` — reads a proposal before acceptance, with the preview of its application: the target's current revision, whether it still stands on the proposal's basis (`applicable`), and what applying needs;
+- `control.list-proposals` — lists every proposal under `.central/proposals`, each with the same preview; `status` narrows it (`proposed` for the pending ones, which Approvals queues);
+- `control.apply-proposal` — writes the authored filesystem target on the person's native authority only: the host's `CENTRAL_NATIVE_TOKEN` must name a human principal granted `control.apply-proposal` at `control:root` in the recognised `native-action-authority` source, `accepted_by_ref` must be that principal, and the target must still stand on the proposal's basis (a moved target answers `conflict` and is preserved). A target absent at proposal time is created; an existing one is replaced on its basis. The proposal then records `accepted`, the principal and authority revision, and the revision the target now stands on. The authority source itself is never a proposal's target.
 
-`personal.show` is also installed in the runtime catalogue on its own (`register_personal_show_action`, called by `create_runtime_action_registry`), so the CLI, the macOS host and the O:I kernel reach it. The three `control.*` proposal actions stay with the library registry: applying a proposal waits on a human-authority route.
+`personal.show` and the four `control.*` proposal actions are installed in the runtime catalogue (`register_personal_actions`, called by `create_runtime_action_registry`), so the CLI, the macOS host and the O:I kernel reach them. Applying needs the owner's grant of `control.apply-proposal` to the human principal in `Control/user/native-action-authority.json`; without it the action refuses in Central's words and writes nothing.
 
 Proposal targets are bounded to `Control/user`, `Control/agents` and `Control/machines`; traversal paths are rejected. This is a proposal/acceptance path for durable preferences and context, not a learning loop. Direct filesystem edits remain visible because the authored files remain canonical.
 

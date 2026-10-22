@@ -55,6 +55,7 @@ pub mod world_here;
 pub mod world_map;
 pub mod world_position;
 pub mod world_source;
+pub mod world_subjects;
 pub mod projectcentral_ops {
     pub use super::projectcentral_ops_base::{
         adopt_in_place, doctor_projectcentral, ensure_root_federation, initialize_projectcentral,
