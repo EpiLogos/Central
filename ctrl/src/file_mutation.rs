@@ -197,6 +197,20 @@ impl NativeFileRead {
         self.read_bytes_with_capacity(limit, "Native source exceeds the 4 MiB eager read capacity")
     }
 
+    /// The first `max` bytes of the file and the file's whole length, for a
+    /// reader that wants a bounded view of a source of any size. Unlike
+    /// `read_bytes` this never refuses for length: the length is returned so the
+    /// caller can say how much it did not read.
+    pub(crate) fn read_prefix(&mut self, max: usize) -> io::Result<(Vec<u8>, u64)> {
+        use std::io::{Seek, SeekFrom};
+        self.validate()?;
+        self.file.seek(SeekFrom::Start(0))?;
+        let mut bytes = Vec::new();
+        (&mut self.file).take(max as u64).read_to_end(&mut bytes)?;
+        self.validate()?;
+        Ok((bytes, self.admitted.len()))
+    }
+
     /// Owner declarations retain the existing file-map 8 MiB metadata capacity.
     /// This does not widen ordinary Source delivery or change material capture.
     pub(crate) fn read_metadata_bytes(&mut self, limit: usize) -> io::Result<Vec<u8>> {

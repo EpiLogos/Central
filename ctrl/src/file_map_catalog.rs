@@ -15,7 +15,14 @@ use std::{
 pub const SCHEMA: &str = "central.file-map/v1";
 const INDEX: &str = ".central/bkmr/bindings.json";
 const ENTRIES_CACHE: &str = ".central/bkmr/entries-cache.json";
-const TEXT_LIMIT: usize = 32768;
+/// Bytes of a source's text written into its bkmr description. bkmr accepts a
+/// description only as a command-line argument, and an argument has a ceiling
+/// that is the OS's, not ours: one argument may not exceed 128 KiB on Linux and
+/// the whole argv 1 MiB on macOS. So the description cannot simply grow with the
+/// file; text past this point is not searchable until sources are indexed as
+/// passages. The bound is never silent: refresh names every source it cuts
+/// (`truncated`) and a search hit carries `indexed_bytes` of `total_bytes`.
+pub(crate) const INDEXED_TEXT_BYTES: usize = 32768;
 pub(crate) const MAX_ENTRIES: usize = 1_000_000;
 #[derive(Clone, Debug)]
 pub(crate) struct Scope {
@@ -491,13 +498,8 @@ pub(crate) fn read_json(path: &Path) -> io::Result<Value> {
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 /// The derived bindings index is not authored ground: pooled scopes carry a
-/// digest per source, so its read bound is sized for a fully pooled world
-/// rather than the authored-document bound above.
-const INDEX_JSON_BOUND: u64 = 512 * 1024 * 1024;
+/// digest per source and it grows with the pool, so it is read whole.
 fn read_index_json(path: &Path) -> io::Result<Value> {
-    if fs::metadata(path)?.len() > INDEX_JSON_BOUND {
-        return Err(invalid("Bindings index exceeds size bound"));
-    }
     serde_json::from_slice(&fs::read(path)?)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
@@ -1674,13 +1676,90 @@ pub(crate) fn uri(path: &Path) -> String {
 pub(crate) fn marker(reference: &str) -> String {
     format!("central-source-ref:{reference}\n")
 }
-pub(crate) fn description(entry: &Entry) -> String {
-    let body = content(entry).unwrap_or_default();
-    let mut end = body.len().min(TEXT_LIMIT);
-    while !body.is_char_boundary(end) {
-        end -= 1;
+/// What the index holds of one source's text, and what it does not.
+pub(crate) struct Extent {
+    /// Bytes of text written into the description.
+    pub indexed: u64,
+    /// The file's whole length, when it could be observed.
+    pub total: Option<u64>,
+    /// Why no text was read, when none was. A source that is not text is the
+    /// ordinary case and says so; anything else is a fault to report.
+    pub gap: Option<String>,
+}
+impl Extent {
+    pub(crate) fn is_not_text(&self) -> bool {
+        self.gap
+            .as_deref()
+            .is_some_and(|gap| gap.contains("not text"))
     }
-    format!("{}{}", marker(&entry.source.source_ref), &body[..end])
+}
+
+/// The start of a source's text, at most `max` bytes, cut at a character
+/// boundary, with the file's whole length. Retrieval admission is checked on
+/// both sides of the read, as `payload` does; unlike `payload` the file is not
+/// read past `max`, so a source of any size has a start to index.
+pub(crate) fn text_prefix(entry: &Entry, max: usize) -> io::Result<(String, u64)> {
+    if entry.kind != "file" {
+        return Err(invalid("A directory has no byte payload"));
+    }
+    let allowed = || source_horizon::retrieval_admission(Path::new("/"), &entry.path);
+    let revoked = || {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Source retrieval has been revoked",
+        )
+    };
+    if !allowed()? {
+        return Err(revoked());
+    }
+    let root = ReadRoot::capture(Path::new("/"))?;
+    let member = entry.path.strip_prefix("/").map_err(io::Error::other)?;
+    let mut reader =
+        crate::file_mutation::NativeFileRead::open(&root.canonical, root.identity, member)?;
+    let (bytes, total) = reader.read_prefix(max)?;
+    root.validate()?;
+    if !allowed()? {
+        return Err(revoked());
+    }
+    if bytes.contains(&0) {
+        return Err(invalid("Source is not text"));
+    }
+    let valid = match std::str::from_utf8(&bytes) {
+        Ok(text) => text.len(),
+        // A character split by the cut is the cut's doing, not the file's.
+        Err(error) if error.error_len().is_none() && (bytes.len() as u64) < total => {
+            error.valid_up_to()
+        }
+        Err(_) => return Err(invalid("Source is not UTF-8 text")),
+    };
+    let text = String::from_utf8(bytes[..valid].to_vec()).map_err(io::Error::other)?;
+    Ok((text, total))
+}
+
+/// The description bkmr is given for a source, and the extent of the text in it.
+pub(crate) fn describe(entry: &Entry) -> (String, Extent) {
+    let marker = marker(&entry.source.source_ref);
+    match text_prefix(entry, INDEXED_TEXT_BYTES) {
+        Ok((text, total)) => {
+            let extent = Extent {
+                indexed: text.len() as u64,
+                total: Some(total),
+                gap: None,
+            };
+            (format!("{marker}{text}"), extent)
+        }
+        Err(error) => (
+            marker,
+            Extent {
+                indexed: 0,
+                total: None,
+                gap: Some(error.to_string()),
+            },
+        ),
+    }
+}
+pub(crate) fn description(entry: &Entry) -> String {
+    describe(entry).0
 }
 pub(crate) fn expect_basis(scope: &Scope, input: &Value) -> io::Result<()> {
     let current = scope.basis()?;
