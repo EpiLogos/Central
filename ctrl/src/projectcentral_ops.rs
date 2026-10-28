@@ -867,7 +867,7 @@ fn wiki_check_with_source(project_root: &Path) -> Result<Value, (PathBuf, io::Er
     }))
 }
 
-fn compatible_wiki(path: &Path) -> io::Result<Option<String>> {
+pub(crate) fn compatible_wiki(path: &Path) -> io::Result<Option<String>> {
     if !path.is_file() || fs::metadata(path)?.len() > MAX_WIKI_BYTES {
         return Ok(None);
     }

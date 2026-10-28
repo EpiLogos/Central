@@ -1109,5 +1109,6 @@ pub fn create_core_action_registry() -> ActionRegistry {
     registry
         .register(work_reveal, work_reveal_action)
         .expect("core Action ids are valid");
+    crate::work_bring::register_work_bring_actions(&mut registry);
     registry
 }
