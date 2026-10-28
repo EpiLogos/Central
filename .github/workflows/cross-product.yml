@@ -74,3 +74,32 @@ jobs:
           path: evidence/
           if-no-files-found: error
           retention-days: 7
+
+  plural-flow-cases:
+    name: Plural Flow cases are a byte copy of O:I main's
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: Central
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: EpiLogos/O-I
+          path: O-I
+          sparse-checkout: desktop/cradle/documents/fixtures
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: Central -> target
+          shared-key: plural-flow-cases
+      - name: The pinned copy against the O:I source
+        working-directory: Central
+        env:
+          OI_SOURCE: ${{ github.workspace }}/O-I
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p ctrl --locked --test flow_append -- --exact the_shared_cases_are_a_pinned_copy_of_the_oi_source 2>&1 | tee "$RUNNER_TEMP/cases.log"
+          grep -q 'test result: ok. 1 passed' "$RUNNER_TEMP/cases.log"

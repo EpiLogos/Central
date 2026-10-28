@@ -209,12 +209,47 @@ fn run(root: &Path, input: &Value, token: Option<&str>) -> Result<Value, (String
     }
 }
 
+/// The shared cases are O:I's: its form's file is the source, and
+/// `tests/fixtures/plural-flow-cases.json` is a byte copy pinned to it (O:I
+/// #785). A case is changed at O:I and the file copied here whole, with the
+/// source revision it was taken at and its digest.
+const CASES_COPY: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/plural-flow-cases.json"
+);
+const CASES_SOURCE: &str = "desktop/cradle/documents/fixtures/plural-flow-cases.json";
+const CASES_SOURCE_REVISION: &str = "d8c2d71953d5c42296f0c2bdcfa9961b15aa391c";
+const CASES_SHA256: &str = "5efd2f1d9bc99367c7c351fa3d0defb742f385ca6d518dffc524d579827e9cb1";
+
+#[test]
+fn the_shared_cases_are_a_pinned_copy_of_the_oi_source() {
+    let copy = fs::read(CASES_COPY).unwrap();
+    let digest = format!("{:x}", Sha256::digest(&copy));
+    assert_eq!(
+        digest, CASES_SHA256,
+        "tests/fixtures/plural-flow-cases.json is a copy of EpiLogos/O-I {CASES_SOURCE} at \
+         {CASES_SOURCE_REVISION}: change the cases there, copy the file here whole, then pin its \
+         revision and digest"
+    );
+    // With an O:I tree at hand (the weekly cross-product run, or both seats on
+    // one machine), the copy is the source's own bytes.
+    if let Some(oi) = std::env::var_os("OI_SOURCE") {
+        let at = Path::new(&oi).join(CASES_SOURCE);
+        let source = fs::read(&at)
+            .unwrap_or_else(|e| panic!("OI_SOURCE names an O:I tree: {}: {e}", at.display()));
+        assert!(
+            source == copy,
+            "tests/fixtures/plural-flow-cases.json ({CASES_SHA256}) is not the source's bytes: {} \
+             is {:x}. The cases are O:I's: copy the source here whole, then pin its revision and \
+             digest",
+            at.display(),
+            Sha256::digest(&source)
+        );
+    }
+}
+
 fn cases() -> Vec<Value> {
-    let raw = fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/plural-flow-cases.json"
-    ))
-    .unwrap();
+    let raw = fs::read_to_string(CASES_COPY).unwrap();
     serde_json::from_str::<Value>(&raw).unwrap()["cases"]
         .as_array()
         .unwrap()
