@@ -5076,6 +5076,39 @@
      "],\"x-unknown-compatible\":{\"zebra\":1,\"apple\":[9007199254740993,18446744073709551617],\"note\":\"kept <\\/script> and <\\u0021-- as written\"},\"notes\":[],\"packet\":[],\"media\":[],\"journal\":[]}"
     ]
    }
+  },
+  {
+   "name": "an-escaped-island-closing-tag-keeps-its-letters",
+   "op": "append-island",
+   "note": "#797. As an-append-keeps-every-island-byte-it-does-not-own, with an island-closing tag in mixed case: the island holds `<\\/SCRIPT>` and `<\\/Script>` as written, in an entry's unknown member and in unknown metadata, and the appended text holds `</SCRIPT>` and `</Script>`. A writer escapes `</script` in any case as `<\\/` followed by the letters as written, so the island reads back as exactly the document and its kept bytes stay as written. (The tags are kept out of the island's HTML: the page cleans HTML when it saves, and a stray end tag is no HTML it keeps.)",
+   "island": "{\"meta\":{\"documentId\":\"doc-letters\",\"revision\":3,\"format\":{\"version\":4,\"minReader\":4},\"title\":\"Kept letters\",\"created\":\"2026-09-30T08:00:00.000Z\",\"template\":\"ql-dialogue-flow v0.4\",\"view\":\"dialogue\",\"participants\":[{\"key\":\"p-ann\",\"name\":\"Ann\",\"initial\":\"A\",\"kind\":\"person\",\"role\":\"contributor\"},{\"key\":\"p-ada\",\"name\":\"Ada\",\"initial\":\"D\",\"kind\":\"agent\",\"role\":\"contributor\"}]},\"entries\":[{\"id\":\"e-q\",\"authorKey\":\"p-ann\",\"author\":\"A\",\"at\":\"2026-09-30T08:00:00.000Z\",\"html\":\"<p>Does an escaped tag keep its letters?</p>\",\"touched\":false,\"replyTo\":null,\"x-quote\":\"<\\/SCRIPT> or <\\/Script>\"}],\"x-unknown-compatible\":{\"note\":\"<\\/SCRIPT>, <\\/Script> and <\\/script> as written\"},\"notes\":[],\"packet\":[],\"media\":[],\"journal\":[]}",
+   "caller": {
+    "kind": "agent",
+    "ref": "agent-session/ada-1",
+    "session": "agent-session/ada-1",
+    "agent": "agent/ada",
+    "authenticated": false
+   },
+   "request": {
+    "operationRef": "op-letters",
+    "authorKey": "p-ada",
+    "html": "<p>Neither: </SCRIPT> and </Script> are written with their letters.</p>",
+    "at": "2026-09-30T09:00:00.000Z",
+    "relations": [
+     {
+      "type": "reply",
+      "entryId": "e-q"
+     }
+    ]
+   },
+   "expect": {
+    "outcome": "appended",
+    "attribution": "declared",
+    "islandAfter": [
+     "{\"meta\":{\"documentId\":\"doc-letters\",\"revision\":4,\"format\":{\"version\":4,\"minReader\":4},\"title\":\"Kept letters\",\"created\":\"2026-09-30T08:00:00.000Z\",\"template\":\"ql-dialogue-flow v0.4\",\"view\":\"dialogue\",\"participants\":[{\"key\":\"p-ann\",\"name\":\"Ann\",\"initial\":\"A\",\"kind\":\"person\",\"role\":\"contributor\"},{\"key\":\"p-ada\",\"name\":\"Ada\",\"initial\":\"D\",\"kind\":\"agent\",\"role\":\"contributor\"}]},\"entries\":[{\"id\":\"e-q\",\"authorKey\":\"p-ann\",\"author\":\"A\",\"at\":\"2026-09-30T08:00:00.000Z\",\"html\":\"<p>Does an escaped tag keep its letters?</p>\",\"touched\":false,\"replyTo\":null,\"x-quote\":\"<\\/SCRIPT> or <\\/Script>\"}",
+     "],\"x-unknown-compatible\":{\"note\":\"<\\/SCRIPT>, <\\/Script> and <\\/script> as written\"},\"notes\":[],\"packet\":[],\"media\":[],\"journal\":[]}"
+    ]
+   }
   }
  ]
 }
