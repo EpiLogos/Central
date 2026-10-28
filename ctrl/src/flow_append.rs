@@ -8,8 +8,11 @@
 // (`appendContribution`), and writes through `central.files.write`'s CAS. A
 // concurrent writer that wins the CAS makes this append reread and try again
 // on the newer bytes, so both contributions survive. The document is the
-// idempotency record: `entry.request = {ref, digest}`. The shared conformance
-// cases live in `ctrl/tests/fixtures/plural-flow-cases.json`.
+// idempotency record: `entry.request = {ref, digest}`. The append writes only
+// what it owns into the island as written (`flow_splice_append`, O:I #766):
+// every other byte, key order and number stays exactly as it was. The shared
+// conformance cases live in `ctrl/tests/fixtures/plural-flow-cases.json`, a
+// copy of O:I's `desktop/cradle/documents/fixtures/plural-flow-cases.json`.
 use sha2::{Digest, Sha256};
 
 const FLOW_ISLAND_OPEN: &str = "<script type=\"application/json\" id=\"ql-doc\">";
@@ -57,18 +60,20 @@ fn flow_island_span(html: &str) -> io::Result<(usize, usize)> {
         .ok_or_else(|| invalid("Flow document state is not terminated"))?;
     Ok((start, end))
 }
+/// The island's text as JSON: the legacy `<\/script` and `<\!--` escapes read
+/// back as written content.
+fn flow_unescape(raw: &str) -> String {
+    raw.replace("<\\/script", "</script").replace("<\\!--", "<!--")
+}
 fn flow_parse(html: &str) -> io::Result<Value> {
     let (start, end) = flow_island_span(html)?;
-    let raw = html[start..end]
-        .replace("<\\/script", "</script")
-        .replace("<\\!--", "<!--");
-    serde_json::from_str(&raw).map_err(|e| invalid(&format!("Flow document state is not valid JSON: {e}")))
+    serde_json::from_str(&flow_unescape(&html[start..end]))
+        .map_err(|e| invalid(&format!("Flow document state is not valid JSON: {e}")))
 }
-fn flow_embed(html: &str, doc: &Value) -> io::Result<String> {
-    let (start, end) = flow_island_span(html)?;
-    let mut json = serde_json::to_string(doc).map_err(io::Error::other)?;
-    // `</script` and `<!--` must not survive inside the island; both escapes
-    // are valid JSON string escapes, so the island stays parseable anywhere.
+/// JSON this owner writes into the island. `</script` and `<!--` must not
+/// survive inside it; both escapes are valid JSON string escapes, so the
+/// island stays parseable anywhere.
+fn flow_island_escape(json: &str) -> String {
     let mut out = String::with_capacity(json.len());
     let lower = json.to_ascii_lowercase();
     let mut at = 0;
@@ -78,8 +83,223 @@ fn flow_embed(html: &str, doc: &Value) -> io::Result<String> {
         at += i + "</script".len();
     }
     out.push_str(&json[at..]);
-    json = out.replace("<!--", "<\\u0021--");
-    Ok(format!("{}{}{}", &html[..start], json, &html[end..]))
+    out.replace("<!--", "<\\u0021--")
+}
+
+// The island carries state this owner does not own: unknown metadata, the
+// order its writer gave the keys, integers no u64/i64/f64 holds exactly, the
+// writer's spacing and escapes. Re-serialising a parsed value rewrites all of
+// it (keys alphabetical, integers past 2^64 rounded: D10 of O:I #558). So an
+// append locates what it owns in the island's own text and splices only that.
+
+/// Where one JSON value sits in the island text, in bytes.
+#[derive(Clone, Copy)]
+struct IslandSpan {
+    start: usize,
+    end: usize,
+}
+/// Replace `start..end` of the island with the text.
+type IslandEdit = (usize, usize, String);
+/// One child of an object (with its key's span) or of an array (without).
+type IslandChild = (Option<IslandSpan>, IslandSpan);
+
+fn island_unlocated() -> io::Error {
+    invalid("Flow document state could not be located for the append")
+}
+fn island_space(text: &[u8], mut at: usize) -> usize {
+    while text
+        .get(at)
+        .is_some_and(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
+    {
+        at += 1;
+    }
+    at
+}
+/// The children of the object or array opening at `open` (an object's carry
+/// their key spans) and the end of the container.
+fn island_children(text: &[u8], open: usize) -> io::Result<(Vec<IslandChild>, usize)> {
+    let close = match text.get(open) {
+        Some(b'{') => b'}',
+        Some(b'[') => b']',
+        _ => return Err(island_unlocated()),
+    };
+    let mut children = Vec::new();
+    let mut at = island_space(text, open + 1);
+    if text.get(at) == Some(&close) {
+        return Ok((children, at + 1));
+    }
+    loop {
+        let key = if close == b'}' {
+            let key = island_value(text, at)?;
+            at = island_space(text, key.end);
+            if text.get(at) != Some(&b':') {
+                return Err(island_unlocated());
+            }
+            at = island_space(text, at + 1);
+            Some(key)
+        } else {
+            None
+        };
+        let value = island_value(text, at)?;
+        children.push((key, value));
+        at = island_space(text, value.end);
+        match text.get(at) {
+            Some(b',') => at = island_space(text, at + 1),
+            Some(&b) if b == close => return Ok((children, at + 1)),
+            _ => return Err(island_unlocated()),
+        }
+    }
+}
+/// The value starting at `at`. Only called on text that already parsed, so
+/// its nesting is within the JSON reader's own depth limit.
+fn island_value(text: &[u8], at: usize) -> io::Result<IslandSpan> {
+    let end = match text.get(at) {
+        Some(b'"') => {
+            let mut i = at + 1;
+            loop {
+                match text.get(i) {
+                    Some(b'\\') => i += 2,
+                    Some(b'"') => break i + 1,
+                    Some(_) => i += 1,
+                    None => return Err(island_unlocated()),
+                }
+            }
+        }
+        Some(b'{' | b'[') => island_children(text, at)?.1,
+        Some(_) => {
+            let mut i = at;
+            while text
+                .get(i)
+                .is_some_and(|b| !matches!(b, b',' | b']' | b'}' | b' ' | b'\t' | b'\n' | b'\r'))
+            {
+                i += 1;
+            }
+            if i == at {
+                return Err(island_unlocated());
+            }
+            i
+        }
+        None => return Err(island_unlocated()),
+    };
+    Ok(IslandSpan { start: at, end })
+}
+/// An object's members in written order: each key as a reader decodes it, and
+/// its value's span.
+fn island_object(island: &str, object: IslandSpan) -> io::Result<Vec<(String, IslandSpan)>> {
+    if island.as_bytes().get(object.start) != Some(&b'{') {
+        return Err(island_unlocated());
+    }
+    island_children(island.as_bytes(), object.start)?
+        .0
+        .into_iter()
+        .map(|(key, value)| {
+            let key = key.ok_or_else(island_unlocated)?;
+            let name = serde_json::from_str::<String>(&flow_unescape(&island[key.start..key.end]))
+                .map_err(|_| island_unlocated())?;
+            Ok((name, value))
+        })
+        .collect()
+}
+fn island_array(island: &str, array: IslandSpan) -> io::Result<Vec<IslandSpan>> {
+    if island.as_bytes().get(array.start) != Some(&b'[') {
+        return Err(island_unlocated());
+    }
+    Ok(island_children(island.as_bytes(), array.start)?
+        .0
+        .into_iter()
+        .map(|(_, value)| value)
+        .collect())
+}
+/// A member's value: the last occurrence of the key, the one a reader keeps.
+fn island_find(members: &[(String, IslandSpan)], key: &str) -> Option<IslandSpan> {
+    members
+        .iter()
+        .rev()
+        .find(|(name, _)| name == key)
+        .map(|(_, value)| *value)
+}
+/// Set `key` of `object` to `json`: an existing value is replaced where it
+/// stands; a new member goes after the object's last member.
+fn island_set(
+    members: &[(String, IslandSpan)],
+    object: IslandSpan,
+    key: &str,
+    json: String,
+    edits: &mut Vec<IslandEdit>,
+) -> io::Result<()> {
+    if let Some(value) = island_find(members, key) {
+        edits.push((value.start, value.end, json));
+        return Ok(());
+    }
+    let member = format!("{}:{json}", serde_json::to_string(key).map_err(io::Error::other)?);
+    match members.last() {
+        Some((_, last)) => edits.push((last.end, last.end, format!(",{member}"))),
+        None => edits.push((object.start + 1, object.start + 1, member)),
+    }
+    Ok(())
+}
+
+/// The Flow file with this append spliced into its island: the new entry
+/// after the last one, `meta.revision`, and a participant binding the append
+/// set. Every other byte of the file is copied as written. The island must
+/// then read as exactly `next`, or nothing is written.
+fn flow_splice_append(html: &str, doc: &Value, next: &Value) -> io::Result<String> {
+    let (start, end) = flow_island_span(html)?;
+    let island = &html[start..end];
+    let root = island_value(island.as_bytes(), island_space(island.as_bytes(), 0))?;
+    let top = island_object(island, root)?;
+    let json = |value: &Value| {
+        serde_json::to_string(value)
+            .map(|text| flow_island_escape(&text))
+            .map_err(io::Error::other)
+    };
+    let mut edits: Vec<IslandEdit> = Vec::new();
+
+    let no_entries = || invalid("Flow document state has no entries list");
+    let entries = island_find(&top, "entries").ok_or_else(no_entries)?;
+    let entry = next
+        .get("entries")
+        .and_then(Value::as_array)
+        .and_then(|list| list.last())
+        .ok_or_else(no_entries)?;
+    match island_array(island, entries)?.last() {
+        Some(last) => edits.push((last.end, last.end, format!(",{}", json(entry)?))),
+        None => edits.push((entries.start + 1, entries.start + 1, json(entry)?)),
+    }
+
+    let meta_at = island_find(&top, "meta").ok_or_else(island_unlocated)?;
+    let meta = island_object(island, meta_at)?;
+    island_set(&meta, meta_at, "revision", json(&next["meta"]["revision"])?, &mut edits)?;
+
+    let seats_before = doc.pointer("/meta/participants").and_then(Value::as_array);
+    let seats_after = next.pointer("/meta/participants").and_then(Value::as_array);
+    if let (Some(seats_before), Some(seats_after)) = (seats_before, seats_after) {
+        for (index, (was, now)) in seats_before.iter().zip(seats_after).enumerate() {
+            let Some(binding) = now.get("binding").filter(|b| Some(*b) != was.get("binding")) else {
+                continue;
+            };
+            let list = island_find(&meta, "participants").ok_or_else(island_unlocated)?;
+            let seat = *island_array(island, list)?
+                .get(index)
+                .ok_or_else(island_unlocated)?;
+            let members = island_object(island, seat)?;
+            island_set(&members, seat, "binding", json(binding)?, &mut edits)?;
+        }
+    }
+
+    edits.sort_by_key(|edit| std::cmp::Reverse(edit.0));
+    let mut spliced = island.to_string();
+    for (from, to, text) in edits {
+        spliced.replace_range(from..to, &text);
+    }
+    let reread: Value =
+        serde_json::from_str(&flow_unescape(&spliced)).map_err(|_| island_unlocated())?;
+    if &reread != next {
+        return Err(io::Error::other(
+            "the append could not be placed in the Flow as written; nothing was written",
+        ));
+    }
+    Ok(format!("{}{spliced}{}", &html[..start], &html[end..]))
 }
 
 fn relations_of(entry: &Value) -> Vec<Value> {
@@ -562,7 +782,7 @@ fn flow_append(
     let mut next = doc.clone();
     next["entries"]
         .as_array_mut()
-        .expect("entries checked above")
+        .expect("entries checked by flow_append_execute")
         .push(entry.clone());
     next["meta"]["revision"] = json!(revision + 1);
     // A caller this owner authenticated binds its participant on first write.
@@ -700,6 +920,9 @@ fn flow_append_execute(
         let html = decode_content(&current.content, &current.content_encoding)?;
         let html = String::from_utf8(html).map_err(|_| invalid("Flow document is not UTF-8"))?;
         let doc = flow_parse(&html)?;
+        if !doc.get("entries").is_some_and(Value::is_array) {
+            return Err(invalid("Flow document state has no entries list"));
+        }
         let (next, entry, outcome) = match flow_append(&doc, &request, &caller) {
             Ok(done) => done,
             Err(refusal) => return Ok(Err(refusal)),
@@ -712,7 +935,7 @@ fn flow_append_execute(
                 "attribution": entry.get("attribution"), "automatic_agent_or_model_invocation": false,
             })));
         }
-        let content = flow_embed(&html, &next)?;
+        let content = flow_splice_append(&html, &doc, &next)?;
         let written = execute(
             &root,
             "write",

@@ -5043,6 +5043,39 @@
      "basis": "declared"
     }
    }
+  },
+  {
+   "name": "an-append-keeps-every-island-byte-it-does-not-own",
+   "op": "append-island",
+   "note": "D10 (O:I #558, #766). `island` is the exact text between the ql-doc script tags. The append owns only meta.revision and the new entry after the last one; every other byte stays as written, keys in their order and every integer exact. The island after the append is islandAfter[0], then a comma and the appended entry (whitespace around them free), then islandAfter[1].",
+   "island": "{\"meta\":{\"documentId\":\"doc-island\",\"revision\":3,\"format\":{\"version\":4,\"minReader\":4},\"title\":\"Exact bytes\",\"created\":\"2026-09-30T08:00:00.000Z\",\"template\":\"ql-dialogue-flow v0.4\",\"view\":\"dialogue\",\"x-ledger\":{\"zeta\":\"written first\",\"alpha\":9007199254740993,\"mid\":{\"z\":18446744073709551617,\"a\":-9223372036854775809}},\"participants\":[{\"key\":\"p-ann\",\"name\":\"Ann\",\"initial\":\"A\",\"kind\":\"person\",\"role\":\"contributor\",\"x-seat\":{\"y\":2,\"x\":1}},{\"key\":\"p-ada\",\"name\":\"Ada\",\"initial\":\"D\",\"kind\":\"agent\",\"role\":\"contributor\"}]},\"entries\":[{\"id\":\"e-q\",\"authorKey\":\"p-ann\",\"author\":\"A\",\"at\":\"2026-09-30T08:00:00.000Z\",\"html\":\"<p>Which order holds?</p>\",\"touched\":false,\"replyTo\":null,\"x-trace\":{\"tick\":9007199254740995,\"by\":\"page\"}}],\"x-unknown-compatible\":{\"zebra\":1,\"apple\":[9007199254740993,18446744073709551617],\"note\":\"kept <\\/script> and <\\u0021-- as written\"},\"notes\":[],\"packet\":[],\"media\":[],\"journal\":[]}",
+   "caller": {
+    "kind": "agent",
+    "ref": "agent-session/ada-1",
+    "session": "agent-session/ada-1",
+    "agent": "agent/ada",
+    "authenticated": false
+   },
+   "request": {
+    "operationRef": "op-island",
+    "authorKey": "p-ada",
+    "html": "<p>Exactly as written.</p>",
+    "at": "2026-09-30T09:00:00.000Z",
+    "relations": [
+     {
+      "type": "reply",
+      "entryId": "e-q"
+     }
+    ]
+   },
+   "expect": {
+    "outcome": "appended",
+    "attribution": "declared",
+    "islandAfter": [
+     "{\"meta\":{\"documentId\":\"doc-island\",\"revision\":4,\"format\":{\"version\":4,\"minReader\":4},\"title\":\"Exact bytes\",\"created\":\"2026-09-30T08:00:00.000Z\",\"template\":\"ql-dialogue-flow v0.4\",\"view\":\"dialogue\",\"x-ledger\":{\"zeta\":\"written first\",\"alpha\":9007199254740993,\"mid\":{\"z\":18446744073709551617,\"a\":-9223372036854775809}},\"participants\":[{\"key\":\"p-ann\",\"name\":\"Ann\",\"initial\":\"A\",\"kind\":\"person\",\"role\":\"contributor\",\"x-seat\":{\"y\":2,\"x\":1}},{\"key\":\"p-ada\",\"name\":\"Ada\",\"initial\":\"D\",\"kind\":\"agent\",\"role\":\"contributor\"}]},\"entries\":[{\"id\":\"e-q\",\"authorKey\":\"p-ann\",\"author\":\"A\",\"at\":\"2026-09-30T08:00:00.000Z\",\"html\":\"<p>Which order holds?</p>\",\"touched\":false,\"replyTo\":null,\"x-trace\":{\"tick\":9007199254740995,\"by\":\"page\"}}",
+     "],\"x-unknown-compatible\":{\"zebra\":1,\"apple\":[9007199254740993,18446744073709551617],\"note\":\"kept <\\/script> and <\\u0021-- as written\"},\"notes\":[],\"packet\":[],\"media\":[],\"journal\":[]}"
+    ]
+   }
   }
  ]
 }
