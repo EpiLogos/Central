@@ -199,7 +199,7 @@ Returned work (native source return):
 - `projectcentral.source.returns`: bounded metadata pages of native returns.
 - `projectcentral.source.return_read`: proposal, current source, conflict and native acceptance availability.
 - `projectcentral.source.return_accept`: explicitly apply a collaborative-source proposal through its existing native authority/CAS route; acceptance strings do not grant human authority.
-- `projectcentral.source.return_reject`: retain rejection without source mutation.
+- `projectcentral.source.return_reject`: retain rejection without source mutation; the person's native credential only (Deny is the person's).
 
 See [Source Return contract](SOURCE-RETURN.md). Source bodies are bounded to 4 MiB UTF-8 without NUL and retrieval-excluded material is refused. The legacy `projectcentral.flow.*` Actions and FlowRef registry were retired in Central #177; the owner's dated Flow documents remain ordinary files under `Control/user/flows/` through the ordinary file CAS.
 
