@@ -27,7 +27,7 @@ resolves its current Project identity and exact SourceRef before acting.
 | `projectcentral.source.returns` | optional `limit` (1–100), exclusive `before` cursor | bounded `central.source-returns/v1` metadata |
 | `projectcentral.source.return_read` | `return_ref`, optional `acceptance: commissioned-maintenance` | proposal, current source, basis comparison, default acceptance availability; selected authority ref/revision metadata |
 | `projectcentral.source.return_accept` | `return_ref`, `expected_revision`, `acceptance: human-accepted` or `commissioned-maintenance`, `accepted_by_ref`; selected mode also requires `expected_authority_revision` | accepted native owner receipt or conflict/refusal |
-| `projectcentral.source.return_reject` | `return_ref` | rejected proposal, unchanged source |
+| `projectcentral.source.return_reject` | `return_ref`; the host's `CENTRAL_NATIVE_TOKEN` for a human grant naming this Action and Project | rejected proposal, unchanged source |
 
 A `central.source-return/v1` proposal preserves `return_ref`, `source_ref`,
 `basis_revision`, exact `basis_content`, `proposed_content`, `reason`, evidence

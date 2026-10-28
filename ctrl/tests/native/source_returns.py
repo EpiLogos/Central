@@ -12,6 +12,24 @@ def run(op,data):
 def good(op,data):
  r=run(op,data);assert r['ok'],r;return r['data']
 good('central.init',{});project=root/'Work'/'Proof';project.mkdir();good('projectcentral.init',{'project':'Proof','project_id':'source-return-proof'})
+# Deny is the person's (DLW §19.14, O-I #805): return_reject is admitted only on the host's CENTRAL_NATIVE_TOKEN for a human
+# grant naming that exact Action and Project. Controlled test grant in this disposable root; the maintenance section below
+# replaces the recognised authority Source with its own.
+import hashlib,time
+deny_token='source-return-native-deny-fixture-token-0001'
+(root/'Control/user/source-return-deny-authority.json').write_text(json.dumps({'schema':'central.native-action-authority/v1','scope_ref':'control:root','grants':[{'principal_ref':'human:source-return-deny-fixture','actor_kind':'human','token_sha256':hashlib.sha256(deny_token.encode()).hexdigest(),'scope_refs':['project:source-return-proof','project:literal-publication-id'],'actions':['projectcentral.source.return_reject'],'expires_at_unix_seconds':int(time.time())+600}]}))
+deny_relations=root/'Control/relations/source-relations.json';deny_relations.parent.mkdir(parents=True,exist_ok=True)
+deny_document=json.loads(deny_relations.read_text()) if deny_relations.exists() else {'schema':'central.control.ground-relations/v1','project_id':'control:root','relations':[]}
+deny_document['relations']=deny_document['relations']+[{'ref':'central:source:control:root:Control/user/source-return-deny-authority.json','path':'Control/user/source-return-deny-authority.json','roles':['native-action-authority'],'provenance':'human-adopted','standing':'architecture-contract','treatment':'projectcentral-user','recognition':'controlled-native-fixture-not-personal-adoption','recorded_at_unix_seconds':1}]
+deny_relations.write_text(json.dumps(deny_document))
+def deny(data,token=deny_token):
+    env=dict(os.environ);env.pop('CENTRAL_NATIVE_TOKEN',None)
+    if token is not None:env['CENTRAL_NATIVE_TOKEN']=token
+    p=subprocess.run([binary,'--root',str(root),'--json','action','run','projectcentral.source.return_reject',json.dumps(data)],capture_output=True,text=True,timeout=15,env=env)
+    try:return json.loads(p.stdout)
+    except Exception:raise RuntimeError((p.returncode,p.stdout,p.stderr))
+def denied(data):
+    r=deny(data);assert r['ok'],r;return r['data']
 # The return vehicle is an ordinary participating world source (the Project's
 # scaffolded working source); the retired Flow registry played no authority.
 notes=project/'ProjectCentral/agents/wiki'/'notes.md';notes.parent.mkdir(parents=True, exist_ok=True);notes.write_text('original thought\n')
@@ -37,7 +55,9 @@ check(accepted['proposal']['agent_session_ref']=='agent-session/native-return','
 check(not run('projectcentral.source.return_accept',{'project':'Proof','return_ref':ref2,'expected_revision':current,'acceptance':'human-accepted','accepted_by_ref':'human:test'})['ok'],'already accepted return cannot apply twice')
 page=good('projectcentral.source.returns',{'project':'Proof','limit':1});check(page['more'] and len(page['entries'])==1 and 'proposed_content' not in page['entries'][0],'return list bounded metadata page')
 older=good('projectcentral.source.returns',{'project':'Proof','limit':1,'before':page['next_before']});check(len(older['entries'])==1 and not older['more'],'return list cursor continues without repeats')
-rejected=good('projectcentral.source.return_reject',{'project':'Proof','return_ref':ref});check(rejected['proposal']['status']=='rejected' and path.read_text()=='returned improvement\n','rejection leaves source unchanged')
+unauthenticated=deny({'project':'Proof','return_ref':ref},None)
+check(not unauthenticated['ok'] and unauthenticated['status']=='unavailable_capability' and good('projectcentral.source.return_read',{'project':'Proof','return_ref':ref})['proposal']['status']=='pending','an agent without the person native credential cannot deny a Return')
+rejected=denied({'project':'Proof','return_ref':ref});check(rejected['proposal']['status']=='rejected' and path.read_text()=='returned improvement\n','rejection leaves source unchanged')
 # Several native return candidates compete against the same source revision.
 cb=good('projectcentral.source.read',{'project':'Proof','source_ref':source})['revision']['revision']
 competing=[good('projectcentral.source.return',dict(proposal,expected_revision=cb,proposed_content=f'candidate {n}'))['proposal']['return_ref'] for n in range(5)]
@@ -55,7 +75,7 @@ check(good('projectcentral.source.returns',{'project':'Proof','limit':1})['entri
 check(good('projectcentral.source.return_read',{'project':'Proof','return_ref':cref})['proposal']['comments'][1]['comment']=='And date it.','the agent reads the comments back')
 blank=run('projectcentral.source.return_comment',{'project':'Proof','return_ref':cref,'comment':'   ','commented_by_ref':'human:test'})
 check(not blank['ok'] and blank['status']=='invalid_input','an empty comment is refused')
-good('projectcentral.source.return_reject',{'project':'Proof','return_ref':cref})
+denied({'project':'Proof','return_ref':cref})
 decided=run('projectcentral.source.return_comment',{'project':'Proof','return_ref':cref,'comment':'Too late.','commented_by_ref':'human:test'})
 check(not decided['ok'] and 'not pending' in decided['error']['message'] and path.read_text()==cbytes,'a decided Return takes no comment')
 # Authored human aperture: explicit acceptance text cannot grant authority.
@@ -102,7 +122,7 @@ for kind in ('hardlink','symlink','fifo','regular'):
    acl_before=[line.strip() for line in subprocess.check_output(['/bin/ls','-lde',str(record)],text=True,timeout=5).splitlines()[1:] if line.strip()]
    check(bool(acl_before),'actual native ACL prerequisite is present')
   record.chmod(0o440);before_owner=record.stat()
-  rejected=good('projectcentral.source.return_reject',{'project':'PublicationProof','return_ref':reference})
+  rejected=denied({'project':'PublicationProof','return_ref':reference})
   check(rejected['proposal']['status']=='rejected','owner replaces operational readonly proposal without changing Source authority')
   after_owner=record.stat()
   check((after_owner.st_uid,after_owner.st_gid,stat.S_IMODE(after_owner.st_mode))==(before_owner.st_uid,before_owner.st_gid,0o440),'actual proposal update retains UID/GID/readonly mode')

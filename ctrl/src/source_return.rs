@@ -114,6 +114,34 @@ fn require_current_scope(
     }
     Ok(())
 }
+/// The Project a person's act on a Return is authenticated in: the selector's current Project, which must own the Return.
+fn person_scope(central: &Path, input: &Value, project: &Path) -> io::Result<Scope> {
+    let scope = Scope::resolve(central, Some(text(input, "project")?))?;
+    if scope.root != fs::canonicalize(project)? {
+        return Err(invalid(
+            "Source Return and authenticated Project do not share an owner",
+        ));
+    }
+    Ok(scope)
+}
+/// The person's own act on a Return: the host's native credential (`CENTRAL_NATIVE_TOKEN`, never a request field) must
+/// authenticate a human grant for this exact Action and Project. A declared actor, principal or token in the payload is not authority.
+fn person(
+    scope: &Scope,
+    action: &str,
+    expected_authority: Option<&str>,
+) -> io::Result<authority::Principal> {
+    let token = std::env::var("CENTRAL_NATIVE_TOKEN").ok();
+    let principal = authority::authenticate(
+        scope,
+        token.as_deref(),
+        action,
+        expected_authority,
+        native_now()?,
+    )?;
+    principal.require_human()?;
+    Ok(principal)
+}
 fn invalid(m: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, m)
 }
@@ -424,7 +452,9 @@ fn run(project: &Path, op: &str, input: &Value, central: &Path) -> io::Result<Va
     }
     if op == "return_comment" {
         // Approvals' Changes: ask the agent for a different result. The Return stays pending (Approve and Reject remain the
-        // owner's), the source is untouched, and the comment is kept on the Return for the agent's return_read.
+        // owner's), the source is untouched, and the comment is kept on the Return for the agent's return_read. A comment decides
+        // nothing, so it is admitted on its declared `commented_by_ref` without the person's credential: DLW §19.14 reserves Deny
+        // ("Deny is always yours"), not Changes (O-I #805).
         let comment = input
             .get("comment")
             .and_then(Value::as_str)
@@ -471,6 +501,13 @@ fn run(project: &Path, op: &str, input: &Value, central: &Path) -> io::Result<Va
         });
     }
     if op == "return_reject" {
+        // Deny is always the person's (DLW §19.14): admitted only on the person's native credential for this exact act and
+        // Project, authenticated as return_accept's commissioned maintenance is. An agent calling ctrl is refused, whatever it declares.
+        person(
+            &person_scope(central, input, project)?,
+            "projectcentral.source.return_reject",
+            None,
+        )?;
         r.status = "rejected".into();
         save(
             project,
@@ -517,13 +554,7 @@ fn run(project: &Path, op: &str, input: &Value, central: &Path) -> io::Result<Va
         {
             return Err(invalid("Source acceptance cannot supply principal or replace immutable proposal attribution/content"));
         }
-        let scope = Scope::resolve(central, Some(text(input, "project")?))?;
-        if scope.root != fs::canonicalize(project)? {
-            return Err(invalid(
-                "Source Return and authenticated Project do not share an owner",
-            ));
-        }
-        Some(scope)
+        Some(person_scope(central, input, project)?)
     } else {
         None
     };
@@ -549,16 +580,11 @@ fn run(project: &Path, op: &str, input: &Value, central: &Path) -> io::Result<Va
         }
         let (root, project) = held.as_ref().expect("held maintenance owner");
         require_current_scope(scope, central, root, project)?;
-        let token = std::env::var("CENTRAL_NATIVE_TOKEN").ok();
-        let principal = authority::authenticate(
+        Some(person(
             scope,
-            token.as_deref(),
             "projectcentral.source.return_accept",
             Some(expected_authority),
-            native_now()?,
-        )?;
-        principal.require_human()?;
-        Some(principal)
+        )?)
     } else {
         None
     };

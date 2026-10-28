@@ -888,7 +888,7 @@ fn disclosed_actions(_observed: u64) -> Value {
             "availability": "disclosed",
             "unavailable_reason": null,
             "subject_kinds": ["central.source-return"],
-            "authority": json!({"requires": [], "granted_by": "proposal owner", "evidence_ref": null}),
+            "authority": json!({"requires": ["host native credential (CENTRAL_NATIVE_TOKEN)", "human grant for this exact Action and Project"], "granted_by": "native-action-authority source (the person's own grant)", "evidence_ref": null}),
             "exposure": expose(false),
             "explain": json!({"ref": "action.list", "command": ["ctrl", "action", "list", "--json"]}),
             "history": json!({"ref": "central.source-returns", "command": ["ctrl", "action", "run", "projectcentral.source.returns", "{\"project\":\"<project>\"}", "--json"]}),
