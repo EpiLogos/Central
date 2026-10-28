@@ -218,8 +218,8 @@ const CASES_COPY: &str = concat!(
     "/tests/fixtures/plural-flow-cases.json"
 );
 const CASES_SOURCE: &str = "desktop/cradle/documents/fixtures/plural-flow-cases.json";
-const CASES_SOURCE_REVISION: &str = "5464880fd682b91c976ba8546cf4ed826ae6c7e9";
-const CASES_SHA256: &str = "2df17e0ff4ec1e0885edbe8d6226f94a6df4468b7c29b4d49522c6167e870c26";
+const CASES_SOURCE_REVISION: &str = "83bb01e461ed45ac89215e20b6d1d14401e8dad2";
+const CASES_SHA256: &str = "db87098717cccbaa47db4a0a9d641a1fee25f668bbc26fb795da8adb782bf689";
 
 #[test]
 fn the_shared_cases_are_a_pinned_copy_of_the_oi_source() {
@@ -1408,6 +1408,72 @@ fn a_first_entry_and_a_missing_revision_take_only_their_own_bytes() {
         ],
         "first entry, revision added after meta's last member",
     );
+}
+
+#[test]
+fn a_revision_written_with_a_fraction_counts_on_from_its_value() {
+    // O:I #798. JSON has one kind of number: a hand-written `3.0` is 3, as
+    // O:I's page and host (`plural.ts`) and its kernel (`page.rs`, #797) read
+    // it. The append counts on from that value, the caller's basis and reply
+    // revisions are checked against it, and the rest of the island, the same
+    // spelling elsewhere among it, stays as written.
+    let island = |revision: &str| {
+        let head = format!(
+            r#"{{"meta":{{"documentId":"doc-count","revision":{revision},"format":{{"version":4,"minReader":4}},"participants":[{{"key":"p-ann","initial":"A","kind":"person","name":"Ann"}},{{"key":"p-ada","initial":"D","kind":"agent","name":"Ada"}}]}},"entries":[{{"id":"e-q","authorKey":"p-ann","author":"A","at":"2026-09-30T08:00:00.000Z","html":"<p>q</p>","touched":false,"replyTo":null}}"#
+        );
+        (head, r#"],"x-count":3.0}"#)
+    };
+    let request = |op: &str, basis: u64, reply: u64| {
+        let mut request = req(op, "p-ada", "<p>counted on</p>");
+        request["basisRevision"] = json!(basis);
+        request["relations"][0]["revision"] = json!(reply);
+        request
+    };
+    for (written, count) in [
+        ("3", 3),
+        ("3.0", 3),
+        ("3e0", 3),
+        ("30e-1", 3),
+        ("0.0", 0),
+        ("-0", 0),
+    ] {
+        let w = world();
+        let (head, tail) = island(written);
+        let loc = place_island(&w.0, "flow-count.html", &format!("{head}{tail}"));
+        // A revision past the one read is one this document has not reached.
+        for (op, basis, reply, code) in [
+            ("op-basis-ahead", count + 1, count, "invalid-basis-revision"),
+            (
+                "op-reply-ahead",
+                count,
+                count + 1,
+                "relation-revision-ahead",
+            ),
+        ] {
+            let (input, token) = input_for(&loc, &declared_ada(), &request(op, basis, reply));
+            let refused = run(&w.0, &input, token).expect_err(written);
+            assert_eq!(refused.0, code, "{written}: {}", refused.1);
+            assert_eq!(
+                island_text(&w.0, &loc),
+                format!("{head}{tail}"),
+                "{written}: nothing written"
+            );
+        }
+        let (input, token) = input_for(&loc, &declared_ada(), &request("op-count", count, count));
+        let done = run(&w.0, &input, token).unwrap_or_else(|e| panic!("{written}: {e:?}"));
+        assert_eq!(done["document_revision"], json!(count + 1), "{written}");
+        let (counted, _) = island(&(count + 1).to_string());
+        assert_island(
+            &island_text(&w.0, &loc),
+            &[
+                Piece::Kept(&counted),
+                Piece::Kept(","),
+                Piece::Written(&done["entry"]),
+                Piece::Kept(tail),
+            ],
+            written,
+        );
+    }
 }
 
 #[test]

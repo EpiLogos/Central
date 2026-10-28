@@ -5109,6 +5109,41 @@
      "],\"x-unknown-compatible\":{\"note\":\"<\\/SCRIPT>, <\\/Script> and <\\/script> as written\"},\"notes\":[],\"packet\":[],\"media\":[],\"journal\":[]}"
     ]
    }
+  },
+  {
+   "name": "every-writer-counts-on-from-a-revision-written-3.0-and-keeps-the-letters",
+   "op": "append-island",
+   "note": "#798. As an-escaped-island-closing-tag-keeps-its-letters, with the revision hand-written `3.0`. JSON has one kind of number, so a whole number in any spelling is that number: every writer reads `3.0` as 3, as the page, the host and the kernel do (#797), and the append writes 4, never 1. The request's basisRevision 3 and its reply's revision 3 are revisions this document has reached. A writer that leaves the revision alone keeps `3.0` as written, and `count` in unknown metadata keeps `3.0` through every writer. The island holds `<\\/SCRIPT>` and `<\\/Script>`, and every writer keeps their letters: Central's append, the page's own save, the host's save, the kernel's field writes, and createInPlace's world tie and Flow meta.",
+   "island": "{\"meta\":{\"documentId\":\"doc-counted\",\"revision\":3.0,\"format\":{\"version\":4,\"minReader\":4},\"title\":\"Counted on\",\"created\":\"2026-09-30T08:00:00.000Z\",\"template\":\"ql-dialogue-flow v0.4\",\"view\":\"dialogue\",\"participants\":[{\"key\":\"p-ann\",\"name\":\"Ann\",\"initial\":\"A\",\"kind\":\"person\",\"role\":\"contributor\"},{\"key\":\"p-ada\",\"name\":\"Ada\",\"initial\":\"D\",\"kind\":\"agent\",\"role\":\"contributor\"}]},\"entries\":[{\"id\":\"e-q\",\"authorKey\":\"p-ann\",\"author\":\"A\",\"at\":\"2026-09-30T08:00:00.000Z\",\"html\":\"<p>Which revision comes after this one?</p>\",\"touched\":false,\"replyTo\":null,\"x-quote\":\"<\\/SCRIPT> or <\\/Script>\"}],\"x-unknown-compatible\":{\"note\":\"<\\/SCRIPT> and <\\/Script> as written\",\"count\":3.0},\"notes\":[],\"packet\":[],\"media\":[],\"journal\":[]}",
+   "caller": {
+    "kind": "agent",
+    "ref": "agent-session/ada-1",
+    "session": "agent-session/ada-1",
+    "agent": "agent/ada",
+    "authenticated": false
+   },
+   "request": {
+    "operationRef": "op-counted",
+    "authorKey": "p-ada",
+    "html": "<p>Four: counted on from 3.0, with </SCRIPT> and </Script> as written.</p>",
+    "at": "2026-09-30T09:00:00.000Z",
+    "basisRevision": 3,
+    "relations": [
+     {
+      "type": "reply",
+      "entryId": "e-q",
+      "revision": 3
+     }
+    ]
+   },
+   "expect": {
+    "outcome": "appended",
+    "attribution": "declared",
+    "islandAfter": [
+     "{\"meta\":{\"documentId\":\"doc-counted\",\"revision\":4,\"format\":{\"version\":4,\"minReader\":4},\"title\":\"Counted on\",\"created\":\"2026-09-30T08:00:00.000Z\",\"template\":\"ql-dialogue-flow v0.4\",\"view\":\"dialogue\",\"participants\":[{\"key\":\"p-ann\",\"name\":\"Ann\",\"initial\":\"A\",\"kind\":\"person\",\"role\":\"contributor\"},{\"key\":\"p-ada\",\"name\":\"Ada\",\"initial\":\"D\",\"kind\":\"agent\",\"role\":\"contributor\"}]},\"entries\":[{\"id\":\"e-q\",\"authorKey\":\"p-ann\",\"author\":\"A\",\"at\":\"2026-09-30T08:00:00.000Z\",\"html\":\"<p>Which revision comes after this one?</p>\",\"touched\":false,\"replyTo\":null,\"x-quote\":\"<\\/SCRIPT> or <\\/Script>\"}",
+     "],\"x-unknown-compatible\":{\"note\":\"<\\/SCRIPT> and <\\/Script> as written\",\"count\":3.0},\"notes\":[],\"packet\":[],\"media\":[],\"journal\":[]}"
+    ]
+   }
   }
  ]
 }
