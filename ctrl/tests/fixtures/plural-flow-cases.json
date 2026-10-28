@@ -5144,6 +5144,297 @@
      "],\"x-unknown-compatible\":{\"note\":\"<\\/SCRIPT> and <\\/Script> as written\",\"count\":3.0},\"notes\":[],\"packet\":[],\"media\":[],\"journal\":[]}"
     ]
    }
+  },
+  {
+   "name": "every-owner-reads-a-whole-number-in-any-spelling-as-its-value-and-hashes-the-integer",
+   "op": "append-island",
+   "note": "#803. JSON has one kind of number, and every owner reads a whole number in any spelling as that number, as the page does (`plural.ts` `formatVersionOf`, `appendContribution`). The island's format is spelt `\"version\":4.0`, so it is the current form 4, not a legacy one. The request's basisRevision is spelt 3.0 and its reply's revision 4.0: both are revisions this document (at 4) has reached. The page writes and hashes them as 3 and 4, so the entry every owner writes, its request digest among it, is `expect.entry`, byte for byte as JSON reads it. A writer that leaves the format alone keeps `4.0` as written, and `count` in unknown metadata keeps `3.0`. The append writes revision 5.",
+   "island": "{\"meta\":{\"documentId\":\"doc-spelt\",\"revision\":4,\"format\":{\"version\":4.0,\"minReader\":4},\"title\":\"Spelt\",\"created\":\"2026-09-30T08:00:00.000Z\",\"template\":\"ql-dialogue-flow v0.4\",\"view\":\"dialogue\",\"participants\":[{\"key\":\"p-ann\",\"name\":\"Ann\",\"initial\":\"A\",\"kind\":\"person\",\"role\":\"contributor\"},{\"key\":\"p-ada\",\"name\":\"Ada\",\"initial\":\"D\",\"kind\":\"agent\",\"role\":\"contributor\"}]},\"entries\":[{\"id\":\"e-q\",\"authorKey\":\"p-ann\",\"author\":\"A\",\"at\":\"2026-09-30T08:00:00.000Z\",\"html\":\"<p>Which revision is this?</p>\",\"touched\":false,\"replyTo\":null}],\"x-unknown-compatible\":{\"count\":3.0},\"notes\":[],\"packet\":[],\"media\":[],\"journal\":[]}",
+   "caller": {
+    "kind": "agent",
+    "ref": "agent-session/ada-1",
+    "session": "agent-session/ada-1",
+    "agent": "agent/ada",
+    "authenticated": false
+   },
+   "request": {
+    "operationRef": "op-spelt",
+    "authorKey": "p-ada",
+    "html": "<p>Five: a basis spelt 3.0 is 3, and a reply at 4.0 is at 4.</p>",
+    "at": "2026-09-30T09:00:00.000Z",
+    "basisRevision": 3.0,
+    "relations": [
+     {
+      "type": "reply",
+      "entryId": "e-q",
+      "revision": 4.0
+     }
+    ]
+   },
+   "expect": {
+    "outcome": "appended",
+    "attribution": "declared",
+    "entry": {
+     "id": "e-3117cad177f02ba1a3b6083c",
+     "author": "D",
+     "authorKey": "p-ada",
+     "at": "2026-09-30T09:00:00.000Z",
+     "html": "<p>Five: a basis spelt 3.0 is 3, and a reply at 4.0 is at 4.</p>",
+     "replyTo": {
+      "entryId": "e-q",
+      "anchor": null
+     },
+     "touched": false,
+     "relations": [
+      {
+       "type": "reply",
+       "entryId": "e-q",
+       "revision": 4
+      }
+     ],
+     "basisRevision": 3,
+     "request": {
+      "ref": "op-spelt",
+      "digest": "d447e9594e163351ea861e0905e8ff5b8a52e687263f20dd5c2fb8ba78143e71"
+     },
+     "attribution": {
+      "basis": "declared",
+      "agency": "agent/ada",
+      "session": "agent-session/ada-1"
+     }
+    },
+    "islandAfter": [
+     "{\"meta\":{\"documentId\":\"doc-spelt\",\"revision\":5,\"format\":{\"version\":4.0,\"minReader\":4},\"title\":\"Spelt\",\"created\":\"2026-09-30T08:00:00.000Z\",\"template\":\"ql-dialogue-flow v0.4\",\"view\":\"dialogue\",\"participants\":[{\"key\":\"p-ann\",\"name\":\"Ann\",\"initial\":\"A\",\"kind\":\"person\",\"role\":\"contributor\"},{\"key\":\"p-ada\",\"name\":\"Ada\",\"initial\":\"D\",\"kind\":\"agent\",\"role\":\"contributor\"}]},\"entries\":[{\"id\":\"e-q\",\"authorKey\":\"p-ann\",\"author\":\"A\",\"at\":\"2026-09-30T08:00:00.000Z\",\"html\":\"<p>Which revision is this?</p>\",\"touched\":false,\"replyTo\":null}",
+     "],\"x-unknown-compatible\":{\"count\":3.0},\"notes\":[],\"packet\":[],\"media\":[],\"journal\":[]}"
+    ]
+   }
+  },
+  {
+   "name": "a-reply-at-a-revision-spelt-5.0-is-one-the-document-has-not-reached",
+   "op": "append",
+   "note": "#803. The page reads a relation's revision as a number: 5.0 is 5, past this document's revision 4, so the reply is refused. An owner that reads only integer spellings lets it through unchecked.",
+   "doc": {
+    "meta": {
+     "documentId": "doc-spelt",
+     "revision": 4,
+     "format": {
+      "version": 4,
+      "minReader": 4
+     },
+     "title": "Spelt",
+     "created": "2026-09-30T08:00:00.000Z",
+     "template": "ql-dialogue-flow v0.4",
+     "view": "dialogue",
+     "participants": [
+      {
+       "key": "p-ann",
+       "name": "Ann",
+       "initial": "A",
+       "kind": "person",
+       "role": "contributor"
+      },
+      {
+       "key": "p-ada",
+       "name": "Ada",
+       "initial": "D",
+       "kind": "agent",
+       "role": "contributor"
+      }
+     ]
+    },
+    "entries": [
+     {
+      "id": "e-q",
+      "authorKey": "p-ann",
+      "author": "A",
+      "at": "2026-09-30T08:00:00.000Z",
+      "html": "<p>Which revision is this?</p>",
+      "touched": false,
+      "replyTo": null
+     }
+    ],
+    "notes": [],
+    "packet": [],
+    "media": [],
+    "journal": []
+   },
+   "caller": {
+    "kind": "agent",
+    "ref": "agent-session/ada-1",
+    "session": "agent-session/ada-1",
+    "agent": "agent/ada",
+    "authenticated": false
+   },
+   "request": {
+    "operationRef": "op-ahead",
+    "authorKey": "p-ada",
+    "html": "<p>A reply from the future.</p>",
+    "at": "2026-09-30T09:00:00.000Z",
+    "basisRevision": 4,
+    "relations": [
+     {
+      "type": "reply",
+      "entryId": "e-q",
+      "revision": 5.0
+     }
+    ]
+   },
+   "expect": {
+    "refusal": "relation-revision-ahead"
+   }
+  },
+  {
+   "name": "a-format-spelt-5.0-needs-a-newer-writer",
+   "op": "append",
+   "note": "#803. The page reads `\"version\":5.0` as 5, a newer form than this writer's 4, and refuses as unsupported-format. An owner that reads only integer spellings takes it for a legacy form.",
+   "doc": {
+    "meta": {
+     "documentId": "doc-spelt",
+     "revision": 4,
+     "format": {
+      "version": 5.0,
+      "minReader": 5.0
+     },
+     "title": "Spelt",
+     "created": "2026-09-30T08:00:00.000Z",
+     "template": "ql-dialogue-flow v0.4",
+     "view": "dialogue",
+     "participants": [
+      {
+       "key": "p-ann",
+       "name": "Ann",
+       "initial": "A",
+       "kind": "person",
+       "role": "contributor"
+      },
+      {
+       "key": "p-ada",
+       "name": "Ada",
+       "initial": "D",
+       "kind": "agent",
+       "role": "contributor"
+      }
+     ]
+    },
+    "entries": [
+     {
+      "id": "e-q",
+      "authorKey": "p-ann",
+      "author": "A",
+      "at": "2026-09-30T08:00:00.000Z",
+      "html": "<p>Which revision is this?</p>",
+      "touched": false,
+      "replyTo": null
+     }
+    ],
+    "notes": [],
+    "packet": [],
+    "media": [],
+    "journal": []
+   },
+   "caller": {
+    "kind": "agent",
+    "ref": "agent-session/ada-1",
+    "session": "agent-session/ada-1",
+    "agent": "agent/ada",
+    "authenticated": false
+   },
+   "request": {
+    "operationRef": "op-newer",
+    "authorKey": "p-ada",
+    "html": "<p>Written by an older writer.</p>",
+    "at": "2026-09-30T09:00:00.000Z"
+   },
+   "expect": {
+    "refusal": "unsupported-format"
+   }
+  },
+  {
+   "name": "a-replay-spelling-its-revisions-3-is-the-request-spelt-3.0",
+   "op": "replay",
+   "note": "#803. One operation, its basis and reply revision spelt 3.0 the first time and 3 the second: the page reads both as 3 and hashes the integer, so the replay is the same request and recovers the entry it wrote.",
+   "doc": {
+    "meta": {
+     "documentId": "doc-spelt",
+     "revision": 3,
+     "format": {
+      "version": 4,
+      "minReader": 4
+     },
+     "title": "Spelt",
+     "created": "2026-09-30T08:00:00.000Z",
+     "template": "ql-dialogue-flow v0.4",
+     "view": "dialogue",
+     "participants": [
+      {
+       "key": "p-ann",
+       "name": "Ann",
+       "initial": "A",
+       "kind": "person",
+       "role": "contributor"
+      },
+      {
+       "key": "p-ada",
+       "name": "Ada",
+       "initial": "D",
+       "kind": "agent",
+       "role": "contributor"
+      }
+     ]
+    },
+    "entries": [
+     {
+      "id": "e-q",
+      "authorKey": "p-ann",
+      "author": "A",
+      "at": "2026-09-30T08:00:00.000Z",
+      "html": "<p>Which revision is this?</p>",
+      "touched": false,
+      "replyTo": null
+     }
+    ],
+    "notes": [],
+    "packet": [],
+    "media": [],
+    "journal": []
+   },
+   "caller": {
+    "kind": "agent",
+    "ref": "agent-session/ada-1",
+    "session": "agent-session/ada-1",
+    "agent": "agent/ada",
+    "authenticated": false
+   },
+   "request": {
+    "operationRef": "op-again",
+    "authorKey": "p-ada",
+    "html": "<p>Said once, in either spelling.</p>",
+    "at": "2026-09-30T09:00:00.000Z",
+    "basisRevision": 3.0,
+    "relations": [
+     {
+      "type": "reply",
+      "entryId": "e-q",
+      "revision": 3.0
+     }
+    ]
+   },
+   "replayRequest": {
+    "at": "2026-09-30T23:59:59.000Z",
+    "basisRevision": 3,
+    "relations": [
+     {
+      "type": "reply",
+      "entryId": "e-q",
+      "revision": 3
+     }
+    ]
+   },
+   "expect": {
+    "second": "recovered",
+    "entries": 2,
+    "revision": 4
+   }
   }
  ]
 }
