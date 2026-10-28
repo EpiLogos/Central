@@ -478,12 +478,14 @@ fn concurrent_agent_appends_both_survive_an_external_human_edit() {
     let current = call(&w.0, "central.files.read", json!({"location": loc}))
         .data
         .unwrap();
-    let html = current["content"].as_str().unwrap();
+    // The person writes the whole file. (A text replace of the island's serde
+    // spelling matched only while the append re-serialised it; it no longer
+    // does, O:I #766.)
     let wrote = call(
         &w.0,
         "central.files.write",
         json!({
-        "location": loc, "expected_revision": current["revision"], "content": html.replace(&serde_json::to_string(&after).unwrap(), &serde_json::to_string(&edited).unwrap()),
+        "location": loc, "expected_revision": current["revision"], "content": flow_html(&edited),
         "actor": "human:desktop", "actor_kind": "human"}),
     );
     assert_eq!(wrote.status, ResultStatus::Success, "{wrote:?}");
@@ -1085,6 +1087,310 @@ fn concurrent_pinned_contributions_retain_their_document_basis() {
         after["meta"]["revision"].as_u64().unwrap(),
         doc["meta"]["revision"].as_u64().unwrap() + 6
     );
+}
+
+// D10 (O:I #558, #766): an append changes only what it owns in the island —
+// the new entry after the last one, `meta.revision`, and the author's binding
+// a verified caller sets. Every other byte stays as written: keys in their
+// order, every number as spelt, whitespace and escapes. These tests author the
+// island as text and compare text, never a re-parsed value.
+
+fn place_island(root: &Path, name: &str, island: &str) -> Value {
+    let loc = location(root, name);
+    let created = call(
+        root,
+        "central.files.write",
+        json!({
+        "location": loc, "expected_revision": "", "content": format!("{SHELL_OPEN}{island}{SHELL_CLOSE}"),
+        "actor": "human:desktop", "actor_kind": "human"}),
+    );
+    assert_eq!(created.status, ResultStatus::Success, "{created:?}");
+    loc
+}
+/// The island exactly as it stands in the file, shell checked untouched.
+fn island_text(root: &Path, loc: &Value) -> String {
+    let read = call(root, "central.files.read", json!({"location": loc}));
+    assert_eq!(read.status, ResultStatus::Success, "{read:?}");
+    let html = read.data.unwrap()["content"].as_str().unwrap().to_string();
+    assert!(
+        html.starts_with(SHELL_OPEN) && html.ends_with(SHELL_CLOSE),
+        "the page shell is untouched"
+    );
+    html[SHELL_OPEN.len()..html.len() - SHELL_CLOSE.len()].to_string()
+}
+/// One stretch of the island after an append: bytes kept as written, or a
+/// value this owner wrote (compared as a value; its own spelling is its own).
+enum Piece<'a> {
+    Kept(&'a str),
+    Written(&'a Value),
+}
+fn assert_island(after: &str, pieces: &[Piece], what: &str) {
+    let mut at = 0;
+    for (index, piece) in pieces.iter().enumerate() {
+        match piece {
+            Piece::Kept(text) => {
+                assert!(
+                    after[at..].starts_with(text),
+                    "{what}: stretch {index} is kept as written\n  want: {text}\n  got:  {}",
+                    &after[at..]
+                );
+                at += text.len();
+            }
+            Piece::Written(want) => {
+                let mut stream =
+                    serde_json::Deserializer::from_str(&after[at..]).into_iter::<Value>();
+                let got = stream
+                    .next()
+                    .unwrap_or_else(|| panic!("{what}: stretch {index} holds a value"))
+                    .unwrap_or_else(|e| panic!("{what}: stretch {index}: {e}: {}", &after[at..]));
+                assert_eq!(&got, *want, "{what}: stretch {index} is the value written");
+                at += stream.byte_offset();
+            }
+        }
+    }
+    assert_eq!(&after[at..], "", "{what}: nothing follows the last stretch");
+}
+fn declared_ada() -> Value {
+    json!({"kind": "agent", "ref": "agent-session/ada-1", "session": "agent-session/ada-1", "agent": "agent/ada", "authenticated": false})
+}
+
+#[test]
+fn the_shared_island_case_keeps_every_byte_it_does_not_own() {
+    let mut ran = 0;
+    for case in cases() {
+        if case["op"] != "append-island" {
+            continue;
+        }
+        ran += 1;
+        let name = case["name"].as_str().unwrap();
+        let w = world();
+        let island = case["island"].as_str().unwrap();
+        let loc = place_island(&w.0, "flow-island.html", island);
+        assert_eq!(island_text(&w.0, &loc), island, "{name}: placed as written");
+        let (input, token) = input_for(&loc, &case["caller"], &case["request"]);
+        let done = run(&w.0, &input, token).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        assert_eq!(done["outcome"], case["expect"]["outcome"], "{name}");
+        assert_eq!(
+            done["entry"]["attribution"]["basis"], case["expect"]["attribution"],
+            "{name}"
+        );
+        let after = island_text(&w.0, &loc);
+        let head = case["expect"]["islandAfter"][0].as_str().unwrap();
+        let tail = case["expect"]["islandAfter"][1].as_str().unwrap();
+        assert!(
+            after.starts_with(head) && after.ends_with(tail) && after.len() >= head.len() + tail.len(),
+            "{name}: only the revision and the appended entry change\n  want: {head} … {tail}\n  got:  {after}"
+        );
+        let appended = after[head.len()..after.len() - tail.len()]
+            .trim()
+            .strip_prefix(',')
+            .unwrap_or_else(|| panic!("{name}: the new entry follows the last one"))
+            .trim();
+        assert_eq!(
+            serde_json::from_str::<Value>(appended).unwrap(),
+            done["entry"],
+            "{name}: the appended region is exactly the new entry"
+        );
+        // The appended entry reads back through the owner's own reading.
+        let reading = read_for(&w.0, &loc, case["request"]["authorKey"].as_str(), None);
+        let last = reading["entries"].as_array().unwrap().last().unwrap();
+        assert_eq!(last["id"], done["entry"]["id"], "{name}");
+        assert_eq!(
+            reading["document_revision"], done["document_revision"],
+            "{name}"
+        );
+    }
+    assert!(
+        ran >= 1,
+        "the shared append-island case is in tests/fixtures/plural-flow-cases.json (copied from O:I desktop/cradle/documents/fixtures)"
+    );
+}
+
+#[test]
+fn an_append_to_a_hand_written_island_keeps_its_spacing_spellings_and_escapes() {
+    // Whitespace, number spellings, \u escapes and the legacy `<\!--` escape
+    // are the writer's, not this owner's: a re-serialising writer changes every
+    // one of them. Only the revision and the new entry may move.
+    let head = |revision: u64| {
+        format!(
+            r#"{{
+  "meta": {{
+    "documentId": "doc-pretty",
+    "revision": {revision},
+    "format": {{ "version": 4, "minReader": 4 }},
+    "title": "café 😀 \/ kept",
+    "x-numbers": {{ "spelt": 1.50, "exp": 1E2, "negzero": -0, "small": 0.1e-2, "big": 123456789012345678901234567890, "u64": 18446744073709551615 }},
+    "participants": [
+      {{ "key": "p-ann", "initial": "A", "kind": "person", "name": "Ann" }},
+      {{ "key": "p-ada", "initial": "D", "kind": "agent", "name": "Ada" }}
+    ]
+  }},
+  "entries": [
+    {{
+      "id": "e-q", "authorKey": "p-ann", "author": "A",
+      "at": "2026-09-30T08:00:00.000Z",
+      "html": "<p>legacy <\!-- comment --> and <\/script> kept</p>",
+      "touched": false, "replyTo": null
+    }}"#
+        )
+    };
+    let tail = "\n  ],\n  \"notes\": [], \"packet\": [], \"media\": [], \"journal\": []\n}\n";
+    let w = world();
+    let loc = place_island(&w.0, "flow-pretty.html", &format!("{}{tail}", head(2)));
+    let (input, token) = input_for(
+        &loc,
+        &declared_ada(),
+        &req(
+            "op-pretty",
+            "p-ada",
+            "<p>an </script> and <!-- in the body</p>",
+        ),
+    );
+    let done = run(&w.0, &input, token).unwrap();
+    assert_eq!(done["outcome"], "appended");
+    let after = island_text(&w.0, &loc);
+    assert_island(
+        &after,
+        &[
+            Piece::Kept(&head(3)),
+            Piece::Kept(","),
+            Piece::Written(&done["entry"]),
+            Piece::Kept(tail),
+        ],
+        "pretty island",
+    );
+    let appended = &after[head(3).len()..after.len() - tail.len()];
+    assert!(
+        !appended.to_ascii_lowercase().contains("</script") && !appended.contains("<!--"),
+        "the appended entry is escaped for the island: {appended}"
+    );
+    let reread: Value = serde_json::from_str(&after.replace("<\\!--", "<!--")).unwrap();
+    assert_eq!(
+        reread["entries"][1]["html"],
+        "<p>an </script> and <!-- in the body</p>"
+    );
+}
+
+#[test]
+fn a_first_verified_write_sets_only_the_authors_binding() {
+    // The binding a verified caller sets is this owner's; the participant's
+    // other keys, their order and every other participant stay as written. An
+    // existing declared binding is replaced where it stands; a missing one is
+    // added after the participant's last member.
+    let island = |revision: u64, ada_binding: &str, ash_tail: &str| {
+        format!(
+            r#"{{"meta":{{"revision":{revision},"documentId":"doc-bind","format":{{"minReader":4,"version":4}},"participants":[{{"key":"p-ann","kind":"person","initial":"A","name":"Ann"}},{{"name":"Ada","key":"p-ada","kind":"agent","initial":"D","binding":{ada_binding},"x-seat":{{"z":1,"a":2}}}},{{"name":"Ash","key":"p-ash","kind":"agent","initial":"S","x-note":"unbound"{ash_tail}}}]}},"entries":[{{"id":"e-q","authorKey":"p-ann","author":"A","at":"2026-09-30T08:00:00.000Z","html":"<p>q</p>","touched":false,"replyTo":null}}],"x-after":{{"z":9007199254740993,"a":18446744073709551617}},"notes":[],"packet":[],"media":[],"journal":[]}}"#
+        )
+    };
+    let declared = r#"{"ref":"agent/ada","owner":"actuation","basis":"declared"}"#;
+    let entry_end = r#""replyTo":null}"#;
+    let split = |text: &str, at: &str| -> (String, String) {
+        let i = text.find(at).unwrap() + at.len();
+        (text[..i].to_string(), text[i..].to_string())
+    };
+
+    // Ada's declared binding is replaced in place.
+    let w = world();
+    let before = island(1, declared, "");
+    let loc = place_island(&w.0, "flow-bind-ada.html", &before);
+    let (input, token) = input_for(&loc, &ada(), &req("op-bind-ada", "p-ada", "<p>a</p>"));
+    let done = run(&w.0, &input, token).unwrap();
+    assert_eq!(done["entry"]["attribution"]["basis"], "verified");
+    let expected = island(2, "@BINDING@", "");
+    let (to_binding, rest) = split(&expected, "\"binding\":");
+    let rest = rest.strip_prefix("@BINDING@").unwrap();
+    let (to_entry, tail) = split(rest, entry_end);
+    let binding = json!({"owner": "actuation", "ref": "agent/ada", "basis": "verified"});
+    assert_island(
+        &island_text(&w.0, &loc),
+        &[
+            Piece::Kept(&to_binding),
+            Piece::Written(&binding),
+            Piece::Kept(&to_entry),
+            Piece::Kept(","),
+            Piece::Written(&done["entry"]),
+            Piece::Kept(&tail),
+        ],
+        "declared binding replaced in place",
+    );
+
+    // Ash has no binding: it is added after Ash's last member.
+    let w = world();
+    let loc = place_island(&w.0, "flow-bind-ash.html", &island(1, declared, ""));
+    let (input, token) = input_for(&loc, &ash(), &req("op-bind-ash", "p-ash", "<p>s</p>"));
+    let done = run(&w.0, &input, token).unwrap();
+    assert_eq!(done["entry"]["attribution"]["basis"], "verified");
+    let expected = island(2, declared, "@BINDING@");
+    let (to_binding, rest) = split(&expected, "\"x-note\":\"unbound\"");
+    let rest = rest.strip_prefix("@BINDING@").unwrap();
+    let (to_entry, tail) = split(rest, entry_end);
+    let binding = json!({"owner": "actuation", "ref": "agent/ash", "basis": "verified"});
+    assert_island(
+        &island_text(&w.0, &loc),
+        &[
+            Piece::Kept(&to_binding),
+            Piece::Kept(",\"binding\":"),
+            Piece::Written(&binding),
+            Piece::Kept(&to_entry),
+            Piece::Kept(","),
+            Piece::Written(&done["entry"]),
+            Piece::Kept(&tail),
+        ],
+        "missing binding added after the participant's last member",
+    );
+}
+
+#[test]
+fn a_first_entry_and_a_missing_revision_take_only_their_own_bytes() {
+    let w = world();
+    let meta = r#"{"meta":{"documentId":"doc-first","format":{"version":4,"minReader":4},"participants":[{"key":"p-ada","initial":"D","kind":"agent","name":"Ada"}]"#;
+    let after_meta = r#"},"entries":["#;
+    let tail = r#"],"x-after":{"b":1,"a":-9223372036854775809}}"#;
+    let loc = place_island(
+        &w.0,
+        "flow-first.html",
+        &format!("{meta}{after_meta}{tail}"),
+    );
+    let mut first = req("op-first", "p-ada", "<p>first</p>");
+    first.as_object_mut().unwrap().remove("relations");
+    let (input, token) = input_for(&loc, &declared_ada(), &first);
+    let done = run(&w.0, &input, token).unwrap();
+    assert_eq!(done["outcome"], "appended");
+    assert_island(
+        &island_text(&w.0, &loc),
+        &[
+            Piece::Kept(meta),
+            Piece::Kept(",\"revision\":1"),
+            Piece::Kept(after_meta),
+            Piece::Written(&done["entry"]),
+            Piece::Kept(tail),
+        ],
+        "first entry, revision added after meta's last member",
+    );
+}
+
+#[test]
+fn a_flow_without_an_entries_list_is_an_owner_condition_not_a_panic() {
+    // Nothing is written, and the caller gets the condition rather than a
+    // crashed owner process.
+    let w = world();
+    let mut first = req("op-first", "p-ada", "<p>first</p>");
+    first.as_object_mut().unwrap().remove("relations");
+    let loc = place_island(
+        &w.0,
+        "flow-no-entries.html",
+        r#"{"meta":{"documentId":"doc-none","revision":0,"format":{"version":4,"minReader":4},"participants":[{"key":"p-ada","initial":"D","kind":"agent"}]},"notes":[]}"#,
+    );
+    let before = island_text(&w.0, &loc);
+    let (input, token) = input_for(&loc, &declared_ada(), &first);
+    match flow_append_with_token(&w.0, &input, token, 100) {
+        Err(FlowAppendError::Io(error)) => {
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput, "{error}")
+        }
+        Ok(done) => panic!("appended to a Flow with no entries list: {done}"),
+        Err(FlowAppendError::Refused { code, .. }) => panic!("refused as {code}"),
+    }
+    assert_eq!(island_text(&w.0, &loc), before, "nothing was written");
 }
 
 #[test]
