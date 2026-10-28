@@ -928,7 +928,7 @@ pub fn register_world_source_actions(registry: &mut ActionRegistry) {
                 "projectcentral.source.read",
                 "Read live World source",
                 "Read one participating World source (omit project for the Central root meta-Project) by SourceRef with its exact content revision, provenance, standing and treatment. Reconciles the Source Change Horizon (derived .central state only) and never invokes an Agent or model. Sources excluded by .no-agent-retrieval are not disclosed here; masking is not missing.",
-                MutationClass::LocallyMutating,
+                MutationClass::DerivedReconciling,
                 "projectcentral-world-source-reading",
                 &[("project", false), ("source_ref", true)],
             ),

@@ -777,3 +777,195 @@ fn world_source_create_refuses_existing_documents_outside_ground_and_non_human_c
     );
     assert_eq!(root_register.status, ResultStatus::InvalidInput);
 }
+
+/// Every file and directory under `root` outside a `.central` directory, with its bytes: the ground an Action may author.
+fn outside_central(root: &Path) -> std::collections::BTreeMap<PathBuf, Option<Vec<u8>>> {
+    let mut ground = std::collections::BTreeMap::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.file_name().is_some_and(|name| name == ".central") {
+                continue;
+            }
+            let relative = path.strip_prefix(root).unwrap().to_path_buf();
+            if path.is_dir() {
+                ground.insert(relative, None);
+                pending.push(path);
+            } else {
+                ground.insert(relative, Some(fs::read(&path).unwrap()));
+            }
+        }
+    }
+    ground
+}
+
+/// The Actions that only reconcile Central's derived state carry a class of their own, `derived-reconciling` (O-I #756): a
+/// reader that keeps readings (the desktop's read model) keeps them through these runs, and nobody's authority changes. Running
+/// each of them, on a Project and on the root, moves no byte outside `.central` — even `return_read` recovering a Return left
+/// `applying`. `projectcentral.source.transfer.resolve` is not one of them: accept-incoming writes the source through its
+/// compare-and-swap and keep-local records the decision. Nor is `change.ack`: a consumer's cursor records an act the sources
+/// cannot vouch for.
+#[test]
+fn reconciles_of_derived_state_carry_their_own_class_and_move_nothing_outside_central() {
+    const RECONCILING: [&str; 5] = [
+        "projectcentral.change.horizon",
+        "projectcentral.change.reconcile",
+        "projectcentral.source.read",
+        "projectcentral.source.return_read",
+        "projectcentral.source.returns",
+    ];
+    let (_temp, central, project) = project_fixture("reconciling", "reconciling-project");
+    central_ctrl::initialize_central(&central).unwrap();
+    let environment = CliEnvironment {
+        configured_root: Some(central.clone()),
+        home: None,
+    };
+    let cli = |args: &[&str]| {
+        run_cli(
+            &args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>(),
+            &environment,
+        )
+    };
+    let run = |action: &str, input: Value| {
+        let ran = cli(&["--json", "action", "run", action, &input.to_string()]);
+        assert_eq!(
+            ran.result.status,
+            ResultStatus::Success,
+            "{action}: {:?}",
+            ran.result.error
+        );
+        ran.result.data.unwrap()
+    };
+
+    // Central's word, in its own catalogue.
+    let listed = cli(&["--json", "action", "list"]).result.data.unwrap();
+    let class = |id: &str| {
+        listed["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|descriptor| descriptor["id"] == id)
+            .unwrap_or_else(|| panic!("{id} is not in the catalogue"))["mutation_class"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let carrying: std::collections::BTreeSet<String> = listed["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|descriptor| descriptor["mutation_class"] == "derived-reconciling")
+        .map(|descriptor| descriptor["id"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        carrying,
+        RECONCILING.iter().map(|id| (*id).to_owned()).collect(),
+        "exactly the reconciles of derived state carry the class"
+    );
+    for id in [
+        "projectcentral.source.transfer.resolve",
+        "projectcentral.source.write",
+        "projectcentral.source.return",
+        "projectcentral.source.return_accept",
+        "projectcentral.change.ack",
+    ] {
+        assert_eq!(
+            class(id),
+            "locally-mutating",
+            "{id} writes, so it stays a write"
+        );
+    }
+    let described = cli(&["--json", "action", "describe", "projectcentral.source.read"]);
+    assert_eq!(
+        described.result.data.unwrap()["mutation_class"],
+        "derived-reconciling",
+        "describe and list are one descriptor"
+    );
+
+    // A Project source, an agent-ground source with a Return left `applying` (an interrupted application whose source never
+    // moved), and a root source.
+    fs::write(project.join("ProjectCentral/user/intent.md"), "intent\n").unwrap();
+    let notes = project.join("ProjectCentral/agents/wiki/notes.md");
+    fs::write(&notes, "notes\n").unwrap();
+    fs::create_dir_all(central.join("Control/user/notes")).unwrap();
+    fs::write(central.join("Control/user/notes/n.md"), "root note\n").unwrap();
+    let horizon = read_project_change_horizon(&project, None).unwrap();
+    let intent = source_ref_of(&horizon, "intent.md");
+    let notes_ref = source_ref_of(&horizon, "notes.md");
+    let proposal = run(
+        "projectcentral.source.return",
+        json!({"project": "reconciling-project", "source_ref": notes_ref,
+               "expected_revision": current_revision(&project, &notes_ref), "proposed_content": "notes, proposed\n",
+               "reason": "a proposal to read back", "agent_session_ref": "agent-session:reconciling"}),
+    );
+    let return_ref = proposal["proposal"]["return_ref"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let record = fs::read_dir(project.join(".central/source-returns"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .unwrap();
+    let mut applying: Value = serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
+    applying["status"] = json!("applying");
+    fs::write(&record, serde_json::to_vec(&applying).unwrap()).unwrap();
+    // A hand edit since the last reconcile, so the reconciles below have a change to record.
+    fs::write(
+        project.join("ProjectCentral/user/intent.md"),
+        "intent, edited by hand\n",
+    )
+    .unwrap();
+
+    let before = outside_central(&central);
+    let project_input = |extra: Value| {
+        let mut input = json!({"project": "reconciling-project"});
+        input
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        input
+    };
+    let read = run(
+        "projectcentral.source.read",
+        project_input(json!({"source_ref": intent})),
+    );
+    assert_eq!(read["content"], "intent, edited by hand\n");
+    run("projectcentral.source.returns", project_input(json!({})));
+    let recovered = run(
+        "projectcentral.source.return_read",
+        project_input(json!({"return_ref": return_ref})),
+    );
+    assert_eq!(
+        recovered["proposal"]["status"], "pending",
+        "the interrupted application is reconciled with the unmoved source"
+    );
+    run("projectcentral.change.reconcile", project_input(json!({})));
+    let reconciled = run("projectcentral.change.horizon", project_input(json!({})));
+    let root_read = run(
+        "projectcentral.source.read",
+        json!({"source_ref": "central:source:control:root:Control/user/notes/n.md"}),
+    );
+    assert_eq!(root_read["content"], "root note\n");
+    run("projectcentral.change.horizon", json!({}));
+    assert_eq!(
+        outside_central(&central),
+        before,
+        "a reconcile of derived state moves nothing outside .central"
+    );
+    // They did reconcile: the horizon recorded the hand edit, and the Return's record moved back to pending.
+    assert!(
+        reconciled["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|change| change["source_ref"] == json!(intent) && change["kind"] == "modified"),
+        "{reconciled}"
+    );
+    let stored: Value = serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
+    assert_eq!(stored["status"], "pending");
+}

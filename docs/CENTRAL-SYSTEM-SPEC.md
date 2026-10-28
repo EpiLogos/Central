@@ -422,8 +422,11 @@ Human-readable output is a rendering of this result.
 Actions must declare whether they are:
 
 - read-only;
+- derived-reconciling;
 - locally mutating;
 - externally mutating.
+
+A derived-reconciling Action is a read that brings Central's derived `.central` state (the Source Change Horizon, a Return's record) into line with the ground it observes. It changes no authored source and no authority, so a reader that keeps readings keeps them through it. `projectcentral.source.read`, `source.returns`, `source.return_read`, `change.horizon` and `change.reconcile` are derived-reconciling (O-I #756). `source.transfer.resolve` and `change.ack` stay locally mutating: the first writes a source or a conflict decision, the second records a consumer's act.
 
 Mutating Actions should support preview when a useful preview can be produced.
 

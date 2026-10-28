@@ -1173,6 +1173,49 @@ fn relation_count(root: &Path) -> usize {
         .count()
 }
 
+/// A Day reading says when its Day was opened (O-I #756): the instant ensure-day opened it, read at any later moment, ensured
+/// again or not. A Day whose relation states no opening says none; nothing stands in for it.
+#[test]
+fn a_day_reading_says_when_its_day_was_opened_and_never_invents_it() {
+    let w = world("Europe/London", 0);
+    let opened = ensure(w.path(), at(T));
+    assert_eq!(opened["opened_at_unix_seconds"], at(T));
+    let later = at("2026-10-20T15:30:00Z");
+    assert_eq!(
+        read(w.path(), "day_read", json!({}), later)["opened_at_unix_seconds"],
+        at(T),
+        "the opening, not the reading's moment"
+    );
+    let time = read(w.path(), "time_policy", json!({}), later);
+    let again = run(
+        w.path(),
+        "day_ensure",
+        json!({"expected_time_policy_revision":time["revision"]}),
+        Some(HUMAN),
+        later,
+    )
+    .unwrap();
+    assert_eq!(again["created"], false);
+    assert_eq!(
+        again["opened_at_unix_seconds"],
+        at(T),
+        "the first opening stands"
+    );
+
+    // A relation that states no opening instant: the reading carries none.
+    let path = w.path().join("Control/relations/source-relations.json");
+    let mut relations: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    for entry in relations["relations"].as_array_mut().unwrap() {
+        if let Some(temporal) = entry["temporal"].as_object_mut() {
+            temporal.remove("created_at_unix_seconds");
+        }
+    }
+    fs::write(&path, serde_json::to_vec(&relations).unwrap()).unwrap();
+    let unstated = read(w.path(), "day_read", json!({}), later);
+    assert_eq!(unstated["day_ref"], opened["day_ref"]);
+    assert_eq!(unstated["opened_at_unix_seconds"], Value::Null);
+}
+
 #[test]
 fn day_read_reports_tomorrow_only_after_a_rollover_opens_it() {
     let w = world("Europe/London", 0);

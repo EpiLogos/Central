@@ -16,6 +16,11 @@ use std::path::{Path, PathBuf};
 pub enum MutationClass {
     #[serde(rename = "read-only")]
     ReadOnly,
+    /// A read that reconciles Central's derived `.central` state (the Source Change Horizon, a Return's record) with the
+    /// ground it observes, and changes no authored source and no authority. A reader that keeps readings keeps them through
+    /// it; what the reconcile wrote lies under `.central` alone.
+    #[serde(rename = "derived-reconciling")]
+    DerivedReconciling,
     #[serde(rename = "locally-mutating")]
     LocallyMutating,
     #[serde(rename = "externally-mutating")]
@@ -26,6 +31,7 @@ impl MutationClass {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ReadOnly => "read-only",
+            Self::DerivedReconciling => "derived-reconciling",
             Self::LocallyMutating => "locally-mutating",
             Self::ExternallyMutating => "externally-mutating",
         }

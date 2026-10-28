@@ -816,6 +816,13 @@ pub(crate) fn register(registry: &mut ActionRegistry) {
             ],
             _ => vec![("project", true), ("return_ref", true)],
         };
-        registry.register(ActionDescriptor{id:format!("projectcentral.source.{op}"),title:format!("Source {op}"),description:"Native returned-work proposal, exact source basis and authority-preserving acceptance. Acceptance text never grants human source authority.".into(),inputs:fields.into_iter().map(|(name,required)|ActionInputDefinition{name:name.into(),input_type:match name{"evidence_refs"=>"array","limit"=>"integer",_=>"string"}.into(),required,choices:None,selection:None}).collect(),output:ActionOutputDefinition{output_type:"central-source-return".into()},mutation_class:MutationClass::LocallyMutating,preview_supported:false,required_ports:vec![],availability:ActionAvailability{available:true,reason:None}},handler).expect("Unique source return Action");
+        // Listing and reading a Return reconcile only `.central`: the source horizon they read through, and a Return left
+        // `applying` recorded against the source as it stands. Every other op writes a Return or a source.
+        let mutation_class = if matches!(op, "returns" | "return_read") {
+            MutationClass::DerivedReconciling
+        } else {
+            MutationClass::LocallyMutating
+        };
+        registry.register(ActionDescriptor{id:format!("projectcentral.source.{op}"),title:format!("Source {op}"),description:"Native returned-work proposal, exact source basis and authority-preserving acceptance. Acceptance text never grants human source authority.".into(),inputs:fields.into_iter().map(|(name,required)|ActionInputDefinition{name:name.into(),input_type:match name{"evidence_refs"=>"array","limit"=>"integer",_=>"string"}.into(),required,choices:None,selection:None}).collect(),output:ActionOutputDefinition{output_type:"central-source-return".into()},mutation_class,preview_supported:false,required_ports:vec![],availability:ActionAvailability{available:true,reason:None}},handler).expect("Unique source return Action");
     }
 }

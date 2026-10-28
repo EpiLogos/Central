@@ -543,8 +543,13 @@ fn reading(
     } else {
         Value::Null
     };
+    // When the Day was opened: `open_day` (ensure-day for today, rollover for tomorrow) writes the Day's temporal relation once,
+    // at that instant. A relation that states none gives none.
+    let opened_at = entry["temporal"]["created_at_unix_seconds"]
+        .as_u64()
+        .map_or(Value::Null, Value::from);
     Ok(
-        json!({"schema":"central.day-reading/v1","day_ref":entry["temporal"]["day_ref"],"source":source.source,"revision":source.revision,"content":source.content,"temporal":entry["temporal"],"relations_revision":relation_basis,"today":relations["temporal"]["today"],"tomorrow":relations["temporal"]["tomorrow"],"document_state":if document.is_null(){"uninitialised"}else{"ready"},"document":document,"automatic_agent_or_model_invocation":false}),
+        json!({"schema":"central.day-reading/v1","day_ref":entry["temporal"]["day_ref"],"source":source.source,"revision":source.revision,"content":source.content,"temporal":entry["temporal"],"opened_at_unix_seconds":opened_at,"relations_revision":relation_basis,"today":relations["temporal"]["today"],"tomorrow":relations["temporal"]["tomorrow"],"document_state":if document.is_null(){"uninitialised"}else{"ready"},"document":document,"automatic_agent_or_model_invocation":false}),
     )
 }
 pub fn day_read(scope: &Scope, input: &Value) -> io::Result<Value> {
