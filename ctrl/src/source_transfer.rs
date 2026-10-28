@@ -2302,6 +2302,7 @@ pub fn register_source_transfer_actions(registry: &mut ActionRegistry) {
             conflicts_action,
         ),
         (
+            // A write, not a reconcile of derived state: accept-incoming writes the source and keep-local records the decision.
             descriptor_mutation(
                 "projectcentral.source.transfer.resolve",
                 "Resolve a recorded transfer conflict",
