@@ -218,8 +218,8 @@ const CASES_COPY: &str = concat!(
     "/tests/fixtures/plural-flow-cases.json"
 );
 const CASES_SOURCE: &str = "desktop/cradle/documents/fixtures/plural-flow-cases.json";
-const CASES_SOURCE_REVISION: &str = "d8c2d71953d5c42296f0c2bdcfa9961b15aa391c";
-const CASES_SHA256: &str = "5efd2f1d9bc99367c7c351fa3d0defb742f385ca6d518dffc524d579827e9cb1";
+const CASES_SOURCE_REVISION: &str = "5464880fd682b91c976ba8546cf4ed826ae6c7e9";
+const CASES_SHA256: &str = "2df17e0ff4ec1e0885edbe8d6226f94a6df4468b7c29b4d49522c6167e870c26";
 
 #[test]
 fn the_shared_cases_are_a_pinned_copy_of_the_oi_source() {
@@ -1225,6 +1225,12 @@ fn the_shared_island_case_keeps_every_byte_it_does_not_own() {
             serde_json::from_str::<Value>(appended).unwrap(),
             done["entry"],
             "{name}: the appended region is exactly the new entry"
+        );
+        // An island-closing tag in any case is escaped, its letters as written
+        // (O:I #797): the region reads back as the entry above.
+        assert!(
+            !appended.to_ascii_lowercase().contains("</script") && !appended.contains("<!--"),
+            "{name}: the appended entry is escaped for the island: {appended}"
         );
         // The appended entry reads back through the owner's own reading.
         let reading = read_for(&w.0, &loc, case["request"]["authorKey"].as_str(), None);

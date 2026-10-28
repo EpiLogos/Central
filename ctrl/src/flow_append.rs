@@ -70,17 +70,19 @@ fn flow_parse(html: &str) -> io::Result<Value> {
     serde_json::from_str(&flow_unescape(&html[start..end]))
         .map_err(|e| invalid(&format!("Flow document state is not valid JSON: {e}")))
 }
-/// JSON this owner writes into the island. `</script` and `<!--` must not
-/// survive inside it; both escapes are valid JSON string escapes, so the
-/// island stays parseable anywhere.
+/// JSON this owner writes into the island. `</script`, in any case, and `<!--`
+/// must not survive inside it; both escapes are valid JSON string escapes, so
+/// the island stays parseable anywhere. The letters after `<\/` stay as
+/// written, so `</SCRIPT` reads back as itself (O:I #797, ported from O:I
+/// `desktop/cradle/kernel/src/page/island.rs` `escape`, #793).
 fn flow_island_escape(json: &str) -> String {
     let mut out = String::with_capacity(json.len());
     let lower = json.to_ascii_lowercase();
     let mut at = 0;
     while let Some(i) = lower[at..].find("</script") {
         out.push_str(&json[at..at + i]);
-        out.push_str("<\\/script");
-        at += i + "</script".len();
+        out.push_str("<\\/");
+        at += i + "</".len();
     }
     out.push_str(&json[at..]);
     out.replace("<!--", "<\\u0021--")
