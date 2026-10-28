@@ -16,7 +16,9 @@
 use sha2::{Digest, Sha256};
 
 const FLOW_ISLAND_OPEN: &str = "<script type=\"application/json\" id=\"ql-doc\">";
-const FLOW_FORMAT: u64 = 4;
+const FLOW_FORMAT: f64 = 4.0;
+/// 2^53: the largest whole number every JavaScript reader holds exactly.
+const FLOW_WHOLE: f64 = 9_007_199_254_740_992.0;
 const FLOW_APPEND_RETRIES: usize = 8;
 
 struct FlowRefusal {
@@ -341,22 +343,60 @@ fn flow_request_digest(entry: &Value) -> String {
 /// `apply_field`, #797). Anything else is no count yet: 0, so the first
 /// append writes 1.
 fn flow_revision(doc: &Value) -> u64 {
-    let count = |n: &serde_json::Number| {
-        n.as_u64().or_else(|| {
-            n.as_f64()
-                .filter(|f| f.fract() == 0.0 && (0.0..=9_007_199_254_740_992.0).contains(f))
-                .map(|f| f as u64)
-        })
+    doc.pointer("/meta/revision").and_then(flow_count).unwrap_or(0)
+}
+/// A count as every Flow writer reads one (`flow_revision`): a whole number
+/// from 0 to 2^53 in any spelling JSON allows, so `3.0`, `3e0` and `30e-1`
+/// are 3. A request's basisRevision is read by the same rule, as the page
+/// reads it (`plural.ts` `appendContribution`, `Number.isInteger`, O:I #803).
+fn flow_count(value: &Value) -> Option<u64> {
+    let Value::Number(n) = value else {
+        return None;
     };
-    match doc.pointer("/meta/revision") {
-        Some(Value::Number(n)) => count(n).unwrap_or(0),
-        _ => 0,
+    n.as_u64().or_else(|| {
+        n.as_f64()
+            .filter(|f| f.fract() == 0.0 && (0.0..=FLOW_WHOLE).contains(f))
+            .map(|f| f as u64)
+    })
+}
+/// A value as the page holds it (O:I #803). JSON has one kind of number, and
+/// the page reads a whole number within 2^53 of zero as that integer whatever
+/// its spelling: `3.0`, `3e0` and `30e-1` are 3 and `-0` is 0. It writes and
+/// hashes them as `3` and `0` (`JSON.stringify`, `plural.ts` `requestDigest`).
+/// This owner reads what it is asked to write the same way, so the entry it
+/// writes and its request digest are the page's. Any other number stays as
+/// read.
+fn flow_as_the_page_holds(value: Value) -> Value {
+    match value {
+        Value::Number(n) if n.is_f64() => match n.as_f64() {
+            Some(f) if f.fract() == 0.0 && f.abs() <= FLOW_WHOLE => {
+                if f < 0.0 {
+                    json!(f as i64)
+                } else {
+                    json!(f as u64)
+                }
+            }
+            _ => Value::Number(n),
+        },
+        Value::Array(list) => {
+            Value::Array(list.into_iter().map(flow_as_the_page_holds).collect())
+        }
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(key, value)| (key, flow_as_the_page_holds(value)))
+                .collect(),
+        ),
+        other => other,
     }
 }
-fn flow_format_version(doc: &Value) -> u64 {
+/// The document's `meta.format.version` as the page reads it (`plural.ts`
+/// `formatVersionOf`): a number in any spelling is its value, so `4.0` is the
+/// current form 4 and `5.0` a newer one (O:I #803). No version is the legacy
+/// form 3.
+fn flow_format_version(doc: &Value) -> f64 {
     doc.pointer("/meta/format/version")
-        .and_then(Value::as_u64)
-        .unwrap_or(3)
+        .and_then(Value::as_f64)
+        .unwrap_or(3.0)
 }
 fn str_of<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
     value.get(key).and_then(Value::as_str)
@@ -558,6 +598,9 @@ fn flow_append(
     request: &Value,
     caller: &FlowCaller,
 ) -> Result<(Value, Value, FlowAppend), FlowRefusal> {
+    // The request as the page reads it: its checks, its digest and the entry
+    // written read `3.0` as 3 and write it as `3` (O:I #803).
+    let request = &flow_as_the_page_holds(request.clone());
     let expected_document = request.get("expectedDocumentId").filter(|value| !value.is_null());
     if let Some(expected) = expected_document {
         // Validate with the existing native UUID parser, retaining the exact
@@ -654,7 +697,7 @@ fn flow_append(
     }
     let revision = flow_revision(doc);
     if let Some(basis) = request.get("basisRevision").filter(|v| !v.is_null()) {
-        match basis.as_u64() {
+        match flow_count(basis) {
             Some(n) if n <= revision => {}
             _ => {
                 return refuse(
@@ -755,10 +798,12 @@ fn flow_append(
                 format!("entry {target} is not in this document"),
             );
         }
+        // A reply's revision is a number, as the page reads it: `5.0` and
+        // `4.5` are past revision 4 (O:I #803).
         if relation
             .get("revision")
-            .and_then(Value::as_u64)
-            .is_some_and(|r| r > revision)
+            .and_then(Value::as_f64)
+            .is_some_and(|r| r > revision as f64)
         {
             return refuse(
                 "relation-revision-ahead",
@@ -846,7 +891,12 @@ fn flow_caller(input: &Value, principal: Option<&crate::continuous_work::authori
         .get("agent_ref")
         .and_then(Value::as_str)
         .map(str::to_owned);
-    let generation = input.get("generation").filter(|v| !v.is_null()).cloned();
+    // Written into the entry's attribution, so held as the page holds it (O:I #803).
+    let generation = input
+        .get("generation")
+        .filter(|v| !v.is_null())
+        .cloned()
+        .map(flow_as_the_page_holds);
     let workcell = input
         .get("workcell")
         .and_then(Value::as_str)

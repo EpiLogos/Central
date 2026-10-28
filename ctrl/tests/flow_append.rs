@@ -218,8 +218,8 @@ const CASES_COPY: &str = concat!(
     "/tests/fixtures/plural-flow-cases.json"
 );
 const CASES_SOURCE: &str = "desktop/cradle/documents/fixtures/plural-flow-cases.json";
-const CASES_SOURCE_REVISION: &str = "83bb01e461ed45ac89215e20b6d1d14401e8dad2";
-const CASES_SHA256: &str = "db87098717cccbaa47db4a0a9d641a1fee25f668bbc26fb795da8adb782bf689";
+const CASES_SOURCE_REVISION: &str = "b52174b6d5d5bf7745182326e48422b1e1709016";
+const CASES_SHA256: &str = "e03103ce2ba0c60ddac5bb0765738d374234e3fddb38ce2ab05f0b78bebf37e5";
 
 #[test]
 fn the_shared_cases_are_a_pinned_copy_of_the_oi_source() {
@@ -325,6 +325,11 @@ fn every_shared_conformance_case_holds_natively() {
                 }
                 if let Some(basis) = expect.get("basisRevision") {
                     assert_eq!(&entry["basisRevision"], basis, "{name}");
+                }
+                // The entry as the page writes it, its request digest among it
+                // (O:I #803): every owner writes this entry.
+                if let Some(want) = expect.get("entry") {
+                    assert_eq!(entry, want, "{name}: the entry every owner writes");
                 }
                 if let Some(list) = expect["converges"].as_array() {
                     let got: Vec<&Value> = entry["relations"]
@@ -1209,6 +1214,12 @@ fn the_shared_island_case_keeps_every_byte_it_does_not_own() {
             done["entry"]["attribution"]["basis"], case["expect"]["attribution"],
             "{name}"
         );
+        // A whole number in any spelling is that number, written and hashed as
+        // the integer, as the page writes it (O:I #803): every owner writes
+        // this entry, its request digest among it.
+        if let Some(want) = case["expect"].get("entry") {
+            assert_eq!(done["entry"], *want, "{name}: the entry every owner writes");
+        }
         let after = island_text(&w.0, &loc);
         let head = case["expect"]["islandAfter"][0].as_str().unwrap();
         let tail = case["expect"]["islandAfter"][1].as_str().unwrap();
@@ -1472,6 +1483,117 @@ fn a_revision_written_with_a_fraction_counts_on_from_its_value() {
                 Piece::Kept(tail),
             ],
             written,
+        );
+    }
+}
+
+#[test]
+fn a_request_and_a_format_in_any_spelling_read_as_the_page_reads_them() {
+    // O:I #803. The page (`plural.ts`) reads a request's basisRevision, a
+    // reply's revision, the caller's generation and the Flow's format version
+    // as numbers: `3.0` is 3 and `"version":4.0` is the current form 4. It
+    // writes and hashes them as `3` and `4`. This owner reads every one the
+    // same way, so a request in any spelling is checked against the revision
+    // it names, and the entry it writes, its digest among it, is the integer
+    // spelling's. The island's own spellings stay as written.
+    let island = |version: &str| {
+        let head = format!(
+            r#"{{"meta":{{"documentId":"doc-spelt","revision":4,"format":{{"version":{version},"minReader":4}},"participants":[{{"key":"p-ann","initial":"A","kind":"person","name":"Ann"}},{{"key":"p-ada","initial":"D","kind":"agent","name":"Ada"}}]}},"entries":[{{"id":"e-q","authorKey":"p-ann","author":"A","at":"2026-09-30T08:00:00.000Z","html":"<p>q</p>","touched":false,"replyTo":null}}"#
+        );
+        (head, r#"],"x-count":3.0}"#)
+    };
+    let number = |spelt: &str| serde_json::from_str::<Value>(spelt).unwrap();
+    let request = |basis: &str, reply: &str| {
+        let mut request = req("op-spelt", "p-ada", "<p>spelt</p>");
+        request["basisRevision"] = number(basis);
+        request["relations"][0]["revision"] = number(reply);
+        request
+    };
+    let caller = |generation: &str| {
+        let mut caller = declared_ada();
+        caller["generation"] = number(generation);
+        caller
+    };
+    // Append once on a fresh Flow; the island after it is checked to be the
+    // island as written with only the revision counted on and the entry added.
+    let append = |version: &str, basis: &str, reply: &str, generation: &str| {
+        let w = world();
+        let (head, tail) = island(version);
+        let loc = place_island(&w.0, "flow-spelt.html", &format!("{head}{tail}"));
+        let (input, token) = input_for(&loc, &caller(generation), &request(basis, reply));
+        let what =
+            format!("version {version}, basis {basis}, reply {reply}, generation {generation}");
+        let done = run(&w.0, &input, token).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+        assert_eq!(done["document_revision"], json!(5), "{what}");
+        let (counted, _) = island(version);
+        let counted = counted.replacen(r#""revision":4,"#, r#""revision":5,"#, 1);
+        assert_island(
+            &island_text(&w.0, &loc),
+            &[
+                Piece::Kept(&counted),
+                Piece::Kept(","),
+                Piece::Written(&done["entry"]),
+                Piece::Kept(tail),
+            ],
+            &what,
+        );
+        done["entry"].clone()
+    };
+    for (basis, reply, generation) in [("3", "4", "2"), ("0", "0", "0")] {
+        let integer = append("4", basis, reply, generation);
+        assert_eq!(integer["basisRevision"], number(basis));
+        assert_eq!(integer["relations"][0]["revision"], number(reply));
+        assert_eq!(integer["attribution"]["generation"], number(generation));
+        let spellings: &[(&str, &str, &str)] = if basis == "0" {
+            &[("-0", "-0.0", "0.0"), ("0e5", "-0e-1", "0.0e0")]
+        } else {
+            &[
+                ("3.0", "4.0", "2.0"),
+                ("3e0", "4E0", "2e+0"),
+                ("30e-1", "40e-1", "20e-1"),
+                ("0.3e1", "0.4e1", "0.2e1"),
+            ]
+        };
+        for (version, (basis, reply, generation)) in ["4.0", "4e0", "40e-1", "0.4e1"]
+            .into_iter()
+            .zip(spellings.iter().cycle())
+        {
+            // The same entry, byte for byte as JSON reads it: the integers,
+            // and the digest of the integers.
+            assert_eq!(
+                append(version, basis, reply, generation),
+                integer,
+                "version {version}, basis {basis}, reply {reply}, generation {generation}"
+            );
+        }
+    }
+
+    // What the page refuses, this owner refuses, and writes nothing.
+    for (version, basis, reply, code) in [
+        ("5", "3", "4", "unsupported-format"),
+        ("5.0", "3", "4", "unsupported-format"),
+        ("4.5", "3", "4", "unsupported-format"),
+        ("3.0", "3", "4", "legacy-format"),
+        ("3.5", "3", "4", "legacy-format"),
+        ("null", "3", "4", "legacy-format"),
+        ("4.0", "5.0", "4", "invalid-basis-revision"),
+        ("4.0", "3.5", "4", "invalid-basis-revision"),
+        ("4.0", "-1.0", "4", "invalid-basis-revision"),
+        ("4.0", "3", "5.0", "relation-revision-ahead"),
+        ("4.0", "3", "5e0", "relation-revision-ahead"),
+        ("4.0", "3", "4.5", "relation-revision-ahead"),
+    ] {
+        let w = world();
+        let (head, tail) = island(version);
+        let loc = place_island(&w.0, "flow-spelt.html", &format!("{head}{tail}"));
+        let (input, token) = input_for(&loc, &caller("2"), &request(basis, reply));
+        let what = format!("version {version}, basis {basis}, reply {reply}");
+        let refused = run(&w.0, &input, token).expect_err(&what);
+        assert_eq!(refused.0, code, "{what}: {}", refused.1);
+        assert_eq!(
+            island_text(&w.0, &loc),
+            format!("{head}{tail}"),
+            "{what}: nothing written"
         );
     }
 }
