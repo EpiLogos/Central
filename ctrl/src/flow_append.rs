@@ -334,6 +334,25 @@ fn flow_request_digest(entry: &Value) -> String {
     });
     sha256_hex(&serde_json::to_string(&payload).unwrap_or_default())
 }
+/// The document's `meta.revision` as every Flow writer reads it: a whole
+/// number from 0 to 2^53 in any spelling JSON allows, so a hand-written `3.0`
+/// is 3, as O:I's page and host (`plural.ts` `appendContribution`) and its
+/// kernel read it (O:I #798, ported from O:I `desktop/cradle/kernel/src/page.rs`
+/// `apply_field`, #797). Anything else is no count yet: 0, so the first
+/// append writes 1.
+fn flow_revision(doc: &Value) -> u64 {
+    let count = |n: &serde_json::Number| {
+        n.as_u64().or_else(|| {
+            n.as_f64()
+                .filter(|f| f.fract() == 0.0 && (0.0..=9_007_199_254_740_992.0).contains(f))
+                .map(|f| f as u64)
+        })
+    };
+    match doc.pointer("/meta/revision") {
+        Some(Value::Number(n)) => count(n).unwrap_or(0),
+        _ => 0,
+    }
+}
 fn flow_format_version(doc: &Value) -> u64 {
     doc.pointer("/meta/format/version")
         .and_then(Value::as_u64)
@@ -633,10 +652,10 @@ fn flow_append(
     if flow_plain_text(&html.replace("&nbsp;", " ")).trim().is_empty() && !has_media {
         return refuse("empty-contribution", "a contribution needs content");
     }
-    let doc_revision = doc.pointer("/meta/revision").and_then(Value::as_i64).unwrap_or(0);
+    let revision = flow_revision(doc);
     if let Some(basis) = request.get("basisRevision").filter(|v| !v.is_null()) {
-        match basis.as_i64() {
-            Some(n) if (0..=doc_revision).contains(&n) => {}
+        match basis.as_u64() {
+            Some(n) if n <= revision => {}
             _ => {
                 return refuse(
                     "invalid-basis-revision",
@@ -713,7 +732,6 @@ fn flow_append(
             }
         }
     }
-    let revision = doc.pointer("/meta/revision").and_then(Value::as_i64).unwrap_or(0);
     for relation in &relations {
         let kind = str_of(relation, "type").unwrap_or("");
         if !["reply", "branch", "converge", "correct", "source", "artifact"].contains(&kind) {
@@ -739,7 +757,7 @@ fn flow_append(
         }
         if relation
             .get("revision")
-            .and_then(Value::as_i64)
+            .and_then(Value::as_u64)
             .is_some_and(|r| r > revision)
         {
             return refuse(
