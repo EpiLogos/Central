@@ -11,7 +11,7 @@ Everything Central keeps is an ordinary file that you can read and edit with any
 | Area | What it covers | Example Actions / commands |
 |---|---|---|
 | Root and health | create, locate and check a personal root | `ctrl init`, `ctrl root`, `ctrl doctor` |
-| Projects | find and enter projects under `Work/` | `ctrl work list \| search`, `ctrl pick`, `work.*` |
+| Projects | find and enter projects under `Work/`, and bring in a folder of work that stands elsewhere under your home (`work.candidates`, `work.bring`) | `ctrl work list \| search`, `ctrl pick`, `work.*` |
 | Authored ground | read and search what the person wrote in `Control/` | `ctrl control open \| search \| index` |
 | Project ground | give an ordinary project its own `ProjectCentral/` folder | `projectcentral.init \| inspect \| doctor \| adopt \| migrate`, `projectcentral.source.*` |
 | Files | create and change ordinary files with compare-and-swap writes and revision history | `central.files.*`, `central.document.*`, `central.flow.*` |

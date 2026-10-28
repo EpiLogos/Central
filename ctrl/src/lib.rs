@@ -50,6 +50,7 @@ pub mod system_disclosure;
 pub mod template_stamp;
 mod wiki_publication;
 pub mod wiki_read;
+pub mod work_bring;
 pub mod world;
 pub mod world_here;
 pub mod world_map;
@@ -64,8 +65,8 @@ pub mod projectcentral_ops {
         ProjectCentralOutcome, SourceSignal, WikiCandidate, PROJECT_PROVENANCE, ROOT_WIKI_REF,
     };
     pub(crate) use super::projectcentral_ops_base::{
-        mutation_failure_result, project_space_ref, project_wiki_value, write_json_new,
-        MutationProgress,
+        compatible_wiki, mutation_failure_result, project_space_ref, project_wiki_value,
+        write_json_new, MutationProgress,
     };
 
     pub fn register_projectcentral_actions(registry: &mut crate::action::ActionRegistry) {
