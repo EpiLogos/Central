@@ -619,7 +619,7 @@ fn write_action(
 /// ordinary file history. The root register has no door here: Control ground
 /// creates through `central.files.create` under `Control/user/flows`.
 #[allow(clippy::too_many_arguments)]
-fn create_scoped_source(
+pub(crate) fn create_scoped_source(
     project_root: &Path,
     path: &str,
     content: &str,
