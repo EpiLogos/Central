@@ -57,6 +57,7 @@ pub mod work_bring;
 pub mod world;
 pub mod world_here;
 pub mod world_map;
+pub mod world_name;
 pub mod world_position;
 pub mod world_source;
 pub mod world_subjects;
@@ -90,6 +91,9 @@ pub mod projectcentral_ops {
         super::ground_projects::register_ground_project_actions(registry);
         super::world_here::register_world_here_action(registry);
         super::world_position::register_world_position_actions(registry);
+        // The person's own acts on a world's pages and on its name (O-I #743): a page to the trash, a world named.
+        super::file_mutation::register_trash(registry);
+        super::world_name::register_world_name_action(registry);
     }
 }
 pub mod recovery;

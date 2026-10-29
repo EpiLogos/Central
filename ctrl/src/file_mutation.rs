@@ -1091,9 +1091,6 @@ struct Snapshot {
     #[serde(default = "utf8_encoding", skip_serializing_if = "is_utf8")]
     content_encoding: String,
 }
-fn snapshot(root: &Path, area: &Path, content: &str) -> io::Result<String> {
-    snapshot_bytes(root, area, content.as_bytes())
-}
 fn snapshot_bytes(root: &Path, area: &Path, bytes: &[u8]) -> io::Result<String> {
     if bytes.len() > MAX {
         return Err(invalid("History exceeds native byte limit"));
@@ -1214,6 +1211,10 @@ fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
     let root = root.canonicalize()?;
     let loc: CentralPathRef =
         serde_json::from_value(input.get("location").cloned().unwrap_or(Value::Null))?;
+    // A page that left its world for the trash (`central.files.trash`): its history reads, and restore brings it back.
+    if let Some(world) = trashed_page(&root, op, &loc)? {
+        return absent_page(&root, op, &loc, world, input);
+    }
     // The create door: an absent file under Control/user/flows/ is created
     // by an explicit write with an empty expected revision. resolve()
     // canonicalizes the final component and cannot name an absent file, so
@@ -1532,8 +1533,37 @@ fn create_user_flow_instance(
     if content.len() > MAX || content.contains('\0') {
         return Err(invalid("Content must be bounded UTF-8 text without NUL"));
     }
-    let (actor, actor_kind, agent_session_ref) = attribution(input)?;
-    let revision = content_revision_bytes(content.as_bytes());
+    create_flow_file(
+        root,
+        loc,
+        path,
+        content.as_bytes(),
+        attribution(input)?,
+        area,
+        None,
+    )
+}
+
+/// The staged creation of an absent file under `Control/user/flows/`: `content` written, one journal event seeded at the next
+/// cursor — `restored_from` names the recorded revision a trashed page came back from — staged and renamed like every commit.
+fn create_flow_file(
+    root: &Path,
+    loc: &CentralPathRef,
+    path: &Path,
+    content: &[u8],
+    (actor, actor_kind, agent_session_ref): (String, String, Option<String>),
+    area: &Path,
+    restored_from: Option<&str>,
+) -> io::Result<Value> {
+    if !loc.path.starts_with("Control/user/flows/") {
+        return Err(denied(
+            "An absent ordinary file is created only as a flow instance under Control/user/flows/",
+        ));
+    }
+    if content.len() > MAX {
+        return Err(invalid("Content exceeds the native byte limit"));
+    }
+    let revision = content_revision_bytes(content);
     let relative_parent = Path::new(&loc.path)
         .parent()
         .ok_or_else(|| invalid("Missing parent"))?
@@ -1549,7 +1579,7 @@ fn create_user_flow_instance(
             .as_nanos()
     );
     let mut staged = create_in(&parent, &name, 0o644)?;
-    staged.write_all(content.as_bytes())?;
+    staged.write_all(content)?;
     staged.sync_all()?;
     let cursor = events(area, 1, None)?
         .first()
@@ -1564,7 +1594,7 @@ fn create_user_flow_instance(
         actor,
         actor_kind,
         agent_session_ref,
-        restored_from: None,
+        restored_from: restored_from.map(str::to_owned),
     };
     if area.join("pending.json").exists() {
         return Err(io::Error::other(
@@ -1573,7 +1603,7 @@ fn create_user_flow_instance(
     }
     let mut committed = false;
     let result = (|| {
-        snapshot(root, area, &content)?;
+        snapshot_bytes(root, area, content)?;
         atomic_record(
             root,
             area.join("pending.json")
@@ -1597,9 +1627,11 @@ fn create_user_flow_instance(
             area.join(format!("event-{}.json", event.cursor)),
         )?;
         File::open(area)?.sync_all()?;
-        Ok(
-            json!({"schema":"central.file-mutation/v1","outcome":"created","location":loc,"revision":revision,"changed":true,"change":event,"automatic_agent_or_model_invocation":false}),
-        )
+        let mut receipt = json!({"schema":"central.file-mutation/v1","outcome":"created","location":loc,"revision":revision,"changed":true,"change":event,"automatic_agent_or_model_invocation":false});
+        if let Some(from) = restored_from {
+            receipt["restored_from"] = json!(from);
+        }
+        Ok(receipt)
     })();
     let c_name = std::ffi::CString::new(name).map_err(io::Error::other)?;
     unsafe {
@@ -1618,6 +1650,456 @@ fn create_user_flow_instance(
     } else {
         result
     }
+}
+/// A history's pending journal resolved against what stands now (`current`: the file's revision, or "" while it is absent): the
+/// event committed when what stands is its target, dropped when what stands is its basis; anything else is owner recovery.
+fn resolve_pending(area: &Path, current: &str) -> io::Result<()> {
+    let pending = area.join("pending.json");
+    if !pending.exists() {
+        return Ok(());
+    }
+    let event: Change = serde_json::from_reader(open(&pending, false)?.take(65536))?;
+    if current == event.revision {
+        fs::rename(&pending, area.join(format!("event-{}.json", event.cursor)))?;
+        File::open(area)?.sync_all()?;
+    } else if current == event.previous_revision {
+        fs::remove_file(&pending)?;
+    } else {
+        return Err(io::Error::other("File commit has an unresolved interrupted receipt; current bytes match neither journal basis nor target. Owner recovery is required; do not resend."));
+    }
+    Ok(())
+}
+fn next_cursor(area: &Path) -> io::Result<u64> {
+    events(area, 1, None)?
+        .first()
+        .map(|e| e.cursor)
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| invalid("History cursor exhausted"))
+}
+
+pub const TRASH_ACTION: &str = "central.files.trash";
+pub const TRASH_SCHEMA: &str = "central.file-trash/v1";
+const PAGE_FOLDERS: &str = "Only a page in a world's page folder leaves it for the trash: your world's Control/user/flows, or a project's ProjectCentral/user";
+
+/// The world a page's location stands in: your world's Flows home (`None`), or the project whose human ground holds it (O-I #743:
+/// a world's pages are kept in those folders, and only there). A location in neither is no world's page folder, and is refused; a
+/// project page deeper than its project's creation door reaches (world_source.rs create_scoped_source) is refused too, so every page
+/// that leaves can come back.
+fn page_world(root: &Path, loc: &CentralPathRef) -> io::Result<Option<String>> {
+    let relative = Path::new(&loc.path);
+    if loc.path.is_empty()
+        || relative.is_absolute()
+        || !relative
+            .components()
+            .all(|part| matches!(part, std::path::Component::Normal(_)))
+    {
+        return Err(invalid(
+            "Central location must contain only relative path components",
+        ));
+    }
+    if *loc != CentralPathRef::new(root, loc.path.clone())? {
+        return Err(invalid(
+            "Central location belongs to another root or an unsupported schema",
+        ));
+    }
+    let parts: Vec<&str> = loc.path.split('/').collect();
+    if parts.len() > 3 && parts[..3] == ["Control", "user", "flows"] {
+        return Ok(None);
+    }
+    if parts.len() > 2 && parts[0] == "Work" {
+        let project = Path::new("Work").join(parts[1]);
+        let manifest = crate::projectcentral::read_project_manifest(&root.join(&project))
+            .ok()
+            .filter(|manifest| manifest.validate().valid);
+        if let Some(manifest) = manifest {
+            if let Ok(within) = relative.strip_prefix(project.join(&manifest.human_source)) {
+                if within.components().count() > 2 {
+                    return Err(denied("A page more than one folder deep in its project's human ground cannot come back through the project's creation door, so it does not leave for the trash"));
+                }
+                if within.components().count() > 0 {
+                    return Ok(Some(parts[1].to_owned()));
+                }
+            }
+        }
+    }
+    Err(denied(PAGE_FOLDERS))
+}
+
+/// Whether `op` reads or restores a page that left for the trash: its location in a world's page folder, nothing standing there,
+/// and a history kept for it. Answers its world (`Some(None)` for yours).
+fn trashed_page(root: &Path, op: &str, loc: &CentralPathRef) -> io::Result<Option<Option<String>>> {
+    if !matches!(op, "history" | "restore") {
+        return Ok(None);
+    }
+    match fs::symlink_metadata(root.join(&loc.path)) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        _ => return Ok(None),
+    }
+    let Ok(world) = page_world(root, loc) else {
+        return Ok(None);
+    };
+    let kept = root
+        .join(".central/file-history")
+        .join(key(loc.ref_id.as_bytes()));
+    Ok(kept.is_dir().then_some(world))
+}
+
+/// A trashed page's history, and its restore: the recorded revision written back where the page stood — in your world as a Flow
+/// instance is created, in a project through the project's own creation door — with one event naming the revision it came from.
+/// An absence whose newest event is no trash has nothing to restore.
+fn absent_page(
+    root: &Path,
+    op: &str,
+    loc: &CentralPathRef,
+    world: Option<String>,
+    input: &Value,
+) -> io::Result<Value> {
+    let parent = Path::new(&loc.path)
+        .parent()
+        .ok_or_else(|| invalid("Missing parent"))?;
+    reject_symlink_components(root, parent)?;
+    let (dir, _lock) = state(root)?;
+    let area = area(root, &dir, loc)?;
+    resolve_pending(&area, "")?;
+    if !events(&area, 1, None)?
+        .first()
+        .is_some_and(|newest| newest.revision.is_empty())
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "No file stands at this location and its history records no trash: there is nothing to restore",
+        ));
+    }
+    if op == "history" {
+        let limit = match input.get("limit") {
+            None => 20,
+            Some(value) => value
+                .as_u64()
+                .ok_or_else(|| invalid("limit must be an integer"))?,
+        };
+        if limit == 0 || limit > 200 {
+            return Err(invalid("limit must be 1..200"));
+        }
+        let before = input
+            .get("before")
+            .map(|v| {
+                v.as_u64()
+                    .ok_or_else(|| invalid("before must be an integer"))
+            })
+            .transpose()?;
+        let mut page = events(&area, limit as usize + 1, before)?;
+        let more = page.len() > limit as usize;
+        page.truncate(limit as usize);
+        let next = if more {
+            page.last().map(|c| c.cursor)
+        } else {
+            None
+        };
+        return Ok(
+            json!({"schema":"central.file-history/v1","location":loc,"current_revision":"","entries":page,"next_before":next,"more":more,"automatic_agent_or_model_invocation":false}),
+        );
+    }
+    let basis = text(input, "expected_revision")?;
+    if !basis.is_empty() {
+        return Ok(
+            json!({"schema":"central.file-mutation/v1","outcome":"conflict","location":loc,"expected_revision":basis,"current":null,"changed":false}),
+        );
+    }
+    let revision = text(input, "revision")?;
+    let content = historical(&area, revision)?;
+    let attributed = attribution(input)?;
+    let Some(project) = world else {
+        return create_flow_file(
+            root,
+            loc,
+            &root.join(&loc.path),
+            &content,
+            attributed,
+            &area,
+            Some(revision),
+        );
+    };
+    // A project's page comes back through the project's own creation door: the source horizon has it again, attributed.
+    let text = String::from_utf8(content)
+        .map_err(|_| invalid("Only a text page comes back through its project's creation door"))?;
+    let (actor, actor_kind, agent_session_ref) = attributed;
+    let event = Change {
+        cursor: next_cursor(&area)?,
+        previous_revision: String::new(),
+        revision: revision.to_owned(),
+        actor: actor.clone(),
+        actor_kind: actor_kind.clone(),
+        agent_session_ref: agent_session_ref.clone(),
+        restored_from: Some(revision.to_owned()),
+    };
+    let pending = area.join("pending.json");
+    atomic_record(
+        root,
+        pending.strip_prefix(root).map_err(io::Error::other)?,
+        &serde_json::to_vec(&event)?,
+        RecordDisposition::ReplaceOrCreate,
+    )?;
+    let base = Path::new("Work").join(&project);
+    let within = Path::new(&loc.path)
+        .strip_prefix(&base)
+        .map_err(io::Error::other)?
+        .to_str()
+        .ok_or_else(|| invalid("path must be UTF-8"))?
+        .to_owned();
+    let created = match crate::world_source::create_scoped_source(
+        &root.join(&base),
+        &within,
+        &text,
+        &actor,
+        &actor_kind,
+        agent_session_ref,
+    ) {
+        Ok(created) => created,
+        Err(error) => {
+            fs::remove_file(&pending)?;
+            return Err(error);
+        }
+    };
+    fs::rename(&pending, area.join(format!("event-{}.json", event.cursor)))?;
+    File::open(&area)?.sync_all()?;
+    Ok(
+        json!({"schema":"central.file-mutation/v1","outcome":"created","location":loc,"revision":revision,"changed":true,"change":event,
+        "restored_from":revision,"source":created,"automatic_agent_or_model_invocation":false}),
+    )
+}
+
+/// `central.files.trash`: a page leaves its world, recoverably (O-I #743; manual §10.9 Delete). Only the person does it: the act
+/// authenticates on their native authority, at the root for your world's page and at the project for a project's. The page's bytes
+/// stay in its owner-kept history beside every earlier revision, its trash recorded there as one more event (to the absent revision
+/// ""), and `central.files.restore` brings it back from there. A page a recognised source binding holds leaves through its source owner,
+/// never here; a stale revision moves nothing.
+pub fn trash(root: &Path, input: &Value, token: Option<&str>, now: u64) -> io::Result<Value> {
+    let root = root.canonicalize()?;
+    let loc: CentralPathRef =
+        serde_json::from_value(input.get("location").cloned().unwrap_or(Value::Null))
+            .map_err(|error| invalid(&format!("location: {error}")))?;
+    let expected = text(input, "expected_revision")?;
+    let named = match input.get("project") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(project)) if !project.trim().is_empty() => Some(project.as_str()),
+        Some(_) => return Err(invalid("project must name a project")),
+    };
+    let expected_authority = match input.get("expected_authority_revision") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(revision)) if !revision.trim().is_empty() => Some(revision.as_str()),
+        Some(_) => return Err(invalid("expected_authority_revision must be text")),
+    };
+    let world = page_world(&root, &loc)?;
+    if named != world.as_deref() {
+        return Err(invalid(&match &world {
+            Some(project) => format!("This page is in the project {project}: name it as project"),
+            None => "A page of your world's Flows home is in no project: name none".to_owned(),
+        }));
+    }
+    let scope = crate::continuous_work::source::Scope::resolve(&root, world.as_deref())?;
+    let principal = crate::continuous_work::authority::authenticate(
+        &scope,
+        token,
+        TRASH_ACTION,
+        expected_authority,
+        now,
+    )?;
+    principal.require_human()?;
+    let relative = Path::new(&loc.path);
+    reject_symlink_components(&root, relative)?;
+    // One lock order with restore: the file-history owner's, then the project's source authority.
+    let (dir, _lock) = state(&root)?;
+    let project_root = world
+        .as_ref()
+        .map(|project| root.join("Work").join(project));
+    let _source = project_root
+        .as_ref()
+        .map(|project| crate::source_safety::lock(project, "source-mutation.lock"))
+        .transpose()?;
+    let source_ref = match &project_root {
+        None => {
+            if participating_source(&root, &loc.path).is_some() {
+                return Err(denied("An authored source binding holds this page: it leaves through its source owner, not the trash"));
+            }
+            None
+        }
+        Some(project_root) => {
+            // The horizon sees the page before it leaves, so its leaving is one Removed change.
+            crate::source_horizon::reconcile_project_sources(project_root)?;
+            let within = relative
+                .strip_prefix(Path::new("Work").join(world.as_deref().unwrap_or_default()))
+                .map_err(io::Error::other)?
+                .to_string_lossy()
+                .into_owned();
+            let binding = crate::source_horizon::project_source_bindings(project_root)?
+                .into_iter()
+                .find(|binding| binding.path == within);
+            if binding
+                .as_ref()
+                .is_some_and(|binding| binding.roles != ["project-human-source-aperture"])
+            {
+                return Err(denied("A recognised source of the project holds this page: it leaves through its relation's owner, not the trash"));
+            }
+            binding.map(|binding| binding.source_ref)
+        }
+    };
+    let metadata = match fs::symlink_metadata(root.join(relative)) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "No page stands at this location: nothing leaves for the trash",
+            ))
+        }
+        Err(error) => return Err(error),
+    };
+    if !metadata.file_type().is_file() {
+        return Err(denied("Only a page file leaves for the trash"));
+    }
+    let mut file = open_native_file(&root, &loc.path)?;
+    let held = file.metadata()?;
+    if held.nlink() != 1 {
+        return Err(denied(
+            "Files with multiple hard links require an explicit native operation",
+        ));
+    }
+    let current = bytes(&mut file)?;
+    let basis = content_revision_bytes(&current);
+    if basis != expected {
+        return Ok(
+            json!({"schema":TRASH_SCHEMA,"outcome":"conflict","location":loc,"expected_revision":expected,"current_revision":basis,"changed":false}),
+        );
+    }
+    let area = area(&root, &dir, &loc)?;
+    resolve_pending(&area, &basis)?;
+    snapshot_bytes(&root, &area, &current)?;
+    let event = Change {
+        cursor: next_cursor(&area)?,
+        previous_revision: basis.clone(),
+        revision: String::new(),
+        actor: principal.principal_ref.clone(),
+        actor_kind: "human".into(),
+        agent_session_ref: None,
+        restored_from: None,
+    };
+    let pending = area.join("pending.json");
+    atomic_record(
+        &root,
+        pending.strip_prefix(&root).map_err(io::Error::other)?,
+        &serde_json::to_vec(&event)?,
+        RecordDisposition::ReplaceOrCreate,
+    )?;
+    // The page that leaves is the one read: the same file, the same bytes.
+    let parent = directory(
+        &root,
+        relative.parent().ok_or_else(|| invalid("Missing parent"))?,
+    )?;
+    let mut again = open_native_file(&root, &loc.path)?;
+    let now_held = again.metadata()?;
+    if now_held.dev() != held.dev() || now_held.ino() != held.ino() || bytes(&mut again)? != current
+    {
+        fs::remove_file(&pending)?;
+        return Err(conflict(
+            "The page changed while it was moved to the trash; nothing left",
+        ));
+    }
+    let name = std::ffi::CString::new(
+        relative
+            .file_name()
+            .ok_or_else(|| invalid("Invalid filename"))?
+            .as_encoded_bytes(),
+    )
+    .map_err(io::Error::other)?;
+    if unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), 0) } != 0 {
+        let error = io::Error::last_os_error();
+        fs::remove_file(&pending)?;
+        return Err(error);
+    }
+    let committed = (|| {
+        parent.sync_all()?;
+        fs::rename(&pending, area.join(format!("event-{}.json", event.cursor)))?;
+        File::open(&area)?.sync_all()?;
+        if let (Some(project_root), Some(source_ref)) = (&project_root, source_ref) {
+            let mut attributions = BTreeMap::new();
+            attributions.insert(
+                source_ref,
+                crate::source_horizon::SourceWriteAttribution {
+                    actor: principal.principal_ref.clone(),
+                    actor_kind: "human".into(),
+                    agent_session_ref: None,
+                },
+            );
+            crate::source_horizon::reconcile_project_source_writes(project_root, &attributions)?;
+        }
+        Ok(())
+    })();
+    committed.map_err(|error| {
+        record_owner_error(
+            error,
+            "ordinary_file.source_publication",
+            Some(&loc.ref_id),
+            Some(""),
+            "published",
+        )
+    })?;
+    Ok(
+        json!({"schema":TRASH_SCHEMA,"outcome":"trashed","location":loc,"project":world,"previous_revision":basis,"revision":"",
+        "byte_len":current.len(),"changed":true,"change":event,"principal_ref":principal.principal_ref,
+        "recover":{"action":"central.files.restore","expected_revision":"","revision":basis},"automatic_agent_or_model_invocation":false}),
+    )
+}
+fn trash_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    let token = std::env::var("CENTRAL_NATIVE_TOKEN").ok();
+    let result = resolve_central_root(context.root_options)
+        .map_err(io::Error::other)
+        .and_then(|root| {
+            trash(
+                &root.path,
+                input,
+                token.as_deref(),
+                crate::civil_time_adoption::now(),
+            )
+        });
+    match result {
+        Ok(data) => ActionResult::success(TRASH_ACTION, data),
+        Err(error) => match record_failure_result(TRASH_ACTION, &error) {
+            Some(result) => result,
+            None => crate::civil_time_adoption::failure(TRASH_ACTION, error),
+        },
+    }
+}
+/// `central.files.trash` joins the runtime registry, beside the person's other authenticated acts.
+pub fn register_trash(registry: &mut ActionRegistry) {
+    let input = |name: &str, input_type: &str, required: bool| ActionInputDefinition {
+        name: name.into(),
+        input_type: input_type.into(),
+        required,
+        choices: None,
+        selection: None,
+    };
+    registry
+        .register(
+            crate::civil_time_adoption::descriptor(
+                TRASH_ACTION,
+                "Move a page to the trash",
+                "A page leaves its world, recoverably: a file in a world's page folder (your world's Control/user/flows, or a project's ProjectCentral/user, which the page then names as project) is moved out on the expected revision, its bytes kept in its owner-kept history with one event to the absent revision \"\", and central.files.restore with expected_revision \"\" brings any recorded revision back. The person's own act: it authenticates on their native authority (CENTRAL_NATIVE_TOKEN), at the root or the project. A stale revision answers conflict and moves nothing; a page an authored or recognised source binding holds is refused. Never invokes an Agent or model.",
+                MutationClass::LocallyMutating,
+                "central-file-trash",
+                vec![
+                    input("location", "object", true),
+                    input("expected_revision", "string", true),
+                    input("project", "string", false),
+                    input("expected_authority_revision", "string", false),
+                ],
+            ),
+            trash_action,
+        )
+        .expect("central.files.trash is a valid Action id");
 }
 fn action(op: &str, id: &str, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
     let result = resolve_central_root(context.root_options)
@@ -1706,7 +2188,7 @@ pub fn register(registry: &mut ActionRegistry) {
                     selection: None,
                 }),
         );
-        registry.register(ActionDescriptor{id:format!("central.files.{op}"),title:format!("Ordinary file {op}"),description:"Native ordinary-file history and CAS. Protected ground and participating SourceRefs must use their authored operations. An absent file is created only as a flow instance under Control/user/flows/ with an empty expected revision. Attribution is declared, not an authentication credential.".into(),inputs,output:ActionOutputDefinition{output_type:format!("central-file-{op}")},mutation_class:if op=="history" || op=="recovery_preview" {MutationClass::ReadOnly}else{MutationClass::LocallyMutating},preview_supported:false,required_ports:vec![],availability:ActionAvailability{available:true,reason:None}},handler).expect("unique file mutation action");
+        registry.register(ActionDescriptor{id:format!("central.files.{op}"),title:format!("Ordinary file {op}"),description:"Native ordinary-file history and CAS. Protected ground and participating SourceRefs must use their authored operations. An absent file is created only as a flow instance under Control/user/flows/ with an empty expected revision. A page that left its world through central.files.trash keeps its history readable, and restore with an empty expected revision brings a recorded revision back where it stood (a project's page through the project's own creation door). Attribution is declared, not an authentication credential.".into(),inputs,output:ActionOutputDefinition{output_type:format!("central-file-{op}")},mutation_class:if op=="history" || op=="recovery_preview" {MutationClass::ReadOnly}else{MutationClass::LocallyMutating},preview_supported:false,required_ports:vec![],availability:ActionAvailability{available:true,reason:None}},handler).expect("unique file mutation action");
     }
 }
 

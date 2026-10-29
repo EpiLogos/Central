@@ -256,6 +256,14 @@ pub struct ProjectCentralMap {
 pub struct ProjectMap {
     pub name: String,
     pub path: String,
+    /// The world's name as the person called it (`central.world.name`, the ProjectCentral manifest's `name`); absent, the world is
+    /// called by its folder's name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub world_name: Option<String>,
+    /// The content revision of the project's ProjectCentral manifest, the one a world's naming is made against; absent when it
+    /// cannot be read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manifest_revision: Option<String>,
     /// Ordinary Project files: everything except ProjectCentral, dot directories
     /// and build/output directories.
     pub source_files: usize,
@@ -1034,6 +1042,25 @@ fn map_projectcentral(
     }
 }
 
+/// The world's name its manifest keeps (only a name the manifest's own rule admits) and the manifest's content revision: what
+/// `central.world.name` is read against. A manifest that is no plain file, or cannot be read, discloses neither.
+fn world_naming(project_root: &Path) -> (Option<String>, Option<String>) {
+    let manifest = project_root.join(PROJECTCENTRAL_DIR).join(PROJECT_MANIFEST);
+    let plain =
+        fs::symlink_metadata(&manifest).is_ok_and(|metadata| metadata.file_type().is_file());
+    let Some(bytes) = plain.then(|| fs::read(&manifest).ok()).flatten() else {
+        return (None, None);
+    };
+    let name = crate::projectcentral::parse_project_manifest(&bytes, &manifest)
+        .ok()
+        .and_then(|parsed| parsed.name)
+        .filter(|name| crate::projectcentral::world_name_words(name).is_ok());
+    (
+        name,
+        Some(crate::source_safety::content_revision_bytes(&bytes)),
+    )
+}
+
 fn map_project(central_root: &Path, work_root: &Path, name: &str, across: bool) -> ProjectMap {
     let project_root = work_root.join(name);
     let relative = format!("Work/{name}");
@@ -1054,9 +1081,12 @@ fn map_project(central_root: &Path, work_root: &Path, name: &str, across: bool) 
         source_files
     };
     let projectcentral = map_projectcentral(central_root, &project_root, &relative);
+    let (world_name, manifest_revision) = world_naming(&project_root);
     ProjectMap {
         name: name.to_owned(),
         path: relative,
+        world_name,
+        manifest_revision,
         source_files,
         projectcentral,
     }

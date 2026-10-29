@@ -24,6 +24,10 @@ pub struct ProjectCentralManifest {
     pub project_id: String,
     pub human_source: String,
     pub wiki: WikiBinding,
+    /// The world's name as the person calls it (`central.world.name`), beside its stable `project_id`; absent, the world is called
+    /// by its folder's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,6 +67,7 @@ impl ProjectCentralManifest {
                 source: WIKI_SOURCE.to_owned(),
                 adopted_sources: Vec::new(),
             },
+            name: None,
         }
     }
 
@@ -87,6 +92,11 @@ impl ProjectCentralManifest {
             errors.push(format!(
                 "wiki.source must be the canonical Agent Wiki source {WIKI_SOURCE}"
             ));
+        }
+        if let Some(name) = &self.name {
+            if let Err(error) = world_name_words(name) {
+                errors.push(format!("name {error}"));
+            }
         }
         validate_project_member("human_source", &self.human_source, &mut errors);
         validate_project_member("wiki.source", &self.wiki.source, &mut errors);
@@ -140,6 +150,24 @@ pub(crate) fn parse_project_manifest(
             ),
         )
     })
+}
+
+/// The most characters a world's name keeps.
+pub const WORLD_NAME_MAX_CHARS: usize = 120;
+
+/// Whether `name` is a world's name as the manifest keeps it: words without surrounding whitespace or control characters, 1 to
+/// `WORLD_NAME_MAX_CHARS` characters. Answers why not, in words.
+pub fn world_name_words(name: &str) -> Result<(), String> {
+    let count = name.chars().count();
+    if name.trim() != name || count == 0 || count > WORLD_NAME_MAX_CHARS {
+        return Err(format!(
+            "must be 1 to {WORLD_NAME_MAX_CHARS} characters without surrounding whitespace"
+        ));
+    }
+    if name.chars().any(char::is_control) {
+        return Err("must hold no control characters".to_owned());
+    }
+    Ok(())
 }
 
 fn validate_project_member(field: &str, raw: &str, errors: &mut Vec<String>) {
