@@ -30,9 +30,24 @@ pub struct TimeReading {
     pub local_time: String,
     pub observed_at_unix_seconds: u64,
 }
+/// The root's recognised civil-time policy. A ground that keeps none is refused with the way on: the person adopts one
+/// (crate::civil_time_adoption); Central never falls back to the harness's zone.
+fn recognised_policy(root: &Scope) -> io::Result<(source::SourceReading, Value, String)> {
+    authority::recognised_source(root, "civil-time-policy").map_err(|error| {
+        if error.kind() == io::ErrorKind::PermissionDenied
+            && error
+                .to_string()
+                .starts_with("requires one explicitly recognised")
+        {
+            denied(format!("{error}; {}", crate::civil_time_adoption::WAY_ON))
+        } else {
+            error
+        }
+    })
+}
 pub fn time_policy(scope: &Scope, now: u64) -> io::Result<TimeReading> {
     let root = Scope::resolve(&scope.central_root, None)?;
-    let (reading, _, basis) = authority::recognised_source(&root, "civil-time-policy")?;
+    let (reading, _, basis) = recognised_policy(&root)?;
     let policy: TimePolicy = serde_json::from_str(&reading.content)?;
     if policy.schema != "central.civil-time-policy/v1"
         || policy.scope_ref != root.world_ref
@@ -89,7 +104,7 @@ pub fn time_occurrences(scope: &Scope, input: &Value) -> io::Result<Value> {
     const OCCURRENCES_SCHEMA: &str = "central.time-occurrences/v1";
     const MAX_OCCURRENCES: usize = 4096;
     let root = Scope::resolve(&scope.central_root, None)?;
-    let (reading, _, basis) = authority::recognised_source(&root, "civil-time-policy")?;
+    let (reading, _, basis) = recognised_policy(&root)?;
     let policy: TimePolicy = serde_json::from_str(&reading.content)?;
     if policy.schema != "central.civil-time-policy/v1"
         || policy.scope_ref != root.world_ref
