@@ -40,6 +40,7 @@ pub mod pasu;
 pub mod personal;
 pub mod personal_history;
 pub mod picker;
+pub mod place_passage;
 pub mod projectcentral;
 pub mod projectcentral_ground;
 pub mod projectcentral_now;
@@ -97,6 +98,8 @@ pub mod projectcentral_ops {
         super::world_name::register_world_name_action(registry);
         // A world's declared place, where the Sky counts its hours when its Observer is Shared (O-I #745).
         super::world_place::register_world_place_action(registry);
+        // A passage filed on a place of your world, sent there from the search line (O-I #820).
+        super::place_passage::register_file_passage_action(registry);
     }
 }
 pub mod recovery;
