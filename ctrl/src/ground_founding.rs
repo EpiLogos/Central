@@ -12,7 +12,15 @@
 //!   granted (a root grant names a Work member, and a new ground's Work is empty; a Day's and a document's placement needs only a
 //!   recognised policy), the ground's own Control sources protected, enforced by native actions.
 //!
-//! Both require a declared human caller and acceptance (`civil_time_adoption::acceptance`), and are recognised by the acceptance
+//! - The ground's Flows home (`FLOWS_HOME`, O-I #742): `Control/user/flows`, the one place inside the protected `Control/user` where a
+//!   document is created (`file_mutation`'s flow-instance law) — the person's Flows, and the works the O:I Expression owner keeps (a walk,
+//!   a kept view). Founded with the placement policy (`central.ground.placement.adopt`), on the person's Setup acceptance; `ctrl init`
+//!   imposes nothing below the Control roots. A ground founded before gets it on first need through `central.flows.ensure` — made when
+//!   absent, nothing that stands moved — whose answer names its location as `central.files.list` discloses it, the `parent` of a first
+//!   `central.files.create` into it. Ensure needs no acceptance (it adds an empty folder the ground's own Flows already write into) and
+//!   refuses a folder that is not a ground.
+//!
+//! The authority and the placement both require a declared human caller and acceptance (`civil_time_adoption::acceptance`), and are recognised by the acceptance
 //! named: provenance `human-adopted`, standing `architecture-contract`, recognition `setup-ground-acceptance:<acceptance_ref>`.
 use crate::action::{ActionExecutionContext, ActionRegistry, MutationClass};
 use crate::civil_time_adoption::{acceptance, descriptor, failure, ground, input, now, root_of};
@@ -23,10 +31,13 @@ use crate::continuous_work::temporal;
 use crate::result::ActionResult;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::fs;
 use std::io;
 use std::path::Path;
 
 pub const AUTHORITY_SOURCE: &str = "Control/user/native-action-authority.json";
+/// The ground's Flows home (module doc).
+pub const FLOWS_HOME: &str = "Control/user/flows";
 pub const PLACEMENT_SOURCE: &str = "Control/user/placement.json";
 /// The person's grant stands until they replace it: 2100-01-01T00:00:00Z (a grant must name its expiry).
 pub const GRANT_EXPIRES_AT: u64 = 4_102_444_800;
@@ -306,6 +317,62 @@ fn form_adopt(root: &Path, input: &Value) -> io::Result<Value> {
     )?;
     Ok(json!({"adopted":true,"source_ref":source_ref,"source_path":path}))
 }
+const FLOWS_ENSURE: &str = "central.flows.ensure";
+
+/// Make the ground's Flows home when it is absent (`Control/user` must stand, a directory reached through no symlink); nothing that
+/// stands is moved. Answers whether it was made or stood already, and its location.
+pub fn ensure_flows_home(root: &Path) -> io::Result<Value> {
+    let root = root.canonicalize()?;
+    let user = root.join(crate::projectcentral::ROOT_HUMAN_SOURCE_DIR);
+    match fs::symlink_metadata(&user) {
+        Ok(metadata) if metadata.file_type().is_dir() => {}
+        Ok(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Control/user is not a folder of this ground, so it keeps no Flows home",
+            ))
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "This folder is no ground Central keeps (it has no Control/user): accept your ground in Setup first",
+            ))
+        }
+        Err(error) => return Err(error),
+    }
+    let home = root.join(FLOWS_HOME);
+    let made = match fs::create_dir(&home) {
+        Ok(()) => true,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => false,
+        Err(error) => return Err(error),
+    };
+    if !fs::symlink_metadata(&home)?.file_type().is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Control/user/flows stands in this ground but is not a folder",
+        ));
+    }
+    let location = crate::files::CentralPathRef::new(&root, FLOWS_HOME.to_owned())?;
+    Ok(
+        json!({"schema":"central.flows-home/v1","outcome":if made {"made"} else {"present"},
+        "path":FLOWS_HOME,"location":location}),
+    )
+}
+fn flows_ensure_action(
+    _: &ActionRegistry,
+    _: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    let root = match root_of(FLOWS_ENSURE, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
+    match ensure_flows_home(&root) {
+        Ok(value) => ActionResult::success(FLOWS_ENSURE, value),
+        Err(error) => failure(FLOWS_ENSURE, error),
+    }
+}
+
 const FORM_PREVIEW: &str = "central.ground.form.preview";
 const FORM_ADOPT: &str = "central.ground.form.adopt";
 fn form_preview_action(
@@ -415,8 +482,10 @@ fn placement_adopt_action(
         let source_ref = adopt(&root, input, &PLACEMENT, &policy, &policy)?;
         // Read back through the owner: the ground's effective placement resolves on it.
         let effective = placement::effective_policy(&Scope::resolve(&root, None)?, now())?;
+        // The ground's Flows home is founded with its bounds: the one place inside Control/user a document is created.
+        let flows_home = ensure_flows_home(&root)?;
         Ok(
-            json!({"adopted":true,"source_ref":source_ref,"policy_revision":effective.revision,"policy":policy}),
+            json!({"adopted":true,"source_ref":source_ref,"policy_revision":effective.revision,"policy":policy,"flows_home":flows_home}),
         )
     })();
     match result {
@@ -495,7 +564,7 @@ pub(crate) fn register_ground_founding_actions(registry: &mut ActionRegistry) {
             descriptor(
                 PLACEMENT_ADOPT,
                 "Adopt the ground's placement policy",
-                "At first establishment only, write the previewed placement policy and its source relation, recognised by the person's acceptance acceptance_ref names; read it back as the ground's effective placement. A ground that keeps a placement policy is refused by name and nothing is written. Requires a declared human caller and acceptance human-accepted.",
+                "At first establishment only, write the previewed placement policy and its source relation, recognised by the person's acceptance acceptance_ref names; read it back as the ground's effective placement; and found the ground's Flows home, Control/user/flows (the receipt's flows_home: made or present, and its location). A ground that keeps a placement policy is refused by name and nothing is written. Requires a declared human caller and acceptance human-accepted.",
                 MutationClass::LocallyMutating,
                 "ground-placement-receipt",
                 gate(),
@@ -508,4 +577,17 @@ pub(crate) fn register_ground_founding_actions(registry: &mut ActionRegistry) {
             .register(descriptor, handler)
             .expect("ground founding Action ids are valid");
     }
+    registry
+        .register(
+            descriptor(
+                FLOWS_ENSURE,
+                "Ensure the ground's Flows home",
+                "Make Control/user/flows, the ground's Flows home, when it is absent; nothing that stands is moved. A ground founds it with its placement policy (central.ground.placement.adopt, on the person's Setup acceptance); one founded before gets it here on first need. Answers outcome made or present and the home's location as central.files.list discloses it (the parent of a first central.files.create into it). Refuses a folder that is no ground (no Control/user).",
+                MutationClass::LocallyMutating,
+                "central-flows-home",
+                vec![],
+            ),
+            flows_ensure_action,
+        )
+        .expect("ground founding Action ids are valid");
 }
