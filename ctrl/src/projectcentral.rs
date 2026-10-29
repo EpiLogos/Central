@@ -28,6 +28,10 @@ pub struct ProjectCentralManifest {
     /// by its folder's name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// The world's declared place, where the Sky counts its hours when its Observer is Shared (`central.world.place`, O-I #745);
+    /// absent, the world declares none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<crate::world_place::WorldPlace>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,6 +72,7 @@ impl ProjectCentralManifest {
                 adopted_sources: Vec::new(),
             },
             name: None,
+            place: None,
         }
     }
 
@@ -96,6 +101,11 @@ impl ProjectCentralManifest {
         if let Some(name) = &self.name {
             if let Err(error) = world_name_words(name) {
                 errors.push(format!("name {error}"));
+            }
+        }
+        if let Some(place) = &self.place {
+            if let Err(error) = place.validate() {
+                errors.push(format!("place: {error}"));
             }
         }
         validate_project_member("human_source", &self.human_source, &mut errors);

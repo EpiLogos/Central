@@ -264,6 +264,10 @@ pub struct ProjectMap {
     /// cannot be read.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub manifest_revision: Option<String>,
+    /// The world's declared place (`central.world.place`, the ProjectCentral manifest's `place`): where the Sky counts its hours when
+    /// its Observer is Shared; absent while it declares none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub world_place: Option<crate::world_place::WorldPlace>,
     /// Ordinary Project files: everything except ProjectCentral, dot directories
     /// and build/output directories.
     pub source_files: usize,
@@ -1042,24 +1046,37 @@ fn map_projectcentral(
     }
 }
 
-/// The world's name its manifest keeps (only a name the manifest's own rule admits) and the manifest's content revision: what
-/// `central.world.name` is read against. A manifest that is no plain file, or cannot be read, discloses neither.
-fn world_naming(project_root: &Path) -> (Option<String>, Option<String>) {
+/// The world's name and place its manifest keeps (only a name and a place the manifest's own rules admit) and the manifest's content
+/// revision: what `central.world.name` and `central.world.place` are read against. A manifest that is no plain file, or cannot be
+/// read, discloses none of them.
+fn world_naming(project_root: &Path) -> WorldNaming {
     let manifest = project_root.join(PROJECTCENTRAL_DIR).join(PROJECT_MANIFEST);
     let plain =
         fs::symlink_metadata(&manifest).is_ok_and(|metadata| metadata.file_type().is_file());
     let Some(bytes) = plain.then(|| fs::read(&manifest).ok()).flatten() else {
-        return (None, None);
+        return (None, None, None);
     };
-    let name = crate::projectcentral::parse_project_manifest(&bytes, &manifest)
-        .ok()
-        .and_then(|parsed| parsed.name)
+    let parsed = crate::projectcentral::parse_project_manifest(&bytes, &manifest).ok();
+    let name = parsed
+        .as_ref()
+        .and_then(|parsed| parsed.name.clone())
         .filter(|name| crate::projectcentral::world_name_words(name).is_ok());
+    let place = parsed
+        .and_then(|parsed| parsed.place)
+        .filter(|place| place.validate().is_ok());
     (
         name,
         Some(crate::source_safety::content_revision_bytes(&bytes)),
+        place,
     )
 }
+
+/// A world's name, its manifest's revision and its place.
+type WorldNaming = (
+    Option<String>,
+    Option<String>,
+    Option<crate::world_place::WorldPlace>,
+);
 
 fn map_project(central_root: &Path, work_root: &Path, name: &str, across: bool) -> ProjectMap {
     let project_root = work_root.join(name);
@@ -1081,12 +1098,13 @@ fn map_project(central_root: &Path, work_root: &Path, name: &str, across: bool) 
         source_files
     };
     let projectcentral = map_projectcentral(central_root, &project_root, &relative);
-    let (world_name, manifest_revision) = world_naming(&project_root);
+    let (world_name, manifest_revision, world_place) = world_naming(&project_root);
     ProjectMap {
         name: name.to_owned(),
         path: relative,
         world_name,
         manifest_revision,
+        world_place,
         source_files,
         projectcentral,
     }

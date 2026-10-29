@@ -32,6 +32,7 @@ pub const AUTHENTICATED_ACTIONS: &[&str] = &[
     "central.receiving.review",
     "central.receiving.submit",
     "central.world.name",
+    "central.world.place",
     "control.apply-proposal",
     "projectcentral.source.return_accept",
     "projectcentral.source.return_reject",
@@ -62,6 +63,7 @@ pub const PROJECT_AUTHENTICATED_ACTIONS: &[&str] = &[
     "central.receiving.review",
     "central.receiving.submit",
     "central.world.name",
+    "central.world.place",
     "projectcentral.source.return_accept",
     "projectcentral.source.return_reject",
 ];
