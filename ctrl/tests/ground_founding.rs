@@ -484,3 +484,88 @@ fn a_new_ground_keeps_the_day_form_it_is_given_once_and_never_replaces_one_that_
         );
     }
 }
+
+/// The ground's Flows home (O-I #742, T5): the folder the O:I Expression owner saves a walk's Expression into, beside the person's Flow
+/// documents (`central.files.create` with it as `parent`). `ctrl init` imposes nothing below the Control roots; the ground founds the
+/// home with its placement policy, on the person's Setup acceptance. A ground founded before it did gets it on first need through
+/// Central's own `central.flows.ensure`, which moves nothing that stands and answers the home's location as `central.files.list`
+/// discloses it, so the caller's first save has its parent.
+#[test]
+fn a_ground_founds_its_flows_home_with_its_bounds_and_an_older_ground_gets_it_through_central_on_first_need(
+) {
+    let home = made();
+    let root = home.ground();
+    assert!(
+        !root.join("Control/user/flows").exists(),
+        "ctrl init imposes nothing below the Control roots"
+    );
+    let preview = cli(&home, "central.ground.placement.preview", json!({}));
+    let placed = cli(
+        &home,
+        "central.ground.placement.adopt",
+        accept(json!({"expected_digest":preview["data"]["digest"]})),
+    );
+    assert_eq!(placed["ok"], true, "{placed}");
+    assert_eq!(placed["data"]["flows_home"]["outcome"], "made", "{placed}");
+    assert!(
+        root.join("Control/user/flows").is_dir(),
+        "the Flows home is founded with the ground's bounds"
+    );
+    let present = cli(&home, "central.flows.ensure", json!({}));
+    assert_eq!(present["ok"], true, "{present}");
+    assert_eq!(present["data"]["schema"], "central.flows-home/v1");
+    assert_eq!(present["data"]["outcome"], "present");
+    let listed = cli(
+        &home,
+        "central.files.list",
+        json!({"path":"Control/user/flows"}),
+    );
+    assert_eq!(listed["ok"], true, "{listed}");
+    assert_eq!(
+        present["data"]["location"], listed["data"]["location"],
+        "the home's location is the one central.files.list discloses"
+    );
+    assert_eq!(
+        placed["data"]["flows_home"]["location"],
+        listed["data"]["location"]
+    );
+
+    // A ground founded before the home was: Central makes it on first need, and a Flow already there stays where it is.
+    let older = made();
+    let root = older.ground();
+    let missing = cli(
+        &older,
+        "central.files.list",
+        json!({"path":"Control/user/flows"}),
+    );
+    assert_eq!(missing["ok"], false, "{missing}");
+    let made_now = cli(&older, "central.flows.ensure", json!({}));
+    assert_eq!(made_now["ok"], true, "{made_now}");
+    assert_eq!(made_now["data"]["outcome"], "made");
+    assert!(root.join("Control/user/flows").is_dir());
+    fs::write(root.join("Control/user/flows/kept.html"), "kept").unwrap();
+    assert_eq!(
+        cli(&older, "central.flows.ensure", json!({}))["data"]["outcome"],
+        "present"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("Control/user/flows/kept.html")).unwrap(),
+        "kept"
+    );
+    let saved = cli(
+        &older,
+        "central.files.create",
+        json!({"parent":made_now["data"]["location"],"name":"walk.expression.json",
+        "content":"{}","expected_absent":true,"operation_ref":"operation:test-first-save","actor":"human:scratch","actor_kind":"human"}),
+    );
+    assert_eq!(saved["ok"], true, "the first save has its parent: {saved}");
+
+    // A folder that is not a ground has no Flows home to make.
+    fs::remove_dir_all(root.join("Control/user")).unwrap();
+    let refused = cli(&older, "central.flows.ensure", json!({}));
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert!(
+        !root.join("Control/user").exists(),
+        "nothing is made outside a ground"
+    );
+}
