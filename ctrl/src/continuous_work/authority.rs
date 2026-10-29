@@ -34,6 +34,38 @@ pub const AUTHENTICATED_ACTIONS: &[&str] = &[
     "projectcentral.source.return_accept",
     "projectcentral.source.return_reject",
 ];
+/// The authenticated Actions that take a project scope: every one of `AUTHENTICATED_ACTIONS` whose Action names a `project`
+/// (the two left out, `central.flow.append` and `control.apply-proposal`, always resolve the root). `authenticate` refuses any other
+/// Action at a project, so this list is exactly what a grant covering `project:<id>` lets its holder do there; extending a person's
+/// grant to a project they bring in (crate::ground_projects) grants these.
+pub const PROJECT_AUTHENTICATED_ACTIONS: &[&str] = &[
+    "agent-profile.accept",
+    "central.day.close-carry",
+    "central.day.ensure",
+    "central.day.lifecycle",
+    "central.day.move.record",
+    "central.day.rollover",
+    "central.day.settings.write",
+    "central.document.create",
+    "central.document.mutate",
+    "central.migration.apply",
+    "central.migration.plan",
+    "central.migration.recover",
+    "central.migration.rollback",
+    "central.now.lifecycle",
+    "central.now.obligations",
+    "central.receiving.include",
+    "central.receiving.recover",
+    "central.receiving.review",
+    "central.receiving.submit",
+    "projectcentral.source.return_accept",
+    "projectcentral.source.return_reject",
+];
+/// Actions a host authenticates against the person's grant itself, never through `authenticate` (which refuses them, as no Action of
+/// Central's), each at the project the Run's Factory state stands in: the O:I kernel's close of a Factory Run (its `factory.rs`
+/// RUN_CLOSE_ACTION) and its retry of a unit, Factory's own `retry` attempt operation (Factory's admission names it
+/// `factory.attempt.retry`). A grant extended to a project holds them there, so the host's own check finds them.
+pub const HOST_AUTHENTICATED_ACTIONS: &[&str] = &["factory.run.close", "factory.attempt.retry"];
 
 /// Returns the exact authored source and relation basis. Unrelated relation
 /// additions do not stale this source, but changing its Recognition does.
@@ -147,6 +179,11 @@ pub fn authenticate(
     if !AUTHENTICATED_ACTIONS.contains(&action) {
         return Err(invalid(format!(
             "{action} is not among Central's AUTHENTICATED_ACTIONS; an authenticated Action is listed there first, so the person's grant holds it"
+        )));
+    }
+    if scope.project.is_some() && !PROJECT_AUTHENTICATED_ACTIONS.contains(&action) {
+        return Err(invalid(format!(
+            "{action} is not among Central's PROJECT_AUTHENTICATED_ACTIONS; an Action authenticated at a project is listed there first, so a grant extended to the project holds it"
         )));
     }
     let token = token.filter(|t| t.len() >= 32 && t.len() <= 4096)

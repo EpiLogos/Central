@@ -30,6 +30,7 @@ mod file_map_skills;
 pub mod git_census;
 pub mod git_diff;
 pub mod ground_founding;
+pub mod ground_projects;
 pub mod local_endpoints;
 pub mod machine;
 pub mod machine_account;
@@ -86,6 +87,7 @@ pub mod projectcentral_ops {
         super::continuous_work::register_actions(registry);
         super::civil_time_adoption::register_civil_time_adoption_actions(registry);
         super::ground_founding::register_ground_founding_actions(registry);
+        super::ground_projects::register_ground_project_actions(registry);
         super::world_here::register_world_here_action(registry);
         super::world_position::register_world_position_actions(registry);
     }
