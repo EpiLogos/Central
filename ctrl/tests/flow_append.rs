@@ -1688,3 +1688,65 @@ fn native_uuid_spellings_are_validated_without_normalizing_the_document_basis() 
         );
     }
 }
+
+/// The root's change horizon as Central answers it (projectcentral.change.horizon): the changes of one page, in the order recorded.
+fn horizon_changes(root: &Path, path: &str) -> Vec<Value> {
+    let mut registry = create_core_action_registry();
+    central_ctrl::projectcentral_ops::register_projectcentral_actions(&mut registry);
+    let options = RootOptions {
+        explicit_root: Some(root.into()),
+        ..RootOptions::default()
+    };
+    let connectors = ConnectorRegistry::default();
+    let connector_context = ConnectorContext {
+        platform: "test".into(),
+    };
+    let read = registry.execute(
+        "projectcentral.change.horizon",
+        &json!({}),
+        &ActionExecutionContext {
+            root_options: &options,
+            connectors: &connectors,
+            connector_context: &connector_context,
+        },
+    );
+    assert_eq!(read.status, ResultStatus::Success, "{read:?}");
+    read.data.unwrap()["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|change| change["source_path"] == path)
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn an_agent_sessions_append_is_a_horizon_change_that_names_its_session() {
+    // What an agent makes under its session is attributed where the world keeps what changed (O-I #746: the outer ring of your
+    // system reads what agents made from the change horizon, and a change that names no agent is no agent's). The horizon stands
+    // before the page, the person places the page, and the admitted agent session appends: two changes, each naming its writer.
+    let w = world();
+    horizon_changes(&w.0, "");
+    let loc = place(&w.0, "flow-ring.html", &doc_of(&base_case()));
+    let (input, token) = input_for(&loc, &ada(), &req("op-ring", "p-ada", "<p>made by ada</p>"));
+    assert_eq!(run(&w.0, &input, token).unwrap()["outcome"], "appended");
+    let changes = horizon_changes(&w.0, "Control/user/flows/flow-ring.html");
+    let seen: Vec<_> = changes
+        .iter()
+        .map(|c| {
+            (
+                c["kind"].clone(),
+                c["actor_kind"].clone(),
+                c["agent_session_ref"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            (json!("added"), json!("human"), Value::Null),
+            (json!("modified"), json!("agent"), json!("agent-session/ada-1")),
+        ],
+        "the person's placing and the agent's append are each one change, each naming who made it: {changes:#?}"
+    );
+}
