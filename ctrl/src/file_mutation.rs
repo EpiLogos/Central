@@ -1251,8 +1251,16 @@ fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
     }
     let (dir, _lock) = state(&root)?;
     let area = area(&root, &dir, &loc)?;
+    let horizon = if matches!(op, "write" | "restore") {
+        FlowsHorizon::meet(&root, &loc)?
+    } else {
+        None
+    };
     if absent {
-        return create_user_flow_instance(&root, &loc, &path, input, &area);
+        return FlowsHorizon::attributed(
+            horizon,
+            create_user_flow_instance(&root, &loc, &path, input, &area),
+        );
     }
     // Revalidate after the cross-process owner lock: another writer may have
     // changed the source or introduced authored participation while waiting.
@@ -1459,7 +1467,7 @@ fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
     unsafe {
         libc::unlinkat(parent.as_raw_fd(), c_name.as_ptr(), 0);
     }
-    if committed {
+    let written = if committed {
         result.map_err(|error| {
             record_owner_error(
                 error,
@@ -1471,6 +1479,75 @@ fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
         })
     } else {
         result
+    };
+    FlowsHorizon::attributed(horizon, written)
+}
+
+/// A page of your world's Flows carrier (`Control/user/flows/`) is a source of the root's change horizon: the Control horizon binds
+/// it while this door writes it (files.rs participating_source). While a write is made here, the root's source authority is held and
+/// the horizon has already met the page as it stood, so the write is one change of its own; once it is committed, that change carries
+/// the attribution its caller declared, an agent's session among it, as every owner-Action write's change does (source_horizon.rs
+/// SourceWriteAttribution). Without this the horizon met the write later and named no one, so nothing an agent made under its session
+/// read as the agent's (O-I #746: what agents make rides your system's outer ring, read from this horizon).
+struct FlowsHorizon {
+    root: PathBuf,
+    path: String,
+    _authority: crate::source_safety::SourceLock,
+}
+impl FlowsHorizon {
+    /// Held from before the write, for a page of the Flows carrier only; None for every other ordinary file. The caller holds the
+    /// file-history lock: the order is that owner's, then the root's source authority, as the trash takes a project's.
+    fn meet(root: &Path, loc: &CentralPathRef) -> io::Result<Option<Self>> {
+        if !loc.path.starts_with("Control/user/flows/") {
+            return Ok(None);
+        }
+        let authority = crate::source_safety::lock(root, "source-mutation.lock")?;
+        crate::source_horizon::reconcile_control_sources(root)?;
+        Ok(Some(Self {
+            root: root.to_path_buf(),
+            path: loc.path.clone(),
+            _authority: authority,
+        }))
+    }
+    /// The receipt a write answered, after its change took the caller's attribution. A write that changed nothing, or any other
+    /// ordinary file's, passes through as it was. The write has landed by now: a failure here is the owner's publication error.
+    fn attributed(horizon: Option<Self>, written: io::Result<Value>) -> io::Result<Value> {
+        let written = written?;
+        let (Some(horizon), Some(change)) = (horizon, written.get("change")) else {
+            return Ok(written);
+        };
+        if written.get("changed") != Some(&Value::Bool(true)) {
+            return Ok(written);
+        }
+        let event: Change = serde_json::from_value(change.clone())?;
+        let attribute = || -> io::Result<()> {
+            let Some(binding) =
+                crate::source_horizon::control_binding_for_path(&horizon.root, &horizon.path)?
+            else {
+                return Ok(());
+            };
+            let mut attributions = BTreeMap::new();
+            attributions.insert(
+                binding.source_ref,
+                crate::source_horizon::SourceWriteAttribution {
+                    actor: event.actor.clone(),
+                    actor_kind: event.actor_kind.clone(),
+                    agent_session_ref: event.agent_session_ref.clone(),
+                },
+            );
+            crate::source_horizon::reconcile_control_source_writes(&horizon.root, &attributions)?;
+            Ok(())
+        };
+        attribute().map_err(|error| {
+            record_owner_error(
+                error,
+                "ordinary_file.source_publication",
+                written.pointer("/location/ref").and_then(Value::as_str),
+                Some(&event.revision),
+                "published",
+            )
+        })?;
+        Ok(written)
     }
 }
 
@@ -1810,14 +1887,19 @@ fn absent_page(
     let content = historical(&area, revision)?;
     let attributed = attribution(input)?;
     let Some(project) = world else {
-        return create_flow_file(
-            root,
-            loc,
-            &root.join(&loc.path),
-            &content,
-            attributed,
-            &area,
-            Some(revision),
+        // Your world's page comes back as a change of the root's horizon, attributed as the trash's leaving was.
+        let horizon = FlowsHorizon::meet(root, loc)?;
+        return FlowsHorizon::attributed(
+            horizon,
+            create_flow_file(
+                root,
+                loc,
+                &root.join(&loc.path),
+                &content,
+                attributed,
+                &area,
+                Some(revision),
+            ),
         );
     };
     // A project's page comes back through the project's own creation door: the source horizon has it again, attributed.

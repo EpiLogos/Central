@@ -256,3 +256,91 @@ fn a_second_creation_of_the_same_instance_is_a_conflict_not_an_overwrite() {
     // CliEnvironment remains constructible in the test's own right.
     let _ = std::marker::PhantomData::<CliEnvironment>;
 }
+
+/// The root's change horizon (its owner Action, projectcentral.change.horizon): the changes of one path, in the order recorded.
+fn horizon_changes(options: &RootOptions, path: &str) -> Vec<serde_json::Value> {
+    let mut registry = create_core_action_registry();
+    central_ctrl::projectcentral_ops::register_projectcentral_actions(&mut registry);
+    let read = run(
+        &registry,
+        options,
+        "projectcentral.change.horizon",
+        &json!({}),
+    );
+    assert_eq!(read.status, ResultStatus::Success, "{:?}", read.error);
+    read.data.unwrap()["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|change| change["source_path"] == path)
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn an_agent_sessions_page_writes_are_horizon_changes_that_name_its_session() {
+    // A page of your world's Flows carrier is a source of the root's change horizon. An agent session that creates it and writes it
+    // through the owner's doors declares itself (actor_kind agent, agent_session_ref); the horizon's change for each write carries
+    // that declaration, as every owner-Action write's does (O-I #746). An edit made outside the doors in between stays its own
+    // change and names no one: a write is attributed only the change it made.
+    let root = temporary_ground("flow-agent-horizon");
+    let registry = create_core_action_registry();
+    let options = RootOptions {
+        explicit_root: Some(root.clone()),
+        ..RootOptions::default()
+    };
+    let session = "agent-session:746-ring";
+    let path = "Control/user/flows/made-by-an-agent.md";
+    fs::create_dir_all(root.join("Control/user/flows")).unwrap();
+    horizon_changes(&options, path);
+    let parent = json!({
+        "schema": "central.path-ref/v1",
+        "ref": format!("central:path:{}:Control/user/flows", root.display()),
+        "root": root.display().to_string(),
+        "path": "Control/user/flows",
+    });
+    let created = run(
+        &registry,
+        &options,
+        "central.files.create",
+        &json!({"parent": parent, "name": "made-by-an-agent.md", "content": "# one\n", "expected_absent": true,
+                "operation_ref": "op:746-create", "actor": session, "actor_kind": "agent", "agent_session_ref": session}),
+    );
+    assert_eq!(created.status, ResultStatus::Success, "{:?}", created.error);
+    fs::write(root.join(path), "# one, edited outside\n").unwrap();
+    let outside = horizon_changes(&options, path);
+    let current = outside.last().unwrap()["after_revision"].clone();
+    let written = run(
+        &registry,
+        &options,
+        "central.files.write",
+        &json!({"location": flow_location(&root, "made-by-an-agent.md"), "expected_revision": current,
+                "content": "# two\n", "actor": session, "actor_kind": "agent", "agent_session_ref": session}),
+    );
+    assert_eq!(written.status, ResultStatus::Success, "{:?}", written.error);
+    assert_eq!(written.data.unwrap()["outcome"], "written");
+    let changes = horizon_changes(&options, path);
+    let seen: Vec<_> = changes
+        .iter()
+        .map(|c| {
+            (
+                c["kind"].clone(),
+                c["actor_kind"].clone(),
+                c["agent_session_ref"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            (json!("added"), json!("agent"), json!(session)),
+            (
+                json!("modified"),
+                serde_json::Value::Null,
+                serde_json::Value::Null
+            ),
+            (json!("modified"), json!("agent"), json!(session)),
+        ],
+        "each write names the session it was made in; the outside edit names no one: {changes:#?}"
+    );
+}

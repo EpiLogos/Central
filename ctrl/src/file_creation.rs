@@ -74,6 +74,8 @@ fn create_ordinary(root: &Path, input: &Value) -> io::Result<Value> {
     let revision = content_revision_bytes(&content_bytes);
     let request = json!({"operation_ref":operation,"location":loc,"revision":revision,"actor":actor,"actor_kind":actor_kind,"agent_session_ref":agent_session_ref});
     let (dir, _lock) = state(&root)?;
+    // A page created in your world's Flows carrier is a change of the root's horizon, attributed to its caller (file_mutation.rs).
+    let horizon = FlowsHorizon::meet(&root, &loc)?;
     let area = area(&root, &dir, &loc)?;
     let record = area.join("creation.json");
     let pending = area.join("pending.json");
@@ -209,14 +211,15 @@ fn create_ordinary(root: &Path, input: &Value) -> io::Result<Value> {
     unsafe {
         libc::unlinkat(parent.as_raw_fd(), c_staging.as_ptr(), 0);
     }
-    if committed {
+    let created = if committed {
         result.map_err(|error| record_owner_error(error, "ordinary_file.source_creation", Some(&loc.ref_id), Some(&revision), "published"))
     } else if creation_intent_acknowledged {
         result.map_err(|error| record_owner_error_with_ref(error, "ordinary_file.after_creation_intent", operation,
             Some(&loc.ref_id), Some(&revision), "source_not_created_creation_intent_acknowledged"))
     } else {
         result
-    }
+    };
+    FlowsHorizon::attributed(horizon, created)
 }
 
 fn register_create(registry: &mut ActionRegistry) {
