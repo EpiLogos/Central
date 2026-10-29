@@ -143,6 +143,11 @@ pub struct WorldRecord {
     /// over this world or any other.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_agent_set_ref: Option<AgentSetRef>,
+    /// The world's declared place, where the Sky counts its hours when its Observer is Shared (`central.world.place`, O-I #745).
+    /// Your own world keeps it here, on its root record; a project's world keeps it in its ProjectCentral manifest. Absent, the
+    /// world declares none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<crate::world_place::WorldPlace>,
 }
 
 impl WorldRecord {
@@ -157,6 +162,7 @@ impl WorldRecord {
             agent_sets: Vec::new(),
             placements: Vec::new(),
             default_agent_set_ref: None,
+            place: None,
         }
     }
 
@@ -167,6 +173,11 @@ impl WorldRecord {
     /// Colon-form is the pasu grammar, not a set id, so it is refused here —
     /// the same drift rule the agent-set record applies to agent refs.
     pub(crate) fn validate(&self) -> Result<(), WorldError> {
+        if let Some(place) = self.place.as_ref() {
+            place
+                .validate()
+                .map_err(|why| WorldError::InvalidRef(format!("the world's place: {why}")))?;
+        }
         if let Some(default) = self.default_agent_set_ref.as_ref() {
             let default = default.0.as_str();
             if default.is_empty()

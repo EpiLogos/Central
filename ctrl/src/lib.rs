@@ -58,6 +58,7 @@ pub mod world;
 pub mod world_here;
 pub mod world_map;
 pub mod world_name;
+pub mod world_place;
 pub mod world_position;
 pub mod world_source;
 pub mod world_subjects;
@@ -94,6 +95,8 @@ pub mod projectcentral_ops {
         // The person's own acts on a world's pages and on its name (O-I #743): a page to the trash, a world named.
         super::file_mutation::register_trash(registry);
         super::world_name::register_world_name_action(registry);
+        // A world's declared place, where the Sky counts its hours when its Observer is Shared (O-I #745).
+        super::world_place::register_world_place_action(registry);
     }
 }
 pub mod recovery;
