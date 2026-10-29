@@ -107,14 +107,14 @@ fn proposed() -> io::Result<(Value, &'static str)> {
     };
     Ok((serde_json::to_value(policy)?, from))
 }
-fn now() -> u64 {
+pub(crate) fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs())
         .unwrap_or_default()
 }
 /// The ground's root scope, or `None` while there is no ground at `root` yet (a missing folder, or one Central has not made).
-fn ground(root: &Path) -> io::Result<Option<Scope>> {
+pub(crate) fn ground(root: &Path) -> io::Result<Option<Scope>> {
     match std::fs::metadata(root) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
@@ -188,7 +188,7 @@ fn read(scope: Option<&Scope>) -> io::Result<Reading> {
     })
 }
 
-fn failure(action: &str, error: io::Error) -> ActionResult {
+pub(crate) fn failure(action: &str, error: io::Error) -> ActionResult {
     let status = match error.kind() {
         io::ErrorKind::PermissionDenied => ResultStatus::UnavailableCapability,
         io::ErrorKind::AlreadyExists => ResultStatus::VerificationFailure,
@@ -198,7 +198,10 @@ fn failure(action: &str, error: io::Error) -> ActionResult {
     };
     ActionResult::failure(Some(action), status, error.to_string(), None)
 }
-fn root_of(action: &str, context: &ActionExecutionContext<'_>) -> Result<PathBuf, ActionResult> {
+pub(crate) fn root_of(
+    action: &str,
+    context: &ActionExecutionContext<'_>,
+) -> Result<PathBuf, ActionResult> {
     resolve_central_root(context.root_options)
         .map(|root| root.path)
         .map_err(|message| {
@@ -222,7 +225,7 @@ fn preview_action(
 }
 
 /// The declared human acceptance a human-adopted source requires, and the acceptance it is recognised by.
-fn acceptance(input: &Value) -> io::Result<String> {
+pub(crate) fn acceptance(input: &Value) -> io::Result<String> {
     let text = |field: &str| input.get(field).and_then(Value::as_str);
     if text("actor_kind") != Some("human")
         || input.get("agent_session_ref").is_some_and(|v| !v.is_null())
@@ -317,7 +320,7 @@ fn adopt_action(
     }
 }
 
-fn input(name: &str, required: bool) -> ActionInputDefinition {
+pub(crate) fn input(name: &str, required: bool) -> ActionInputDefinition {
     ActionInputDefinition {
         name: name.to_owned(),
         input_type: "string".to_owned(),
@@ -326,7 +329,7 @@ fn input(name: &str, required: bool) -> ActionInputDefinition {
         selection: None,
     }
 }
-fn descriptor(
+pub(crate) fn descriptor(
     id: &str,
     title: &str,
     description: &str,
