@@ -6,6 +6,34 @@ use serde_json::Value;
 use std::io;
 
 pub const AUTHORITY_ROLE: &str = "native-action-authority";
+/// Every Action Central authenticates against the native-action authority: the one list a person's grant is made of when their
+/// ground's authority is adopted (crate::ground_founding). `authenticate` refuses any Action outside it, so an authenticated Action
+/// added to the code without being listed here never authenticates, and cannot fall outside the person's grant unseen.
+pub const AUTHENTICATED_ACTIONS: &[&str] = &[
+    "agent-profile.accept",
+    "central.day.close-carry",
+    "central.day.ensure",
+    "central.day.lifecycle",
+    "central.day.move.record",
+    "central.day.rollover",
+    "central.day.settings.write",
+    "central.document.create",
+    "central.document.mutate",
+    "central.flow.append",
+    "central.migration.apply",
+    "central.migration.plan",
+    "central.migration.recover",
+    "central.migration.rollback",
+    "central.now.lifecycle",
+    "central.now.obligations",
+    "central.receiving.include",
+    "central.receiving.recover",
+    "central.receiving.review",
+    "central.receiving.submit",
+    "control.apply-proposal",
+    "projectcentral.source.return_accept",
+    "projectcentral.source.return_reject",
+];
 
 /// Returns the exact authored source and relation basis. Unrelated relation
 /// additions do not stale this source, but changing its Recognition does.
@@ -116,6 +144,11 @@ pub fn authenticate(
     expected: Option<&str>,
     now: u64,
 ) -> io::Result<Principal> {
+    if !AUTHENTICATED_ACTIONS.contains(&action) {
+        return Err(invalid(format!(
+            "{action} is not among Central's AUTHENTICATED_ACTIONS; an authenticated Action is listed there first, so the person's grant holds it"
+        )));
+    }
     let token = token.filter(|t| t.len() >= 32 && t.len() <= 4096)
         .ok_or_else(|| denied("missing bounded CENTRAL_NATIVE_TOKEN; declared H/human attribution is not authentication"))?;
     let root = Scope::resolve(&scope.central_root, None)?;
