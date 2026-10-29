@@ -558,10 +558,13 @@ mod tests {
     }
 
     fn root() -> PathBuf {
+        // Tests run side by side and the clock can read the same instant twice: each root is its own.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let (_, nanos) = now().unwrap();
         let root = std::env::temp_dir().join(format!(
-            "central-notification-test-{}-{nanos}",
-            std::process::id()
+            "central-notification-test-{}-{nanos}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         initialize_central(&root).unwrap();
         root
