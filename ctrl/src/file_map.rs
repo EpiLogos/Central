@@ -987,6 +987,7 @@ fn refresh_each(
                     "entries": done["entries"],
                     "changes": done["changes"].as_array().map_or(0, Vec::len),
                     "diagnostics": done["diagnostics"],
+                    "truncated": done["truncated"].as_array().map_or(0, Vec::len),
                     "seconds": seconds,
                 }),
                 Err(error) => json!({
@@ -1301,6 +1302,7 @@ pub fn register(registry: &mut ActionRegistry) {
             "query",
             "mode",
             "limit",
+            "snippet_chars",
             "tags",
             "content",
             "federated",
@@ -1316,7 +1318,7 @@ pub fn register(registry: &mut ActionRegistry) {
         .map(|name| ActionInputDefinition {
             name: (*name).into(),
             input_type: match *name {
-                "limit" | "record_id" => "number",
+                "limit" | "snippet_chars" | "record_id" => "number",
                 "tags" | "allowed_sources" | "selected_capsules" => "array",
                 "content" | "federated" | "allow_external" | "native_import" | "embeddings"
                 | "quiesced" => "boolean",
@@ -2109,6 +2111,57 @@ mod binding_read_tests {
         for scope in second["result"]["scopes"].as_array().unwrap() {
             assert_eq!(scope["changes"], 0, "{second}");
         }
+    }
+
+    /// Against the real bkmr: a source longer than the indexed start is named by
+    /// refresh as cut, and a search hit carries the passage that matched, with
+    /// where it sits, instead of the opening of the file.
+    #[test]
+    fn a_long_source_is_reported_cut_and_its_hit_carries_the_matching_passage() {
+        if std::env::var("CENTRAL_FILE_MAP_BKMR_CONFORMANCE").as_deref() != Ok("real") {
+            eprintln!("set CENTRAL_FILE_MAP_BKMR_CONFORMANCE=real to run the real-bkmr regression");
+            return;
+        }
+        let fixture = Fixture::new();
+        let opening = "The quick brown fox jumps over a lazy dog. ".repeat(250);
+        let body = format!(
+            "{opening}Zyxwvu is the rare word this test looks for, and it sits well past the first thousand characters.\n{}",
+            "Lorem ipsum dolor sit amet, consectetur. ".repeat(2500)
+        );
+        assert!(
+            body.len() > INDEXED_TEXT_BYTES,
+            "the fixture must exceed the indexed start"
+        );
+        fs::write(&fixture.source, &body).unwrap();
+        let refreshed = execute(&fixture.root, "refresh", &json!({"embeddings": false})).unwrap();
+        let cut = refreshed["result"]["truncated"].as_array().unwrap();
+        let named = cut
+            .iter()
+            .find(|entry| entry["source_ref"] == "opaque:fixture:note")
+            .unwrap_or_else(|| panic!("the cut source is named: {refreshed}"));
+        assert_eq!(named["indexed_bytes"], INDEXED_TEXT_BYTES as u64);
+        assert_eq!(named["total_bytes"], body.len() as u64);
+        let found = execute(
+            &fixture.root,
+            "search",
+            &json!({"query": "zyxwvu", "mode": "fulltext"}),
+        )
+        .unwrap();
+        let hits = found["result"]["hits"].as_array().unwrap();
+        assert_eq!(hits.len(), 1, "{found}");
+        let hit = &hits[0];
+        assert!(
+            hit["snippet"]
+                .as_str()
+                .unwrap()
+                .contains("Zyxwvu is the rare word"),
+            "{hit}"
+        );
+        assert_eq!(hit["matched"], true);
+        assert_eq!(hit["span"]["unit"], "text_span");
+        assert!(hit["span"]["start"].as_u64().unwrap() > 1000, "{hit}");
+        assert_eq!(hit["indexed_bytes"], INDEXED_TEXT_BYTES as u64);
+        assert_eq!(hit["total_bytes"], body.len() as u64);
     }
 
     #[test]

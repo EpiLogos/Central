@@ -10,11 +10,8 @@ use std::{
 };
 
 pub(crate) const VERSION: &str = "7.6.7";
-/// A pooled scope's full row listing scales with its source count (tens of
-/// MB at tens of thousands of rows). Bounded, but bounded for a world of
-/// pooled trees, not for one repo.
-const OUTPUT_LIMIT: usize = 512 * 1024 * 1024;
-
+/// The most candidates bkmr's hybrid search takes (a sqlite-vec limit).
+pub(crate) const HYBRID_K_CEILING: usize = 4096;
 /// The embedder every scope's bkmr runs with. One name, written into each
 /// scope's config and surfaced by `central.file-map.inspect` — never ambient
 /// and never silently defaulted twice. BGESmallENV15 is the efficiency pick
@@ -266,8 +263,14 @@ fn search_args(query: &str, tags: &[String], hybrid: bool, limit: usize) -> (Vec
     let hybrid = hybrid && !query.trim().is_empty();
     // bkmr's hybrid path feeds the limit straight into a sqlite-vec knn
     // query, which rejects k above 4096. Full-text search has no such
-    // ceiling, so only the hybrid invocation is capped.
-    let limit = if hybrid { limit.min(100) } else { limit };
+    // ceiling, so only the hybrid invocation is capped, and at that ceiling:
+    // it was capped at 100, and the authority, freshness and scope filters run
+    // after this cut, so a federated query could lose every candidate to them.
+    let limit = if hybrid {
+        limit.min(HYBRID_K_CEILING)
+    } else {
+        limit
+    };
     let mut args: Vec<String> = vec![
         if hybrid { "hsearch" } else { "search" }.into(),
         "--json".into(),
@@ -424,29 +427,13 @@ fn records(text: &str) -> io::Result<Vec<Value>> {
     }
     Ok(values.clone())
 }
+/// Everything a bkmr stream carries. A pooled scope's full row listing scales
+/// with its source count, and a size ceiling here turned a growing pool into a
+/// map that stopped answering at all; the child's own timeout bounds the wait.
 fn drain(mut stream: impl Read) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
-    let mut buffer = [0u8; 8192];
-    let mut overflow = false;
-    loop {
-        let n = stream.read(&mut buffer)?;
-        if n == 0 {
-            break;
-        }
-        if bytes.len() + n <= OUTPUT_LIMIT {
-            bytes.extend_from_slice(&buffer[..n]);
-        } else {
-            overflow = true;
-        }
-    }
-    if overflow {
-        Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "bkmr output exceeds bounded response size",
-        ))
-    } else {
-        Ok(bytes)
-    }
+    stream.read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 
@@ -567,6 +554,16 @@ mod tests {
         assert!(ran_hybrid);
         assert_eq!(args[0], "hsearch");
         assert_eq!(args.last().unwrap(), "\"now-context\"");
+    }
+
+    #[test]
+    fn hybrid_asks_bkmr_for_up_to_its_own_ceiling_and_full_text_for_all() {
+        let (args, _) = search_args("now", &[], true, 500);
+        assert!(args.iter().any(|a| a == "500"), "{args:?}");
+        let (args, _) = search_args("now", &[], true, 1_000_000);
+        assert!(args.iter().any(|a| a == "4096"), "{args:?}");
+        let (args, _) = search_args("now", &[], false, 1_000_000);
+        assert!(args.iter().any(|a| a == "1000000"), "{args:?}");
     }
 
     #[test]

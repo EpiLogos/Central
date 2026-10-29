@@ -19,6 +19,9 @@ pub(crate) fn refresh(scope: &Scope, embeddings: bool) -> io::Result<Value> {
         .collect();
     let mut changes = Vec::new();
     let mut diagnostics = Vec::new();
+    // Sources whose text the description holds only the start of. Named, not
+    // counted away: this is the bound `INDEXED_TEXT_BYTES` puts on search.
+    let mut truncated = Vec::new();
     // A changed embedder poisons every stored vector. Clear before the entry
     // pass so rows added below embed under the configured model, then fill
     // everything the clear removed once the pass is done. Backfill can
@@ -54,7 +57,20 @@ pub(crate) fn refresh(scope: &Scope, embeddings: bool) -> io::Result<Value> {
         let entry = with_revision(entry)?;
         let reference = &entry.source.source_ref;
         let url = uri(&entry.path);
-        let mut generated = description(&entry);
+        let (mut generated, extent) = describe(&entry);
+        if extent.total.is_some_and(|total| total > extent.indexed) {
+            truncated.push(json!({
+                "source_ref": reference,
+                "indexed_bytes": extent.indexed,
+                "total_bytes": extent.total,
+            }));
+        }
+        if extent.gap.is_some() && !extent.is_not_text() {
+            diagnostics.push(format!(
+                "{reference}: no text indexed: {}",
+                extent.gap.as_deref().unwrap_or_default()
+            ));
+        }
         let existing = index.entries.get(reference).cloned();
         if let Some(text) = existing
             .as_ref()
@@ -267,7 +283,7 @@ pub(crate) fn refresh(scope: &Scope, embeddings: bool) -> io::Result<Value> {
     index.embeddings = embeddings;
     scope.save_index(&index)?;
     Ok(
-        json!({"world_ref":scope.world,"database":backend.db(),"changes":changes,"diagnostics":diagnostics,"entries":index.entries.len(),"embeddings":embeddings}),
+        json!({"world_ref":scope.world,"database":backend.db(),"changes":changes,"diagnostics":diagnostics,"truncated":truncated,"entries":index.entries.len(),"embeddings":embeddings}),
     )
 }
 pub(crate) fn search(all: &[Scope], input: &Value) -> io::Result<Value> {
@@ -303,7 +319,8 @@ pub(crate) fn search(all: &[Scope], input: &Value) -> io::Result<Value> {
     }
     let tags: Vec<String> = serde_json::from_value(input.get("tags").cloned().unwrap_or(json!([])))
         .map_err(io::Error::other)?;
-    let limit = input["limit"].as_u64().unwrap_or(50).min(1000) as usize;
+    let limit = input["limit"].as_u64().unwrap_or(50) as usize;
+    let snippet_chars = input["snippet_chars"].as_u64().unwrap_or(1000) as usize;
     let allow: Option<BTreeSet<String>> = input
         .get("allowed_sources")
         .map(|v| serde_json::from_value(v.clone()))
@@ -411,7 +428,26 @@ pub(crate) fn search(all: &[Scope], input: &Value) -> io::Result<Value> {
                 if !seen.insert(reference.clone()) {
                     continue;
                 }
-                hits.push(json!({"source":entry.source,"world_ref":scope.world,"project":scope.project,"path":entry.path,"kind":entry.kind,"revision":entry.revision,"title":native::record(&value)["title"],"tags":native::tags(&value)?,"snippet":content(&entry).unwrap_or_default().chars().take(1000).collect::<String>(),"provider_binding":id.to_string(),"score":value["rrf_score"].as_f64().unwrap_or(1.0/(rank+1) as f64),"mode":mode}));
+                // The snippet is the passage that matched, from the live text
+                // the index was built from, with where it sits in the source.
+                let (snippet, span, matched, indexed, total) =
+                    match text_prefix(&entry, INDEXED_TEXT_BYTES) {
+                        Ok((text, total)) => {
+                            let found = passage(&text, query, snippet_chars);
+                            (
+                                found.text,
+                                json!({"unit":"text_span","start":found.start,"end":found.end}),
+                                found.matched,
+                                text.len() as u64,
+                                Some(total),
+                            )
+                        }
+                        Err(error) => {
+                            absences.push(format!("{reference}: no snippet: {error}"));
+                            (String::new(), Value::Null, false, 0, None)
+                        }
+                    };
+                hits.push(json!({"source":entry.source,"world_ref":scope.world,"project":scope.project,"path":entry.path,"kind":entry.kind,"revision":entry.revision,"title":native::record(&value)["title"],"tags":native::tags(&value)?,"snippet":snippet,"span":span,"matched":matched,"indexed_bytes":indexed,"total_bytes":total,"provider_binding":id.to_string(),"score":value["rrf_score"].as_f64().unwrap_or(1.0/(rank+1) as f64),"mode":mode}));
             }
         }
         if !hits.is_empty() {
@@ -437,4 +473,192 @@ pub(crate) fn search(all: &[Scope], input: &Value) -> io::Result<Value> {
     });
     hits.truncate(limit);
     Ok(json!({"hits":hits,"absences":absences,"query":effective,"query_relaxed":relaxed}))
+}
+
+/// The passage of a source's text that best answers a query, and where it sits
+/// (character offsets, the unit of a `text_span` selector).
+pub(crate) struct Passage {
+    pub text: String,
+    pub start: usize,
+    pub end: usize,
+    /// Whether any query term was found. A hit the meaning arm returned for a
+    /// query whose words are not in the text gets the start of the source.
+    pub matched: bool,
+}
+
+/// The window of about `width` characters holding the most distinct query terms
+/// (then the most occurrences), earliest on a tie, widened to word edges. The
+/// text is the indexed start of a source, so scanning it whole is cheap.
+pub(crate) fn passage(text: &str, query: &str, width: usize) -> Passage {
+    let width = width.max(1);
+    let mut terms: Vec<String> = Vec::new();
+    for raw in query.split_whitespace() {
+        let term = raw
+            .trim_matches(|c: char| !c.is_alphanumeric())
+            .to_lowercase();
+        if !term.is_empty() && !terms.contains(&term) {
+            terms.push(term);
+        }
+    }
+    // Byte offset of every character, and the character index of every byte.
+    let starts: Vec<usize> = text
+        .char_indices()
+        .map(|(at, _)| at)
+        .chain(std::iter::once(text.len()))
+        .collect();
+    let total = starts.len() - 1;
+    let mut char_of = vec![0usize; text.len() + 1];
+    for (index, window) in starts.windows(2).enumerate() {
+        char_of[window[0]..window[1]].fill(index);
+    }
+    char_of[text.len()] = total;
+    // Lowercasing can change a character's byte length; keep the way back.
+    let mut lower = String::with_capacity(text.len());
+    let mut origin: Vec<usize> = Vec::with_capacity(text.len());
+    for (at, c) in text.char_indices() {
+        for folded in c.to_lowercase() {
+            let before = lower.len();
+            lower.push(folded);
+            origin.extend(std::iter::repeat_n(at, lower.len() - before));
+        }
+    }
+    let mut found: Vec<(usize, usize)> = Vec::new();
+    for (which, term) in terms.iter().enumerate() {
+        for (at, _) in lower.match_indices(term.as_str()) {
+            found.push((char_of[origin[at]], which));
+        }
+    }
+    found.sort_unstable();
+    let slice = |from: usize, to: usize| Passage {
+        text: text[starts[from]..starts[to]].to_owned(),
+        start: from,
+        end: to,
+        matched: false,
+    };
+    if found.is_empty() {
+        return slice(0, total.min(width));
+    }
+    // Sweep a window of `width` characters over the occurrences.
+    let mut counts = vec![0usize; terms.len()];
+    let mut distinct = 0usize;
+    let mut tail = 0usize;
+    let mut best = (0usize, 0usize, 0usize); // (distinct, occurrences, first position)
+    for head in 0..found.len() {
+        let (at, which) = found[head];
+        counts[which] += 1;
+        if counts[which] == 1 {
+            distinct += 1;
+        }
+        while found[tail].0 + width <= at {
+            let (_, gone) = found[tail];
+            counts[gone] -= 1;
+            if counts[gone] == 0 {
+                distinct -= 1;
+            }
+            tail += 1;
+        }
+        let occurrences = head + 1 - tail;
+        if (distinct, occurrences) > (best.0, best.1) {
+            best = (distinct, occurrences, found[tail].0);
+        }
+    }
+    let first = best.2;
+    let mut from = first.saturating_sub(width / 8);
+    let mut to = (from + width).min(total);
+    from = to.saturating_sub(width).min(from);
+    // Begin and end on word edges where one is near.
+    let edge = |c: char| c.is_whitespace();
+    for _ in 0..60 {
+        if from == 0 || text[starts[from - 1]..starts[from]].chars().all(edge) {
+            break;
+        }
+        from -= 1;
+    }
+    for _ in 0..60 {
+        if to >= total || text[starts[to]..starts[to + 1]].chars().all(edge) {
+            break;
+        }
+        to += 1;
+    }
+    let mut found = slice(from, to);
+    found.matched = true;
+    found
+}
+
+#[cfg(test)]
+mod passage_tests {
+    use super::passage;
+
+    fn filler(count: usize) -> String {
+        "the quick brown fox jumps over a lazy dog. ".repeat(count)
+    }
+
+    #[test]
+    fn the_passage_is_where_the_terms_are_not_where_the_file_begins() {
+        let text = format!(
+            "{}needle in the haystack sits here. {}",
+            filler(120),
+            filler(40)
+        );
+        let found = passage(&text, "needle haystack", 200);
+        assert!(found.matched);
+        assert!(
+            found.text.contains("needle in the haystack"),
+            "{}",
+            found.text
+        );
+        assert!(found.start > 4000, "offset {}", found.start);
+        let chars: Vec<char> = text.chars().collect();
+        let sliced: String = chars[found.start..found.end].iter().collect();
+        assert_eq!(sliced, found.text, "the span is the passage");
+    }
+
+    #[test]
+    fn a_cluster_of_distinct_terms_beats_one_term_repeated() {
+        let text = format!(
+            "{}alpha alpha alpha alpha. {}alpha beta gamma together. {}",
+            filler(20),
+            filler(20),
+            filler(5)
+        );
+        let found = passage(&text, "alpha beta gamma", 160);
+        assert!(
+            found.text.contains("alpha beta gamma together"),
+            "{}",
+            found.text
+        );
+    }
+
+    #[test]
+    fn offsets_count_characters_not_bytes() {
+        let text = format!(
+            "{}ünïcode señal here and more. {}",
+            "é".repeat(500),
+            filler(10)
+        );
+        let found = passage(&text, "SEÑAL", 80);
+        assert!(found.matched, "case folds across non-ASCII");
+        let chars: Vec<char> = text.chars().collect();
+        let sliced: String = chars[found.start..found.end].iter().collect();
+        assert_eq!(sliced, found.text);
+        assert!(found.text.contains("señal"));
+    }
+
+    #[test]
+    fn a_query_with_no_term_in_the_text_answers_with_its_start_unmatched() {
+        let text = filler(60);
+        let found = passage(&text, "zebra", 100);
+        assert!(!found.matched);
+        assert_eq!(found.start, 0);
+        assert!(found.end <= 100);
+        let empty = passage(&text, "   ", 100);
+        assert!(!empty.matched && empty.start == 0);
+    }
+
+    #[test]
+    fn a_passage_never_runs_past_the_text() {
+        let found = passage("short text with needle", "needle", 1000);
+        assert_eq!(found.start, 0);
+        assert_eq!(found.end, "short text with needle".chars().count());
+    }
 }
