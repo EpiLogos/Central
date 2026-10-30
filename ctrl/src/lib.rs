@@ -13,6 +13,7 @@ pub mod cli;
 pub mod cli_frontdoor;
 #[cfg(all(feature = "cli-macos-native", target_os = "macos"))]
 pub mod cli_host_ports;
+pub mod collections;
 pub mod configuration;
 pub mod continuous_work;
 pub mod control;
@@ -100,6 +101,8 @@ pub mod projectcentral_ops {
         super::world_place::register_world_place_action(registry);
         // A passage filed on a place of your world, sent there from the search line (O-I #820).
         super::place_passage::register_file_passage_action(registry);
+        // A world's Collections, the browser's coloured favourites (O-I #749).
+        super::collections::register_collections_actions(registry);
     }
 }
 pub mod recovery;

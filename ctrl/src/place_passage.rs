@@ -189,7 +189,7 @@ fn key_of(place: &str, passage: &str, source: &FiledSource) -> String {
 }
 
 /// Make each folder of `relative` under `owner_root` that is absent; a folder that is a link or a file is refused.
-fn ensure_folders(owner_root: &Path, relative: &Path) -> io::Result<()> {
+pub(crate) fn ensure_folders(owner_root: &Path, relative: &Path) -> io::Result<()> {
     let mut current = owner_root.to_path_buf();
     for part in relative.components() {
         let std::path::Component::Normal(part) = part else {
