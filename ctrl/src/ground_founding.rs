@@ -119,10 +119,16 @@ fn principal(input: &Value) -> io::Result<String> {
             source::invalid("principal_ref names the human the grant is made to (human:…, at most 512 characters)")
         })
 }
+/// The Actions Setup's Ground Accept grants the person at `control:root`: exactly those Central authenticates
+/// (`authority::AUTHENTICATED_ACTIONS`; `authenticate` refuses any other). A grant an older Setup founded is brought into agreement
+/// with this list (crate::ground_agreement), never with a copy of it.
+pub fn setup_root_actions() -> &'static [&'static str] {
+    AUTHENTICATED_ACTIONS
+}
 /// The grant, as previewed: everything but the credential's digest.
 fn grant(principal: &str) -> Value {
     json!({"principal_ref":principal,"actor_kind":"human","scope_refs":[crate::source_horizon::CONTROL_WORLD_REF],
-        "actions":AUTHENTICATED_ACTIONS,"expires_at_unix_seconds":GRANT_EXPIRES_AT})
+        "actions":setup_root_actions(),"expires_at_unix_seconds":GRANT_EXPIRES_AT})
 }
 fn token_digest(input: &Value) -> io::Result<String> {
     input
@@ -446,7 +452,7 @@ fn authority_adopt_action(
         let (_, _, revision) = authority::recognised_source(&scope, AUTHORITY_ROLE)?;
         Ok(
             json!({"adopted":true,"source_ref":source_ref,"authority_revision":revision,"principal_ref":person,
-            "scope_refs":[crate::source_horizon::CONTROL_WORLD_REF],"actions":AUTHENTICATED_ACTIONS}),
+            "scope_refs":[crate::source_horizon::CONTROL_WORLD_REF],"actions":setup_root_actions()}),
         )
     })();
     match result {

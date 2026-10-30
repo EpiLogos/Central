@@ -31,7 +31,7 @@ use std::path::Path;
 pub const PREVIEW: &str = "central.ground.project.preview";
 pub const ADOPT: &str = "central.ground.project.adopt";
 /// The recognition Setup gives what it founds (crate::ground_founding).
-const SETUP_RECOGNITION: &str = "setup-ground-acceptance:";
+pub(crate) const SETUP_RECOGNITION: &str = "setup-ground-acceptance:";
 
 /// Every Action a grant extended to a project holds there: the project-scoped ones Central authenticates, then the host-checked.
 pub fn project_actions() -> Vec<&'static str> {
@@ -96,16 +96,16 @@ fn identity(root: &Path, member: &str, input: &Value) -> io::Result<(String, boo
 }
 
 /// One source Setup founded, as it stands: its content, revision and relation.
-struct Founded {
-    path: &'static str,
-    value: Value,
-    revision: String,
-    recognition: String,
+pub(crate) struct Founded {
+    pub(crate) path: &'static str,
+    pub(crate) value: Value,
+    pub(crate) revision: String,
+    pub(crate) recognition: String,
 }
 
 /// The source of a role Setup founded, or why Central extends none: a ground keeps none (`unfounded`), or keeps one recognised
-/// otherwise (`hand-authored`).
-fn founded(
+/// otherwise (`hand-authored`). The ground's agreement with Setup reads the authority by the same test (crate::ground_agreement).
+pub(crate) fn founded(
     scope: &Scope,
     relations: &Value,
     role: &str,
@@ -154,22 +154,25 @@ fn founded(
     }))
 }
 
-/// What extending the person's grant to `scope_ref` writes: the one human grant Setup made, covering the project and holding every
-/// project Action. None where it does already.
-fn extended_authority(authority: &Value, scope_ref: &str) -> io::Result<Option<Value>> {
+/// The one human grant an authority Setup founded holds, at `control:root`; refused by name where it holds any other shape (mended by
+/// hand).
+pub(crate) fn setup_grant(authority: &Value) -> io::Result<&Value> {
     let grants = authority["grants"].as_array().filter(|_| {
         authority["schema"] == "central.native-action-authority/v1"
             && authority["scope_ref"] == crate::source_horizon::CONTROL_WORLD_REF
     });
-    let Some([grant]) = grants.map(Vec::as_slice) else {
-        return Err(source::denied(
+    match grants.map(Vec::as_slice) {
+        Some([grant]) if grant["actor_kind"] == "human" => Ok(grant),
+        _ => Err(source::denied(
             "the authority Setup founded holds one human grant; this one does not: it is mended by hand, and Central extends nothing. Nothing was written.",
-        ));
-    };
-    if grant["actor_kind"] != "human" {
-        return Err(source::denied("the authority Setup founded holds one human grant; this one does not: it is mended by hand, and Central extends nothing. Nothing was written."));
+        )),
     }
-    let mut grant = grant.clone();
+}
+
+/// What extending the person's grant to `scope_ref` writes: the one human grant Setup made, covering the project and holding every
+/// project Action. None where it does already.
+fn extended_authority(authority: &Value, scope_ref: &str) -> io::Result<Option<Value>> {
+    let mut grant = setup_grant(authority)?.clone();
     let mut changed = false;
     let scopes = grant["scope_refs"]
         .as_array_mut()
