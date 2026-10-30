@@ -555,7 +555,7 @@ impl Privacy {
     pub(crate) fn verify(&self, file: &File) -> io::Result<()> {
         let reading = Self::read(file)?;
         verify_ownership_mode(&self.metadata, &reading.metadata)?;
-        if self.attributes != reading.attributes {
+        if !retained(&self.attributes).eq(retained(&reading.attributes)) {
             return Err(denied(
                 "Source extended attribute retention could not be confirmed",
             ));
@@ -566,6 +566,20 @@ impl Privacy {
         }
         Ok(())
     }
+}
+
+// macOS stamps each inode a provenance-tracked process creates with the
+// responsible app's provenance id and keeps it against rewrite, so a stage
+// can never carry its source's stamp once the writing app or ctrl build
+// changes. It names the writer, not the source, and is not retained.
+const WRITER_ASSIGNED_ATTRIBUTES: &[&[u8]] = &[b"com.apple.provenance"];
+
+fn retained(
+    attributes: &std::collections::BTreeMap<Vec<u8>, Vec<u8>>,
+) -> impl Iterator<Item = (&Vec<u8>, &Vec<u8>)> {
+    attributes
+        .iter()
+        .filter(|(name, _)| !WRITER_ASSIGNED_ATTRIBUTES.contains(&name.as_slice()))
 }
 
 const MAX_METADATA_BYTES: usize = 8 * 1024 * 1024;
@@ -1385,6 +1399,50 @@ pub(crate) mod tests {
         assert_eq!(fs::metadata(&target).unwrap().mode() & 0o7777, 0o777);
         drop(owner);
         assert_eq!(fs::read(&target).unwrap(), b"actually published bootstrap");
+    }
+
+    // macOS stamps every inode a provenance-tracked process creates with the
+    // responsible app's provenance id and keeps it against any rewrite by
+    // that process tree, so a record written under one app (or ctrl build)
+    // and replaced under another always differs here. The stamp names the
+    // writer, not the source, and is no retention failure. The tracked test
+    // process cannot stage that inode, so the frozen expectation carries the
+    // previous writer's stamp instead.
+    #[test]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn retention_admits_the_kernel_provenance_stamp_of_another_writer() {
+        let scratch = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../ProjectCentral/now/tmp");
+        fs::create_dir_all(&scratch).unwrap();
+        let fixture = NativeFixture::new_in(&scratch);
+        let target = fixture.path().join("cursor.json");
+        fs::write(&target, b"written under the previous app").unwrap();
+        let file = File::open(&target).unwrap();
+        let mut expected = Privacy::read(&file).unwrap();
+        expected.attributes.insert(
+            b"com.apple.provenance".to_vec(),
+            vec![
+                0x01, 0x02, 0x00, 0x53, 0x88, 0x65, 0xfe, 0x0f, 0x24, 0x6c, 0x13,
+            ],
+        );
+        expected.verify(&file).unwrap();
+    }
+
+    #[test]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn retention_still_refuses_any_other_changed_xattr() {
+        let scratch = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../ProjectCentral/now/tmp");
+        fs::create_dir_all(&scratch).unwrap();
+        let fixture = NativeFixture::new_in(&scratch);
+        let target = fixture.path().join("cursor.json");
+        fs::write(&target, b"written under the previous app").unwrap();
+        let file = File::open(&target).unwrap();
+        let mut expected = Privacy::read(&file).unwrap();
+        expected.attributes.insert(
+            b"com.apple.provenance.foreign".to_vec(),
+            b"foreign".to_vec(),
+        );
+        let error = expected.verify(&file).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     }
 
     #[test]
