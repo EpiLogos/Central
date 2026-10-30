@@ -30,6 +30,7 @@ mod file_map_projection;
 mod file_map_skills;
 pub mod git_census;
 pub mod git_diff;
+pub mod ground_agreement;
 pub mod ground_founding;
 pub mod ground_projects;
 pub mod local_endpoints;
@@ -92,6 +93,8 @@ pub mod projectcentral_ops {
         super::civil_time_adoption::register_civil_time_adoption_actions(registry);
         super::ground_founding::register_ground_founding_actions(registry);
         super::ground_projects::register_ground_project_actions(registry);
+        // A grant an older Setup founded, brought into agreement with what Setup grants now (O-I #740).
+        super::ground_agreement::register_ground_agreement_actions(registry);
         super::world_here::register_world_here_action(registry);
         super::world_position::register_world_position_actions(registry);
         // The person's own acts on a world's pages and on its name (O-I #743): a page to the trash, a world named.
