@@ -28,6 +28,7 @@ The composed registry is deliberately discovered at runtime through `action.list
 | Action | Purpose | Common CLI projection |
 |---|---|---|
 | `central.files.list` | list actual Central directories without adoption | `action run central.files.list` |
+| `central.files.reach` | what a reader may not reach, and why: each named path (up to 256) reachable, or withheld with its code (`deny-marker`, `redirected`, `outside`, `not-a-member`, `unobserved`), the place that withholds it and Central's words; `under` lists every withheld place below a folder (`central.files-reach/v1`). Central's treatment is the world's, the same for every agent. Read-only | `action run central.files.reach '{"paths":["Work/P/private/a.md"],"under":"Work/P"}'` |
 | `central.files.read` | read a validated owner location as bounded UTF-8 text | `action run central.files.read` |
 | `central.files.read-batch` | read up to 256 owner locations in one call; each answered as `central.files.read` answers it, the source tables derived once | `action run central.files.read-batch` |
 | `central.files.write` | atomically replace ordinary text under owner CAS | `action run central.files.write` |

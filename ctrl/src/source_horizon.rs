@@ -350,26 +350,62 @@ thread_local! {
 }
 
 fn retrieval_path_admission(world_root: &Path, source: &Path, allow_absent_suffix: bool) -> io::Result<bool> {
+    match retrieval_path_verdict(world_root, source, allow_absent_suffix) {
+        Ok(None) => Ok(true),
+        Ok(Some(_)) => Ok(false),
+        Err(refused) => Err(refused.error),
+    }
+}
+
+/// A refusal `retrieval_path_verdict` met, with what it was and where: the error is the one `retrieval_admission` has always answered.
+struct Refused {
+    code: &'static str,
+    at: Option<PathBuf>,
+    error: io::Error,
+}
+
+impl From<io::Error> for Refused {
+    fn from(error: io::Error) -> Self {
+        Self { code: WITHHELD_UNOBSERVED, at: None, error }
+    }
+}
+
+impl Refused {
+    fn at(code: &'static str, at: &Path, kind: io::ErrorKind, message: &str) -> Self {
+        Self { code, at: Some(at.to_path_buf()), error: io::Error::new(kind, message) }
+    }
+}
+
+/// The admission itself: `None` when the place is admitted, else the folder whose `.no-agent-retrieval` withholds it; a refusal keeps
+/// what refused and where. `retrieval_path_admission` reduces it to the bool its callers have always had.
+fn retrieval_path_verdict(world_root: &Path, source: &Path, allow_absent_suffix: bool) -> Result<Option<PathBuf>, Refused> {
     use std::os::unix::fs::MetadataExt;
 
-    let relative = source.strip_prefix(world_root).map_err(|_| {
-        io::Error::new(io::ErrorKind::InvalidInput, "Retrieval source is outside its owner boundary")
+    let relative = source.strip_prefix(world_root).map_err(|_| Refused {
+        code: WITHHELD_OUTSIDE,
+        at: None,
+        error: io::Error::new(io::ErrorKind::InvalidInput, "Retrieval source is outside its owner boundary"),
     })?;
     if !relative.components().all(|part| matches!(part, Component::Normal(_))) {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Retrieval source requires a normal member path"));
+        return Err(Refused {
+            code: WITHHELD_NOT_A_MEMBER,
+            at: None,
+            error: io::Error::new(io::ErrorKind::InvalidInput, "Retrieval source requires a normal member path"),
+        });
     }
     let canonical = fs::canonicalize(world_root)?;
     let root_metadata = fs::symlink_metadata(&canonical)?;
     if !root_metadata.is_dir() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Retrieval owner root is not a directory"));
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Retrieval owner root is not a directory").into());
     }
-    let marker = |directory: &Path| -> io::Result<bool> {
-        match fs::symlink_metadata(directory.join(AGENT_RETRIEVAL_DENY_MARKER)) {
+    let marker = |directory: &Path| -> Result<bool, Refused> {
+        let marker = directory.join(AGENT_RETRIEVAL_DENY_MARKER);
+        match fs::symlink_metadata(&marker) {
             Ok(metadata) if metadata.is_file() => Ok(true),
-            Ok(_) => Err(io::Error::new(io::ErrorKind::PermissionDenied,
+            Ok(_) => Err(Refused::at(WITHHELD_REDIRECTED, &marker, io::ErrorKind::PermissionDenied,
                 "Retrieval marker must be an unredirected regular file")),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-            Err(error) => Err(error),
+            Err(error) => Err(error.into()),
         }
     };
     let check_root = || -> io::Result<()> {
@@ -388,7 +424,7 @@ fn retrieval_path_admission(world_root: &Path, source: &Path, allow_absent_suffi
     let mut current = canonical.clone();
     if marker(&current)? {
         check_root()?;
-        return Ok(false);
+        return Ok(Some(current));
     }
     let parts: Vec<_> = relative.components().collect();
     for (index, part) in parts.iter().enumerate() {
@@ -398,29 +434,95 @@ fn retrieval_path_admission(world_root: &Path, source: &Path, allow_absent_suffi
             Err(error) if error.kind() == io::ErrorKind::NotFound
                 && (allow_absent_suffix || index + 1 == parts.len()) => {
                 check_root()?;
-                return Ok(true);
+                return Ok(None);
             }
-            Err(error) => return Err(error),
+            Err(error) => return Err(error.into()),
         };
         if metadata.file_type().is_symlink() || (!metadata.is_dir() && !metadata.is_file()) {
-            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Retrieval member is redirected or not ordinary material"));
+            return Err(Refused::at(WITHHELD_REDIRECTED, &current, io::ErrorKind::PermissionDenied,
+                "Retrieval member is redirected or not ordinary material"));
         }
         if index + 1 != parts.len() && !metadata.is_dir() {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "Retrieval parent is not a directory"));
+            return Err(Refused::at(WITHHELD_NOT_A_MEMBER, &current, io::ErrorKind::InvalidInput, "Retrieval parent is not a directory"));
         }
         if metadata.is_dir() && marker(&current)? {
             check_root()?;
-            return Ok(false);
+            return Ok(Some(current));
         }
     }
     check_root()?;
-    Ok(true)
+    Ok(None)
 }
 
 /// Compatibility projection for existing binding metadata. A failed
 /// observation cannot grant readability; actual delivery uses the fallible API.
 pub(crate) fn retrieval_allowed(world_root: &Path, source: &Path) -> bool {
     retrieval_admission(world_root, source).unwrap_or(false)
+}
+
+/// A `.no-agent-retrieval` marker withholds the place: it stands on the place or on a folder above it.
+pub const WITHHELD_DENY_MARKER: &str = "deny-marker";
+/// A link, or material that is neither a file nor a folder, stands on the way (a marker that is not an ordinary file included).
+pub const WITHHELD_REDIRECTED: &str = "redirected";
+/// The place is not inside the world's root.
+pub const WITHHELD_OUTSIDE: &str = "outside";
+/// The path is no plain member path: it climbs (`..`), or a file stands where a folder must.
+pub const WITHHELD_NOT_A_MEMBER: &str = "not-a-member";
+/// Central could not observe the place; a failed observation grants nothing.
+pub const WITHHELD_UNOBSERVED: &str = "unobserved";
+
+/// Why a reader may not retrieve a place, as the admission found it: the reason `retrieval_allowed` reduces to `false`, kept whole.
+/// Central's treatment is the world's, the same for every agent that reads it; it records no reach of one agent's own.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RetrievalWithheld {
+    /// One of the `WITHHELD_*` codes.
+    pub code: String,
+    /// The place that withholds it, relative to the world's root ("" is the root itself): the folder carrying the marker, the link,
+    /// or the file standing as a folder. Absent when nothing inside the world withholds it (outside, unobserved).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
+    /// Central's words for it.
+    pub words: String,
+}
+
+/// The reason `source` is withheld from retrieval in the world at `world_root`, or `None` when it is admitted (an absent final member
+/// is admitted, as `retrieval_admission` admits it, without claiming the material exists).
+pub(crate) fn retrieval_withheld(world_root: &Path, source: &Path) -> Option<RetrievalWithheld> {
+    let canonical = fs::canonicalize(world_root).ok();
+    let place = |path: &Path| -> String {
+        canonical
+            .as_ref()
+            .and_then(|root| path.strip_prefix(root).ok())
+            .unwrap_or(path)
+            .to_string_lossy()
+            .into_owned()
+    };
+    let named = source
+        .strip_prefix(world_root)
+        .map(|relative| relative.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| source.to_string_lossy().into_owned());
+    match retrieval_path_verdict(world_root, source, false) {
+        Ok(None) => None,
+        Ok(Some(folder)) => {
+            let at = place(&folder);
+            let holder = if at.is_empty() { "The world's root".to_owned() } else { at.clone() };
+            let what = if at == named { "it" } else { "everything under it" };
+            Some(RetrievalWithheld {
+                code: WITHHELD_DENY_MARKER.into(),
+                words: format!("{holder} carries {AGENT_RETRIEVAL_DENY_MARKER}, so Central withholds {what} from agent retrieval."),
+                at: Some(at),
+            })
+        }
+        Err(Refused { code, at, error }) => {
+            let at = at.as_deref().map(place);
+            let words = match code {
+                WITHHELD_UNOBSERVED => format!("Central could not observe {named} ({error}); a failed observation grants no retrieval."),
+                WITHHELD_OUTSIDE => format!("{named} stands outside the world Central reads ({}): {error}.", world_root.display()),
+                _ => format!("{}: {error}.", at.as_deref().unwrap_or(&named)),
+            };
+            Some(RetrievalWithheld { code: code.into(), at, words })
+        }
+    }
 }
 
 fn safe_regular_file(world_root: &Path, path: &Path) -> io::Result<bool> {
@@ -651,6 +753,11 @@ impl<'a> ScanMemo<'a> {
 /// person wrote or an agent should retrieve, and all of it churns: a GitNexus
 /// parse cache or a package store rewrites itself on every index or install,
 /// which left the pooled maps permanently "stale index; refresh required".
+/// Whether a scan of Central's leaves this folder unopened (`should_skip_dir`): the version-control, build and tool-state folders.
+pub(crate) fn scan_skips_dir(name: &str) -> bool {
+    should_skip_dir(name)
+}
+
 fn should_skip_dir(name: &str) -> bool {
     matches!(
         name,
