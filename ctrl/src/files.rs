@@ -7,7 +7,7 @@ use crate::action::{
 };
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
-use crate::source_horizon::retrieval_allowed;
+use crate::source_horizon::{retrieval_allowed, retrieval_withheld, RetrievalWithheld};
 use crate::source_safety::{content_revision_bytes, reject_symlink_components};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -144,6 +144,9 @@ pub struct FileEntry {
     pub kind: String,
     pub byte_len: u64,
     pub retrieval_allowed: bool,
+    /// Why the entry may not be retrieved, where `retrieval_allowed` is false: the admission's own reason, kept.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retrieval_withheld: Option<RetrievalWithheld>,
 }
 #[derive(Debug, Serialize)]
 pub struct DirectoryReading {
@@ -353,14 +356,16 @@ pub fn list_files(configured: &Path, relative: &str) -> io::Result<DirectoryRead
             .strip_prefix(&root)
             .map_err(io::Error::other)?
             .to_path_buf();
+        // A link, a folder carrying its own marker, or a place withheld from above: the admission's reason, the one the bool
+        // `retrieval_allowed` has always stood for (a link is refused as redirected, a marked folder withheld at itself).
+        let withheld = retrieval_withheld(&root, &entry.path());
         entries.push(FileEntry {
             name,
             location: CentralPathRef::new(&root, utf8(&relative)?.into())?,
             kind: kind.into(),
             byte_len: metadata.len(),
-            retrieval_allowed: kind != "symlink"
-                && retrieval_allowed(&root, &entry.path())
-                && !(metadata.is_dir() && entry.path().join(".no-agent-retrieval").is_file()),
+            retrieval_allowed: withheld.is_none(),
+            retrieval_withheld: withheld,
         });
     }
     entries.sort_by(|a, b| (a.kind != "directory", &a.name).cmp(&(b.kind != "directory", &b.name)));
@@ -606,11 +611,15 @@ fn read_batch_within(
         "automatic_agent_or_model_invocation": false,
     }))
 }
+#[path = "files_reach.rs"]
+mod reach;
 #[path = "file_resolution.rs"]
 mod resolution;
+pub use reach::{REACH_ACTION, REACH_SCHEMA};
 
 pub fn register_file_actions(registry: &mut ActionRegistry) {
     resolution::register(registry);
+    reach::register(registry);
     crate::file_mutation::register(registry);
     for (id, title, read) in [
         ("central.files.list", "List native Central directory", false),
