@@ -255,3 +255,151 @@ fn a_project_s_world_keeps_its_own_and_what_is_no_collection_or_no_world_is_refu
         .join("Control/relations/collections.json")
         .exists());
 }
+
+/// The name a reading gives one collection, and whether the person chose to show it.
+fn named(reading: &Value, collection: &str) -> (String, Value) {
+    let entry = reading["collections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == collection)
+        .unwrap_or_else(|| panic!("no {collection} in {reading}"));
+    (
+        entry["name"].as_str().unwrap().to_owned(),
+        entry["shown"].clone(),
+    )
+}
+
+/// Live's Rename and Edit (O-I #749 follow-up): a collection takes the name you give it, and you choose whether the browser's column
+/// shows it. Both are kept beside what the collections hold, and neither touches it.
+#[test]
+fn a_collection_is_renamed_and_shown_or_hidden_as_you_choose_and_keeps_what_it_holds() {
+    let home = made();
+    let world = json!("control:root");
+    let added = cli(
+        &home,
+        "central.collections.add",
+        json!({"world": world, "collection": "green", "item": {"ref": "workcell:mac", "label": "This machine", "kind": "workcell"}}),
+    );
+    assert_eq!(added["ok"], true, "{added}");
+    // Nothing chosen yet: Live's names, and no choice about showing.
+    let read = cli(&home, "central.collections.read", json!({"world": world}));
+    assert_eq!(
+        named(&read["data"], "green"),
+        ("Green".to_owned(), Value::Null)
+    );
+    // A record that holds only things is the record it was: no names, no choices.
+    let kept: Value = serde_json::from_slice(
+        &fs::read(home.ground().join("Control/relations/collections.json")).unwrap(),
+    )
+    .unwrap();
+    let mut keys: Vec<&str> = kept
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["collections", "schema", "world"]);
+
+    let renamed = cli(
+        &home,
+        "central.collections.rename",
+        json!({"world": world, "collection": "green", "name": "  Machines I use  "}),
+    );
+    assert_eq!(renamed["ok"], true, "{renamed}");
+    assert_eq!(renamed["data"]["outcome"], "renamed");
+    assert_eq!(renamed["data"]["name"], "Machines I use");
+    assert_eq!(
+        named(&renamed["data"]["reading"], "green").0,
+        "Machines I use"
+    );
+    assert_eq!(
+        items(&renamed["data"]["reading"], "green"),
+        ["workcell:mac"],
+        "a rename keeps what it holds"
+    );
+    let again = cli(
+        &home,
+        "central.collections.rename",
+        json!({"world": world, "collection": "green", "name": "Machines I use"}),
+    );
+    assert_eq!(again["data"]["outcome"], "unchanged", "{again}");
+    assert_eq!(
+        again["data"]["reading"]["revision"],
+        renamed["data"]["reading"]["revision"]
+    );
+
+    let hidden = cli(
+        &home,
+        "central.collections.show",
+        json!({"world": world, "collection": "favourites", "shown": false}),
+    );
+    assert_eq!(hidden["ok"], true, "{hidden}");
+    assert_eq!(hidden["data"]["outcome"], "hidden");
+    assert_eq!(
+        named(&hidden["data"]["reading"], "favourites"),
+        ("Favourites".to_owned(), json!(false))
+    );
+    let shown = cli(
+        &home,
+        "central.collections.show",
+        json!({"world": world, "collection": "blue", "shown": true}),
+    );
+    assert_eq!(shown["data"]["outcome"], "shown", "{shown}");
+    assert_eq!(named(&shown["data"]["reading"], "blue").1, json!(true));
+    let same = cli(
+        &home,
+        "central.collections.show",
+        json!({"world": world, "collection": "blue", "shown": true}),
+    );
+    assert_eq!(same["data"]["outcome"], "unchanged", "{same}");
+
+    // What was chosen is kept, read again from the record.
+    let read = cli(&home, "central.collections.read", json!({"world": world}));
+    assert_eq!(
+        named(&read["data"], "green"),
+        ("Machines I use".to_owned(), Value::Null)
+    );
+    assert_eq!(named(&read["data"], "favourites").1, json!(false));
+    assert_eq!(items(&read["data"], "green"), ["workcell:mac"]);
+    // The name Live gives it, or no name at all, gives it back Live's name; the record keeps no name for it.
+    for back in ["Green", ""] {
+        cli(
+            &home,
+            "central.collections.rename",
+            json!({"world": world, "collection": "green", "name": "Mine"}),
+        );
+        let restored = cli(
+            &home,
+            "central.collections.rename",
+            json!({"world": world, "collection": "green", "name": back}),
+        );
+        assert_eq!(restored["data"]["outcome"], "renamed", "{restored}");
+        assert_eq!(named(&restored["data"]["reading"], "green").0, "Green");
+    }
+    let kept: Value = serde_json::from_slice(
+        &fs::read(home.ground().join("Control/relations/collections.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(kept.get("names").is_none(), "{kept}");
+    assert_eq!(kept["shown"], json!({"blue": true, "favourites": false}));
+
+    for input in [
+        json!({"world": world, "collection": "crimson", "name": "x"}),
+        json!({"world": world, "collection": "green", "name": "two\nlines"}),
+        json!({"world": world, "collection": "green", "name": "x".repeat(65)}),
+        json!({"world": world, "collection": "green"}),
+    ] {
+        let refused = cli(&home, "central.collections.rename", input.clone());
+        assert_eq!(refused["ok"], false, "{input}: {refused}");
+    }
+    for input in [
+        json!({"world": world, "collection": "green", "shown": "no"}),
+        json!({"world": world, "collection": "green"}),
+        json!({"world": "project:absent", "collection": "green", "shown": false}),
+    ] {
+        let refused = cli(&home, "central.collections.show", input.clone());
+        assert_eq!(refused["ok"], false, "{input}: {refused}");
+    }
+}

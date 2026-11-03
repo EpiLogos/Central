@@ -6,10 +6,13 @@
 //! Kept where the world's relations are. Your own world (`control:root`) keeps its collections in
 //! `Control/relations/collections.json`, a project's world (`project:<Name>`, the Work folder) in its
 //! `ProjectCentral/relations/collections.json`. A world that has put nothing in a collection keeps no file, and its reading is the
-//! seven collections empty. Three acts: `central.collections.read`; `central.collections.add`, which puts one thing in one collection
+//! seven collections empty. Five acts: `central.collections.read`; `central.collections.add`, which puts one thing in one collection
 //! (the same thing put in again answers `unchanged`, never a second row); `central.collections.remove`, which takes one out (a thing
-//! that is not there answers `unchanged`). Each write is made under the world's source lock and replaces the record atomically.
-//! Never invokes an Agent or model.
+//! that is not there answers `unchanged`); and Live's two acts on a collection itself: `central.collections.rename` gives it the name you
+//! choose (Live's Rename, ⌘R: its own name, or none, gives back Live's), and `central.collections.show` keeps whether the browser's
+//! column shows it (Live's Edit, a box ticked or not for each collection). A collection whose showing you never chose shows as the
+//! browser shows it unchosen. Each write is made under the world's source lock and replaces the record atomically. A record that holds
+//! no name and no choice is written as it was before names and choices were kept. Never invokes an Agent or model.
 use crate::action::{ActionExecutionContext, ActionRegistry, MutationClass};
 use crate::civil_time_adoption::{descriptor, failure, input, now, root_of};
 use crate::continuous_work::source::Scope;
@@ -26,6 +29,8 @@ use std::path::{Path, PathBuf};
 pub const COLLECTIONS_READ_ACTION: &str = "central.collections.read";
 pub const COLLECTIONS_ADD_ACTION: &str = "central.collections.add";
 pub const COLLECTIONS_REMOVE_ACTION: &str = "central.collections.remove";
+pub const COLLECTIONS_RENAME_ACTION: &str = "central.collections.rename";
+pub const COLLECTIONS_SHOW_ACTION: &str = "central.collections.show";
 pub const COLLECTIONS_SCHEMA: &str = "central.collections/v1";
 pub const COLLECTIONS_RECEIPT_SCHEMA: &str = "central.collections-receipt/v1";
 /// Where a world keeps its collections, under the world's own ground (`Control` or `ProjectCentral`).
@@ -34,6 +39,8 @@ const YOUR_WORLD: &str = "control:root";
 const REF_MAX_BYTES: usize = 1024;
 const LABEL_MAX_CHARS: usize = 240;
 const KIND_MAX_CHARS: usize = 64;
+/// How long a collection's name may be.
+const NAME_MAX_CHARS: usize = 64;
 /// How many things one collection holds.
 pub const COLLECTION_MAX_ITEMS: usize = 1000;
 const RECORD_LIMIT: u64 = 4 * 1024 * 1024;
@@ -64,13 +71,21 @@ pub struct CollectedItem {
     pub added_at_unix_seconds: u64,
 }
 
-/// `central.collections/v1` as kept: each collection that holds something, by its id.
+/// `central.collections/v1` as kept: each collection that holds something, by its id; the names you gave collections; and whether you
+/// chose to show or hide each in the browser's column.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CollectionsRecord {
     pub schema: String,
     pub world: String,
     pub collections: BTreeMap<String, Vec<CollectedItem>>,
+    /// The name you gave a collection, by its id (Live's Rename); a collection not here keeps Live's name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub names: BTreeMap<String, String>,
+    /// Whether you chose to show a collection in the browser's column, by its id (Live's Edit); a collection not here shows as the
+    /// browser shows it unchosen.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub shown: BTreeMap<String, bool>,
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -181,12 +196,27 @@ fn read_kept(kept: &Kept, world: &str) -> io::Result<Option<(CollectionsRecord, 
             if let Some(unknown) = record
                 .collections
                 .keys()
+                .chain(record.names.keys())
+                .chain(record.shown.keys())
                 .find(|id| collection_of(id).is_none())
             {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!(
                         "The record at {} keeps {unknown:?}, which is no collection",
+                        kept.central_path
+                    ),
+                ));
+            }
+            if let Some((id, _)) = record
+                .names
+                .iter()
+                .find(|(_, name)| name_of(name).ok().flatten().as_deref() != Some(name.as_str()))
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "The record at {} names {id} in words that are no collection's name",
                         kept.central_path
                     ),
                 ));
@@ -209,16 +239,21 @@ fn collection_of(id: &str) -> Option<(&'static str, &'static str, &'static str)>
         .find(|(palette_id, _, _)| *palette_id == id)
 }
 
-/// The reading: Live's seven collections in order, each with what it holds.
+/// The reading: Live's seven collections in order, each with its name, what it holds, and whether you chose to show it (null: unchosen).
 fn reading(world: &str, kept: &Kept, record: Option<&(CollectionsRecord, String)>) -> Value {
     let collections: Vec<Value> = PALETTE
         .iter()
         .map(|(id, name, colour)| {
+            let record = record.map(|(record, _)| record);
             let items = record
-                .and_then(|(record, _)| record.collections.get(*id))
+                .and_then(|record| record.collections.get(*id))
                 .cloned()
                 .unwrap_or_default();
-            json!({"id": id, "name": name, "colour": colour, "items": items})
+            let name = record
+                .and_then(|record| record.names.get(*id))
+                .map_or(*name, String::as_str);
+            let shown = record.and_then(|record| record.shown.get(*id)).copied();
+            json!({"id": id, "name": name, "colour": colour, "items": items, "shown": shown})
         })
         .collect();
     json!({"schema": COLLECTIONS_SCHEMA, "world": world, "kept": record.is_some(),
@@ -304,6 +339,17 @@ fn item_of(input: &Value, now: u64) -> io::Result<CollectedItem> {
     })
 }
 
+/// A collection's name as you give it: trimmed, at most one line of NAME_MAX_CHARS characters. None: no name, so Live's.
+fn name_of(raw: &str) -> io::Result<Option<String>> {
+    let name = raw.trim();
+    if name.chars().count() > NAME_MAX_CHARS || name.chars().any(char::is_control) {
+        return Err(invalid(format!(
+            "A collection's name is one line of at most {NAME_MAX_CHARS} characters"
+        )));
+    }
+    Ok((!name.is_empty()).then(|| name.to_owned()))
+}
+
 /// Read a world's collections in the Central root `central`.
 pub fn read_collections(central: &Path, input: &Value) -> io::Result<Value> {
     let world = World::parse(input, COLLECTIONS_READ_ACTION)?;
@@ -316,6 +362,9 @@ pub fn read_collections(central: &Path, input: &Value) -> io::Result<Value> {
 enum Change {
     Add(&'static str, CollectedItem),
     Remove(&'static str, String),
+    /// A collection's new name; None gives back Live's.
+    Rename(&'static str, Option<String>),
+    Show(&'static str, bool),
 }
 
 fn change_collections(central: &Path, world: World, change: Change) -> io::Result<Value> {
@@ -330,20 +379,22 @@ fn change_collections(central: &Path, world: World, change: Change) -> io::Resul
             schema: COLLECTIONS_SCHEMA.to_owned(),
             world: world.clone(),
             collections: BTreeMap::new(),
+            names: BTreeMap::new(),
+            shown: BTreeMap::new(),
         });
-    let (collection, reference, outcome) = match change {
+    let (collection, detail, outcome) = match change {
         Change::Add(collection, item) => {
             let items = record.collections.entry(collection.to_owned()).or_default();
+            let detail = ("ref", json!(item.reference));
             if items.iter().any(|held| held.reference == item.reference) {
-                (collection, item.reference, "unchanged")
+                (collection, detail, "unchanged")
             } else if items.len() >= COLLECTION_MAX_ITEMS {
                 return Err(invalid(format!(
                     "{collection} holds {COLLECTION_MAX_ITEMS} things already: take one out first"
                 )));
             } else {
-                let reference = item.reference.clone();
                 items.push(item);
-                (collection, reference, "added")
+                (collection, detail, "added")
             }
         }
         Change::Remove(collection, reference) => {
@@ -355,7 +406,36 @@ fn change_collections(central: &Path, world: World, change: Change) -> io::Resul
             } else {
                 "removed"
             };
-            (collection, reference, outcome)
+            (collection, ("ref", json!(reference)), outcome)
+        }
+        Change::Rename(collection, name) => {
+            let live = collection_of(collection).map_or(collection, |(_, name, _)| name);
+            // Live's own name is no name of yours: the record keeps none for it.
+            let name = name.filter(|name| name != live);
+            let before = record.names.get(collection).cloned();
+            match &name {
+                Some(name) => record.names.insert(collection.to_owned(), name.clone()),
+                None => record.names.remove(collection),
+            };
+            let outcome = if before == name {
+                "unchanged"
+            } else {
+                "renamed"
+            };
+            (
+                collection,
+                ("name", json!(name.as_deref().unwrap_or(live))),
+                outcome,
+            )
+        }
+        Change::Show(collection, shown) => {
+            let before = record.shown.insert(collection.to_owned(), shown);
+            let outcome = match (before == Some(shown), shown) {
+                (true, _) => "unchanged",
+                (false, true) => "shown",
+                (false, false) => "hidden",
+            };
+            (collection, ("shown", json!(shown)), outcome)
         }
     };
     record.collections.retain(|_, items| !items.is_empty());
@@ -375,10 +455,10 @@ fn change_collections(central: &Path, world: World, change: Change) -> io::Resul
         )?;
         Some((record, content_revision_bytes(&bytes)))
     };
-    Ok(
-        json!({"schema": COLLECTIONS_RECEIPT_SCHEMA, "outcome": outcome, "world": world, "collection": collection,
-        "ref": reference, "source_path": kept.central_path, "reading": reading(&world, &kept, after.as_ref())}),
-    )
+    let mut receipt = json!({"schema": COLLECTIONS_RECEIPT_SCHEMA, "outcome": outcome, "world": world, "collection": collection,
+        "source_path": kept.central_path, "reading": reading(&world, &kept, after.as_ref())});
+    receipt[detail.0] = detail.1;
+    Ok(receipt)
 }
 
 /// Put one thing in one of a world's collections.
@@ -395,6 +475,30 @@ pub fn remove_from_collection(central: &Path, input: &Value) -> io::Result<Value
     let collection = collection_input(input, COLLECTIONS_REMOVE_ACTION)?;
     let reference = reference_of(input.get("ref"), COLLECTIONS_REMOVE_ACTION)?;
     change_collections(central, world, Change::Remove(collection, reference))
+}
+
+/// Give one of a world's collections the name you choose; Live's own name, or none, gives back Live's.
+pub fn rename_collection(central: &Path, input: &Value) -> io::Result<Value> {
+    let world = World::parse(input, COLLECTIONS_RENAME_ACTION)?;
+    let collection = collection_input(input, COLLECTIONS_RENAME_ACTION)?;
+    let raw = input.get("name").and_then(Value::as_str).ok_or_else(|| {
+        invalid(format!(
+            "{COLLECTIONS_RENAME_ACTION} names the collection's new name (empty gives back Live's)"
+        ))
+    })?;
+    change_collections(central, world, Change::Rename(collection, name_of(raw)?))
+}
+
+/// Keep whether the browser's column shows one of a world's collections.
+pub fn show_collection(central: &Path, input: &Value) -> io::Result<Value> {
+    let world = World::parse(input, COLLECTIONS_SHOW_ACTION)?;
+    let collection = collection_input(input, COLLECTIONS_SHOW_ACTION)?;
+    let shown = input.get("shown").and_then(Value::as_bool).ok_or_else(|| {
+        invalid(format!(
+            "{COLLECTIONS_SHOW_ACTION} says whether the collection shows: shown true or false"
+        ))
+    })?;
+    change_collections(central, world, Change::Show(collection, shown))
 }
 
 fn run(
@@ -442,14 +546,36 @@ fn remove_action(
     })
 }
 
+fn rename_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    run(COLLECTIONS_RENAME_ACTION, context, |root| {
+        rename_collection(root, input)
+    })
+}
+
+fn show_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    run(COLLECTIONS_SHOW_ACTION, context, |root| {
+        show_collection(root, input)
+    })
+}
+
 pub fn register_collections_actions(registry: &mut ActionRegistry) {
     let mut item = input("item", true);
     item.input_type = "object".to_owned();
+    let mut shown = input("shown", true);
+    shown.input_type = "boolean".to_owned();
     for (id, title, description, class, inputs, handler) in [
         (
             COLLECTIONS_READ_ACTION,
             "Read a world's collections",
-            "A world's Collections (DLW manual §10.3, the browser's coloured favourites): Live's seven collections in order (favourites, orange, yellow, green, blue, purple, grey), each with its name, its colour and the things in it ({ref, label, kind?, added_at_unix_seconds}), as central.collections/v1, with the record's revision and where it is kept (Control/relations/collections.json for control:root, the project's ProjectCentral/relations/collections.json for project:<Name>). A world that keeps no file reads as the seven empty.",
+            "A world's Collections (DLW manual §10.3, the browser's coloured favourites): Live's seven collections in order (favourites, orange, yellow, green, blue, purple, grey), each with its name (the one you gave it, else Live's), its colour, the things in it ({ref, label, kind?, added_at_unix_seconds}) and shown (whether you chose to show it in the browser's column; null while unchosen), as central.collections/v1, with the record's revision and where it is kept (Control/relations/collections.json for control:root, the project's ProjectCentral/relations/collections.json for project:<Name>). A world that keeps no file reads as the seven empty.",
             MutationClass::ReadOnly,
             vec![input("world", true)],
             read_action as fn(&ActionRegistry, &Value, &ActionExecutionContext<'_>) -> ActionResult,
@@ -469,6 +595,22 @@ pub fn register_collections_actions(registry: &mut ActionRegistry) {
             MutationClass::LocallyMutating,
             vec![input("world", true), input("collection", true), input("ref", true)],
             remove_action,
+        ),
+        (
+            COLLECTIONS_RENAME_ACTION,
+            "Rename a collection",
+            "Give one of a world's collections the name you choose (Live's Rename): world is control:root or project:<Name>; collection is one of the seven; name is one line of at most 64 characters, trimmed. Live's own name for it, or an empty name, gives back Live's. What it holds is untouched. The same name again answers unchanged. Answers central.collections-receipt/v1 with the name and the reading after.",
+            MutationClass::LocallyMutating,
+            vec![input("world", true), input("collection", true), input("name", true)],
+            rename_action,
+        ),
+        (
+            COLLECTIONS_SHOW_ACTION,
+            "Show or hide a collection",
+            "Keep whether the browser's column shows one of a world's collections (Live's Edit, a box ticked or not): world is control:root or project:<Name>; collection is one of the seven; shown is true or false. What it holds is untouched. The same choice again answers unchanged; otherwise shown or hidden. Answers central.collections-receipt/v1 with the reading after.",
+            MutationClass::LocallyMutating,
+            vec![input("world", true), input("collection", true), shown],
+            show_action,
         ),
     ] {
         registry
