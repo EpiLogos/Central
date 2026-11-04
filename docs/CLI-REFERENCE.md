@@ -66,6 +66,10 @@ The composed registry is deliberately discovered at runtime through `action.list
 | `control.skills.inspect` | disclose the authored skill surface at every Control scope with scope, standing, provenance and retirement records; empty scopes are disclosed honestly as absent | `action run control.skills.inspect` |
 | `control.skills.retire` | write standing retired into a skill's ground manifest with who/when/why provenance; the directory and body are never deleted | `action run control.skills.retire` |
 | `control.skills.restore` | reverse a retirement: return the manifest to standing active and clear the retirement record | `action run control.skills.restore` |
+| `control.skills.revision.propose` | keep one proposed revision of an active skill's body beside the skill in use, in Central's native state; the skill, its directory and its manifest are never written, and `proposed_by` is declared attribution, never authority | `action run control.skills.revision.propose` |
+| `control.skills.revision.read` | read the skill in use (its body's digest) beside the revision proposed for it, whether it was drafted on the body in use, and whether the person can accept it now | `action run control.skills.revision.read` |
+| `control.skills.revision.accept` | the person's own hold: with a human-scoped native credential for this exact Action, write the reviewed revision (`expected_proposed_digest`) as the skill's body, on the bytes it was drafted against; the manifest is left as authored | `action run control.skills.revision.accept` |
+| `control.skills.revision.discard` | the person's own hold: with a human-scoped native credential for this exact Action, drop the reviewed proposal; the skill in use stays as it is | `action run control.skills.revision.discard` |
 | `machine.declaration` | read authored machine-role intent | `machine declaration <role>` |
 | `machine.inspect` | inspect current observed machine state | `machine inspect` |
 | `machine.account` | compose the current-machine account (identity, observed state, authored roles, drift) | `machine account` |
