@@ -475,6 +475,66 @@ fn record_begin_and_end_round_trip_and_a_run_keeps_the_prompt_it_ran_with() {
     }
 }
 
+/// The Patterns move names the one skill or method its pattern's items point
+/// at (O-I manual §18.2: "A pattern whose items point at one skill or method
+/// can open a refinement of it (§19.7)"): `gave.points_at`, its ref. No other
+/// move names one.
+#[test]
+fn the_patterns_move_names_the_one_skill_its_items_point_at() {
+    let w = world("Europe/London", 0);
+    ensure(w.path(), at(T));
+    let end_giving = |run_ref: &Value, at_ms: i64, points_at: Value| {
+        run(
+            w.path(),
+            "day_move_record",
+            json!({"event":"end","run_ref":run_ref,"at_unix_ms":at_ms + 60_000,"state":"done",
+                "gave":{"summary":"Three closes pull against one skill.","proposals":["central:proposal:7"],"points_at":points_at}}),
+            Some(AGENT),
+            at(T),
+        )
+    };
+    let begun = |mv: &str, at_ms: i64| {
+        begin(w.path(), mv, at_ms, HOST, at(T)).unwrap()["run"]["run_ref"].clone()
+    };
+    let first = ms("2026-10-20T09:00:05Z");
+    let ended = end_giving(
+        &begun("patterns", first),
+        first,
+        json!("skill/practice/alpha"),
+    )
+    .unwrap();
+    assert_eq!(
+        ended["run"]["end"]["gave"]["points_at"],
+        "skill/practice/alpha"
+    );
+    let moves = read(w.path(), "day_moves_read", json!({}), at(T));
+    assert_eq!(
+        moves["moves"]["patterns"]["last"]["end"]["gave"]["points_at"],
+        "skill/practice/alpha"
+    );
+    // A refused end leaves its run open: each wrong value is refused on the one run.
+    let second = ms("2026-10-20T09:10:00Z");
+    let open = begun("patterns", second);
+    for wrong in [
+        json!(""),
+        json!("two skills"),
+        json!(["skill/a", "skill/b"]),
+    ] {
+        let said = words_of(end_giving(&open, second, wrong.clone()));
+        assert!(
+            said.contains("names one skill or method by its ref"),
+            "{wrong}: {said}"
+        );
+    }
+    let third = ms("2026-10-20T09:20:00Z");
+    let said = words_of(end_giving(
+        &begun("tasks", third),
+        third,
+        json!("skill/practice/alpha"),
+    ));
+    assert!(said.contains("only the Patterns move"), "{said}");
+}
+
 #[test]
 fn a_scheduled_occurrence_begins_once() {
     let w = world("Europe/London", 0);

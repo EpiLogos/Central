@@ -1016,12 +1016,37 @@ pub(crate) fn move_record(
                 None | Some(Value::Null) => None,
                 Some(gave) => {
                     let object = gave.as_object().ok_or_else(|| {
-                        invalid("gave is {summary, proposals?, writes?, counts?}")
+                        invalid("gave is {summary, proposals?, writes?, counts?, points_at?}")
                     })?;
                     if let Some(key) = object.keys().find(|key| {
-                        !matches!(key.as_str(), "summary" | "proposals" | "writes" | "counts")
+                        !matches!(
+                            key.as_str(),
+                            "summary" | "proposals" | "writes" | "counts" | "points_at"
+                        )
                     }) {
                         return Err(invalid(format!("gave has no `{key}`")));
+                    }
+                    // The Patterns move names the one skill or method its
+                    // pattern's items point at, so the pattern can open a
+                    // refinement of it (O-I manual §18.2, §19.7).
+                    match object.get("points_at") {
+                        None | Some(Value::Null) => {}
+                        Some(_) if mv != "patterns" => {
+                            return Err(invalid(
+                                "only the Patterns move names what its pattern's items point at",
+                            ))
+                        }
+                        Some(Value::String(points_at))
+                            if !points_at.is_empty()
+                                && points_at.len() <= 512
+                                && !points_at
+                                    .chars()
+                                    .any(|c| c.is_whitespace() || c.is_control()) => {}
+                        Some(_) => {
+                            return Err(invalid(
+                                "gave.points_at names one skill or method by its ref",
+                            ))
+                        }
                     }
                     text(gave, "summary")?;
                     let proposals = bounded_text_list(gave, "proposals")?;

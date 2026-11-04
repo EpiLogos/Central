@@ -1091,6 +1091,385 @@ fn restore_action(
         .unwrap_or_else(|error| io_failure(action, error))
 }
 
+// ---- proposed revisions -------------------------------------------------------------------
+//
+// A proposed revision of a skill's body waits beside the skill in use, in Central's own native state for the skill's world
+// (`.central/skill-revisions/`), never inside the skill's directory, so nothing that reads the skill ground (inspection, AIKit's
+// central source, a projection) sees it. Proposing writes nothing of the skill. Accept and Discard are the person's own hold: each
+// takes a human-scoped native credential for its exact Action, and Accept is Central's own write of the skill's body, on the
+// bytes the proposal was drafted against.
+
+pub const REVISION_PROPOSE: &str = "control.skills.revision.propose";
+pub const REVISION_READ: &str = "control.skills.revision.read";
+pub const REVISION_ACCEPT: &str = "control.skills.revision.accept";
+pub const REVISION_DISCARD: &str = "control.skills.revision.discard";
+const REVISION_SCHEMA: &str = "central.skill-revision/v1";
+const REVISIONS_DIR: &str = ".central/skill-revisions";
+const MAX_REVISION_BODY: usize = 1024 * 1024;
+
+/// One proposed revision of one skill's body, as Central keeps it beside the skill in use.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillRevision {
+    pub schema: String,
+    pub revision_ref: String,
+    pub name: String,
+    pub scope: SkillScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    pub body_source_ref: String,
+    /// The digest of the body in use the revision was drafted against.
+    pub based_on_digest: String,
+    pub proposed_digest: String,
+    pub proposed_body: String,
+    pub reason: String,
+    /// Declared by the caller and recorded verbatim; never authorship and never authority.
+    pub proposed_by: String,
+    pub proposed_at_unix_seconds: u64,
+}
+
+pub(crate) fn revision_digest(text: &str) -> String {
+    format!("sha256:{}", crate::continuous_work::source::key(text))
+}
+
+/// The root of the skill's world: the Central root for a Control scope, the project's root for ProjectCentral's.
+fn world_root(location: &SkillLocation) -> PathBuf {
+    let mut root = location.skills_root.clone();
+    for _ in Path::new(&location.world_relative_prefix).components() {
+        root.pop();
+    }
+    root
+}
+
+fn body_relative(location: &SkillLocation, name: &str) -> String {
+    format!("{}/{SKILL_BODY}", location.skill_world_relative(name))
+}
+
+fn revision_relative(location: &SkillLocation, name: &str) -> String {
+    format!(
+        "{REVISIONS_DIR}/{}.json",
+        crate::continuous_work::source::key(&location.body_source_ref(name))
+    )
+}
+
+/// The skill in use: an active skill with its ground manifest, and its body as it stands now.
+fn skill_in_use(location: &SkillLocation, name: &str) -> io::Result<String> {
+    let skill_dir = location.skills_root.join(name);
+    if !skill_dir.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "skill ground does not exist: {}",
+                location.skill_display_path(name)
+            ),
+        ));
+    }
+    let manifest = read_skill_manifest(&skill_dir)?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("skill {name} has no ground manifest; author {SKILL_MANIFEST} first"),
+        )
+    })?;
+    if manifest.scope != location.scope || manifest.name != name {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("the manifest of {name} does not name this skill at this scope"),
+        ));
+    }
+    if manifest.standing != SkillStanding::Active {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("skill {name} is retired: a retired skill takes no revision; restore it first"),
+        ));
+    }
+    crate::source_safety::read(&world_root(location), &body_relative(location, name))
+}
+
+fn load_revision(location: &SkillLocation, name: &str) -> io::Result<Option<SkillRevision>> {
+    match crate::source_safety::read(&world_root(location), &revision_relative(location, name)) {
+        Ok(text) => {
+            let revision: SkillRevision = serde_json::from_str(&text)?;
+            if revision.schema != REVISION_SCHEMA
+                || revision.name != name
+                || revision.scope != location.scope
+                || revision.body_source_ref != location.body_source_ref(name)
+                || revision.proposed_digest != revision_digest(&revision.proposed_body)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("the proposed revision kept for {name} does not name this skill"),
+                ));
+            }
+            Ok(Some(revision))
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn drop_revision(location: &SkillLocation, name: &str) -> io::Result<()> {
+    let root = world_root(location);
+    let relative = revision_relative(location, name);
+    crate::source_safety::reject_symlink_components(&root, Path::new(&relative))?;
+    fs::remove_file(root.join(relative))
+}
+
+fn revision_reading(location: &SkillLocation, name: &str) -> io::Result<serde_json::Value> {
+    let current = skill_in_use(location, name)?;
+    let digest = revision_digest(&current);
+    let proposal = load_revision(location, name)?;
+    let stale = proposal
+        .as_ref()
+        .is_some_and(|revision| revision.based_on_digest != digest);
+    let reason = match &proposal {
+        None => Some(format!("no proposed revision of {name} waits")),
+        Some(_) if stale => Some(format!(
+            "{name} changed since the revision was proposed: discard it, and propose again on the body in use"
+        )),
+        Some(_) => None,
+    };
+    Ok(
+        serde_json::json!({"schema":"central.skill-revision-reading/v1","name":name,"scope":location.scope.as_str(),
+        "machine":location.machine,"project":location.project,"path":location.skill_display_path(name),
+        "body_source_ref":location.body_source_ref(name),"in_use":{"digest":digest},"proposal":proposal,"stale":stale,
+        "accept":{"available":reason.is_none(),"reason":reason,"action":REVISION_ACCEPT,
+            "by":"the person: a human-scoped native credential for this exact Action"},
+        "skill_bytes_mutated":false}),
+    )
+}
+
+fn revision_text<'a>(input: &'a Value, field: &str) -> io::Result<&'a str> {
+    input
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("{field} is required")))
+}
+
+/// The Central native scope a person's act on a skill's revision is authenticated in: the root for a Control skill, the project for
+/// a ProjectCentral one.
+fn revision_scope(
+    central: &Path,
+    location: &SkillLocation,
+) -> io::Result<crate::continuous_work::source::Scope> {
+    crate::continuous_work::source::Scope::resolve(central, location.project.as_deref())
+}
+
+/// Same production handler as the Actions, with an explicit credential channel and a controlled clock for tests. A credential never
+/// travels in the input or the output.
+pub fn revision_execute_at(
+    central: &Path,
+    action: &str,
+    input: &Value,
+    token: Option<&str>,
+    now: u64,
+) -> io::Result<Value> {
+    use crate::continuous_work::{authority, source};
+    let scope = SkillScope::from_input(revision_text(input, "scope")?)?;
+    let optional = |field: &str| {
+        input
+            .get(field)
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+    };
+    let location =
+        resolve_skill_location(central, scope, optional("machine"), optional("project"))?;
+    let name = validate_segment(revision_text(input, "name")?, "skill name")?;
+    if action == REVISION_READ {
+        return revision_reading(&location, &name);
+    }
+    let native = revision_scope(central, &location)?;
+    let _lock = source::lock(&native)?;
+    match action {
+        REVISION_PROPOSE => {
+            let body = revision_text(input, "body")?;
+            if body.len() > MAX_REVISION_BODY || body.contains('\0') {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "body is the revised SKILL.md: UTF-8 text without NUL, at most 1 MiB",
+                ));
+            }
+            let reason = revision_text(input, "reason")?;
+            let proposed_by = revision_text(input, "proposed_by")?;
+            let current = skill_in_use(&location, &name)?;
+            if body == current {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "the proposed revision of {name} changes nothing: it is the body in use"
+                    ),
+                ));
+            }
+            if let Some(waiting) = load_revision(&location, &name)? {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!(
+                        "a proposed revision of {name} waits already ({}): accept or discard it first",
+                        waiting.revision_ref
+                    ),
+                ));
+            }
+            let relative = revision_relative(&location, &name);
+            let revision = SkillRevision {
+                schema: REVISION_SCHEMA.into(),
+                revision_ref: format!(
+                    "central:skill-revision:{}",
+                    source::key(&format!("{relative}\n{}\n{now}", revision_digest(body)))
+                ),
+                name: name.clone(),
+                scope: location.scope,
+                machine: location.machine.clone(),
+                project: location.project.clone(),
+                body_source_ref: location.body_source_ref(&name),
+                based_on_digest: revision_digest(&current),
+                proposed_digest: revision_digest(body),
+                proposed_body: body.to_owned(),
+                reason: reason.to_owned(),
+                proposed_by: proposed_by.to_owned(),
+                proposed_at_unix_seconds: now,
+            };
+            source::put_new(
+                &world_root(&location),
+                &relative,
+                &source::encoded(&revision)?,
+            )?;
+            revision_reading(&location, &name)
+        }
+        REVISION_ACCEPT | REVISION_DISCARD => {
+            let principal = authority::authenticate(
+                &native,
+                token,
+                action,
+                input
+                    .get("expected_authority_revision")
+                    .and_then(Value::as_str),
+                now,
+            )?;
+            principal.require_human()?;
+            let revision = load_revision(&location, &name)?.ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("no proposed revision of {name} waits"),
+                )
+            })?;
+            if Some(revision.proposed_digest.as_str())
+                != input
+                    .get("expected_proposed_digest")
+                    .and_then(Value::as_str)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!("the proposed revision of {name} differs from the one reviewed; nothing was written"),
+                ));
+            }
+            if action == REVISION_DISCARD {
+                drop_revision(&location, &name)?;
+                return Ok(
+                    serde_json::json!({"schema":"central.skill-revision-discard/v1","name":name,
+                    "discarded":revision.revision_ref,"discarded_by_ref":principal.principal_ref,"skill_bytes_mutated":false}),
+                );
+            }
+            let current = skill_in_use(&location, &name)?;
+            if revision_digest(&current) != revision.based_on_digest {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!("{name} changed since the revision was proposed: discard it, and propose again on the body in use; nothing was written"),
+                ));
+            }
+            // Central's own write of the skill's body: descriptor-relative, no symlinked ancestor followed, atomic.
+            crate::file_mutation::atomic_record(
+                &world_root(&location),
+                Path::new(&body_relative(&location, &name)),
+                revision.proposed_body.as_bytes(),
+                crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+            )?;
+            drop_revision(&location, &name)?;
+            Ok(
+                serde_json::json!({"schema":"central.skill-revision-acceptance/v1","name":name,
+                "revision_ref":revision.revision_ref,"body_source_ref":revision.body_source_ref,
+                "previous_digest":revision.based_on_digest,"digest":revision.proposed_digest,
+                "accepted_by_ref":principal.principal_ref,"authority_ref":principal.authority_ref,
+                "authority_revision":principal.authority_revision,"accepted_at_unix_seconds":now,
+                "skill_bytes_mutated":true,"manifest_mutated":false}),
+            )
+        }
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{action} is no operation on a skill's proposed revision"),
+        )),
+    }
+}
+
+fn revision_action(
+    action: &'static str,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    let root = match central_root(action, context) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let token = std::env::var("CENTRAL_NATIVE_TOKEN").ok();
+    match revision_execute_at(&root, action, input, token.as_deref(), now) {
+        Ok(value) => ActionResult::success(action, value),
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            ActionResult::failure_coded(
+                Some(action),
+                ResultStatus::UnavailableCapability,
+                "skill_revision_denied",
+                error.to_string(),
+                Some(
+                    serde_json::json!({"setup":{"owner":"central","section":"native-authority","action":action,
+                "credential_channel":"native-protected-process","raw_credentials_accepted":false},"automatic_retry":false}),
+                ),
+            )
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => ActionResult::failure_coded(
+            Some(action),
+            ResultStatus::VerificationFailure,
+            "skill_revision_stale",
+            error.to_string(),
+            None,
+        ),
+        Err(error) => io_failure(action, error),
+    }
+}
+
+fn revision_propose_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    revision_action(REVISION_PROPOSE, input, context)
+}
+fn revision_read_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    revision_action(REVISION_READ, input, context)
+}
+fn revision_accept_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    revision_action(REVISION_ACCEPT, input, context)
+}
+fn revision_discard_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    revision_action(REVISION_DISCARD, input, context)
+}
+
 pub fn register_control_skills_actions(registry: &mut ActionRegistry) {
     let scope_choices = [
         SCOPE_CONTROL_USER,
@@ -1148,6 +1527,37 @@ pub fn register_control_skills_actions(registry: &mut ActionRegistry) {
             restore_action,
         )
         .expect("Control skills Action ids are valid");
+    let target = || {
+        vec![
+            action_input("scope", true, Some(&scope_choices)),
+            action_input("machine", false, None),
+            action_input("project", false, None),
+            action_input("name", true, None),
+        ]
+    };
+    for (id, title, description, mutation, output, extra, handler) in [
+        (REVISION_PROPOSE, "Propose a revision of a skill",
+            "Keep one proposed revision of an active skill's body beside the skill in use, in Central's native state; the skill, its directory and its manifest are never written. One waits per skill at a time; `proposed_by` is declared attribution, never authority.",
+            MutationClass::LocallyMutating, "control-skill-revision-reading", vec!["body", "reason", "proposed_by"],
+            revision_propose_action as crate::action::ActionHandler),
+        (REVISION_READ, "Read a skill's proposed revision",
+            "The skill in use (its body's digest) beside the revision proposed for it, whether it was drafted on the body in use, and whether the person can accept it now.",
+            MutationClass::ReadOnly, "control-skill-revision-reading", vec![], revision_read_action as crate::action::ActionHandler),
+        (REVISION_ACCEPT, "Accept a skill's proposed revision",
+            "The person's own hold: with a human-scoped native credential for this exact Action, Central writes the reviewed revision as the skill's body, on the bytes it was drafted against, and the proposal waits no more. The manifest is left as authored.",
+            MutationClass::LocallyMutating, "control-skill-revision-acceptance", vec!["expected_proposed_digest", "expected_authority_revision"],
+            revision_accept_action as crate::action::ActionHandler),
+        (REVISION_DISCARD, "Discard a skill's proposed revision",
+            "The person's own hold: with a human-scoped native credential for this exact Action, the reviewed proposal is dropped; the skill in use stays as it is.",
+            MutationClass::LocallyMutating, "control-skill-revision-discard", vec!["expected_proposed_digest", "expected_authority_revision"],
+            revision_discard_action as crate::action::ActionHandler),
+    ] {
+        let mut inputs = target();
+        inputs.extend(extra.into_iter().map(|name| action_input(name, name != "expected_authority_revision", None)));
+        registry
+            .register(descriptor(id, title, description, mutation, output, inputs), handler)
+            .expect("Control skills Action ids are valid");
+    }
 }
 
 #[cfg(test)]
@@ -1202,6 +1612,207 @@ mod tests {
         )
         .unwrap();
         skill_dir
+    }
+
+    // ---- proposed revisions of a skill (O-I 795 round 13) -------------------------------------
+
+    const PERSON: &str = "skill-revision-human-token-not-a-live-credential";
+    const AGENT: &str = "skill-revision-agent-token-not-a-live-credential";
+
+    /// A disposable Central root with one Control skill and a native-action authority that names a person and an agent. Never the
+    /// real ~/Central/Control: every path is under the test's own temporary root.
+    fn revision_world(label: &str) -> PathBuf {
+        use sha2::{Digest, Sha256};
+        let central = temp_central(label);
+        for dir in ["Control/user", "Control/relations", "Work"] {
+            fs::create_dir_all(central.join(dir)).unwrap();
+        }
+        seed_skill(&central, "Control/user/skills/practice-alpha");
+        let grant = |token: &str, principal: &str, kind: &str| {
+            serde_json::json!({"principal_ref":principal,"actor_kind":kind,
+                "token_sha256":format!("{:x}", Sha256::digest(token.as_bytes())),"scope_refs":["control:root"],
+                "actions":[REVISION_ACCEPT, REVISION_DISCARD],"expires_at_unix_seconds":4_000_000_000u64})
+        };
+        fs::write(
+            central.join("Control/user/authority.json"),
+            serde_json::to_vec(&serde_json::json!({"schema":"central.native-action-authority/v1","scope_ref":"control:root",
+                "grants":[grant(PERSON, "human:test", "human"), grant(AGENT, "agent:test", "agent")]}))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            central.join("Control/relations/source-relations.json"),
+            serde_json::to_vec(&serde_json::json!({"schema":"central.control.ground-relations/v1","project_id":"control:root",
+                "relations":[{"ref":"central:source:control:root:Control/user/authority.json","path":"Control/user/authority.json",
+                    "roles":["native-action-authority"],"provenance":"human-adopted","standing":"architecture-contract",
+                    "treatment":"control-user","recognition":"controlled-test-only","recorded_at_unix_seconds":1}]}))
+            .unwrap(),
+        )
+        .unwrap();
+        central
+    }
+
+    fn with(target: &Value, extra: Value) -> Value {
+        let mut value = target.clone();
+        for (key, item) in extra.as_object().unwrap() {
+            value[key] = item.clone();
+        }
+        value
+    }
+
+    #[test]
+    fn a_proposed_revision_waits_beside_the_skill_in_use_and_only_the_persons_accept_writes_it() {
+        let central = revision_world("revision");
+        let skill_dir = central.join("Control/user/skills/practice-alpha");
+        let body = skill_dir.join(SKILL_BODY);
+        let in_use = fs::read_to_string(&body).unwrap();
+        let target = serde_json::json!({"scope":"control-user","name":"practice-alpha"});
+        let revised = "---\nname: seeded\n---\nBody, with the step the closes kept missing.\n";
+        let propose = |text: &str| {
+            revision_execute_at(
+                &central,
+                REVISION_PROPOSE,
+                &with(
+                    &target,
+                    serde_json::json!({"body":text,
+                    "reason":"Not met: the plan names each gate by its command","proposed_by":"aikit:improvement"}),
+                ),
+                None,
+                20,
+            )
+        };
+        let listing = || {
+            let mut names = fs::read_dir(&skill_dir)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            names.sort();
+            names
+        };
+        assert_eq!(listing(), [SKILL_BODY, SKILL_MANIFEST]);
+        let read = revision_execute_at(&central, REVISION_READ, &target, None, 10).unwrap();
+        assert_eq!(read["proposal"], Value::Null, "nothing waits yet");
+        assert_eq!(read["accept"]["available"], false);
+
+        // Proposed: kept beside the skill in Central's own state; the skill, its directory and its siblings are untouched.
+        let proposed = propose(revised).unwrap();
+        assert_eq!(proposed["proposal"]["proposed_body"], revised);
+        assert_eq!(
+            proposed["proposal"]["reason"],
+            "Not met: the plan names each gate by its command"
+        );
+        assert_eq!(proposed["proposal"]["proposed_by"], "aikit:improvement");
+        assert_eq!(proposed["in_use"]["digest"], revision_digest(&in_use));
+        assert_eq!(proposed["accept"]["available"], true);
+        assert_eq!(proposed["skill_bytes_mutated"], false);
+        assert_eq!(fs::read_to_string(&body).unwrap(), in_use);
+        assert_eq!(listing(), [SKILL_BODY, SKILL_MANIFEST]);
+        assert_eq!(
+            child_directories(&central.join(PERSONAL_SKILL_DIR)).unwrap(),
+            ["practice-alpha"]
+        );
+        let reviewed = proposed["proposal"]["proposed_digest"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        // One waits at a time; a revision that changes nothing, and a skill that is not there, are refused in words.
+        assert!(propose("another\n")
+            .unwrap_err()
+            .to_string()
+            .contains("waits already"));
+        let missing = revision_execute_at(&central, REVISION_PROPOSE,
+            &serde_json::json!({"scope":"control-user","name":"gone","body":"x","reason":"r","proposed_by":"p"}), None, 20).unwrap_err();
+        assert_eq!(missing.kind(), io::ErrorKind::NotFound);
+
+        // Accept is the person's hold: no credential, an agent's, and a review of other bytes are each refused, and nothing is written.
+        let accept = |token: Option<&str>, digest: &str| {
+            revision_execute_at(
+                &central,
+                REVISION_ACCEPT,
+                &with(
+                    &target,
+                    serde_json::json!({"expected_proposed_digest":digest}),
+                ),
+                token,
+                30,
+            )
+        };
+        assert_eq!(
+            accept(None, &reviewed).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert!(accept(Some(AGENT), &reviewed)
+            .unwrap_err()
+            .to_string()
+            .contains("human-scoped"));
+        assert!(accept(Some(PERSON), "sha256:other")
+            .unwrap_err()
+            .to_string()
+            .contains("differs from the one reviewed"));
+        assert_eq!(fs::read_to_string(&body).unwrap(), in_use);
+
+        // The person's Accept: Central's own write of the skill, then nothing waits.
+        let accepted = accept(Some(PERSON), &reviewed).unwrap();
+        assert_eq!(accepted["skill_bytes_mutated"], true);
+        assert_eq!(accepted["accepted_by_ref"], "human:test");
+        assert_eq!(accepted["previous_digest"], revision_digest(&in_use));
+        assert_eq!(fs::read_to_string(&body).unwrap(), revised);
+        let after = revision_execute_at(&central, REVISION_READ, &target, None, 40).unwrap();
+        assert_eq!(after["proposal"], Value::Null);
+        assert_eq!(after["in_use"]["digest"], reviewed);
+        assert_eq!(
+            listing(),
+            [SKILL_BODY, SKILL_MANIFEST],
+            "the manifest stays as authored"
+        );
+
+        // Discard is the person's too, and the skill stays as it is.
+        let second = propose("---\nname: seeded\n---\nA second thought.\n").unwrap();
+        let second_digest = second["proposal"]["proposed_digest"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let discard = |token: Option<&str>| {
+            revision_execute_at(
+                &central,
+                REVISION_DISCARD,
+                &with(
+                    &target,
+                    serde_json::json!({"expected_proposed_digest":second_digest}),
+                ),
+                token,
+                50,
+            )
+        };
+        assert!(discard(Some(AGENT))
+            .unwrap_err()
+            .to_string()
+            .contains("human-scoped"));
+        assert_eq!(discard(Some(PERSON)).unwrap()["skill_bytes_mutated"], false);
+        assert_eq!(fs::read_to_string(&body).unwrap(), revised);
+        assert_eq!(
+            revision_execute_at(&central, REVISION_READ, &target, None, 60).unwrap()["proposal"],
+            Value::Null
+        );
+
+        // Drafted on a body that changed since: read stale, and Accept refuses rather than overwrite the newer words.
+        let third = propose("---\nname: seeded\n---\nA third.\n").unwrap();
+        fs::write(&body, "---\nname: seeded\n---\nEdited by hand meanwhile.\n").unwrap();
+        let stale = revision_execute_at(&central, REVISION_READ, &target, None, 70).unwrap();
+        assert_eq!(stale["stale"], true);
+        assert_eq!(stale["accept"]["available"], false);
+        let refused = accept(
+            Some(PERSON),
+            third["proposal"]["proposed_digest"].as_str().unwrap(),
+        )
+        .unwrap_err();
+        assert!(refused.to_string().contains("changed since"), "{refused}");
+        assert_eq!(
+            fs::read_to_string(&body).unwrap(),
+            "---\nname: seeded\n---\nEdited by hand meanwhile.\n"
+        );
+        let _ = fs::remove_dir_all(&central);
     }
 
     #[test]

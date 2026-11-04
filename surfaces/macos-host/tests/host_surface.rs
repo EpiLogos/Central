@@ -56,7 +56,7 @@ mod unix_tests {
     #[test]
     fn macos_action_registry_extends_current_runtime_without_mutating_owner_identity() {
         let core = create_core_action_registry();
-        assert_eq!(core.list().len(), 46);
+        assert_eq!(core.list().len(), 50);
         assert!(core.get("central.files.resolve").is_some());
         assert!(core.get("automation.run").is_none());
         assert!(
@@ -85,6 +85,17 @@ mod unix_tests {
             assert!(
                 core.get(id).is_some(),
                 "Core lost ordinary-file Action {id}"
+            );
+        }
+        for id in [
+            "control.skills.revision.propose",
+            "control.skills.revision.read",
+            "control.skills.revision.accept",
+            "control.skills.revision.discard",
+        ] {
+            assert!(
+                core.get(id).is_some(),
+                "Core lost Control skill revision Action {id}"
             );
         }
 
