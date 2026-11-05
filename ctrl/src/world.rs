@@ -148,6 +148,10 @@ pub struct WorldRecord {
     /// world declares none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub place: Option<crate::world_place::WorldPlace>,
+    /// The order of your world's chain after its packet and its agent (`central.world.chain-order`, O-I #743), kept beside its place;
+    /// absent, the chain stands in the manual's order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chain_order: Option<Vec<String>>,
 }
 
 impl WorldRecord {
@@ -163,6 +167,7 @@ impl WorldRecord {
             placements: Vec::new(),
             default_agent_set_ref: None,
             place: None,
+            chain_order: None,
         }
     }
 
@@ -177,6 +182,10 @@ impl WorldRecord {
             place
                 .validate()
                 .map_err(|why| WorldError::InvalidRef(format!("the world's place: {why}")))?;
+        }
+        if let Some(order) = self.chain_order.as_ref() {
+            crate::world_place::chain_order_words(order)
+                .map_err(|why| WorldError::InvalidRef(format!("the world's chain order: {why}")))?;
         }
         if let Some(default) = self.default_agent_set_ref.as_ref() {
             let default = default.0.as_str();

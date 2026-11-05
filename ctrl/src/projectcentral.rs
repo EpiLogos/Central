@@ -32,6 +32,10 @@ pub struct ProjectCentralManifest {
     /// absent, the world declares none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub place: Option<crate::world_place::WorldPlace>,
+    /// The order of the world's chain after its packet and its agent (`central.world.chain-order`, O-I #743); absent, the chain
+    /// stands in the manual's order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chain_order: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,6 +77,7 @@ impl ProjectCentralManifest {
             },
             name: None,
             place: None,
+            chain_order: None,
         }
     }
 
@@ -106,6 +111,11 @@ impl ProjectCentralManifest {
         if let Some(place) = &self.place {
             if let Err(error) = place.validate() {
                 errors.push(format!("place: {error}"));
+            }
+        }
+        if let Some(order) = &self.chain_order {
+            if let Err(error) = crate::world_place::chain_order_words(order) {
+                errors.push(format!("chain_order: {error}"));
             }
         }
         validate_project_member("human_source", &self.human_source, &mut errors);
