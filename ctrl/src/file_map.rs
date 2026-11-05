@@ -20,6 +20,7 @@ pub use crate::file_map_catalog::SCHEMA;
 pub(crate) use crate::file_map_catalog::*;
 pub(crate) use crate::file_map_index::refresh;
 use crate::file_map_index::search;
+use crate::file_map_index::{refresh_walked, walk, Walk};
 #[cfg(test)]
 type BeforeReadAcknowledgement = Box<dyn FnOnce()>;
 #[cfg(test)]
@@ -882,6 +883,12 @@ pub fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
         "move-apply" => super::file_map_moves::apply(&root, &all, input, false)?,
         "move-rollback" => super::file_map_moves::apply(&root, &all, input, true)?,
         "register" => register_source(&all, scope, input)?,
+        // An external scope's walk is bounded as the world refresh bounds it.
+        "refresh" if scope.is_external() => refresh_walked(
+            scope,
+            input["embeddings"] == true,
+            walk_within(scope, EXTERNAL_ROOT_DEADLINE)?,
+        )?,
         "refresh" => refresh(scope, input["embeddings"] == true)?,
         "link" => link(&all, input)?,
         _ => return Err(invalid("Unknown file-map operation")),
@@ -972,16 +979,35 @@ fn disclose_unreachable(envelope: &mut Value, unreachable: &[UnreachableScope]) 
 /// vanished external root) is reported in its own entry and the others still
 /// are. Central knows its scopes, including the external ones no `central.world`
 /// listing names, so a caller never has to enumerate or spell them.
+///
+/// No scope holds the others: a lock another writer keeps past
+/// [`EXTERNAL_ROOT_DEADLINE`] is that scope's `held` entry, and an external
+/// scope whose walk stops answering for as long is its `stalled` entry; the
+/// world refresh goes on to the next.
 fn refresh_world(root: &Path, input: &Value) -> io::Result<Value> {
-    let (all, unreachable) = participating(&root.canonicalize()?)?;
+    let ground = root.canonicalize()?;
+    let (all, unreachable) = participating(&ground)?;
     let embeddings = input["embeddings"] == true;
+    let mut ground_wait = EXTERNAL_ROOT_DEADLINE;
     let reports = world_refresh_reports(&all, &unreachable, |scope| {
-        execute(
-            root,
-            "refresh",
-            &json!({"project": scope.world, "embeddings": embeddings}),
-        )
-        .map(|done| done["result"].clone())
+        let refreshed = refresh_scope_within(
+            &ground,
+            scope,
+            ground_wait,
+            EXTERNAL_ROOT_DEADLINE,
+            |scope, walked| match walked {
+                Some(walked) => refresh_walked(scope, embeddings, walked),
+                None => refresh(scope, embeddings),
+            },
+        );
+        // The ground's lock held once is not waited on again by each scope.
+        if matches!(
+            refreshed.as_ref().err().and_then(scope_wait),
+            Some(ScopeWait::GroundHeld(_))
+        ) {
+            ground_wait = std::time::Duration::ZERO;
+        }
+        refreshed
     });
     let failed = reports.iter().filter(|report| report["ok"] != true).count();
     Ok(json!({
@@ -1019,6 +1045,142 @@ fn world_refresh_reports(
     reports
 }
 
+/// Why a scope was not refreshed this time, though nothing failed: a lock
+/// another writer keeps, or an external tree that stopped answering.
+#[derive(Debug)]
+enum ScopeWait {
+    GroundHeld(String),
+    Held(String),
+    Stalled(String),
+}
+impl std::fmt::Display for ScopeWait {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::GroundHeld(message) | Self::Held(message) | Self::Stalled(message) => {
+                f.write_str(message)
+            }
+        }
+    }
+}
+impl std::error::Error for ScopeWait {}
+
+fn scope_wait(error: &io::Error) -> Option<&ScopeWait> {
+    error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<ScopeWait>())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// An external scope whose walk first opens this FIFO for reading: with no
+    /// writer the open never returns, standing in for a provider that stalls
+    /// after the root opened.
+    static STALLED_EXTERNAL_WALK: std::cell::RefCell<Option<(PathBuf, PathBuf)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// An external scope's walk on a helper thread. It must answer — list the
+/// tree, read the next entry — within `quiet` of its last answer, the
+/// deadline the scope's root had to open in; a walk that keeps answering
+/// takes as long as it needs. One that stops is left: it holds no lock and
+/// writes nothing, and it ends with the process.
+fn walk_within(scope: &Scope, quiet: std::time::Duration) -> io::Result<Walk> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let answered = std::sync::Arc::new(AtomicUsize::new(0));
+    let (send, receive) = std::sync::mpsc::channel();
+    let owned = scope.clone();
+    let counting = answered.clone();
+    #[cfg(test)]
+    let stall = STALLED_EXTERNAL_WALK.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .filter(|(root, _)| *root == scope.root)
+            .map(|(_, fifo)| fifo.clone())
+    });
+    std::thread::Builder::new()
+        .name("file-map-external-walk".into())
+        .spawn(move || {
+            #[cfg(test)]
+            if let Some(fifo) = stall {
+                let _ = fs::File::open(fifo);
+            }
+            let _ = send.send(walk(&owned, &counting));
+        })?;
+    let mut seen = 0;
+    let mut since = std::time::Instant::now();
+    loop {
+        match receive.recv_timeout(std::time::Duration::from_millis(50)) {
+            Ok(walked) => return walked,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                let now = answered.load(Ordering::Relaxed);
+                if now != seen {
+                    seen = now;
+                    since = std::time::Instant::now();
+                } else if since.elapsed() >= quiet {
+                    return Err(io::Error::other(ScopeWait::Stalled(format!(
+                        "stalled: {} stopped answering its refresh walk for {quiet:?} after \
+                         {seen} answers (a File Provider or network volume not answering); \
+                         nothing of it was written",
+                        scope.root.display()
+                    ))));
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(io::Error::other(
+                    "the external scope's walk ended without an answer",
+                ))
+            }
+        }
+    }
+}
+
+/// One scope's refresh in the world's upkeep, under the locks a single
+/// `refresh` takes — the ground's, then the scope's own state's — each
+/// waited on for no longer than its allowance. An external scope's walk runs
+/// on a helper thread ([`walk_within`]); the bkmr maintenance runs here,
+/// after it, under the locks.
+fn refresh_scope_within(
+    ground: &Path,
+    scope: &Scope,
+    ground_wait: std::time::Duration,
+    quiet: std::time::Duration,
+    apply: impl FnOnce(&Scope, Option<Walk>) -> io::Result<Value>,
+) -> io::Result<Value> {
+    let held = |owner: &Path, wait: std::time::Duration| {
+        let kept = if wait.is_zero() {
+            "is kept by another writer".to_owned()
+        } else {
+            format!("was kept by another writer for {wait:?}")
+        };
+        format!(
+            "held: {}'s file-map lock {kept}; {} is not refreshed this time",
+            owner.display(),
+            scope.world
+        )
+    };
+    let Some(_ground) = crate::source_safety::lock_within(ground, "file-map.lock", ground_wait)?
+    else {
+        return Err(io::Error::other(ScopeWait::GroundHeld(held(
+            ground,
+            ground_wait,
+        ))));
+    };
+    let _own = if scope.state != ground {
+        match crate::source_safety::lock_within(&scope.state, "file-map.lock", quiet)? {
+            Some(lock) => Some(lock),
+            None => return Err(io::Error::other(ScopeWait::Held(held(&scope.state, quiet)))),
+        }
+    } else {
+        None
+    };
+    if scope.is_external() {
+        let walked = walk_within(scope, quiet)?;
+        apply(scope, Some(walked))
+    } else {
+        apply(scope, None)
+    }
+}
+
 /// One report per scope, in scope order, whatever each refresh answers.
 fn refresh_each(
     all: &[Scope],
@@ -1040,13 +1202,23 @@ fn refresh_each(
                     "truncated": done["truncated"].as_array().map_or(0, Vec::len),
                     "seconds": seconds,
                 }),
-                Err(error) => json!({
-                    "world_ref": scope.world,
-                    "project": scope.project,
-                    "ok": false,
-                    "error": error.to_string(),
-                    "seconds": seconds,
-                }),
+                Err(error) => {
+                    let mut report = json!({
+                        "world_ref": scope.world,
+                        "project": scope.project,
+                        "ok": false,
+                        "error": error.to_string(),
+                        "seconds": seconds,
+                    });
+                    match scope_wait(&error) {
+                        Some(ScopeWait::GroundHeld(_) | ScopeWait::Held(_)) => {
+                            report["held"] = json!(true)
+                        }
+                        Some(ScopeWait::Stalled(_)) => report["stalled"] = json!(true),
+                        None => {}
+                    }
+                    report
+                }
             }
         })
         .collect()
@@ -2651,6 +2823,116 @@ mod external_scope_tests {
     #[test]
     fn external_scope_name_must_be_one_component() {
         assert!(super::super::file_map_catalog::external_state(Path::new("/tmp"), "a/b").is_err());
+    }
+
+    /// Round 22, residual (a): the root opened, then the provider stalled
+    /// inside the walk. The world refresh names that scope `stalled` and goes
+    /// on; a scope whose lock another writer keeps is `held`, and the ground's
+    /// lock held is every scope's `held`, waited on once. Nothing waits past
+    /// its deadline, and nothing is applied for a scope that did not answer.
+    #[test]
+    fn a_walk_that_stops_answering_is_stalled_a_kept_lock_is_held_and_the_world_goes_on() {
+        let world = World::new();
+        let ground = world.root.canonicalize().unwrap();
+        let (all, unreachable) = participating(&ground).unwrap();
+        assert!(unreachable.is_empty());
+        let epi = all
+            .iter()
+            .find(|scope| scope.world == "project:epi")
+            .unwrap()
+            .clone();
+        assert!(epi.is_external());
+        let fine = |_: &Scope| Ok(json!({"entries": 1, "changes": [], "diagnostics": []}));
+        let quick = std::time::Duration::from_millis(400);
+        let round = |quiet: std::time::Duration| {
+            let mut applied = Vec::new();
+            let began = std::time::Instant::now();
+            let reports = world_refresh_reports(&all, &unreachable, |scope| {
+                refresh_scope_within(&ground, scope, quiet, quiet, |scope, walked| {
+                    applied.push((scope.world.clone(), walked.is_some()));
+                    fine(scope)
+                })
+            });
+            (reports, applied, began.elapsed())
+        };
+
+        // A walk that keeps answering is applied after it, the others as before.
+        let (reports, applied, _) = round(quick);
+        assert!(
+            reports.iter().all(|report| report["ok"] == true),
+            "{reports:?}"
+        );
+        assert!(applied.contains(&("project:epi".to_owned(), true)));
+        assert!(applied.contains(&("control:root".to_owned(), false)));
+
+        // The provider stalls inside the walk: that scope is stalled, the world goes on.
+        let fifo = world.base.join("walk.fifo");
+        let named = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(named.as_ptr(), 0o600) }, 0);
+        STALLED_EXTERNAL_WALK
+            .with(|slot| *slot.borrow_mut() = Some((epi.root.clone(), fifo.clone())));
+        let (reports, applied, took) = round(quick);
+        assert!(took < quick + std::time::Duration::from_secs(2), "{took:?}");
+        let stalled = reports
+            .iter()
+            .find(|report| report["world_ref"] == "project:epi")
+            .unwrap();
+        assert_eq!(stalled["ok"], false);
+        assert_eq!(stalled["stalled"], true);
+        assert!(stalled.get("held").is_none());
+        let message = stalled["error"].as_str().unwrap();
+        assert!(
+            message.starts_with(&format!(
+                "stalled: {} stopped answering its refresh walk for 400ms after 0 answers",
+                epi.root.display()
+            )),
+            "{message}"
+        );
+        assert!(reports
+            .iter()
+            .filter(|report| report["world_ref"] != "project:epi")
+            .all(|report| report["ok"] == true));
+        assert!(!applied.iter().any(|(world, _)| world == "project:epi"));
+        // Asked for by name, the scope's refresh says so in the same words.
+        let refused = execute(&world.root, "refresh", &json!({"project": "epi"})).unwrap_err();
+        assert!(refused.to_string().starts_with("stalled: "), "{refused}");
+        STALLED_EXTERNAL_WALK.with(|slot| *slot.borrow_mut() = None);
+        let _writer = fs::OpenOptions::new().write(true).open(&fifo).unwrap();
+
+        // Another writer keeps the scope's own lock: held, and the world goes on.
+        let kept = crate::source_safety::lock(&epi.state, "file-map.lock").unwrap();
+        let (reports, applied, took) = round(quick);
+        assert!(took < quick + std::time::Duration::from_secs(2), "{took:?}");
+        let held = reports
+            .iter()
+            .find(|report| report["world_ref"] == "project:epi")
+            .unwrap();
+        assert_eq!(held["held"], true);
+        assert!(held["error"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("held: {}'s file-map lock", epi.state.display())));
+        assert!(!applied.iter().any(|(world, _)| world == "project:epi"));
+        assert!(applied.contains(&("control:root".to_owned(), false)));
+        drop(kept);
+
+        // The ground's lock kept: every scope is held, waited on once.
+        let kept = crate::source_safety::lock(&ground, "file-map.lock").unwrap();
+        let began = std::time::Instant::now();
+        let answered = execute(&world.root, "refresh", &json!({"federated": true})).unwrap();
+        assert!(
+            began.elapsed() < EXTERNAL_ROOT_DEADLINE + std::time::Duration::from_secs(2),
+            "{:?}",
+            began.elapsed()
+        );
+        let scopes = answered["result"]["scopes"].as_array().unwrap();
+        assert_eq!(scopes.len(), all.len());
+        assert!(
+            scopes.iter().all(|report| report["held"] == true),
+            "{answered}"
+        );
+        assert_eq!(answered["result"]["refreshed"], 0);
+        drop(kept);
     }
 
     /// 5 Nov 2026: ~/Documents is a File Provider domain, and while its
