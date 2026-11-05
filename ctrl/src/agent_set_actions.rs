@@ -69,7 +69,7 @@ pub fn register_agent_set_actions(registry: &mut ActionRegistry) {
     let _ = registry.register(ActionDescriptor {
         id: AGENT_SET_PROPOSE_ACTION.into(),
         title: "Propose agent-set".into(),
-        description: "Propose a central.agent-set/v1 composition as generated source: typed members, orchestrator and join, create-only, stamped generated-proposal/unrecognised. Recognition stays with the human owner.".into(),
+        description: "Propose a central.agent-set/v1 composition as generated source: typed members, orchestrator, join and the set's type, create-only, stamped generated-proposal/unrecognised. Recognition stays with the human owner.".into(),
         inputs: {
             let mut inputs = store_inputs("agent-set");
             inputs.push(input("ref", "string", true));
@@ -86,6 +86,9 @@ pub fn register_agent_set_actions(registry: &mut ActionRegistry) {
                 join
             });
             inputs.push(input("reason", "string", false));
+            // The set's type (O-I manual §19.15: "what it is for, and its type, which sets how its agents answer
+            // together"): a pattern's id, kept as the join is, a relation and not a grant.
+            inputs.push(input("type", "string", false));
             inputs
         },
         output: ActionOutputDefinition { output_type: PROPOSE_OUTPUT.into() },
@@ -760,6 +763,10 @@ fn agent_set_propose(
             Err(error) => return invalid(action, format!("invalid agent-set proposal: {error}")),
         };
     record.join = join;
+    record.set_type = optional(input, "type");
+    if let Err(error) = record.validate() {
+        return invalid(action, format!("invalid agent-set proposal: {error}"));
+    }
     let record_json = match serde_json::to_value(&record) {
         Ok(value) => value,
         Err(error) => {
@@ -1577,6 +1584,109 @@ mod tests {
             );
             assert!(!read.ok, "{absent} was not written");
         }
+    }
+
+    #[test]
+    fn an_agent_sets_type_is_proposed_saved_read_and_resolved_and_a_malformed_type_is_refused() {
+        let root = fixture_root();
+        let registry = registry();
+        let mut options = None;
+        let mut connectors = None;
+        let mut connector_context = None;
+        let context = context(&root, &mut options, &mut connectors, &mut connector_context);
+        let said = |result: &ActionResult| {
+            result
+                .error
+                .as_ref()
+                .map(|error| error.message.clone())
+                .unwrap_or_default()
+        };
+
+        // Group's card (O-I manual §19.15): what the set is for, and its type. Central proposes it with both.
+        let proposed = registry.execute(
+            AGENT_SET_PROPOSE_ACTION,
+            &json!({"scope": "root", "ref": "landing-crew", "revision": "r1",
+                "members": [{"kind": "agent", "agent_ref": "agent/kite"}, {"kind": "agent", "agent_ref": "agent/cairn"}],
+                "reason": "land the docs lane", "type": "quorum"}),
+            &context,
+        );
+        assert!(proposed.ok, "{proposed:?}");
+        assert_eq!(proposed.data.as_ref().unwrap()["record"]["type"], "quorum");
+        let read = registry.execute(
+            AGENT_SET_READ_ACTION,
+            &json!({"scope": "root", "ref": "landing-crew"}),
+            &context,
+        );
+        assert_eq!(read.data.as_ref().unwrap()["record"]["type"], "quorum");
+        let resolved = registry.execute(
+            AGENT_SET_RESOLVE_ACTION,
+            &json!({"scope": "root", "ref": "landing-crew"}),
+            &context,
+        );
+        assert_eq!(resolved.data.as_ref().unwrap()["type"], "quorum");
+
+        // Accepting it saves Central's record at its revision, its type with it; a new type is a new revision.
+        let mut record = read.data.as_ref().unwrap()["record"].clone();
+        record["revision"] = json!("r2");
+        record["type"] = json!("relay");
+        let saved = registry.execute(
+            AGENT_SET_SAVE_ACTION,
+            &json!({"scope": "root", "record": record, "expected_revision": "r1"}),
+            &context,
+        );
+        assert!(saved.ok, "{saved:?}");
+        let reread = registry.execute(
+            AGENT_SET_READ_ACTION,
+            &json!({"scope": "root", "ref": "landing-crew"}),
+            &context,
+        );
+        assert_eq!(reread.data.as_ref().unwrap()["record"]["type"], "relay");
+
+        // A set proposed with none carries none.
+        let plain = registry.execute(
+            AGENT_SET_PROPOSE_ACTION,
+            &json!({"scope": "root", "ref": "untyped-pair", "revision": "r1",
+                "members": [{"kind": "agent", "agent_ref": "agent/lilt"}]}),
+            &context,
+        );
+        assert!(plain.data.as_ref().unwrap()["record"].get("type").is_none());
+
+        // A type that is no pattern's id is refused, proposed or saved, and nothing is written.
+        for (at, odd) in [
+            ("odd-a", "Quorum"),
+            ("odd-b", "two words"),
+            ("odd-c", "9lives"),
+        ] {
+            let refused = registry.execute(
+                AGENT_SET_PROPOSE_ACTION,
+                &json!({"scope": "root", "ref": at, "revision": "r1",
+                    "members": [{"kind": "agent", "agent_ref": "agent/kite"}], "type": odd}),
+                &context,
+            );
+            assert!(!refused.ok, "{odd}: {refused:?}");
+            assert!(
+                said(&refused).contains("a set's type is a pattern's id"),
+                "{}",
+                said(&refused)
+            );
+        }
+        let long = "a".repeat(crate::world::MAX_AGENT_SET_TYPE_CHARS + 1);
+        let bad_save = registry.execute(
+            AGENT_SET_SAVE_ACTION,
+            &json!({"scope": "root", "record": {"schema": "central.agent-set/v1", "ref": "odd-d", "revision": "r1",
+                "members": [{"kind": "agent", "agent_ref": "agent/kite"}], "type": long}}),
+            &context,
+        );
+        assert!(!bad_save.ok, "{bad_save:?}");
+        for absent in ["odd-a", "odd-b", "odd-c", "odd-d"] {
+            let read = registry.execute(
+                AGENT_SET_READ_ACTION,
+                &json!({"scope": "root", "ref": absent}),
+                &context,
+            );
+            assert!(!read.ok, "{absent} was not written");
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
