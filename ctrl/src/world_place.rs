@@ -10,6 +10,12 @@
 //! advances; `central.world-relations.read` reads it back. A root with no world record has nowhere to keep one, and the act says so
 //! rather than declare the world. The person's own act: it authenticates on their native authority. A stale revision answers conflict
 //! and writes nothing; the same place answers unchanged; `null` takes the place away.
+//!
+//! `central.world.chain-order`: the order of a world's chain (O-I #743; DLW manual §16.2, §18.3: "The packet gathers what the agent
+//! reads, the agent of the world answers after it, then Scope limits what it may touch and Docs keeps the world's account"). The
+//! packet and the agent head the chain and never move; Scope and Docs stand after them in the order the person gives. Central owns
+//! that order (DLW build ruling 2026-11-05) and keeps it where the world keeps its place, as `chain_order`, on the same record and the
+//! same revision; `null` gives the chain back the manual's order.
 use crate::action::{ActionExecutionContext, ActionRegistry, MutationClass};
 use crate::agent_set_store::{RelationRecordStore, RelationRecordStoreError, ROOT_WORLD_DIR};
 use crate::civil_time_adoption::{descriptor, failure, input, now, root_of};
@@ -20,6 +26,7 @@ use crate::result::ActionResult;
 use crate::source_horizon::CONTROL_WORLD_REF;
 use crate::source_safety::content_revision_bytes;
 use chrono_tz::Tz;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{self, Read};
@@ -27,6 +34,14 @@ use std::path::Path;
 
 pub const WORLD_PLACE_ACTION: &str = "central.world.place";
 pub const WORLD_PLACE_SCHEMA: &str = "central.world-place/v1";
+pub const WORLD_CHAIN_ORDER_ACTION: &str = "central.world.chain-order";
+pub const WORLD_CHAIN_ORDER_SCHEMA: &str = "central.world-chain-order/v1";
+/// The devices of a world's chain that head it and never move (DLW manual §18.3: the packet gathers what the agent reads, and the
+/// agent answers after it).
+pub const WORLD_CHAIN_FIXED: [&str; 2] = ["packet", "agent"];
+/// The devices of a world's chain whose order is the person's, in the manual's order (§16.2: "then Scope limits what it may touch
+/// and Docs keeps the world's account").
+pub const WORLD_CHAIN_MOVABLE: [&str; 2] = ["scope", "docs"];
 const MANIFEST: &str = "ProjectCentral/project.json";
 const MANIFEST_LIMIT: u64 = 1024 * 1024;
 /// The bounds QL's sky provider counts a day within (QL-MEF `providers/sky/hours.py` `place`).
@@ -87,6 +102,39 @@ impl WorldPlace {
         }
         Ok(())
     }
+}
+
+/// Whether `order` is an order of a world's chain: each device whose place is the person's, once; answers why not, in words.
+pub fn chain_order_words(order: &[String]) -> Result<(), String> {
+    if let Some(fixed) = order
+        .iter()
+        .find(|slot| WORLD_CHAIN_FIXED.contains(&slot.as_str()))
+    {
+        return Err(format!(
+            "{fixed} heads a world's chain and never moves (the packet gathers what the agent reads, and the agent answers after it); the order names {}",
+            WORLD_CHAIN_MOVABLE.join(" and ")
+        ));
+    }
+    if let Some(stranger) = order
+        .iter()
+        .find(|slot| !WORLD_CHAIN_MOVABLE.contains(&slot.as_str()))
+    {
+        return Err(format!(
+            "{stranger:?} is no device of a world's chain; the order names {}",
+            WORLD_CHAIN_MOVABLE.join(" and ")
+        ));
+    }
+    if order.len() != WORLD_CHAIN_MOVABLE.len()
+        || WORLD_CHAIN_MOVABLE
+            .iter()
+            .any(|slot| order.iter().filter(|kept| kept == slot).count() != 1)
+    {
+        return Err(format!(
+            "the order names each of {} once",
+            WORLD_CHAIN_MOVABLE.join(" and ")
+        ));
+    }
+    Ok(())
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -191,25 +239,130 @@ pub fn place_world(
     )?;
     principal.require_human()?;
     let _lock = crate::source_safety::lock(&scope.root, "source-mutation.lock")?;
-    match project {
-        Some(project) => place_project_world(
-            &scope.root,
-            project,
-            place.as_ref(),
-            expected,
-            &principal.principal_ref,
+    let kept = keep_world_field(
+        central,
+        &scope.root,
+        project,
+        "place",
+        "place",
+        place.as_ref(),
+        expected,
+    )?;
+    let world_ref = kept.world_ref.clone();
+    let receipt = Receipt {
+        world_ref: &world_ref,
+        project,
+        source: &kept.source,
+        place: place.as_ref(),
+        principal_ref: &principal.principal_ref,
+    };
+    Ok(match kept.outcome {
+        Kept::Conflict => {
+            let mut conflict =
+                receipt.answer("conflict", None, &kept.previous_revision, &kept.revision);
+            conflict["expected_revision"] = json!(expected);
+            conflict
+        }
+        Kept::Unchanged => receipt.answer(
+            "unchanged",
+            kept.previous.as_ref(),
+            &kept.previous_revision,
+            &kept.revision,
         ),
-        None => place_your_world(central, place.as_ref(), expected, &principal.principal_ref),
-    }
+        Kept::Written => receipt.answer(
+            outcome(place.as_ref()),
+            kept.previous.as_ref(),
+            &kept.previous_revision,
+            &kept.revision,
+        ),
+    })
 }
 
-fn place_project_world(
+/// What a world's own record did with one field it keeps.
+enum Kept {
+    Conflict,
+    Unchanged,
+    Written,
+}
+
+struct KeptField<T> {
+    world_ref: String,
+    source: String,
+    outcome: Kept,
+    previous: Option<T>,
+    previous_revision: String,
+    revision: String,
+}
+
+/// Keep `value` as `field` (or take it away, `None`) on the record that keeps the world's own: a project's ProjectCentral manifest,
+/// or your own world's root world record, on that record's `expected` revision. Only that field changes (and the root record's
+/// revision, which the act advances); a stale revision changes nothing; the same value changes nothing. `what` names the field in
+/// words for a root with no world record.
+fn keep_world_field<T: Serialize + DeserializeOwned + PartialEq>(
+    central: &Path,
     project_root: &Path,
-    project: &str,
-    place: Option<&WorldPlace>,
+    project: Option<&str>,
+    field: &str,
+    what: &str,
+    value: Option<&T>,
     expected: &str,
-    principal_ref: &str,
-) -> io::Result<Value> {
+) -> io::Result<KeptField<T>> {
+    let decode = |kept: Option<&Value>, whose: &str| -> io::Result<Option<T>> {
+        match kept {
+            None | Some(Value::Null) => Ok(None),
+            Some(kept) => serde_json::from_value(kept.clone())
+                .map(Some)
+                .map_err(|error| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("{whose} {what} cannot be read: {error}"),
+                    )
+                }),
+        }
+    };
+    let set = |fields: &mut serde_json::Map<String, Value>| match value {
+        Some(value) => {
+            fields.insert(field.into(), json!(value));
+        }
+        None => {
+            fields.remove(field);
+        }
+    };
+    let Some(project) = project else {
+        let store = RelationRecordStore::worlds_at_root(central);
+        let reading = store
+            .read(CONTROL_WORLD_REF)
+            .map_err(|error| store_error(error, what))?;
+        let mut kept = KeptField {
+            world_ref: CONTROL_WORLD_REF.to_owned(),
+            source: reading.source_path.clone(),
+            outcome: Kept::Conflict,
+            previous: None,
+            previous_revision: reading.revision.clone(),
+            revision: reading.revision.clone(),
+        };
+        if reading.revision != expected {
+            return Ok(kept);
+        }
+        kept.previous = decode(reading.record.get(field), "Your world record's")?;
+        if kept.previous.as_ref() == value {
+            kept.outcome = Kept::Unchanged;
+            return Ok(kept);
+        }
+        let mut record = reading.record.clone();
+        let fields = record
+            .as_object_mut()
+            .ok_or_else(|| invalid("Your world record is not an object"))?;
+        set(fields);
+        let next = next_record_revision(&reading.revision);
+        fields.insert("revision".into(), json!(next));
+        store
+            .save(&record, Some(&reading.revision))
+            .map_err(|error| store_error(error, what))?;
+        kept.outcome = Kept::Written;
+        kept.revision = next;
+        return Ok(kept);
+    };
     let mut held = Vec::new();
     open_native_file(project_root, MANIFEST)?
         .take(MANIFEST_LIMIT + 1)
@@ -218,47 +371,39 @@ fn place_project_world(
         return Err(invalid("The project's manifest exceeds its bounded size"));
     }
     let revision = content_revision_bytes(&held);
-    let world_ref = format!("project:{project}");
-    let receipt = Receipt {
-        world_ref: &world_ref,
-        project: Some(project),
-        source: MANIFEST,
-        place,
-        principal_ref,
+    let mut kept = KeptField {
+        world_ref: format!("project:{project}"),
+        source: MANIFEST.to_owned(),
+        outcome: Kept::Conflict,
+        previous: None,
+        previous_revision: revision.clone(),
+        revision: revision.clone(),
     };
     if revision != expected {
-        let mut conflict = receipt.answer("conflict", None, &revision, &revision);
-        conflict["expected_revision"] = json!(expected);
-        return Ok(conflict);
+        return Ok(kept);
     }
     let path = project_root.join(MANIFEST);
     let manifest = parse_project_manifest(&held, &path)?;
-    let previous = manifest.place.clone();
-    if previous.as_ref() == place {
-        return Ok(receipt.answer("unchanged", previous.as_ref(), &revision, &revision));
-    }
-    // Only the place changes: every other field stays as the manifest keeps it, written as ProjectCentral writes its manifest.
+    // Every other field stays as the manifest keeps it, written as ProjectCentral writes its manifest.
     let mut document: Value = serde_json::from_slice(&held)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    kept.previous = decode(document.get(field), "The project's manifest")?;
+    if kept.previous.as_ref() == value {
+        kept.outcome = Kept::Unchanged;
+        return Ok(kept);
+    }
     let fields = document
         .as_object_mut()
         .ok_or_else(|| invalid("The project's manifest is not an object"))?;
-    match place {
-        Some(place) => {
-            fields.insert("place".into(), json!(place));
-        }
-        None => {
-            fields.remove("place");
-        }
-    }
+    set(fields);
     let mut written = serde_json::to_vec_pretty(&document)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     written.push(b'\n');
-    let kept = parse_project_manifest(&written, &path)?;
-    if kept.project_id != manifest.project_id || !kept.validate().valid {
-        return Err(invalid(
-            "The placed manifest would not validate; nothing was written",
-        ));
+    let checked = parse_project_manifest(&written, &path)?;
+    if checked.project_id != manifest.project_id || !checked.validate().valid {
+        return Err(invalid(format!(
+            "The manifest with its {what} would not validate; nothing was written"
+        )));
     }
     atomic_record(
         project_root,
@@ -266,20 +411,17 @@ fn place_project_world(
         &written,
         RecordDisposition::ReplaceOrCreate,
     )?;
-    Ok(receipt.answer(
-        outcome(place),
-        previous.as_ref(),
-        &revision,
-        &content_revision_bytes(&written),
-    ))
+    kept.outcome = Kept::Written;
+    kept.revision = content_revision_bytes(&written);
+    Ok(kept)
 }
 
-fn store_error(error: RelationRecordStoreError) -> io::Error {
+fn store_error(error: RelationRecordStoreError, what: &str) -> io::Error {
     match error {
         RelationRecordStoreError::NotFound(_) => io::Error::new(
             io::ErrorKind::NotFound,
             format!(
-                "Your world declares no world record ({ROOT_WORLD_DIR}, {CONTROL_WORLD_REF}): Central keeps your world's place on it, and does not declare the world for a place. Declare it first (central.world-relations.save)."
+                "Your world declares no world record ({ROOT_WORLD_DIR}, {CONTROL_WORLD_REF}): Central keeps your world's {what} on it, and does not declare the world for a {what}. Declare it first (central.world-relations.save)."
             ),
         ),
         RelationRecordStoreError::InvalidRecord(why) => invalid(why),
@@ -287,57 +429,128 @@ fn store_error(error: RelationRecordStoreError) -> io::Error {
     }
 }
 
-fn place_your_world(
+/// Give the world `input.project` names, or your own world when it names none, the chain order `input.order` names (`null`: the
+/// manual's order), on the `input.expected_revision` of the record that keeps it, as the person `token` names.
+pub fn order_world_chain(
     central: &Path,
-    place: Option<&WorldPlace>,
-    expected: &str,
-    principal_ref: &str,
+    input: &Value,
+    token: Option<&str>,
+    now: u64,
 ) -> io::Result<Value> {
-    let store = RelationRecordStore::worlds_at_root(central);
-    let reading = store.read(CONTROL_WORLD_REF).map_err(store_error)?;
-    let source = reading.source_path.clone();
-    let receipt = Receipt {
-        world_ref: CONTROL_WORLD_REF,
-        project: None,
-        source: &source,
-        place,
-        principal_ref,
-    };
-    let revision = reading.revision.clone();
-    if revision != expected {
-        let mut conflict = receipt.answer("conflict", None, &revision, &revision);
-        conflict["expected_revision"] = json!(expected);
-        return Ok(conflict);
-    }
-    let previous: Option<WorldPlace> = match reading.record.get("place") {
+    let text = |field: &str| input.get(field).and_then(Value::as_str);
+    let project = match input.get("project") {
         None | Some(Value::Null) => None,
-        Some(kept) => Some(serde_json::from_value(kept.clone()).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("Your world record's place cannot be read: {error}"),
-            )
-        })?),
+        Some(Value::String(project)) if !project.trim().is_empty() => Some(project.as_str()),
+        Some(_) => {
+            return Err(invalid(
+                "central.world.chain-order names a project, or none for your own world",
+            ))
+        }
     };
-    if previous.as_ref() == place {
-        return Ok(receipt.answer("unchanged", previous.as_ref(), &revision, &revision));
-    }
-    // Only the place and the revision change: every other field stays as the record keeps it.
-    let mut record = reading.record.clone();
-    let fields = record
-        .as_object_mut()
-        .ok_or_else(|| invalid("Your world record is not an object"))?;
-    match place {
-        Some(place) => {
-            fields.insert("place".into(), json!(place));
-        }
+    let order: Option<Vec<String>> = match input.get("order") {
         None => {
-            fields.remove("place");
+            return Err(invalid(
+                "central.world.chain-order names the order, or null for the manual's order",
+            ))
         }
+        Some(Value::Null) => None,
+        Some(value) => {
+            let order: Vec<String> = serde_json::from_value(value.clone()).map_err(|_| {
+                invalid("A world's chain order is a list of its devices' ids, scope and docs")
+            })?;
+            chain_order_words(&order)
+                .map_err(|why| invalid(format!("A world's chain order: {why}")))?;
+            Some(order)
+        }
+    };
+    let expected = text("expected_revision").ok_or_else(|| {
+        invalid("central.world.chain-order is made against the record's expected_revision")
+    })?;
+    let scope = Scope::resolve(central, project)?;
+    let principal = authority::authenticate(
+        &scope,
+        token,
+        WORLD_CHAIN_ORDER_ACTION,
+        text("expected_authority_revision"),
+        now,
+    )?;
+    principal.require_human()?;
+    let _lock = crate::source_safety::lock(&scope.root, "source-mutation.lock")?;
+    let kept = keep_world_field(
+        central,
+        &scope.root,
+        project,
+        "chain_order",
+        "chain order",
+        order.as_ref(),
+        expected,
+    )?;
+    let outcome = match (&kept.outcome, &order) {
+        (Kept::Conflict, _) => "conflict",
+        (Kept::Unchanged, _) => "unchanged",
+        (Kept::Written, Some(_)) => "ordered",
+        (Kept::Written, None) => "reset",
+    };
+    let standing = |order: Option<&Vec<String>>| -> Vec<String> {
+        WORLD_CHAIN_FIXED
+            .iter()
+            .map(|slot| (*slot).to_owned())
+            .chain(order.cloned().unwrap_or_else(|| {
+                WORLD_CHAIN_MOVABLE
+                    .iter()
+                    .map(|slot| (*slot).to_owned())
+                    .collect()
+            }))
+            .collect()
+    };
+    let mut answer = json!({"schema":WORLD_CHAIN_ORDER_SCHEMA,"outcome":outcome,"world_ref":kept.world_ref,"project":project,
+        "source":kept.source,"order":order,"chain":standing(order.as_ref()),"previous_order":kept.previous,
+        "previous_revision":kept.previous_revision,"revision":kept.revision,"principal_ref":principal.principal_ref,
+        "automatic_agent_or_model_invocation":false});
+    if matches!(kept.outcome, Kept::Conflict) {
+        answer["expected_revision"] = json!(expected);
+        answer["chain"] = Value::Null;
     }
-    let next = next_record_revision(&revision);
-    fields.insert("revision".into(), json!(next));
-    store.save(&record, Some(&revision)).map_err(store_error)?;
-    Ok(receipt.answer(outcome(place), previous.as_ref(), &revision, &next))
+    Ok(answer)
+}
+
+fn world_chain_order_action(
+    _: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    let root = match root_of(WORLD_CHAIN_ORDER_ACTION, context) {
+        Ok(root) => root,
+        Err(result) => return result,
+    };
+    let token = std::env::var("CENTRAL_NATIVE_TOKEN").ok();
+    match order_world_chain(&root, input, token.as_deref(), now()) {
+        Ok(data) => ActionResult::success(WORLD_CHAIN_ORDER_ACTION, data),
+        Err(error) => failure(WORLD_CHAIN_ORDER_ACTION, error),
+    }
+}
+
+pub fn register_world_chain_order_action(registry: &mut ActionRegistry) {
+    let mut order = input("order", true);
+    order.input_type = "array".to_owned();
+    registry
+        .register(
+            descriptor(
+                WORLD_CHAIN_ORDER_ACTION,
+                "Order a world's chain",
+                "Give a world's chain its order (DLW manual §16.2, §18.3): the packet and the agent head it and never move; order names scope and docs, each once, in the order they stand after the agent, or null for the manual's order (scope, then docs). A project's world keeps it in its ProjectCentral manifest as chain_order, on the manifest's expected_revision (the world map's manifest_revision), and the world map discloses it as world_chain_order; with no project, your own world keeps it on its root world record (control:root, central.world-relations/v1) on that record's revision, which the act advances, read back by central.world-relations.read; a root with no world record is refused, never declared. The person's own act: it authenticates on their native authority (CENTRAL_NATIVE_TOKEN). A stale revision answers conflict and writes nothing; the same order answers unchanged. Never invokes an Agent or model.",
+                MutationClass::LocallyMutating,
+                "central-world-chain-order",
+                vec![
+                    input("project", false),
+                    order,
+                    input("expected_revision", true),
+                    input("expected_authority_revision", false),
+                ],
+            ),
+            world_chain_order_action,
+        )
+        .expect("central.world.chain-order is a valid Action id");
 }
 
 fn world_place_action(
@@ -443,6 +656,31 @@ mod tests {
         ] {
             let why = wrong.validate().unwrap_err();
             assert!(why.contains(field), "{why}");
+        }
+    }
+
+    #[test]
+    fn a_world_chain_order_names_scope_and_docs_once_each() {
+        let order = |slots: &[&str]| slots.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(chain_order_words(&order(&["docs", "scope"])), Ok(()));
+        assert_eq!(chain_order_words(&order(&["scope", "docs"])), Ok(()));
+        for (wrong, words) in [
+            (
+                order(&["agent", "scope", "docs"]),
+                "agent heads a world's chain and never moves",
+            ),
+            (
+                order(&["docs", "lens"]),
+                "\"lens\" is no device of a world's chain",
+            ),
+            (order(&["docs"]), "names each of scope and docs once"),
+            (
+                order(&["docs", "docs"]),
+                "names each of scope and docs once",
+            ),
+        ] {
+            let why = chain_order_words(&wrong).unwrap_err();
+            assert!(why.contains(words), "{why}");
         }
     }
 

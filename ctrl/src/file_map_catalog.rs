@@ -507,12 +507,19 @@ impl Scope {
     pub fn project(root: PathBuf, project: Option<String>) -> io::Result<Self> {
         let manifest = project_manifest(&root)
             .map_err(|error| read_failure(error, "known", "project_declaration", "unavailable"))?;
-        Ok(Self {
+        Ok(Self::declared(root, project, &manifest))
+    }
+    fn declared(
+        root: PathBuf,
+        project: Option<String>,
+        manifest: &crate::projectcentral::ProjectCentralManifest,
+    ) -> Self {
+        Self {
             state: root.clone(),
             root,
             world: format!("project:{}", manifest.project_id),
             project,
-        })
+        }
     }
     pub fn is_external(&self) -> bool {
         self.state != self.root
@@ -649,7 +656,143 @@ impl Scope {
         }
     }
 }
+/// How long an external scope's root may take to open before the scope is
+/// reported unreachable. On macOS ~/Documents is a File Provider domain: while
+/// its provider stalls, a plain open() of it blocks every process (5 Nov 2026:
+/// a world refresh waited 17 minutes opening ~/Documents/epi, and the gateway
+/// stop that waited on it was held as long).
+pub(crate) const EXTERNAL_ROOT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// External roots whose opening thread has not returned. Asked again, such a
+/// root is unreachable at once instead of another thread blocking the same
+/// way; the thread clears it when its open finally returns.
+static OPENING_EXTERNAL_ROOTS: std::sync::Mutex<BTreeSet<PathBuf>> =
+    std::sync::Mutex::new(BTreeSet::new());
+
+#[cfg(test)]
+thread_local! {
+    /// A root whose opening first opens this FIFO for reading: with no writer
+    /// the open never returns, standing in for a stalled provider.
+    pub(crate) static STALLED_EXTERNAL_ROOT: std::cell::RefCell<Option<(PathBuf, PathBuf)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// A participating external scope whose root did not open within
+/// [`EXTERNAL_ROOT_DEADLINE`]. It is left out of the scopes and named.
+#[derive(Clone, Debug)]
+pub(crate) struct UnreachableScope {
+    pub project: String,
+    pub root: String,
+    pub message: String,
+}
+
+type ExternalOpened = (
+    PathBuf,
+    (crate::projectcentral::ProjectCentralManifest, String),
+);
+
+enum ExternalOpening {
+    Held(Box<ExternalOpened>),
+    Waiting(std::sync::mpsc::Receiver<io::Result<ExternalOpened>>),
+    StillOpening,
+    Failed(io::Error),
+}
+
+/// Start opening an external scope's root on a helper thread. An abandoned
+/// thread (one whose open has not returned by the deadline) ends with the
+/// process.
+fn begin_external_open(raw: &str) -> ExternalOpening {
+    let key = PathBuf::from(raw);
+    let held = OBSERVATION_PHASE.with(|held| {
+        held.borrow()
+            .as_ref()
+            .and_then(|phase| phase.manifests.get(&key).cloned())
+    });
+    if let Some(held) = held {
+        return ExternalOpening::Held(Box::new((key, held)));
+    }
+    if !OPENING_EXTERNAL_ROOTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(key.clone())
+    {
+        return ExternalOpening::StillOpening;
+    }
+    #[cfg(test)]
+    let stall = STALLED_EXTERNAL_ROOT.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .filter(|(root, _)| *root == key)
+            .map(|(_, fifo)| fifo.clone())
+    });
+    let (send, receive) = std::sync::mpsc::channel();
+    let owned = raw.to_owned();
+    let spawned = std::thread::Builder::new()
+        .name("file-map-external-root".into())
+        .spawn(move || {
+            #[cfg(test)]
+            if let Some(fifo) = stall {
+                let _ = fs::File::open(fifo);
+            }
+            let opened = open_external_root(&owned);
+            OPENING_EXTERNAL_ROOTS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(Path::new(&owned));
+            let _ = send.send(opened);
+        });
+    match spawned {
+        Ok(_) => ExternalOpening::Waiting(receive),
+        Err(error) => {
+            OPENING_EXTERNAL_ROOTS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&key);
+            ExternalOpening::Failed(error)
+        }
+    }
+}
+
+/// What an external scope's first touch reads: its root, contained, and its
+/// Project declaration. These are the opens a stalled provider blocks.
+fn open_external_root(raw: &str) -> io::Result<ExternalOpened> {
+    let target = safe_member(Path::new("/"), raw.trim_start_matches('/'), true)
+        .map_err(|error| read_failure(error, "known", "owner_root", "unavailable"))?;
+    let observed = observe_project_manifest(&target)
+        .map_err(|error| read_failure(error, "known", "project_declaration", "unavailable"))?;
+    Ok((target, observed))
+}
+
+impl ExternalOpening {
+    /// The opened root, `Ok(None)` when it did not open by `deadline`.
+    fn wait(self, deadline: std::time::Instant) -> io::Result<Option<ExternalOpened>> {
+        match self {
+            Self::Held(opened) => Ok(Some(*opened)),
+            Self::StillOpening => Ok(None),
+            Self::Failed(error) => Err(error),
+            Self::Waiting(receive) => {
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                match receive.recv_timeout(left) {
+                    Ok(opened) => opened.map(Some),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(None),
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(io::Error::other(
+                        "the external root's opening thread ended without an answer",
+                    )),
+                }
+            }
+        }
+    }
+}
+
 pub(crate) fn scopes(root: &Path) -> io::Result<Vec<Scope>> {
+    participating(root).map(|(scopes, _)| scopes)
+}
+
+/// Every participating scope, and the external ones whose roots did not open
+/// within [`EXTERNAL_ROOT_DEADLINE`]: those are left out and named, and the
+/// others stand. Each external root opens on its own helper thread, all under
+/// one deadline.
+pub(crate) fn participating(root: &Path) -> io::Result<(Vec<Scope>, Vec<UnreachableScope>)> {
     let manifest = match fs::symlink_metadata(root.join("ProjectCentral/project.json")) {
         Ok(metadata) if metadata.is_file() => true,
         Ok(_) => return Err(invalid("Project manifest is not an ordinary file")),
@@ -658,7 +801,7 @@ pub(crate) fn scopes(root: &Path) -> io::Result<Vec<Scope>> {
     };
     let control = optional_directory(&root.join("Control"))?;
     if manifest && !control {
-        return Ok(vec![Scope::project(root.into(), None)?]);
+        return Ok((vec![Scope::project(root.into(), None)?], Vec::new()));
     }
     if !control {
         return Err(invalid(
@@ -702,16 +845,48 @@ pub(crate) fn scopes(root: &Path) -> io::Result<Vec<Scope>> {
         return Err(invalid("More than 512 participating scopes"));
     }
     let mut result = vec![base];
+    let mut unreachable = Vec::new();
     let mut seen = BTreeSet::new();
+    let deadline = std::time::Instant::now() + EXTERNAL_ROOT_DEADLINE;
+    let mut openings = candidates
+        .iter()
+        .filter(|(_, path)| Path::new(path).is_absolute())
+        .map(|(name, path)| (name.clone(), begin_external_open(path)))
+        .collect::<BTreeMap<_, _>>();
     for (name, path) in candidates {
-        let target = if Path::new(&path).is_absolute() {
-            safe_member(Path::new("/"), path.trim_start_matches('/'), true)
-        } else {
-            safe_member(root, &path, true)
-        }
-        .map_err(|error| read_failure(error, "known", "owner_root", "unavailable"))?;
+        let (target, scope) = match openings.remove(&name) {
+            Some(opening) => match opening.wait(deadline)? {
+                Some((target, observed)) => {
+                    OBSERVATION_PHASE.with(|held| {
+                        if let Some(phase) = held.borrow_mut().as_mut() {
+                            phase.manifests.insert(target.clone(), observed.clone());
+                        }
+                    });
+                    let scope = Scope::declared(target.clone(), Some(name.clone()), &observed.0);
+                    (target, scope)
+                }
+                None => {
+                    unreachable.push(UnreachableScope {
+                        message: format!(
+                            "unreachable: {path} did not open within {}s (a File Provider or \
+                             network volume not answering)",
+                            EXTERNAL_ROOT_DEADLINE.as_secs()
+                        ),
+                        project: name,
+                        root: path,
+                    });
+                    continue;
+                }
+            },
+            None => {
+                let target = safe_member(root, &path, true)
+                    .map_err(|error| read_failure(error, "known", "owner_root", "unavailable"))?;
+                let scope = Scope::project(target.clone(), Some(name.clone()))?;
+                (target, scope)
+            }
+        };
         let external = !target.starts_with(root);
-        let mut scope = Scope::project(target, Some(name.clone()))?;
+        let mut scope = scope;
         if external {
             scope.state = external_state(root, &name)?;
         }
@@ -720,7 +895,7 @@ pub(crate) fn scopes(root: &Path) -> io::Result<Vec<Scope>> {
         }
         result.push(scope);
     }
-    Ok(result)
+    Ok((result, unreachable))
 }
 /// The ground-side home of an external scope's derived state, created on
 /// first sight so locks and indexes never fall back into the external tree.

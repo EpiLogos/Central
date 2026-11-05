@@ -781,12 +781,25 @@ pub fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
     } else {
         Some(crate::source_safety::lock(&root, "file-map.lock")?)
     };
-    let all = if matches!(op, "move-apply" | "move-rollback") {
-        super::file_map_moves::resume_scopes(&root, input)?
+    let (all, unreachable) = if matches!(op, "move-apply" | "move-rollback") {
+        (
+            super::file_map_moves::resume_scopes(&root, input)?,
+            Vec::new(),
+        )
     } else {
-        scopes(&root)?
+        participating(&root)?
     };
-    let scope = selected(&all, input)?;
+    // A scope asked for by name whose root did not open says so, rather than
+    // being an unknown map.
+    let scope = selected(&all, input).map_err(|error| {
+        let asked = input.get("project").and_then(Value::as_str);
+        unreachable
+            .iter()
+            .find(|scope| asked == Some(scope.project.as_str()))
+            .map_or(error, |scope| {
+                io::Error::new(io::ErrorKind::TimedOut, scope.message.clone())
+            })
+    })?;
     let read_roots = if read_root.is_some() {
         all.iter()
             .map(|scope| ReadRoot::capture(&scope.root))
@@ -945,9 +958,9 @@ pub fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
 /// are. Central knows its scopes, including the external ones no `central.world`
 /// listing names, so a caller never has to enumerate or spell them.
 fn refresh_world(root: &Path, input: &Value) -> io::Result<Value> {
-    let all = scopes(&root.canonicalize()?)?;
+    let (all, unreachable) = participating(&root.canonicalize()?)?;
     let embeddings = input["embeddings"] == true;
-    let reports = refresh_each(&all, |scope| {
+    let reports = world_refresh_reports(&all, &unreachable, |scope| {
         execute(
             root,
             "refresh",
@@ -967,6 +980,28 @@ fn refresh_world(root: &Path, input: &Value) -> io::Result<Value> {
         },
         "automatic_agent_or_model_invocation": false,
     }))
+}
+
+/// The world refresh's reports: one per participating scope, in scope order,
+/// then one per external scope whose root did not open in time, named
+/// unreachable. A stalled volume costs its own entry, never the others.
+fn world_refresh_reports(
+    all: &[Scope],
+    unreachable: &[UnreachableScope],
+    refresh_one: impl FnMut(&Scope) -> io::Result<Value>,
+) -> Vec<Value> {
+    let mut reports = refresh_each(all, refresh_one);
+    reports.extend(unreachable.iter().map(|scope| {
+        json!({
+            "world_ref": Value::Null,
+            "project": scope.project,
+            "root": scope.root,
+            "ok": false,
+            "unreachable": true,
+            "error": scope.message,
+        })
+    }));
+    reports
 }
 
 /// One report per scope, in scope order, whatever each refresh answers.
@@ -2599,5 +2634,106 @@ mod external_scope_tests {
     #[test]
     fn external_scope_name_must_be_one_component() {
         assert!(super::super::file_map_catalog::external_state(Path::new("/tmp"), "a/b").is_err());
+    }
+
+    /// 5 Nov 2026: ~/Documents is a File Provider domain, and while its
+    /// provider stalled a plain open() of ~/Documents/epi blocked the world
+    /// refresh for 17 minutes. A FIFO opened for reading, with no writer,
+    /// stands in for the stalled provider.
+    #[test]
+    fn an_external_root_that_does_not_open_is_named_unreachable_and_the_other_scopes_stand() {
+        let world = World::new();
+        let stalled = world.base.join("documents-legacy");
+        fs::create_dir_all(stalled.join("ProjectCentral")).unwrap();
+        fs::write(
+            stalled.join("ProjectCentral/project.json"),
+            serde_json::to_vec(&json!({"schema":"central.project/v1","project_id":"legacy",
+                "human_source":"ProjectCentral/user",
+                "wiki":{"profile":"okf-wiki/v1","source":"ProjectCentral/agents/wiki/wiki.json"}}))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            world
+                .root
+                .join(source_horizon::CONTROL_GROUND_RELATIONS_SOURCE),
+            serde_json::to_vec(&json!({
+                "schema":source_horizon::CONTROL_GROUND_RELATIONS_SCHEMA,
+                "project_id":"control:root","relations":[],
+                "file_map":{"scopes":{
+                    "epi":world.external.to_str().unwrap(),
+                    "legacy":stalled.to_str().unwrap()
+                }}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let fifo = world.base.join("provider.fifo");
+        let named = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(named.as_ptr(), 0o600) }, 0);
+        STALLED_EXTERNAL_ROOT
+            .with(|slot| *slot.borrow_mut() = Some((stalled.clone(), fifo.clone())));
+
+        let began = std::time::Instant::now();
+        let (all, unreachable) = participating(&world.root).unwrap();
+        assert!(
+            began.elapsed() < EXTERNAL_ROOT_DEADLINE + std::time::Duration::from_secs(2),
+            "the stalled root held the scopes for {:?}",
+            began.elapsed()
+        );
+        assert!(all.iter().any(|scope| scope.world == "project:epi"));
+        assert!(all.iter().all(|scope| scope.world != "project:legacy"));
+        assert_eq!(unreachable.len(), 1);
+        assert_eq!(unreachable[0].project, "legacy");
+        let message = format!(
+            "unreachable: {} did not open within 3s (a File Provider or network volume not \
+             answering)",
+            stalled.display()
+        );
+        assert_eq!(unreachable[0].message, message);
+
+        // Asked again while that open still waits, it answers at once: no
+        // second thread blocks on the same root.
+        let again = std::time::Instant::now();
+        let (_, still) = participating(&world.root).unwrap();
+        assert!(again.elapsed() < std::time::Duration::from_secs(1));
+        assert_eq!(still.len(), 1);
+
+        // The world refresh names it in its own entry and the others refresh.
+        let reports = world_refresh_reports(&all, &unreachable, |_| {
+            Ok(json!({"entries": 1, "changes": [], "diagnostics": []}))
+        });
+        assert!(reports
+            .iter()
+            .filter(|report| report["project"] != "legacy")
+            .all(|report| report["ok"] == true));
+        let legacy = reports
+            .iter()
+            .find(|report| report["project"] == "legacy")
+            .unwrap();
+        assert_eq!(legacy["ok"], false);
+        assert_eq!(legacy["unreachable"], true);
+        assert_eq!(legacy["error"], message);
+        // Asked for by name, it says why rather than being an unknown map.
+        let refused = execute(&world.root, "inspect", &json!({"project":"legacy"})).unwrap_err();
+        assert_eq!(refused.to_string(), message);
+
+        // The provider answers: the abandoned open returns, and the root is
+        // reachable again.
+        STALLED_EXTERNAL_ROOT.with(|slot| *slot.borrow_mut() = None);
+        let _writer = fs::OpenOptions::new().write(true).open(&fifo).unwrap();
+        let recovered = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let (all, unreachable) = participating(&world.root).unwrap();
+            if unreachable.is_empty() {
+                assert!(all.iter().any(|scope| scope.world == "project:legacy"));
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < recovered,
+                "the root never opened again"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 }

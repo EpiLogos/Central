@@ -296,3 +296,116 @@ fn your_world_declares_its_place_on_its_root_world_record() {
     assert_eq!(cleared["data"]["outcome"], "cleared", "{cleared}");
     assert!(read()["data"]["record"].get("place").is_none());
 }
+
+/// A world's chain order (`central.world.chain-order`, O-I #743; DLW manual §16.2, §18.3): the packet and the agent head the chain
+/// and never move, and Scope and Docs stand after them in the order the person gives. Central keeps it where the world keeps its
+/// place, on the same record and revision: a project's ProjectCentral manifest (disclosed by the world map), your own world's root
+/// world record.
+#[test]
+fn a_world_s_chain_order_is_kept_on_its_own_record_with_compare_and_swap() {
+    const ORDER: &str = "central.world.chain-order";
+    let home = made(&[ORDER, ACTION]);
+    let before = project_of(&cli(&home, "central.world", json!({}), None));
+    assert!(before.get("world_chain_order").is_none(), "{before}");
+    let revision = before["manifest_revision"].as_str().unwrap().to_owned();
+    let order = |order: Value, expected: &str, token: Option<&str>| {
+        cli(
+            &home,
+            ORDER,
+            json!({"project":PROJECT,"order":order,"expected_revision":expected}),
+            token,
+        )
+    };
+    let refused = order(json!(["docs", "scope"]), &revision, None);
+    assert_eq!(
+        refused["ok"], false,
+        "only the person's own press orders it: {refused}"
+    );
+    for (wrong, words) in [
+        (json!(["agent", "docs", "scope"]), "never moves"),
+        (json!(["docs"]), "once"),
+        (json!(["docs", "lens"]), "no device of a world's chain"),
+        (json!("docs, scope"), "list of its devices"),
+    ] {
+        let refused = order(wrong.clone(), &revision, Some(TOKEN));
+        assert_eq!(refused["ok"], false, "{wrong}: {refused}");
+        assert!(refused.to_string().contains(words), "{wrong}: {refused}");
+    }
+    let stale = order(
+        json!(["docs", "scope"]),
+        "central.content-fnv1a64/v1:1:0000000000000000",
+        Some(TOKEN),
+    );
+    assert_eq!(stale["data"]["outcome"], "conflict", "{stale}");
+
+    let ordered = order(json!(["docs", "scope"]), &revision, Some(TOKEN));
+    assert_eq!(ordered["ok"], true, "{ordered}");
+    let data = &ordered["data"];
+    assert_eq!(data["schema"], "central.world-chain-order/v1");
+    assert_eq!(data["outcome"], "ordered");
+    assert_eq!(data["chain"], json!(["packet", "agent", "docs", "scope"]));
+    assert_eq!(data["previous_order"], Value::Null);
+    assert_eq!(data["principal_ref"], PRINCIPAL);
+    let after = project_of(&cli(&home, "central.world", json!({}), None));
+    assert_eq!(
+        after["world_chain_order"],
+        json!(["docs", "scope"]),
+        "{after}"
+    );
+    assert_eq!(after["manifest_revision"], data["revision"]);
+    // The place and the order share the manifest's revision: a place made on the old revision is a conflict now.
+    let late = cli(
+        &home,
+        ACTION,
+        json!({"project":PROJECT,"place":hastings(),"expected_revision":revision}),
+        Some(TOKEN),
+    );
+    assert_eq!(late["data"]["outcome"], "conflict", "{late}");
+    let at = data["revision"].as_str().unwrap();
+    let same = order(json!(["docs", "scope"]), at, Some(TOKEN));
+    assert_eq!(same["data"]["outcome"], "unchanged", "{same}");
+    let reset = order(Value::Null, at, Some(TOKEN));
+    assert_eq!(reset["data"]["outcome"], "reset", "{reset}");
+    assert_eq!(
+        reset["data"]["chain"],
+        json!(["packet", "agent", "scope", "docs"])
+    );
+    assert!(project_of(&cli(&home, "central.world", json!({}), None))
+        .get("world_chain_order")
+        .is_none());
+
+    // Your own world keeps it on its root world record, which the act advances.
+    let declared = cli(
+        &home,
+        "central.world-relations.save",
+        json!({"scope":"root","record":{"schema":"central.world-relations/v1","ref":"control:root","revision":"w1","parent":null}}),
+        None,
+    );
+    assert_eq!(declared["ok"], true, "{declared}");
+    let root = cli(
+        &home,
+        ORDER,
+        json!({"order":["docs","scope"],"expected_revision":"w1"}),
+        Some(TOKEN),
+    );
+    assert_eq!(root["data"]["outcome"], "ordered", "{root}");
+    assert_eq!(root["data"]["revision"], "w2");
+    let record = cli(
+        &home,
+        "central.world-relations.read",
+        json!({"scope":"root","ref":"control:root"}),
+        None,
+    );
+    assert_eq!(
+        record["data"]["record"]["chain_order"],
+        json!(["docs", "scope"]),
+        "{record}"
+    );
+    let stale = cli(
+        &home,
+        ORDER,
+        json!({"order":null,"expected_revision":"w1"}),
+        Some(TOKEN),
+    );
+    assert_eq!(stale["data"]["outcome"], "conflict", "{stale}");
+}
