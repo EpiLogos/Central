@@ -21,6 +21,36 @@ impl Drop for SourceLock {
     }
 }
 pub(crate) fn lock(root: &Path, name: &str) -> io::Result<SourceLock> {
+    let f = lock_file(root, name)?;
+    if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(SourceLock(f))
+}
+/// [`lock`], waiting no longer than `wait`: `Ok(None)` while another holder
+/// keeps it past then, so a caller that must go on can say it was held.
+pub(crate) fn lock_within(
+    root: &Path,
+    name: &str,
+    wait: std::time::Duration,
+) -> io::Result<Option<SourceLock>> {
+    let f = lock_file(root, name)?;
+    let until = std::time::Instant::now() + wait;
+    loop {
+        if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(Some(SourceLock(f)));
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::EWOULDBLOCK) {
+            return Err(error);
+        }
+        if std::time::Instant::now() >= until {
+            return Ok(None);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+}
+fn lock_file(root: &Path, name: &str) -> io::Result<File> {
     let dir = root.join(".central");
     match fs::create_dir(&dir) {
         Ok(()) => {}
@@ -28,18 +58,14 @@ pub(crate) fn lock(root: &Path, name: &str) -> io::Result<SourceLock> {
         Err(e) => return Err(e),
     };
     reject_symlink_components(root, Path::new(".central"))?;
-    let f = OpenOptions::new()
+    OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
-        .open(dir.join(name))?;
-    if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(SourceLock(f))
+        .open(dir.join(name))
 }
 pub(crate) fn read(root: &Path, relative: &str) -> io::Result<String> {
     let f = crate::file_mutation::open_native_file(root, relative)?;

@@ -8,15 +8,89 @@ use std::{
     io,
 };
 pub(crate) fn refresh(scope: &Scope, embeddings: bool) -> io::Result<Value> {
+    let entries = entries(scope)?;
+    let allowed = sources_of(&entries);
+    refresh_from(
+        scope,
+        embeddings,
+        allowed,
+        entries.into_iter().map(walked_entry),
+    )
+}
+
+/// What a refresh reads of a scope's tree: its entries, each with its
+/// revision and its description. These are the reads a stalled provider
+/// blocks, so an external scope's walk is made whole, apart from the bkmr
+/// maintenance that follows it ([`refresh_walked`]): at most
+/// `INDEXED_TEXT_BYTES` of text is held for each entry.
+pub(crate) struct Walk {
+    allowed: BTreeSet<String>,
+    walked: Vec<Walked>,
+}
+
+pub(crate) struct Walked {
+    entry: Entry,
+    generated: String,
+    extent: Extent,
+}
+
+fn sources_of(entries: &[Entry]) -> BTreeSet<String> {
+    entries
+        .iter()
+        .map(|e| e.source.source_ref.clone())
+        .collect()
+}
+
+fn walked_entry(entry: Entry) -> io::Result<Walked> {
+    let entry = with_revision(entry)?;
+    let (generated, extent) = describe(&entry);
+    Ok(Walked {
+        entry,
+        generated,
+        extent,
+    })
+}
+
+/// The walk of a scope's tree, counting each answer it has: the listing, then
+/// each entry read. A caller waiting on it from another thread reads the
+/// count to tell a walk that is still answering from one that has stopped.
+pub(crate) fn walk(scope: &Scope, answered: &std::sync::atomic::AtomicUsize) -> io::Result<Walk> {
+    use std::sync::atomic::Ordering;
+    let entries = entries(scope)?;
+    answered.fetch_add(1, Ordering::Relaxed);
+    let allowed = sources_of(&entries);
+    let walked = entries
+        .into_iter()
+        .map(|entry| {
+            let walked = walked_entry(entry);
+            answered.fetch_add(1, Ordering::Relaxed);
+            walked
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+    Ok(Walk { allowed, walked })
+}
+
+/// The bkmr maintenance of a walk already made: nothing more is read of the
+/// scope's tree.
+pub(crate) fn refresh_walked(scope: &Scope, embeddings: bool, walk: Walk) -> io::Result<Value> {
+    refresh_from(
+        scope,
+        embeddings,
+        walk.allowed,
+        walk.walked.into_iter().map(Ok),
+    )
+}
+
+fn refresh_from(
+    scope: &Scope,
+    embeddings: bool,
+    allowed: BTreeSet<String>,
+    walked: impl Iterator<Item = io::Result<Walked>>,
+) -> io::Result<Value> {
     let backend = Backend::for_scope(scope);
     backend.prepare()?;
     let mut index = scope.index()?;
     let mut records = backend.records()?;
-    let entries = entries(scope)?;
-    let allowed: BTreeSet<_> = entries
-        .iter()
-        .map(|e| e.source.source_ref.as_str())
-        .collect();
     let mut changes = Vec::new();
     let mut diagnostics = Vec::new();
     // Sources whose text the description holds only the start of. Named, not
@@ -53,11 +127,14 @@ pub(crate) fn refresh(scope: &Scope, embeddings: bool) -> io::Result<Value> {
     }
     let mut added_without_embed = 0usize;
     let mut checkpointed = 0usize;
-    for entry in entries {
-        let entry = with_revision(entry)?;
+    for walked in walked {
+        let Walked {
+            entry,
+            mut generated,
+            extent,
+        } = walked?;
         let reference = &entry.source.source_ref;
         let url = uri(&entry.path);
-        let (mut generated, extent) = describe(&entry);
         if extent.total.is_some_and(|total| total > extent.indexed) {
             truncated.push(json!({
                 "source_ref": reference,
