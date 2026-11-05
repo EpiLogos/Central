@@ -76,12 +76,14 @@ pub const PROJECT_AUTHENTICATED_ACTIONS: &[&str] = &[
 /// Actions a host authenticates against the person's grant itself, never through `authenticate` (which refuses them, as no Action of
 /// Central's), each at the project the Run's Factory state stands in: the O:I kernel's close of a Factory Run (its `factory.rs`
 /// RUN_CLOSE_ACTION), its retry of a unit, Factory's own `retry` attempt operation (Factory's admission names it
-/// `factory.attempt.retry`), and its request that a unit's current attempt stop, Factory's own `request-cancellation`
-/// (`factory.attempt.request-cancellation`). A grant extended to a project holds them there, so the host's own check finds them.
+/// `factory.attempt.retry`), its request that a unit's current attempt stop, Factory's own `request-cancellation`
+/// (`factory.attempt.request-cancellation`), and its launch of a unit, Factory's own `start-serial` assembled from the owners'
+/// readings (`factory.attempt.launch`). A grant extended to a project holds them there, so the host's own check finds them.
 pub const HOST_AUTHENTICATED_ACTIONS: &[&str] = &[
     "factory.run.close",
     "factory.attempt.retry",
     "factory.attempt.request-cancellation",
+    "factory.attempt.launch",
 ];
 
 /// Returns the exact authored source and relation basis. Unrelated relation

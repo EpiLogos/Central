@@ -947,9 +947,24 @@ pub fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
         }
         original.validate()?;
     }
-    Ok(
-        json!({"schema":SCHEMA,"operation":op,"result":data,"automatic_agent_or_model_invocation":false}),
-    )
+    let mut envelope = json!({"schema":SCHEMA,"operation":op,"result":data,"automatic_agent_or_model_invocation":false});
+    disclose_unreachable(&mut envelope, &unreachable);
+    Ok(envelope)
+}
+
+/// Any answer read across the World while a participating external scope did
+/// not open names that scope beside its result, so a search or an inspection
+/// that could not include it never reads as the whole World.
+fn disclose_unreachable(envelope: &mut Value, unreachable: &[UnreachableScope]) {
+    if unreachable.is_empty() {
+        return;
+    }
+    envelope["unreachable"] = unreachable
+        .iter()
+        .map(
+            |scope| json!({"project": scope.project, "root": scope.root, "message": scope.message}),
+        )
+        .collect();
 }
 /// `refresh` for every participating scope: the world's upkeep as one call.
 /// Each scope is refreshed by the same locked, validated `refresh` a single
@@ -1094,7 +1109,7 @@ fn execute_resolve_batch(root: &Path, input: &Value) -> io::Result<Value> {
 
     let read_root = ReadRoot::capture(root)?;
     let root = root.canonicalize()?;
-    let all = scopes(&root)?;
+    let (all, unreachable) = participating(&root)?;
     selected(&all, input)?;
     let read_roots = all
         .iter()
@@ -1222,12 +1237,14 @@ fn execute_resolve_batch(root: &Path, input: &Value) -> io::Result<Value> {
         ));
     }
     read_root.validate()?;
-    Ok(json!({
+    let mut envelope = json!({
         "schema": SCHEMA,
         "operation": "resolve-batch",
         "result": {"readings": readings},
         "automatic_agent_or_model_invocation": false
-    }))
+    });
+    disclose_unreachable(&mut envelope, &unreachable);
+    Ok(envelope)
 }
 
 /// One Source's refusal inside a batch, in the code and details a single
@@ -2717,6 +2734,14 @@ mod external_scope_tests {
         // Asked for by name, it says why rather than being an unknown map.
         let refused = execute(&world.root, "inspect", &json!({"project":"legacy"})).unwrap_err();
         assert_eq!(refused.to_string(), message);
+        // Read across the World while it does not open, every answer names it
+        // beside the result (round 21): a search that could not include it
+        // never reads as the whole World.
+        let answered = execute(&world.root, "search", &json!({"query":"anything"})).unwrap();
+        assert_eq!(
+            answered["unreachable"],
+            json!([{"project": "legacy", "root": stalled.to_str().unwrap(), "message": message}])
+        );
 
         // The provider answers: the abandoned open returns, and the root is
         // reachable again.
@@ -2727,6 +2752,9 @@ mod external_scope_tests {
             let (all, unreachable) = participating(&world.root).unwrap();
             if unreachable.is_empty() {
                 assert!(all.iter().any(|scope| scope.world == "project:legacy"));
+                let answered =
+                    execute(&world.root, "search", &json!({"query":"anything"})).unwrap();
+                assert!(answered.get("unreachable").is_none(), "{answered}");
                 break;
             }
             assert!(
