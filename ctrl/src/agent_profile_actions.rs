@@ -20,6 +20,11 @@ pub const AGENT_PROFILE_SAVE_ACTION: &str = "agent-profile.save";
 pub const AGENT_PROFILE_REMOVE_ACTION: &str = "agent-profile.remove";
 pub const AGENT_PROFILE_PROPOSE_ACTION: &str = "agent-profile.propose";
 pub const AGENT_PROFILE_EXPRESS_ACTION: &str = "agent-profile.express";
+pub const AGENT_PROFILE_CHAIN_ORDER_ACTION: &str = "agent-profile.chain-order";
+pub const AGENT_PROFILE_CHAIN_REPLACE_ACTION: &str = "agent-profile.chain-replace";
+pub const AGENT_PROFILE_RENAME_ACTION: &str = "agent-profile.rename";
+/// The longest name an Agent takes on its chain.
+const MAX_AGENT_NAME_CHARS: usize = 120;
 
 fn input(name: &str, input_type: &str, required: bool) -> ActionInputDefinition {
     ActionInputDefinition {
@@ -407,6 +412,229 @@ fn remove_action(
             )
         })
         .unwrap_or_else(|error| store_failure(AGENT_PROFILE_REMOVE_ACTION, error))
+}
+
+// ---- The agent's chain (O-I #743) ------------------------------------------------
+//
+// The chain is the profile Central keeps for the agent (O-I manual §19.4): what the agent
+// carries stands before its Agent, in the order the profile keeps it, so the acts on that
+// chain are the profile's. Its order is Central's (DLW build ruling 2026-11-05, as the
+// shell's chain law names it: `agent-chain order`); a SkillSet hot-swapped for another
+// stands where the old one stood (the head's Hot-swap, `chain.device.replace`); and
+// Rename on the Agent's head names the Agent (`chain.device.rename`). Each is one
+// compare-and-swap save of the profile at its next revision, so it answers a revision
+// conflict instead of writing over a change it did not see. Acceptance is bound to a
+// revision and its content, so a profile accepted before the act needs accepting again.
+
+/// The revision after `revision`: its trailing number counted on, else `-1` appended
+/// (the rule the shell's other profile edits keep, O-I kernel `agent_definition.rs`).
+pub(crate) fn next_profile_revision(revision: &str) -> String {
+    let digits = revision.len()
+        - revision
+            .trim_end_matches(|c: char| c.is_ascii_digit())
+            .len();
+    if digits > 0 {
+        let (head, tail) = revision.split_at(revision.len() - digits);
+        if let Ok(number) = tail.parse::<u64>() {
+            return format!("{head}{}", number + 1);
+        }
+    }
+    format!("{revision}-1")
+}
+
+fn invalid_input(action: &str, message: impl Into<String>) -> ActionResult {
+    ActionResult::failure(Some(action), ResultStatus::InvalidInput, message, None)
+}
+
+/// Read the profile at the revision the caller saw, let `edit` change it (`Ok(false)`: it
+/// already stands so), and save it at the next revision under compare-and-swap.
+fn chain_edit(
+    action: &str,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+    edit: impl FnOnce(&mut AgentProfile) -> Result<bool, String>,
+) -> ActionResult {
+    let store = match resolve_store(action, input, context) {
+        Ok(store) => store,
+        Err(result) => return result,
+    };
+    let profile_ref = match required_text(input, "profile_ref", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let expected_revision = match required_text(input, "expected_revision", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let reading = match store.read(&profile_ref) {
+        Ok(reading) => reading,
+        Err(error) => return store_failure(action, error),
+    };
+    let current = reading.profile;
+    if current.revision != expected_revision {
+        return store_failure(
+            action,
+            AgentProfileStoreError::RevisionConflict {
+                profile_ref,
+                expected: expected_revision,
+                actual: current.revision,
+            },
+        );
+    }
+    let mut profile = current.clone();
+    match edit(&mut profile) {
+        Err(message) => return invalid_input(action, message),
+        Ok(false) => {
+            return ActionResult::success(
+                action,
+                json!({
+                    "profile_ref": profile_ref,
+                    "state": "unchanged",
+                    "revision": current.revision,
+                    "source_path": reading.source_path,
+                }),
+            );
+        }
+        Ok(true) => {}
+    }
+    profile.revision = next_profile_revision(&current.revision);
+    if let Err(error) = validate_ingested_profile(&profile) {
+        return invalid_input(action, error);
+    }
+    store
+        .save(&profile, Some(&expected_revision))
+        .map(|receipt| {
+            let mut data = to_value(receipt).expect("AgentProfile receipt serializes");
+            data["state"] = json!("saved");
+            data["chain"] = json!({
+                "skill_set_refs": profile.skill_set_refs,
+                "name": profile.name,
+            });
+            ActionResult::success(action, data)
+        })
+        .unwrap_or_else(|error| store_failure(action, error))
+}
+
+fn ref_array(input: &Value, field: &str, action: &str) -> Result<Vec<String>, ActionResult> {
+    let Some(values) = input.get(field).and_then(Value::as_array) else {
+        return Err(invalid_input(action, format!("{action} requires {field}.")));
+    };
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| invalid_input(action, format!("{field} holds only refs.")))
+        })
+        .collect()
+}
+
+/// `agent-profile.chain-order`: a new order of the SkillSets the agent carries before its
+/// Agent. The new order holds exactly the SkillSets the profile carries; adding, dropping or
+/// swapping one is another act.
+fn chain_order_action(
+    _registry: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    let action = AGENT_PROFILE_CHAIN_ORDER_ACTION;
+    let order = match ref_array(input, "skill_set_refs", action) {
+        Ok(order) => order,
+        Err(result) => return result,
+    };
+    chain_edit(action, input, context, |profile| {
+        let mut given = order.clone();
+        let mut carried = profile.skill_set_refs.clone();
+        given.sort();
+        carried.sort();
+        if given != carried {
+            return Err(format!(
+                "A new order holds the SkillSets the agent carries, each once: it carries {}, and the order given holds {}.",
+                list_or_none(&profile.skill_set_refs),
+                list_or_none(&order)
+            ));
+        }
+        if profile.skill_set_refs == order {
+            return Ok(false);
+        }
+        profile.skill_set_refs = order;
+        Ok(true)
+    })
+}
+
+/// `agent-profile.chain-replace`: one SkillSet the agent carries hot-swapped for another, which
+/// stands where the old one stood.
+fn chain_replace_action(
+    _registry: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    let action = AGENT_PROFILE_CHAIN_REPLACE_ACTION;
+    let replace = match required_text(input, "replace", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let with = match required_text(input, "with", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    chain_edit(action, input, context, |profile| {
+        if replace == with {
+            return Ok(false);
+        }
+        let Some(at) = profile
+            .skill_set_refs
+            .iter()
+            .position(|carried| *carried == replace)
+        else {
+            return Err(format!(
+                "The agent carries no SkillSet {replace}: it carries {}.",
+                list_or_none(&profile.skill_set_refs)
+            ));
+        };
+        if profile.skill_set_refs.contains(&with) {
+            return Err(format!(
+                "The agent already carries {with}; a SkillSet stands once on its chain."
+            ));
+        }
+        profile.skill_set_refs[at] = with;
+        Ok(true)
+    })
+}
+
+/// `agent-profile.rename`: the Agent's name, as Rename on its head gives it.
+fn rename_action(
+    _registry: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    let action = AGENT_PROFILE_RENAME_ACTION;
+    let name = match required_text(input, "name", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    if name.chars().count() > MAX_AGENT_NAME_CHARS || name.chars().any(char::is_control) {
+        return invalid_input(
+            action,
+            format!("A name is one line of at most {MAX_AGENT_NAME_CHARS} characters."),
+        );
+    }
+    chain_edit(action, input, context, |profile| {
+        if profile.name.as_deref() == Some(name.as_str()) {
+            return Ok(false);
+        }
+        profile.name = Some(name);
+        Ok(true)
+    })
+}
+
+fn list_or_none(refs: &[String]) -> String {
+    if refs.is_empty() {
+        "none".into()
+    } else {
+        refs.join(", ")
+    }
 }
 
 /// Map store failures for the intent authoring boundary. Every failed state is
@@ -847,6 +1075,54 @@ pub fn register_agent_profile_actions(registry: &mut ActionRegistry) {
         )
         .expect("AgentProfile Action ids are valid");
 
+    let chain_inputs = |extra: Vec<ActionInputDefinition>| {
+        let mut inputs = vec![
+            scope_input(),
+            input("project", "string", false),
+            input("profile_ref", "string", true),
+            input("expected_revision", "string", true),
+        ];
+        inputs.extend(extra);
+        inputs
+    };
+    for (id, title, description, extra, handler) in [
+        (
+            AGENT_PROFILE_CHAIN_ORDER_ACTION,
+            "Order an Agent's Chain",
+            "Write a new order of the SkillSets an AgentProfile carries before its Agent (the agent's chain, O-I manual §19.4), at the profile's next revision under compare-and-swap. The order holds exactly the SkillSets carried.",
+            vec![input("skill_set_refs", "array", true)],
+            chain_order_action as crate::action::ActionHandler,
+        ),
+        (
+            AGENT_PROFILE_CHAIN_REPLACE_ACTION,
+            "Hot-swap a SkillSet on an Agent's Chain",
+            "Replace one SkillSet an AgentProfile carries with another, in the same place on the agent's chain, at the profile's next revision under compare-and-swap.",
+            vec![input("replace", "string", true), input("with", "string", true)],
+            chain_replace_action,
+        ),
+        (
+            AGENT_PROFILE_RENAME_ACTION,
+            "Rename an Agent",
+            "Give an AgentProfile's Agent its display name, as Rename on the Agent's head does, at the profile's next revision under compare-and-swap.",
+            vec![input("name", "string", true)],
+            rename_action,
+        ),
+    ] {
+        registry
+            .register(
+                descriptor(
+                    id,
+                    title,
+                    description,
+                    MutationClass::LocallyMutating,
+                    "agent-profile-write-receipt",
+                    chain_inputs(extra),
+                ),
+                handler,
+            )
+            .expect("AgentProfile Action ids are valid");
+    }
+
     let mut propose_inputs = vec![scope_input(), input("project", "string", false)];
     for (name, required) in [
         ("profile_ref", true),
@@ -1095,6 +1371,171 @@ mod tests {
             false
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_agent_s_chain_is_ordered_hot_swapped_and_named_through_its_profile() {
+        let root = fixture_root();
+        let registry = registry();
+        let mut options = None;
+        let mut connectors = None;
+        let mut connector_context = None;
+        let context = context(&root, &mut options, &mut connectors, &mut connector_context);
+        let mut profile = personal_profile("r1");
+        profile["skill_set_refs"] = json!(["skill-set:a", "skill-set:b", "skill-set:c"]);
+        let created = registry.execute(
+            AGENT_PROFILE_SAVE_ACTION,
+            &json!({"scope": "root", "profile": profile}),
+            &context,
+        );
+        assert!(created.ok, "{created:?}");
+        let act = |action: &str, revision: &str, extra: Value| {
+            let mut input = json!({"scope": "root", "profile_ref": "agent-profile:guardian", "expected_revision": revision});
+            for (key, value) in extra.as_object().unwrap() {
+                input[key] = value.clone();
+            }
+            registry.execute(action, &input, &context)
+        };
+        let said = |result: &ActionResult| {
+            result
+                .error
+                .as_ref()
+                .map(|error| error.message.clone())
+                .unwrap_or_default()
+        };
+        let carried = || {
+            let read = registry.execute(
+                AGENT_PROFILE_READ_ACTION,
+                &json!({"scope": "root", "profile_ref": "agent-profile:guardian"}),
+                &context,
+            );
+            let profile = read.data.unwrap()["profile"].clone();
+            (
+                profile["revision"].as_str().unwrap().to_owned(),
+                profile["skill_set_refs"].clone(),
+                profile["name"].clone(),
+            )
+        };
+
+        // A new order of what it carries is saved at the next revision.
+        let ordered = act(
+            AGENT_PROFILE_CHAIN_ORDER_ACTION,
+            "r1",
+            json!({"skill_set_refs": ["skill-set:c", "skill-set:a", "skill-set:b"]}),
+        );
+        assert!(ordered.ok, "{ordered:?}");
+        assert_eq!(ordered.data.as_ref().unwrap()["state"], "saved");
+        assert_eq!(ordered.data.as_ref().unwrap()["previous_revision"], "r1");
+        assert_eq!(
+            carried(),
+            (
+                "r2".into(),
+                json!(["skill-set:c", "skill-set:a", "skill-set:b"]),
+                Value::Null
+            )
+        );
+        // The same order again writes nothing.
+        let again = act(
+            AGENT_PROFILE_CHAIN_ORDER_ACTION,
+            "r2",
+            json!({"skill_set_refs": ["skill-set:c", "skill-set:a", "skill-set:b"]}),
+        );
+        assert_eq!(
+            again.data.as_ref().unwrap()["state"],
+            "unchanged",
+            "{again:?}"
+        );
+        // An order that drops, adds or repeats a SkillSet is another act, and is refused in words.
+        for order in [
+            json!(["skill-set:c", "skill-set:a"]),
+            json!(["skill-set:c", "skill-set:a", "skill-set:d"]),
+            json!(["skill-set:c", "skill-set:c", "skill-set:a"]),
+        ] {
+            let refused = act(
+                AGENT_PROFILE_CHAIN_ORDER_ACTION,
+                "r2",
+                json!({"skill_set_refs": order}),
+            );
+            assert!(!refused.ok, "{refused:?}");
+            assert!(
+                said(&refused).contains("holds the SkillSets the agent carries"),
+                "{refused:?}"
+            );
+        }
+        // A revision the caller did not see is a conflict, and nothing is written.
+        let stale = act(
+            AGENT_PROFILE_CHAIN_ORDER_ACTION,
+            "r1",
+            json!({"skill_set_refs": ["skill-set:a", "skill-set:b", "skill-set:c"]}),
+        );
+        assert!(
+            !stale.ok && said(&stale).contains("revision conflict"),
+            "{stale:?}"
+        );
+        assert_eq!(carried().0, "r2");
+
+        // Hot-swap puts the new SkillSet where the old one stood.
+        let swapped = act(
+            AGENT_PROFILE_CHAIN_REPLACE_ACTION,
+            "r2",
+            json!({"replace": "skill-set:a", "with": "skill-set:d"}),
+        );
+        assert!(swapped.ok, "{swapped:?}");
+        assert_eq!(
+            carried(),
+            (
+                "r3".into(),
+                json!(["skill-set:c", "skill-set:d", "skill-set:b"]),
+                Value::Null
+            )
+        );
+        let not_carried = act(
+            AGENT_PROFILE_CHAIN_REPLACE_ACTION,
+            "r3",
+            json!({"replace": "skill-set:a", "with": "skill-set:e"}),
+        );
+        assert!(
+            !not_carried.ok && said(&not_carried).contains("carries no SkillSet skill-set:a"),
+            "{not_carried:?}"
+        );
+        let twice = act(
+            AGENT_PROFILE_CHAIN_REPLACE_ACTION,
+            "r3",
+            json!({"replace": "skill-set:c", "with": "skill-set:b"}),
+        );
+        assert!(
+            !twice.ok && said(&twice).contains("already carries skill-set:b"),
+            "{twice:?}"
+        );
+
+        // Rename names the Agent; the same name again writes nothing; a name is one line.
+        let named = act(AGENT_PROFILE_RENAME_ACTION, "r3", json!({"name": "Keeper"}));
+        assert!(named.ok, "{named:?}");
+        assert_eq!(
+            carried(),
+            (
+                "r4".into(),
+                json!(["skill-set:c", "skill-set:d", "skill-set:b"]),
+                json!("Keeper")
+            )
+        );
+        assert_eq!(
+            act(AGENT_PROFILE_RENAME_ACTION, "r4", json!({"name": "Keeper"}))
+                .data
+                .unwrap()["state"],
+            "unchanged"
+        );
+        assert!(
+            !act(
+                AGENT_PROFILE_RENAME_ACTION,
+                "r4",
+                json!({"name": "Two\nlines"})
+            )
+            .ok
+        );
+        assert_eq!(next_profile_revision("p9"), "p10");
+        assert_eq!(next_profile_revision("draft"), "draft-1");
+        fs::remove_dir_all(root).ok();
     }
 
     #[test]

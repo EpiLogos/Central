@@ -547,6 +547,12 @@ pub struct AgentSetRecord {
     /// record written before this field existed. A relation, not a grant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub join: Option<AgentSetJoin>,
+    /// The set's type: the pattern by which its agents answer together, named by the agent types' own id (O-I manual §19.15
+    /// "its type, which sets how its agents answer together", §25.6: `quorum`, `relay`, `drive`, …). Absent means none is
+    /// authored, the state of every record written before this field existed. A relation, not a grant, as the join is: it
+    /// says how the set is meant to work, and confers no authority, capability or selection on its members.
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    pub set_type: Option<String>,
     /// Provenance for a corrective revision. Absent on original authorship.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub correction: Option<AgentSetCorrection>,
@@ -566,6 +572,7 @@ impl AgentSetRecord {
             members: Vec::new(),
             orchestrator_agent_ref: None,
             join: None,
+            set_type: None,
             correction: None,
             proposal: None,
         }
@@ -609,6 +616,9 @@ impl AgentSetRecord {
         if let Some(orchestrator) = self.orchestrator_agent_ref.as_deref() {
             validate_relation_agent_ref(orchestrator)?;
         }
+        if let Some(set_type) = self.set_type.as_deref() {
+            validate_set_type(set_type)?;
+        }
         if let Some(correction) = self.correction.as_ref() {
             correction.validate()?;
         }
@@ -617,6 +627,25 @@ impl AgentSetRecord {
         }
         Ok(())
     }
+}
+
+/// The most characters a set's type may carry: a pattern's id is one short word.
+pub const MAX_AGENT_SET_TYPE_CHARS: usize = 64;
+
+/// A set's type is a pattern's id as the agent types name it: a lowercase word, letters first, then letters, digits or `-`.
+/// Central keeps the name and does not hold the patterns' list, which is the agent types' own (the face rig's agency
+/// ontology); an unknown id is the reader's to name dark.
+fn validate_set_type(value: &str) -> Result<(), WorldError> {
+    let mut chars = value.chars();
+    let well_formed = value.len() <= MAX_AGENT_SET_TYPE_CHARS
+        && chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if !well_formed {
+        return Err(WorldError::InvalidRef(format!(
+            "a set's type is a pattern's id: a lowercase word of at most {MAX_AGENT_SET_TYPE_CHARS} letters, digits or `-`, letters first; got {value:?}"
+        )));
+    }
+    Ok(())
 }
 
 /// Agent refs inside Central relation records are slash-form (`agent/<id>`),
@@ -663,6 +692,9 @@ pub struct ResolvedAgentSet {
     /// The set's authored join, carried through as the orchestrator is. Absent when none is authored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub join: Option<AgentSetJoin>,
+    /// The set's authored type, carried through as the join is. Absent when none is authored.
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    pub set_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -707,6 +739,7 @@ impl AgentSetRegistry {
             nested_sets: nested_sets.into_iter().collect(),
             orchestrator_agent_ref: root.orchestrator_agent_ref.clone(),
             join: root.join,
+            set_type: root.set_type.clone(),
         })
     }
 
