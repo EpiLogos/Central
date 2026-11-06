@@ -24,6 +24,7 @@ pub const AGENT_PROFILE_CHAIN_ORDER_ACTION: &str = "agent-profile.chain-order";
 pub const AGENT_PROFILE_CHAIN_REPLACE_ACTION: &str = "agent-profile.chain-replace";
 pub const AGENT_PROFILE_RENAME_ACTION: &str = "agent-profile.rename";
 pub const AGENT_PROFILE_PIN_SOURCE_ACTION: &str = "agent-profile.pin-source";
+pub const AGENT_PROFILE_UNPIN_SOURCE_ACTION: &str = "agent-profile.unpin-source";
 /// The longest name an Agent takes on its chain.
 const MAX_AGENT_NAME_CHARS: usize = 120;
 
@@ -645,6 +646,32 @@ fn pin_source_action(
         Ok(value) => value,
         Err(result) => return result,
     };
+    // Central keeps pins only on sources inside its own ground (DLW build ruling 2026-11-06): a path that climbs out of it or stands
+    // absolute is Central's bound, refused in words that say so before anything is read.
+    if let Some(path) = reference
+        .strip_prefix("central:source:")
+        .and_then(|rest| rest.rsplit_once(':'))
+        .map(|(_, path)| path)
+        .filter(|path| {
+            let path = std::path::Path::new(path);
+            path.is_absolute()
+                || path.components().any(|component| {
+                    matches!(
+                        component,
+                        std::path::Component::ParentDir
+                            | std::path::Component::RootDir
+                            | std::path::Component::Prefix(_)
+                    )
+                })
+        })
+    {
+        return invalid_input(
+            action,
+            format!(
+                "{path} stands outside Central's ground: Central keeps pins only on sources inside it, so it is not pinned."
+            ),
+        );
+    }
     let store = match resolve_store(action, input, context) {
         Ok(store) => store,
         Err(result) => return result,
@@ -705,6 +732,33 @@ fn pin_source_action(
             ));
         }
         profile.source_pins.push(pin);
+        Ok(true)
+    })
+}
+
+/// `agent-profile.unpin-source`: one pinned source taken off the agent's Sources (O-I manual §19.9 Pinned), at the profile's next
+/// revision under compare-and-swap. Only the pin leaves the profile; the source itself is never touched.
+fn unpin_source_action(
+    _registry: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    let action = AGENT_PROFILE_UNPIN_SOURCE_ACTION;
+    let reference = match required_text(input, "reference", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    chain_edit(action, input, context, |profile| {
+        let Some(at) = profile
+            .source_pins
+            .iter()
+            .position(|pinned| pinned.reference == reference)
+        else {
+            return Err(format!(
+                "{reference} is not pinned on this agent's Sources, so there is nothing to unpin."
+            ));
+        };
+        profile.source_pins.remove(at);
         Ok(true)
     })
 }
@@ -1194,6 +1248,13 @@ pub fn register_agent_profile_actions(registry: &mut ActionRegistry) {
             vec![input("reference", "string", true)],
             pin_source_action,
         ),
+        (
+            AGENT_PROFILE_UNPIN_SOURCE_ACTION,
+            "Unpin a Source from an Agent",
+            "Take one pinned source off the agent's Sources (O-I manual §19.9 Pinned), at the profile's next revision under compare-and-swap. Only the pin leaves the profile; the source is never touched.",
+            vec![input("reference", "string", true)],
+            unpin_source_action,
+        ),
     ] {
         registry
             .register(
@@ -1592,6 +1653,97 @@ mod tests {
             said(&refused).contains("each source is pinned once"),
             "{refused:?}"
         );
+    }
+
+    #[test]
+    fn a_pin_is_unpinned_at_its_revision_and_one_outside_central_is_refused() {
+        // O-I manual §19.9 Pinned, BD round 27 (DLW build ruling 2026-11-06): the pin row's Unpin drops one source from the agent's
+        // profile at the revision the caller read; a source outside Central's ground is Central's bound, refused in its own words.
+        let root = fixture_root();
+        let registry = registry();
+        let mut options = None;
+        let mut connectors = None;
+        let mut connector_context = None;
+        let context = context(&root, &mut options, &mut connectors, &mut connector_context);
+        let created = registry.execute(
+            AGENT_PROFILE_SAVE_ACTION,
+            &json!({"scope": "root", "profile": personal_profile("r1")}),
+            &context,
+        );
+        assert!(created.ok, "{created:?}");
+        fs::create_dir_all(root.join("Control/self/agents/guardian")).unwrap();
+        for name in ["one.md", "two.md"] {
+            fs::write(
+                root.join(format!("Control/self/agents/guardian/{name}")),
+                format!("{name} is read first."),
+            )
+            .unwrap();
+        }
+        let reference =
+            |name: &str| format!("central:source:control:root:Control/self/agents/guardian/{name}");
+        let act = |action: &str, revision: &str, reference: &str| {
+            registry.execute(
+                action,
+                &json!({"scope": "root", "profile_ref": "agent-profile:guardian",
+                    "expected_revision": revision, "reference": reference}),
+                &context,
+            )
+        };
+        let said = |result: &ActionResult| {
+            result
+                .error
+                .as_ref()
+                .map(|error| error.message.clone())
+                .unwrap_or_default()
+        };
+        let pinned = || {
+            let read = registry.execute(
+                AGENT_PROFILE_READ_ACTION,
+                &json!({"scope": "root", "profile_ref": "agent-profile:guardian"}),
+                &context,
+            );
+            let profile = read.data.unwrap()["profile"].clone();
+            let references: Vec<String> = profile["source_pins"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|pin| pin["reference"].as_str().map(str::to_owned))
+                .collect();
+            (profile["revision"].as_str().unwrap().to_owned(), references)
+        };
+        assert!(act("agent-profile.pin-source", "r1", &reference("one.md")).ok);
+        assert!(act("agent-profile.pin-source", "r2", &reference("two.md")).ok);
+        assert_eq!(
+            pinned(),
+            ("r3".into(), vec![reference("one.md"), reference("two.md")])
+        );
+
+        // Unpin: the one source leaves the profile at its next revision; the other stays, and the file is untouched.
+        let unpinned = act("agent-profile.unpin-source", "r3", &reference("one.md"));
+        assert!(unpinned.ok, "{unpinned:?}");
+        assert_eq!(unpinned.data.as_ref().unwrap()["state"], "saved");
+        assert_eq!(pinned(), ("r4".into(), vec![reference("two.md")]));
+        assert!(root.join("Control/self/agents/guardian/one.md").is_file());
+        // Refused in words: a source the profile does not pin, and a revision the caller did not see.
+        let absent = act("agent-profile.unpin-source", "r4", &reference("one.md"));
+        assert!(!absent.ok, "{absent:?}");
+        assert!(said(&absent).contains("is not pinned"), "{absent:?}");
+        let stale = act("agent-profile.unpin-source", "r3", &reference("two.md"));
+        assert!(!stale.ok, "{stale:?}");
+        assert_eq!(pinned(), ("r4".into(), vec![reference("two.md")]));
+
+        // A source outside Central's ground is Central's bound: refused in words that say so, never as a malformed reference.
+        let outside = act(
+            "agent-profile.pin-source",
+            "r4",
+            "central:source:control:root:../Elsewhere/notes.md",
+        );
+        assert!(!outside.ok, "{outside:?}");
+        assert!(
+            said(&outside).contains("outside Central's ground"),
+            "{outside:?}"
+        );
+        assert_eq!(pinned().0, "r4");
     }
 
     #[test]
