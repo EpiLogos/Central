@@ -146,6 +146,24 @@ fn reviewed_self_definition(definition: &AgentSelfDefinition, world_root: &Path)
         resolved,
     )
 }
+/// One pinned source as the review reads it (O-I manual §19.9 Pinned, "each at its revision"): the revision it was pinned at, and
+/// whether its source still stands there; one that has moved names the revision it stands at now. No text: the agent reads a
+/// pinned source on demand, so the review does not copy it.
+fn reviewed_source_pin(pin: &AgentSelfSourcePin, world_root: &Path) -> Value {
+    match resolve_self_source_pin(pin, world_root) {
+        Ok(_) => {
+            json!({"reference": pin.reference, "content_digest": pin.content_digest, "resolved": true, "moved": false})
+        }
+        Err(AgentProfileError::SelfSourceDigestMismatch { actual, .. }) => json!({
+            "reference": pin.reference, "content_digest": pin.content_digest, "resolved": false, "moved": true,
+            "current_digest": actual, "reason": "self-source-digest-mismatch",
+        }),
+        Err(error) => json!({
+            "reference": pin.reference, "content_digest": pin.content_digest, "resolved": false, "moved": false,
+            "reason": self_source_reason(&error),
+        }),
+    }
+}
 fn review(store: &AgentProfileStore, scope: &Scope, profile_ref: &str) -> io::Result<Value> {
     let (reading, content_digest) = profile_source(store, profile_ref)?;
     let path = receipt_path(profile_ref, &content_digest);
@@ -184,6 +202,14 @@ fn review(store: &AgentProfileStore, scope: &Scope, profile_ref: &str) -> io::Re
         let (reviewed, resolved) = reviewed_self_definition(definition, store.owner_root());
         payload["self_definition"] = reviewed;
         payload["self_sources_resolved"] = json!(resolved);
+    }
+    if !reading.profile.source_pins.is_empty() {
+        payload["source_pins"] = reading
+            .profile
+            .source_pins
+            .iter()
+            .map(|pin| reviewed_source_pin(pin, store.owner_root()))
+            .collect();
     }
     Ok(payload)
 }

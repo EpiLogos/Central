@@ -120,18 +120,7 @@ impl AgentSelfSourcePin {
     /// Validate only Central-owned source structure. This performs no
     /// filesystem access: resolution is a separate, horizon-admitted act.
     pub(crate) fn validate(&self, role: &str) -> Result<(), AgentProfileError> {
-        let reference_field = format!("Agent self definition {role} reference");
-        if self.reference.trim().is_empty()
-            || self.reference != self.reference.trim()
-            || self.reference.len() > 1024
-            || self
-                .reference
-                .chars()
-                .any(|value| value.is_control() || value.is_whitespace())
-            || parse_self_source_reference(&self.reference).is_err()
-        {
-            return Err(AgentProfileError::InvalidText(reference_field));
-        }
+        validate_source_reference(&self.reference, role)?;
         let digest_field = format!("Agent self definition {role} content digest");
         let hex = self
             .content_digest
@@ -146,6 +135,48 @@ impl AgentSelfSourcePin {
         }
         Ok(())
     }
+}
+
+/// One source reference's Central-owned structure: one line, at most 1024
+/// bytes, in the `central:source:{world_ref}:{relpath}` form. No filesystem access.
+fn validate_source_reference(reference: &str, role: &str) -> Result<(), AgentProfileError> {
+    if reference.trim().is_empty()
+        || reference != reference.trim()
+        || reference.len() > 1024
+        || reference
+            .chars()
+            .any(|value| value.is_control() || value.is_whitespace())
+        || parse_self_source_reference(reference).is_err()
+    {
+        return Err(AgentProfileError::InvalidText(format!(
+            "Agent self definition {role} reference"
+        )));
+    }
+    Ok(())
+}
+
+/// The most sources one profile pins (O-I manual §19.9 Sources' Pinned).
+pub const MAX_SOURCE_PINS: usize = 64;
+
+/// The pinned sources' Central-owned structure: each a valid pin, each source
+/// pinned once, and at most [`MAX_SOURCE_PINS`] of them. No filesystem access.
+pub(crate) fn validate_source_pins(pins: &[AgentSelfSourcePin]) -> Result<(), AgentProfileError> {
+    if pins.len() > MAX_SOURCE_PINS {
+        return Err(AgentProfileError::InvalidText(format!(
+            "Agent pinned sources (at most {MAX_SOURCE_PINS})"
+        )));
+    }
+    let mut pinned = BTreeSet::new();
+    for pin in pins {
+        pin.validate("pinned source")?;
+        if !pinned.insert(pin.reference.as_str()) {
+            return Err(AgentProfileError::InvalidText(format!(
+                "Agent pinned source {} (each source is pinned once)",
+                pin.reference
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// The authored Agent-self binding: the Agent's own source and the relational
@@ -208,34 +239,7 @@ pub fn resolve_self_source_pin(
     pin: &AgentSelfSourcePin,
     world_root: &Path,
 ) -> Result<AgentSelfResolvedPin, AgentProfileError> {
-    let (_, relative) = parse_self_source_reference(&pin.reference)?;
-    let member = world_root.join(&relative);
-    match crate::source_horizon::retrieval_admission(world_root, &member) {
-        Ok(true) => {}
-        Ok(false) => {
-            return Err(AgentProfileError::SelfSourceWithheld {
-                reference: pin.reference.clone(),
-            });
-        }
-        Err(error) => {
-            return Err(AgentProfileError::SelfSourceUnreadable {
-                reference: pin.reference.clone(),
-                reason: error.to_string(),
-            });
-        }
-    }
-    let text = crate::source_safety::read(world_root, &relative).map_err(|error| {
-        if error.kind() == io::ErrorKind::NotFound {
-            AgentProfileError::SelfSourceMissing {
-                reference: pin.reference.clone(),
-            }
-        } else {
-            AgentProfileError::SelfSourceUnreadable {
-                reference: pin.reference.clone(),
-                reason: error.to_string(),
-            }
-        }
-    })?;
+    let text = read_source(&pin.reference, world_root)?;
     let content_digest = format!("sha256:{}", crate::continuous_work::source::key(&text));
     if content_digest != pin.content_digest {
         return Err(AgentProfileError::SelfSourceDigestMismatch {
@@ -248,6 +252,53 @@ pub fn resolve_self_source_pin(
         reference: pin.reference.clone(),
         content_digest,
         text,
+    })
+}
+
+/// Read one source ref's exact bytes under its World root: parse the ref, admit
+/// the member through the source retrieval horizon, and read it.
+fn read_source(reference: &str, world_root: &Path) -> Result<String, AgentProfileError> {
+    let (_, relative) = parse_self_source_reference(reference)?;
+    let member = world_root.join(&relative);
+    match crate::source_horizon::retrieval_admission(world_root, &member) {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(AgentProfileError::SelfSourceWithheld {
+                reference: reference.to_owned(),
+            });
+        }
+        Err(error) => {
+            return Err(AgentProfileError::SelfSourceUnreadable {
+                reference: reference.to_owned(),
+                reason: error.to_string(),
+            });
+        }
+    }
+    crate::source_safety::read(world_root, &relative).map_err(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            AgentProfileError::SelfSourceMissing {
+                reference: reference.to_owned(),
+            }
+        } else {
+            AgentProfileError::SelfSourceUnreadable {
+                reference: reference.to_owned(),
+                reason: error.to_string(),
+            }
+        }
+    })
+}
+
+/// Pin one source at the revision it stands at now: the exact bytes the
+/// horizon admits under the World root, by their sha256 digest.
+pub fn pin_source(
+    reference: &str,
+    world_root: &Path,
+) -> Result<AgentSelfSourcePin, AgentProfileError> {
+    validate_source_reference(reference, "pinned source")?;
+    let text = read_source(reference, world_root)?;
+    Ok(AgentSelfSourcePin {
+        reference: reference.to_owned(),
+        content_digest: format!("sha256:{}", crate::continuous_work::source::key(&text)),
     })
 }
 
@@ -344,6 +395,13 @@ pub struct AgentProfile {
     /// time through the retrieval horizon, never copied into the profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub self_definition: Option<AgentSelfDefinition>,
+    /// The sources the agent always reads from (O-I manual §19.9 Sources'
+    /// Pinned): documents, pages and files of its World, each a Central source
+    /// ref pinned by sha256 digest to the bytes it stood at when pinned, which
+    /// is its revision. Refs and digests only: the agent finds and reads them on
+    /// demand, and they are never copied into the profile or its prompt.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_pins: Vec<AgentSelfSourcePin>,
 }
 
 impl AgentProfile {
@@ -378,6 +436,7 @@ impl AgentProfile {
             intent_provenance: None,
             expressive_character_ref: None,
             self_definition: None,
+            source_pins: Vec::new(),
         };
         value.validate_shape()?;
         Ok(value)
@@ -513,6 +572,7 @@ impl AgentProfile {
             source_profile_is_effective_profile: false,
             source_profile_is_material_binding: false,
             self_definition: self.self_definition.clone(),
+            source_pins: self.source_pins.clone(),
         }
     }
 
@@ -571,6 +631,7 @@ impl AgentProfile {
         if let Some(definition) = &self.self_definition {
             definition.validate()?;
         }
+        validate_source_pins(&self.source_pins)?;
         if let Some(provenance) = &self.intent_provenance {
             provenance.validate()?;
         }
@@ -594,6 +655,9 @@ pub struct AgentProfileHandoff {
     /// that silently dropped it would misrepresent the authored ground.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub self_definition: Option<AgentSelfDefinition>,
+    /// The pinned sources travel with it for the same reason.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_pins: Vec<AgentSelfSourcePin>,
 }
 
 fn required(value: String, field: &str) -> Result<String, AgentProfileError> {
