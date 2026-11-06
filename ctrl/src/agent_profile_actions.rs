@@ -23,6 +23,7 @@ pub const AGENT_PROFILE_EXPRESS_ACTION: &str = "agent-profile.express";
 pub const AGENT_PROFILE_CHAIN_ORDER_ACTION: &str = "agent-profile.chain-order";
 pub const AGENT_PROFILE_CHAIN_REPLACE_ACTION: &str = "agent-profile.chain-replace";
 pub const AGENT_PROFILE_RENAME_ACTION: &str = "agent-profile.rename";
+pub const AGENT_PROFILE_PIN_SOURCE_ACTION: &str = "agent-profile.pin-source";
 /// The longest name an Agent takes on its chain.
 const MAX_AGENT_NAME_CHARS: usize = 120;
 
@@ -259,6 +260,8 @@ fn validate_ingested_profile(profile: &AgentProfile) -> Result<(), String> {
             .validate()
             .map_err(|error| format!("invalid self definition: {error}"))?;
     }
+    crate::agent_profile::validate_source_pins(&profile.source_pins)
+        .map_err(|error| format!("invalid pinned sources: {error}"))?;
     Ok(())
 }
 
@@ -625,6 +628,83 @@ fn rename_action(
             return Ok(false);
         }
         profile.name = Some(name);
+        Ok(true)
+    })
+}
+
+/// `agent-profile.pin-source`: one source of the profile's World pinned onto the agent's Sources (O-I manual §19.9 Pinned, "Drag a
+/// source from the browser onto the list to add it"), at the revision it stands at now: Central reads its exact bytes through the
+/// retrieval horizon and keeps the reference with their digest. A source pinned before is pinned again at its new revision.
+fn pin_source_action(
+    _registry: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    let action = AGENT_PROFILE_PIN_SOURCE_ACTION;
+    let reference = match required_text(input, "reference", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let store = match resolve_store(action, input, context) {
+        Ok(store) => store,
+        Err(result) => return result,
+    };
+    let world = crate::agent_profile::parse_self_source_reference(&reference)
+        .map(|(world, _)| world)
+        .unwrap_or_default();
+    // The World a source ref names is the one its profile is kept in: Control's for the root register, the project's own id for a
+    // project's (source_horizon.rs names a project's sources `project:{project_id}`).
+    let ours = match input.get("scope").and_then(Value::as_str) {
+        Some("project") => read_project_manifest(store.owner_root())
+            .is_ok_and(|manifest| world == format!("project:{}", manifest.project_id)),
+        _ => world == crate::source_horizon::CONTROL_WORLD_REF,
+    };
+    if !ours {
+        return invalid_input(
+            action,
+            format!(
+                "{reference} is no source of this profile's World, so its agent cannot pin it."
+            ),
+        );
+    }
+    let pin = match crate::agent_profile::pin_source(&reference, store.owner_root()) {
+        Ok(pin) => pin,
+        Err(error) => {
+            let words = match error {
+                AgentProfileError::SelfSourceMissing { .. } => {
+                    format!("There is no source at {reference} to pin.")
+                }
+                AgentProfileError::SelfSourceWithheld { .. } => format!(
+                    "{reference} is withheld from retrieval, so its agent cannot read it, and it is not pinned."
+                ),
+                AgentProfileError::SelfSourceUnreadable { reason, .. } => {
+                    format!("{reference} could not be read, so it is not pinned: {reason}")
+                }
+                _ => format!("{reference} is not a Central source reference."),
+            };
+            return invalid_input(action, words);
+        }
+    };
+    chain_edit(action, input, context, |profile| {
+        if let Some(at) = profile
+            .source_pins
+            .iter()
+            .position(|pinned| pinned.reference == pin.reference)
+        {
+            if profile.source_pins[at] == pin {
+                return Ok(false);
+            }
+            profile.source_pins[at] = pin;
+            return Ok(true);
+        }
+        if profile.source_pins.len() >= crate::agent_profile::MAX_SOURCE_PINS {
+            return Err(format!(
+                "The agent pins at most {} sources; it pins {} now.",
+                crate::agent_profile::MAX_SOURCE_PINS,
+                profile.source_pins.len()
+            ));
+        }
+        profile.source_pins.push(pin);
         Ok(true)
     })
 }
@@ -1107,6 +1187,13 @@ pub fn register_agent_profile_actions(registry: &mut ActionRegistry) {
             vec![input("name", "string", true)],
             rename_action,
         ),
+        (
+            AGENT_PROFILE_PIN_SOURCE_ACTION,
+            "Pin a Source for an Agent",
+            "Pin one source of the profile's World onto the agent's Sources (O-I manual §19.9 Pinned) at the revision it stands at now: the exact bytes read through the retrieval horizon, kept by their sha256 digest, at the profile's next revision under compare-and-swap. A source pinned before is pinned again at its new revision.",
+            vec![input("reference", "string", true)],
+            pin_source_action,
+        ),
     ] {
         registry
             .register(
@@ -1371,6 +1458,140 @@ mod tests {
             false
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_source_dropped_on_pinned_is_kept_in_the_profile_at_its_revision_and_read_back_moved() {
+        // O-I manual §19.9 Pinned: "Drag a source from the browser onto the list to add it"; Central keeps each at its revision.
+        let root = fixture_root();
+        let registry = registry();
+        let mut options = None;
+        let mut connectors = None;
+        let mut connector_context = None;
+        let context = context(&root, &mut options, &mut connectors, &mut connector_context);
+        let created = registry.execute(
+            AGENT_PROFILE_SAVE_ACTION,
+            &json!({"scope": "root", "profile": personal_profile("r1")}),
+            &context,
+        );
+        assert!(created.ok, "{created:?}");
+        let relative = "Control/self/agents/guardian/reading.md";
+        fs::create_dir_all(root.join("Control/self/agents/guardian")).unwrap();
+        fs::write(root.join(relative), "Read the wiki before the code.").unwrap();
+        let reference = format!("central:source:control:root:{relative}");
+        let digest = |text: &str| format!("sha256:{}", crate::continuous_work::source::key(text));
+        let pin = |revision: &str, reference: &str| {
+            registry.execute(
+                "agent-profile.pin-source",
+                &json!({"scope": "root", "profile_ref": "agent-profile:guardian",
+                    "expected_revision": revision, "reference": reference}),
+                &context,
+            )
+        };
+        let said = |result: &ActionResult| {
+            result
+                .error
+                .as_ref()
+                .map(|error| error.message.clone())
+                .unwrap_or_default()
+        };
+        let pins = || {
+            let read = registry.execute(
+                AGENT_PROFILE_READ_ACTION,
+                &json!({"scope": "root", "profile_ref": "agent-profile:guardian"}),
+                &context,
+            );
+            let profile = read.data.unwrap()["profile"].clone();
+            (
+                profile["revision"].as_str().unwrap().to_owned(),
+                profile["source_pins"].clone(),
+            )
+        };
+        let reviewed = || {
+            let review = registry.execute(
+                crate::agent_profile_acceptance::REVIEW,
+                &json!({"scope": "root", "profile_ref": "agent-profile:guardian"}),
+                &context,
+            );
+            assert!(review.ok, "{review:?}");
+            review.data.unwrap()["source_pins"].clone()
+        };
+
+        // Pinned: the source at the bytes it stands at now, at the profile's next revision.
+        let pinned = pin("r1", &reference);
+        assert!(pinned.ok, "{pinned:?}");
+        assert_eq!(pinned.data.as_ref().unwrap()["state"], "saved");
+        let first = digest("Read the wiki before the code.");
+        assert_eq!(
+            pins(),
+            (
+                "r2".into(),
+                json!([{"reference": reference, "content_digest": first}])
+            )
+        );
+        assert_eq!(
+            reviewed(),
+            json!([{"reference": reference, "content_digest": first, "resolved": true, "moved": false}])
+        );
+        // The same source at the same revision writes nothing.
+        assert_eq!(pin("r2", &reference).data.unwrap()["state"], "unchanged");
+
+        // Its source moves: the review reads it as moved, naming the revision it stands at now; the profile is untouched.
+        fs::write(root.join(relative), "Read the map, then the wiki.").unwrap();
+        let second = digest("Read the map, then the wiki.");
+        assert_eq!(
+            reviewed(),
+            json!([{"reference": reference, "content_digest": first, "resolved": false, "moved": true,
+                "current_digest": second, "reason": "self-source-digest-mismatch"}])
+        );
+        assert_eq!(pins().0, "r2");
+        // Pinned again, it stands at the new revision, once.
+        assert!(pin("r2", &reference).ok);
+        assert_eq!(
+            pins(),
+            (
+                "r3".into(),
+                json!([{"reference": reference, "content_digest": second}])
+            )
+        );
+
+        // Refused in words: a source that is not there, one of another World, and a revision the caller did not see.
+        let missing = pin(
+            "r3",
+            "central:source:control:root:Control/self/agents/guardian/gone.md",
+        );
+        assert!(!missing.ok);
+        assert!(
+            said(&missing).contains("There is no source at"),
+            "{missing:?}"
+        );
+        let elsewhere = pin("r3", &format!("central:source:project:Other:{relative}"));
+        assert!(!elsewhere.ok);
+        assert!(
+            said(&elsewhere).contains("is no source of this profile's World"),
+            "{elsewhere:?}"
+        );
+        let stale = pin("r1", &reference);
+        assert!(!stale.ok, "{stale:?}");
+        assert_eq!(pins().0, "r3");
+        // A profile that pins one source twice is not a profile Central keeps.
+        let mut doubled = personal_profile("r1");
+        doubled["ref"] = json!("agent-profile:doubled");
+        doubled["agent_ref"] = json!("agent:doubled");
+        doubled["source_pins"] = json!([
+            {"reference": reference, "content_digest": first},
+            {"reference": reference, "content_digest": second}
+        ]);
+        let refused = registry.execute(
+            AGENT_PROFILE_SAVE_ACTION,
+            &json!({"scope": "root", "profile": doubled}),
+            &context,
+        );
+        assert!(!refused.ok, "{refused:?}");
+        assert!(
+            said(&refused).contains("each source is pinned once"),
+            "{refused:?}"
+        );
     }
 
     #[test]
