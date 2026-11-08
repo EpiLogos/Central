@@ -25,7 +25,19 @@ use serde_json::{json, Map, Value};
 use std::{collections::BTreeMap, io};
 
 pub(crate) const MOVES: [&str; 5] = ["tasks", "patterns", "context", "synthesis", "close"];
-const SOURCES: [&str; 5] = ["central", "factory", "expressions", "techne", "live"];
+/// What sends entries to the Day (manual 18.2 Sources): each mode, and the shared
+/// field. The field is a source of its own, not Technē's (Central #324; DLW build
+/// ruling 2026-11-08): what reaches you there comes in every mode (manual 2, "Every
+/// kind of work takes place in the field") and names who sent it and how it came,
+/// so turning Technē's sessions off never silences the field, nor the reverse.
+const SOURCES: [&str; 6] = [
+    "central",
+    "factory",
+    "expressions",
+    "techne",
+    "live",
+    "field",
+];
 const AGENT_WRITES: [&str; 3] = ["off", "propose", "write"];
 const SETTINGS_SCHEMA: &str = "central.day-settings/v1";
 const EVENT_SCHEMA: &str = "central.day-move-event/v1";
@@ -44,6 +56,11 @@ const NO_SCHEDULE_SAVED: &str =
 const FACE_FIVE_PROPOSAL: &str = "/body/p5_tomorrow";
 const FACE_ZERO_GROUND: &str = "/fields/p0_quick_thoughts";
 const MAX_DUE_WINDOW_MS: i64 = 400 * 24 * 3600 * 1000;
+
+/// The shape of the Sources setting, in words, from `SOURCES` itself.
+fn sources_shape() -> String {
+    format!("sources is {{{}}}", SOURCES.join(", "))
+}
 
 fn label(mv: &str) -> &'static str {
     match mv {
@@ -299,10 +316,13 @@ fn validate_saved(scope: &Scope, saved: &Map<String, Value>) -> io::Result<()> {
     if let Some(sources) = saved.get("sources") {
         let sources = sources
             .as_object()
-            .ok_or_else(|| invalid("sources is {central, factory, expressions, techne, live}"))?;
+            .ok_or_else(|| invalid(sources_shape()))?;
         for (name, value) in sources {
             if !SOURCES.contains(&name.as_str()) {
-                return Err(invalid(format!("`{name}` is not a source mode")));
+                return Err(invalid(format!(
+                    "`{name}` is not one of the Day's sources: {}",
+                    sources_shape()
+                )));
             }
             if !value.is_boolean() {
                 return Err(invalid(format!("source {name} is true or false")));
@@ -460,9 +480,7 @@ pub(crate) fn settings_write(
         }
     }
     if let Some(patch) = object.get("sources") {
-        let patch = patch
-            .as_object()
-            .ok_or_else(|| invalid("sources is {central, factory, expressions, techne, live}"))?;
+        let patch = patch.as_object().ok_or_else(|| invalid(sources_shape()))?;
         let mut sources = merged
             .get("sources")
             .and_then(Value::as_object)
@@ -639,7 +657,17 @@ struct Log {
 }
 
 fn load_log(scope: &Scope, civil_date: &str) -> io::Result<Log> {
-    let Some(raw) = read_optional(scope, &record_path(scope, civil_date))? else {
+    load_lines(
+        scope,
+        &record_path(scope, civil_date),
+        EVENT_SCHEMA,
+        "move record",
+    )
+}
+
+/// One of the Day's append-only records: every line one document of `schema`.
+fn load_lines(scope: &Scope, path: &str, schema: &str, what: &str) -> io::Result<Log> {
+    let Some(raw) = read_optional(scope, path)? else {
         return Ok(Log {
             exists: false,
             raw: String::new(),
@@ -652,13 +680,13 @@ fn load_log(scope: &Scope, civil_date: &str) -> io::Result<Log> {
         let event: Value = serde_json::from_str(line).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
-                "a line of the Day's move record is not an event; it is kept as it is",
+                format!("a line of the Day's {what} is not JSON; it is kept as it is"),
             )
         })?;
-        if event["schema"] != EVENT_SCHEMA {
+        if event["schema"] != schema {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "a line of the Day's move record is not a central.day-move-event/v1",
+                format!("a line of the Day's {what} is not a {schema}"),
             ));
         }
         events.push(event);
@@ -680,7 +708,23 @@ fn append_event(
     event: &Value,
     principal: &Principal,
 ) -> io::Result<()> {
-    let path = record_path(scope, civil_date);
+    append_line(
+        scope,
+        &record_path(scope, civil_date),
+        log,
+        event,
+        principal,
+    )
+}
+
+fn append_line(
+    scope: &Scope,
+    path: &str,
+    log: &Log,
+    event: &Value,
+    principal: &Principal,
+) -> io::Result<()> {
+    let path = path.to_owned();
     let mut content = log.raw.clone();
     if !content.is_empty() && !content.ends_with('\n') {
         content.push('\n');
@@ -1547,6 +1591,399 @@ pub(crate) fn close_carry(
     }))
 }
 
+// ---- the field source -------------------------------------------------------
+//
+// What reached you from the shared field is recorded into the Day under its
+// field source (Central #324, O-I #858 SF08): beside the Day as its moves are,
+// on face 4 where the day sat, never into the person's own writing. Each record
+// names who sent it and how it came, and carries nothing that would rank it.
+
+const FIELD_ITEM_SCHEMA: &str = "central.day-field-item/v1";
+/// How a thing reaches you from the field (manual 2): addressed to you, from a
+/// star you are gathered at, from someone you watch, or from a search you made.
+const FIELD_HOWS: [(&str, &str); 4] = [
+    ("to-you", "addressed to you"),
+    ("star", "from a star you are gathered at"),
+    ("watch", "from someone you watch"),
+    ("search", "from a search you made"),
+];
+/// The Day face a field record stands on: face 4, where the day sat.
+const FIELD_FACE: u64 = 4;
+
+fn field_record_path(scope: &Scope, civil_date: &str) -> String {
+    format!("{}/{civil_date}/field.jsonl", scope.day_dir())
+}
+
+fn field_hows() -> String {
+    let named: Vec<String> = FIELD_HOWS
+        .iter()
+        .map(|(how, words)| format!("{words} ({how})"))
+        .collect();
+    let (last, rest) = named.split_last().expect("four ways to reach you");
+    format!("how is {}, or {last}", rest.join(", "))
+}
+
+/// A bounded ref: one token, no whitespace or control characters.
+fn bounded_ref<'a>(value: &'a Value, what: &str) -> io::Result<&'a str> {
+    value
+        .as_str()
+        .filter(|r| {
+            !r.is_empty()
+                && r.len() <= 512
+                && !r.chars().any(|c| c.is_whitespace() || c.is_control())
+        })
+        .ok_or_else(|| invalid(format!("{what} is a ref of at most 512 bytes")))
+}
+
+/// Bounded words: not blank, at most `max` characters, no NUL.
+fn bounded_words<'a>(value: &'a Value, what: &str, max: usize) -> io::Result<&'a str> {
+    value
+        .as_str()
+        .filter(|w| !w.trim().is_empty() && w.chars().count() <= max && !w.contains('\0'))
+        .ok_or_else(|| invalid(format!("{what} is text of at most {max} characters")))
+}
+
+fn exact_keys(object: &Map<String, Value>, allowed: &[&str], what: &str) -> io::Result<()> {
+    match object.keys().find(|key| !allowed.contains(&key.as_str())) {
+        Some(key) => Err(invalid(format!(
+            "{what} has no `{key}`: it names who sent it, how it came, what it is, its words and when, and nothing else"
+        ))),
+        None => Ok(()),
+    }
+}
+
+/// The record of one thing that reached you, as the input names it.
+fn field_item(input: &Value) -> io::Result<Value> {
+    let object = input
+        .as_object()
+        .ok_or_else(|| invalid("a field record is an object"))?;
+    exact_keys(
+        object,
+        &[
+            "project",
+            "day_ref",
+            "item_ref",
+            "from",
+            "how",
+            "star",
+            "what",
+            "words",
+            "at_unix_ms",
+            "expected_authority_revision",
+        ],
+        "A field record",
+    )?;
+    let item_ref = bounded_ref(&input["item_ref"], "item_ref")?;
+    let from = input["from"]
+        .as_object()
+        .ok_or_else(|| invalid("from is {world_ref, name}: who sent it"))?;
+    exact_keys(from, &["world_ref", "name"], "from")?;
+    let from = json!({"world_ref":bounded_ref(&input["from"]["world_ref"], "from.world_ref")?,
+        "name":bounded_words(&input["from"]["name"], "from.name", 120)?.trim()});
+    let how = input["how"]
+        .as_str()
+        .filter(|how| FIELD_HOWS.iter().any(|(known, _)| known == how))
+        .ok_or_else(|| invalid(field_hows()))?;
+    let star = match input.get("star") {
+        None | Some(Value::Null) if how == "star" => return Err(invalid(
+            "what came from a star you are gathered at names the star: star is {star_ref, name}",
+        )),
+        None | Some(Value::Null) => Value::Null,
+        Some(Value::Object(star)) => {
+            exact_keys(star, &["star_ref", "name"], "star")?;
+            json!({"star_ref":bounded_ref(&input["star"]["star_ref"], "star.star_ref")?,
+                "name":bounded_words(&input["star"]["name"], "star.name", 160)?.trim()})
+        }
+        Some(_) => return Err(invalid("star is {star_ref, name}, or absent")),
+    };
+    let what = input["what"]
+        .as_str()
+        .filter(|what| {
+            !what.is_empty()
+                && what.len() <= 64
+                && what
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        })
+        .ok_or_else(|| {
+            invalid("what is the kind of thing it is, as the field names it (question, finding, showed, …)")
+        })?;
+    let words = bounded_words(&input["words"], "words", 4096)?;
+    Ok(
+        json!({"item_ref":item_ref,"from":from,"how":how,"star":star,"what":what,"words":words,
+        "at_unix_ms":instant_ms(input)?}),
+    )
+}
+
+/// The Day's field source as the person's settings hold it: (on, saved).
+fn field_source(settings: &Loaded) -> Value {
+    let (on, saved) = settings.source("field");
+    json!({"name":"field","on":on,"standing":if saved {"saved"} else {"default"}})
+}
+
+/// Every field record of a Day, in the order each reached you (and, for two at
+/// the same moment, the order they were recorded): by time, and by nothing else.
+fn field_items(log: &Log) -> Vec<Value> {
+    let mut items = log.events.clone();
+    items.sort_by_key(|item| item["at_unix_ms"].as_i64().unwrap_or(0));
+    items
+}
+
+pub(crate) fn field_record(
+    scope: &Scope,
+    input: &Value,
+    principal: &Principal,
+    now: u64,
+) -> io::Result<Value> {
+    let item = field_item(input)?;
+    let (relations, _) = scope.relations()?;
+    let (day_ref, entry) = target_day(&relations, input)?;
+    let civil_date = civil_date_of(&entry)?;
+    let settings = load_settings(scope)?;
+    if !settings.source("field").0 {
+        return Err(denied(
+            "The Day's Sources keep the field Off, so nothing that reached you from the field is recorded into the Day.",
+        ));
+    }
+    if entry["temporal"]["lifecycle"] == "closed" {
+        return Err(conflict(format!(
+            "The Day of {civil_date} is closed; a closed Day is kept and nothing more is recorded into it"
+        )));
+    }
+    let path = field_record_path(scope, &civil_date);
+    let log = load_lines(scope, &path, FIELD_ITEM_SCHEMA, "field record")?;
+    let result = |created: bool, item: &Value, revision: &str| {
+        json!({"schema":"central.day-field-record/v1","created":created,"item":item,"revision":revision,
+            "automatic_agent_or_model_invocation":false})
+    };
+    if let Some(existing) = log
+        .events
+        .iter()
+        .find(|existing| existing["item_ref"] == item["item_ref"])
+    {
+        let same = [
+            "item_ref",
+            "from",
+            "how",
+            "star",
+            "what",
+            "words",
+            "at_unix_ms",
+        ]
+        .iter()
+        .all(|key| existing[*key] == item[*key]);
+        if !same {
+            return Err(conflict(format!(
+                "{} is recorded in this Day already, with other content; a record is never rewritten",
+                item["item_ref"].as_str().unwrap_or_default()
+            )));
+        }
+        return Ok(result(false, existing, &log.revision));
+    }
+    let mut record = item;
+    record["schema"] = json!(FIELD_ITEM_SCHEMA);
+    record["day_ref"] = json!(day_ref);
+    record["source"] = json!("field");
+    record["face"] = json!(FIELD_FACE);
+    record["actor_ref"] = json!(principal.principal_ref);
+    record["recorded_at_unix_ms"] = json!((now as i64) * 1000);
+    append_line(scope, &path, &log, &record, principal)?;
+    let log = load_lines(scope, &path, FIELD_ITEM_SCHEMA, "field record")?;
+    Ok(result(true, &record, &log.revision))
+}
+
+pub(crate) fn field_read(scope: &Scope, input: &Value) -> io::Result<Value> {
+    let (relations, _) = scope.relations()?;
+    let (day_ref, entry) = target_day(&relations, input)?;
+    let civil_date = civil_date_of(&entry)?;
+    let settings = load_settings(scope)?;
+    let log = load_lines(
+        scope,
+        &field_record_path(scope, &civil_date),
+        FIELD_ITEM_SCHEMA,
+        "field record",
+    )?;
+    Ok(json!({
+        "schema":"central.day-field-reading/v1",
+        "day_ref":day_ref,
+        "civil_date":civil_date,
+        "source":field_source(&settings),
+        "face":FIELD_FACE,
+        "items":field_items(&log),
+        "revision":log.revision,
+        "order":"by when each reached you, and by nothing else",
+        "automatic_agent_or_model_invocation":false,
+    }))
+}
+
+// ---- a Day entry shown as a part --------------------------------------------
+//
+// "Nothing from my own Day enters [a star's day] unless I bring it" (O-I #858
+// SF06): one entry of the Day, read exactly as the field would receive it if
+// the person showed it. Central answers the part; showing it is the person's
+// own act in the field, and nothing is written here.
+
+/// The field names a part in at most this many characters.
+const PART_LABEL_MAX: usize = 160;
+
+/// Plain words from a Day entry: sanitised contribution markup without its
+/// tags (a block ends a word), the five escapes undone, whitespace collapsed.
+fn plain_words(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for c in html.chars() {
+        match (in_tag, c) {
+            (false, '<') => {
+                in_tag = true;
+                out.push(' ');
+            }
+            (true, '>') => in_tag = false,
+            (false, c) => out.push(c),
+            (true, _) => {}
+        }
+    }
+    let out = out
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&");
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The label the field receives: the words whole when they fit, else cut at a
+/// word with an ellipsis. Returns (label, cut).
+fn part_label(words: &str) -> (String, bool) {
+    if words.chars().count() <= PART_LABEL_MAX {
+        return (words.to_owned(), false);
+    }
+    let head: String = words.chars().take(PART_LABEL_MAX - 1).collect();
+    let head = match head.rfind(' ') {
+        Some(at) if at > 0 => head[..at].trim_end().to_owned(),
+        _ => head,
+    };
+    (format!("{head}…"), true)
+}
+
+pub(crate) fn entry_part(scope: &Scope, input: &Value) -> io::Result<Value> {
+    let field_id = match input.get("field_id") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(bounded_ref(value, "field_id")?),
+    };
+    let contribution_id = match input.get("contribution_id") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(bounded_ref(value, "contribution_id")?),
+    };
+    let index =
+        match input.get("index") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(value.as_u64().ok_or_else(|| {
+                invalid("index is the place of one item in a list field, from 0")
+            })?),
+        };
+    let (relations, _) = scope.relations()?;
+    let (day_ref, entry) = target_day(&relations, input)?;
+    let day = temporal::day_read(scope, &json!({"day_ref":day_ref}))?;
+    if day["document"].is_null() {
+        return Err(conflict(format!(
+            "No Day document stands for the Day of {}, so it holds no entry to show",
+            civil_date_of(&entry)?
+        )));
+    }
+    let document = &day["document"]["document"];
+    let (address, words, author) = match (field_id, contribution_id) {
+        (Some(field_id), None) => {
+            let field = document["fields"]
+                .as_array()
+                .and_then(|fields| fields.iter().find(|field| field["id"] == field_id))
+                .ok_or_else(|| invalid(format!("{field_id} is not a field of this Day")))?;
+            let value = field["template_pointer"]
+                .as_str()
+                .and_then(|pointer| document["template_payload"].pointer(pointer))
+                .cloned()
+                .unwrap_or(Value::Null);
+            let words = match (&value, index) {
+                (Value::String(words), None) => words.clone(),
+                (Value::String(_), Some(_)) => {
+                    return Err(invalid(format!(
+                        "{field_id} holds one entry, not a list: name it without an index"
+                    )))
+                }
+                (Value::Array(_), None) => {
+                    return Err(invalid(format!(
+                        "{field_id} is a list: name one item of it by its index"
+                    )))
+                }
+                (Value::Array(items), Some(index)) => {
+                    let item = items
+                        .get(index as usize)
+                        .ok_or_else(|| invalid(format!("{field_id} has no item {index}")))?;
+                    item.as_str()
+                        .or_else(|| item["text"].as_str())
+                        .unwrap_or_default()
+                        .to_owned()
+                }
+                _ => String::new(),
+            };
+            let mut address = json!({"field_id":field_id});
+            if let Some(index) = index {
+                address["index"] = json!(index);
+            }
+            // A field's own value is written only by the person (field.set).
+            (address, words, json!({"actor_kind":"human"}))
+        }
+        (None, Some(contribution_id)) => {
+            if index.is_some() {
+                return Err(invalid("a contribution is one entry: name it without an index"));
+            }
+            let contribution = document["contributions"]
+                .as_array()
+                .and_then(|rows| rows.iter().find(|row| row["id"] == contribution_id))
+                .ok_or_else(|| {
+                    invalid(format!("{contribution_id} is not a contribution of this Day"))
+                })?;
+            if contribution["removed"] == true {
+                return Err(conflict(format!(
+                    "{contribution_id} was removed from the Day: it holds no words to show"
+                )));
+            }
+            (
+                json!({"contribution_id":contribution_id}),
+                contribution["html"].as_str().unwrap_or_default().to_owned(),
+                json!({"actor_kind":contribution["actor_kind"],"author_ref":contribution["author_ref"]}),
+            )
+        }
+        _ => {
+            return Err(invalid(
+                "Name one entry of the Day: field_id (with index for one item of a list field), or contribution_id",
+            ))
+        }
+    };
+    let words = plain_words(&words);
+    if words.is_empty() {
+        return Err(invalid("That entry holds no words to show"));
+    }
+    let (label, cut) = part_label(&words);
+    // An opaque, stable ref: the same entry is the same part (so showing it
+    // again changes nothing and withdrawing finds it), and it names neither the
+    // Day's date nor its field.
+    let digest = source::key(&serde_json::to_string(&json!([day_ref, address]))?);
+    Ok(json!({
+        "schema":"central.day-entry-part/v1",
+        "day_ref":day_ref,
+        "entry":address,
+        "revision":day["document"]["revision"]["revision"],
+        "part":{"id":format!("day-entry:{}", &digest[..16]),"kind":"page","label":label},
+        "label_cut":cut,
+        "author":author,
+        "receives":"the part's kind and label, as they stand here",
+        "stays_out":"every other face, field, entry, contribution and note of the Day, its date, and who else wrote in it",
+        "shown":false,
+        "automatic_agent_or_model_invocation":false,
+    }))
+}
+
 // ---- operations and actions -------------------------------------------------
 
 /// The Action an authenticated operation is granted as.
@@ -1556,6 +1993,7 @@ pub(crate) fn authenticated_action(operation: &str) -> Option<&'static str> {
         "day_move_record" => "central.day.move.record",
         "day_rollover" => "central.day.rollover",
         "day_close_carry" => "central.day.close-carry",
+        "day_field_record" => "central.day.field.record",
         _ => return None,
     })
 }
@@ -1572,6 +2010,7 @@ pub(crate) fn authenticated_operation(
         "day_move_record" => move_record(scope, input, principal, now),
         "day_rollover" => rollover(scope, input, principal, now),
         "day_close_carry" => close_carry(scope, input, principal, now),
+        "day_field_record" => field_record(scope, input, principal, now),
         _ => Err(invalid("unknown continuous-work operation")),
     }
 }
@@ -1614,6 +2053,21 @@ handler!(
     "central.day.close-carry",
     "day_close_carry"
 );
+handler!(
+    field_record_action,
+    "central.day.field.record",
+    "day_field_record"
+);
+handler!(
+    field_read_action,
+    "central.day.field.read",
+    "day_field_read"
+);
+handler!(
+    entry_part_action,
+    "central.day.entry.part",
+    "day_entry_part"
+);
 
 pub(crate) fn register_actions(registry: &mut ActionRegistry) {
     super::register_definitions(registry, &[
@@ -1623,6 +2077,9 @@ pub(crate) fn register_actions(registry: &mut ActionRegistry) {
         ("central.day.moves.read", "Read the Day's moves", "Read the Day's settings and, for each move, its effective prompt, Runs at with its standing, the next time it runs by itself (only for a schedule the person saved), the open run, the last ended run, and every run of the Day oldest first. Read-only.", false, moves_read_action, &[("day_ref","string",false)]),
         ("central.day.moves.due", "List the Day's moves that are due", "List the scheduled occurrences in (since, now] for every move whose Runs at the person saved, each with a stable occurrence_ref and whether it has begun. With only the defaults it lists nothing and says why. The native host polls this; Central runs nothing.", false, moves_due_action, &[("now_unix_ms","integer",true),("since_unix_ms","integer",true)]),
         ("central.day.rollover", "Open tomorrow's Day beside today's", "Open the Day of the civil date after today without moving today, through the same Day creation as central.day.ensure, and record it as the Day's tomorrow. Idempotent. A human may open it at any time; another authenticated principal only once the Rollover time the person saved has been reached.", true, rollover_action, &[("expected_time_policy_revision","string",true),("expected_authority_revision","string",false)]),
+        ("central.day.field.record", "Record what reached you from the field", "Authenticated, append-only record of one thing that reached you from the shared field, into the Day under its field source (face 4): who sent it (from: world_ref, name), how it came (how: to-you, star, watch or search; a star names star_ref and name), what it is, its words and when it reached you. It carries nothing else: no count of looks and no ranking. Idempotent per item_ref; the same ref with other content is refused. Refused while the Day's Sources keep the field Off, and on a closed Day.", true, field_record_action, &[("day_ref","string",false),("item_ref","string",true),("from","object",true),("how","string",true),("star","object",false),("what","string",true),("words","string",true),("at_unix_ms","integer",true),("expected_authority_revision","string",false)]),
+        ("central.day.field.read", "Read what reached the Day from the field", "Read the Day's field source (on or off, default or saved) and every thing recorded into the Day from the shared field, ordered by when it reached you and by nothing else, each naming who sent it and how it came. Read-only.", false, field_read_action, &[("day_ref","string",false)]),
+        ("central.day.entry.part", "Read a Day entry as a part to show", "Read one entry of the Day exactly as the shared field would receive it if you showed it: an opaque part ref, its kind (page) and its label (the entry's words as plain text, at most 160 characters), with who wrote it. Name a field (field_id, and index for one item of a list field) or one contribution (contribution_id). Nothing else of the Day goes with it, and the reading shows nothing: showing it is your own act in the field. Read-only.", false, entry_part_action, &[("day_ref","string",false),("field_id","string",false),("index","integer",false),("contribution_id","string",false)]),
         ("central.day.close-carry", "Close a Day and carry face 5 to tomorrow", "Run the close routine on exact revisions: carry face 5's proposal for tomorrow into tomorrow's face 0 (a human writes it; an agent's entry is returned as a proposal for receiving), then close the Day as central.day.lifecycle does, and return both revisions. A human may call it at any time; another authenticated principal only when the person saved Close at Day start and the Day boundary has passed.", true, close_carry_action, &[("day_ref","string",true),("expected_revision","string",true),("expected_relations_revision","string",true),("expected_authority_revision","string",false)]),
     ]);
 }

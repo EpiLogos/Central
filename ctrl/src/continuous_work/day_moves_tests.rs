@@ -10,8 +10,9 @@ use std::fs;
 const HUMAN: &str = "c1-day-moves-human-token-not-a-live-credential";
 const AGENT: &str = "c1-day-moves-agent-token-not-a-live-credential";
 const HOST: &str = "c1-day-moves-host-token--not-a-live-credential";
-const ALL_ACTIONS: [&str; 8] = [
+const ALL_ACTIONS: [&str; 9] = [
     "central.day.ensure",
+    "central.day.field.record",
     "central.day.lifecycle",
     "central.day.settings.write",
     "central.day.move.record",
@@ -1883,4 +1884,431 @@ fn close_carry_with_the_close_routine_off_only_closes() {
         tomorrow_document(w.path(), at(T))["document"]["contributions"],
         json!([])
     );
+}
+
+// ---- the field source and a Day entry shown as a part (Central #324; O-I #858 SF06, SF08) ----
+
+fn field_path(root: &Path, civil_date: &str) -> std::path::PathBuf {
+    root.join(format!("Control/user/day/{civil_date}/field.jsonl"))
+}
+fn reached(item_ref: &str, how: &str, at_ms: i64, words: &str) -> Value {
+    let mut item = json!({"item_ref":item_ref,"from":{"world_ref":"world:mara","name":"mara"},"how":how,
+        "what":"question","words":words,"at_unix_ms":at_ms});
+    if how == "star" {
+        item["star"] = json!({"star_ref":"star:rosarium","name":"The Rosarium plates"});
+    }
+    item
+}
+fn record(root: &Path, item: Value, token: &str, now: u64) -> io::Result<Value> {
+    run(root, "day_field_record", item, Some(token), now)
+}
+
+#[test]
+fn the_field_is_one_of_the_days_sources_on_by_default_and_yours_to_turn_off() {
+    let w = world("Europe/London", 0);
+    let r = read(w.path(), "day_settings_read", json!({}), at(T));
+    assert_eq!(
+        r["settings"]["sources"]["field"], true,
+        "All On, the field too"
+    );
+    assert_eq!(r["standing"]["sources"]["field"], "default");
+    let saved = save(w.path(), json!({"sources":{"field":false}}), at(T));
+    assert_eq!(saved["settings"]["sources"]["field"], false);
+    assert_eq!(saved["standing"]["sources"]["field"], "saved");
+    assert_eq!(
+        saved["settings"]["sources"]["techne"], true,
+        "the field is its own source: turning it off leaves Technē on"
+    );
+    let refused = words_of(run(
+        w.path(),
+        "day_settings_write",
+        json!({"expected_revision":saved["revision"],"sources":{"world":true}}),
+        Some(HUMAN),
+        at(T),
+    ));
+    assert!(
+        refused.contains("central, factory, expressions, techne, live, field"),
+        "the refusal names every source: {refused}"
+    );
+}
+
+#[test]
+fn what_reached_you_from_the_field_is_recorded_in_the_day_naming_who_sent_it_and_how_it_came() {
+    let w = world("Europe/London", 0);
+    let day = ensure(w.path(), at(T));
+    let later = reached(
+        "saying:mara-2",
+        "to-you",
+        ms("2026-10-20T09:30:00Z"),
+        "And the fifth?",
+    );
+    let first = reached(
+        "saying:mara-1",
+        "star",
+        ms("2026-10-20T09:10:00Z"),
+        "Which plate is this?",
+    );
+    let made = record(w.path(), later.clone(), HOST, at(T)).unwrap();
+    assert_eq!(made["schema"], "central.day-field-record/v1");
+    assert_eq!(made["created"], true);
+    assert_eq!(made["item"]["source"], "field");
+    assert_eq!(made["item"]["face"], 4, "where the day sat: face 4");
+    assert_eq!(made["item"]["day_ref"], day["day_ref"]);
+    assert_eq!(made["item"]["actor_ref"], "native-service:host");
+    assert_eq!(made["automatic_agent_or_model_invocation"], false);
+    record(w.path(), first.clone(), AGENT, at(T)).unwrap();
+    // The same thing reaching the Day again is the record already made, and nothing is rewritten.
+    let before = fs::read_to_string(field_path(w.path(), "2026-10-20")).unwrap();
+    let again = record(w.path(), later.clone(), HOST, at(T)).unwrap();
+    assert_eq!(again["created"], false);
+    assert_eq!(again["item"], made["item"]);
+    assert_eq!(
+        fs::read_to_string(field_path(w.path(), "2026-10-20")).unwrap(),
+        before
+    );
+    // The reading: each thing in the order it reached you, and by nothing else; who sent it, how it came, when.
+    let reading = read(w.path(), "day_field_read", json!({}), at(T));
+    assert_eq!(reading["schema"], "central.day-field-reading/v1");
+    assert_eq!(reading["day_ref"], day["day_ref"]);
+    assert_eq!(
+        reading["source"],
+        json!({"name":"field","on":true,"standing":"default"})
+    );
+    let items = reading["items"].as_array().unwrap();
+    assert_eq!(
+        items
+            .iter()
+            .map(|i| i["item_ref"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["saying:mara-1", "saying:mara-2"],
+        "ordered by when each reached you"
+    );
+    assert_eq!(
+        items[0]["from"],
+        json!({"world_ref":"world:mara","name":"mara"})
+    );
+    assert_eq!(items[0]["how"], "star");
+    assert_eq!(items[0]["star"]["name"], "The Rosarium plates");
+    assert_eq!(items[1]["how"], "to-you");
+    assert_eq!(items[1]["star"], Value::Null);
+    assert!(reading["revision"].as_str().is_some_and(|r| r != "absent"));
+    assert_eq!(reading["automatic_agent_or_model_invocation"], false);
+}
+
+#[test]
+fn a_field_record_carries_only_who_how_what_and_when_and_never_a_count_of_looks() {
+    let w = world("Europe/London", 0);
+    ensure(w.path(), at(T));
+    let base = reached(
+        "saying:x",
+        "to-you",
+        ms("2026-10-20T09:10:00Z"),
+        "Which plate?",
+    );
+    let mut looks = base.clone();
+    looks["looks"] = json!(41);
+    assert!(words_of(record(w.path(), looks, HOST, at(T))).contains("`looks`"));
+    let mut how = base.clone();
+    how["how"] = json!("popular");
+    assert!(words_of(record(w.path(), how, HOST, at(T)))
+        .contains("addressed to you (to-you), from a star you are gathered at (star), from someone you watch (watch), or from a search you made (search)"));
+    let mut starless = base.clone();
+    starless["how"] = json!("star");
+    assert_eq!(
+        kind_of(record(w.path(), starless, HOST, at(T))),
+        io::ErrorKind::InvalidInput
+    );
+    let mut nameless = base.clone();
+    nameless["from"] = json!({"world_ref":"world:mara","name":"  "});
+    assert_eq!(
+        kind_of(record(w.path(), nameless, HOST, at(T))),
+        io::ErrorKind::InvalidInput
+    );
+    let mut wordless = base.clone();
+    wordless["words"] = json!("");
+    assert_eq!(
+        kind_of(record(w.path(), wordless, HOST, at(T))),
+        io::ErrorKind::InvalidInput
+    );
+    // The same ref with other words is a different thing claiming that name: refused, never rewritten.
+    record(w.path(), base.clone(), HOST, at(T)).unwrap();
+    let mut other = base.clone();
+    other["words"] = json!("Another question.");
+    assert_eq!(
+        kind_of(record(w.path(), other, HOST, at(T))),
+        io::ErrorKind::AlreadyExists
+    );
+    // Recording needs a credential the person granted.
+    assert_eq!(
+        kind_of(record(w.path(), base, "not-a-granted-token", at(T))),
+        io::ErrorKind::PermissionDenied
+    );
+}
+
+#[test]
+fn with_the_field_source_off_or_the_day_closed_nothing_from_the_field_is_recorded() {
+    let w = world("Europe/London", 0);
+    ensure(w.path(), at(T));
+    save(w.path(), json!({"sources":{"field":false}}), at(T));
+    let refused = record(
+        w.path(),
+        reached(
+            "saying:x",
+            "to-you",
+            ms("2026-10-20T09:10:00Z"),
+            "Which plate?",
+        ),
+        HOST,
+        at(T),
+    );
+    let words = words_of(refused);
+    assert!(words.contains("Sources keep the field Off"), "{words}");
+    assert!(
+        !field_path(w.path(), "2026-10-20").exists(),
+        "nothing is written"
+    );
+    let reading = read(w.path(), "day_field_read", json!({}), at(T));
+    assert_eq!(reading["source"]["on"], false);
+    assert_eq!(reading["source"]["standing"], "saved");
+    assert_eq!(reading["items"], json!([]));
+
+    let w = world("Europe/London", 0);
+    let day = ensure(w.path(), at(T));
+    run(
+        w.path(),
+        "day_lifecycle",
+        json!({"day_ref":day["day_ref"],"expected_revision":day["revision"]["revision"],
+            "expected_relations_revision":day["relations_revision"],"lifecycle":"closed"}),
+        Some(HUMAN),
+        at(T),
+    )
+    .unwrap();
+    assert_eq!(
+        kind_of(record(
+            w.path(),
+            reached(
+                "saying:x",
+                "to-you",
+                ms("2026-10-20T09:10:00Z"),
+                "Which plate?"
+            ),
+            HOST,
+            at(T),
+        )),
+        io::ErrorKind::AlreadyExists
+    );
+    assert!(!field_path(w.path(), "2026-10-20").exists());
+}
+
+fn set_field(root: &Path, day_ref: &str, field: &str, value: Value, request: &str, now: u64) {
+    let day = read(root, "day_read", json!({"day_ref":day_ref}), now);
+    let doc = &day["document"];
+    run(
+        root,
+        "document_mutate",
+        json!({"source_ref":doc["source"]["ref"],"document_id":doc["document_id"],"expected_revision":doc["revision"]["revision"],
+            "request_id":request,"operation":"field.set","field_id":field,"value":value}),
+        Some(HUMAN),
+        now,
+    )
+    .unwrap();
+}
+fn append_contribution(root: &Path, day_ref: &str, field: &str, id: &str, html: &str, now: u64) {
+    let day = read(root, "day_read", json!({"day_ref":day_ref}), now);
+    let doc = &day["document"];
+    run(
+        root,
+        "document_mutate",
+        json!({"source_ref":doc["source"]["ref"],"document_id":doc["document_id"],"expected_revision":doc["revision"]["revision"],
+            "request_id":format!("append:{id}"),"operation":"field.append","field_id":field,"contribution_id":id,"html":html}),
+        Some(HUMAN),
+        now,
+    )
+    .unwrap();
+}
+fn part(root: &Path, input: Value, now: u64) -> io::Result<Value> {
+    execute_at(root, "day_entry_part", &input, now)
+}
+
+#[test]
+fn a_day_entry_is_read_as_a_part_you_may_show_and_nothing_else_of_the_day_goes_with_it() {
+    let w = world("Europe/London", 0);
+    ensure(w.path(), at(T));
+    make_document(w.path(), TODAY, "day:c1-today", PROPOSAL, at(T));
+    set_field(
+        w.path(),
+        TODAY,
+        "p0_quick_thoughts",
+        json!("Begin with the harbour map.\n\n  Then the tide tables."),
+        "set:p0",
+        at(T),
+    );
+    set_field(
+        w.path(),
+        TODAY,
+        "p0_adjacencies",
+        json!("A private worry about the rent."),
+        "set:p0a",
+        at(T),
+    );
+    set_field(
+        w.path(),
+        TODAY,
+        "p1_must",
+        json!(["Write the letter", {"text":"Call the harbour master"}]),
+        "set:p1",
+        at(T),
+    );
+    append_contribution(
+        w.path(),
+        TODAY,
+        "p0_quick_thoughts",
+        "c:bold",
+        "<p>A <strong>bold</strong> line &amp; a second</p><p>paragraph</p>",
+        at(T),
+    );
+    let before = read(w.path(), "day_read", json!({"day_ref":TODAY}), at(T));
+
+    let shown = part(w.path(), json!({"field_id":"p0_quick_thoughts"}), at(T)).unwrap();
+    assert_eq!(shown["schema"], "central.day-entry-part/v1");
+    assert_eq!(shown["day_ref"], TODAY);
+    assert_eq!(shown["part"]["kind"], "page");
+    assert_eq!(
+        shown["part"]["label"],
+        "Begin with the harbour map. Then the tide tables."
+    );
+    assert_eq!(shown["label_cut"], false);
+    assert_eq!(shown["author"]["actor_kind"], "human");
+    let id = shown["part"]["id"].as_str().unwrap();
+    assert!(
+        id.starts_with("day-entry:") && id.len() == "day-entry:".len() + 16,
+        "an opaque ref: {id}"
+    );
+    assert!(
+        !id.contains("2026") && !id.contains("p0_"),
+        "the ref names no date and no field: {id}"
+    );
+    assert_eq!(
+        part(w.path(), json!({"field_id":"p0_quick_thoughts"}), at(T)).unwrap()["part"]["id"],
+        id,
+        "the same entry is the same part"
+    );
+    let whole = serde_json::to_string(&shown).unwrap();
+    assert!(
+        !whole.contains("rent") && !whole.contains("harbour master") && !whole.contains("bold"),
+        "nothing else of the Day goes with it: {whole}"
+    );
+    assert_eq!(
+        shown["shown"], false,
+        "reading a part shows nothing: showing is your act in the field"
+    );
+    assert_eq!(shown["automatic_agent_or_model_invocation"], false);
+
+    let item = part(w.path(), json!({"field_id":"p1_must","index":1}), at(T)).unwrap();
+    assert_eq!(item["part"]["label"], "Call the harbour master");
+    assert_ne!(item["part"]["id"], id);
+    let words = part(w.path(), json!({"contribution_id":"c:bold"}), at(T)).unwrap();
+    assert_eq!(words["part"]["label"], "A bold line & a second paragraph");
+    assert_eq!(
+        words["author"],
+        json!({"actor_kind":"human","author_ref":"human:test"})
+    );
+
+    // Nothing was written by reading parts.
+    let after = read(w.path(), "day_read", json!({"day_ref":TODAY}), at(T));
+    assert_eq!(
+        after["document"]["revision"],
+        before["document"]["revision"]
+    );
+}
+
+#[test]
+fn a_day_entry_is_named_exactly_and_holds_words_to_show() {
+    let w = world("Europe/London", 0);
+    ensure(w.path(), at(T));
+    assert!(words_of(part(
+        w.path(),
+        json!({"field_id":"p0_quick_thoughts"}),
+        at(T)
+    ))
+    .contains("No Day document stands"));
+    make_document(w.path(), TODAY, "day:c1-today", PROPOSAL, at(T));
+    let long = "word ".repeat(60);
+    set_field(
+        w.path(),
+        TODAY,
+        "p0_quick_thoughts",
+        json!(long),
+        "set:long",
+        at(T),
+    );
+    set_field(
+        w.path(),
+        TODAY,
+        "p1_must",
+        json!(["Write the letter"]),
+        "set:p1",
+        at(T),
+    );
+    append_contribution(
+        w.path(),
+        TODAY,
+        "p0_quick_thoughts",
+        "c:gone",
+        "<p>Taken back.</p>",
+        at(T),
+    );
+    let day = read(w.path(), "day_read", json!({"day_ref":TODAY}), at(T));
+    let doc = &day["document"];
+    run(
+        w.path(),
+        "document_mutate",
+        json!({"source_ref":doc["source"]["ref"],"document_id":doc["document_id"],"expected_revision":doc["revision"]["revision"],
+            "request_id":"remove:c:gone","operation":"contribution.remove","contribution_id":"c:gone"}),
+        Some(HUMAN),
+        at(T),
+    )
+    .unwrap();
+    assert!(
+        words_of(part(w.path(), json!({"contribution_id":"c:gone"}), at(T)))
+            .contains("was removed")
+    );
+    let cut = part(w.path(), json!({"field_id":"p0_quick_thoughts"}), at(T)).unwrap();
+    let label = cut["part"]["label"].as_str().unwrap();
+    assert!(
+        label.chars().count() <= 160 && label.ends_with('…') && label.starts_with("word word"),
+        "{label}"
+    );
+    assert_eq!(cut["label_cut"], true);
+    for (input, words) in [
+        (json!({}), "Name one entry of the Day"),
+        (
+            json!({"field_id":"p0_quick_thoughts","contribution_id":"c:x"}),
+            "Name one entry of the Day",
+        ),
+        (
+            json!({"field_id":"p9_nothing"}),
+            "is not a field of this Day",
+        ),
+        (
+            json!({"field_id":"p0_adjacencies"}),
+            "holds no words to show",
+        ),
+        (
+            json!({"field_id":"p1_must"}),
+            "name one item of it by its index",
+        ),
+        (json!({"field_id":"p1_must","index":3}), "has no item 3"),
+        (
+            json!({"field_id":"p0_quick_thoughts","index":0}),
+            "holds one entry, not a list",
+        ),
+        (
+            json!({"contribution_id":"c:none"}),
+            "is not a contribution of this Day",
+        ),
+    ] {
+        let refused = words_of(part(w.path(), input.clone(), at(T)));
+        assert!(refused.contains(words), "{input}: {refused}");
+    }
 }
