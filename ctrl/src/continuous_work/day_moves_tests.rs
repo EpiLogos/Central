@@ -1954,7 +1954,14 @@ fn what_reached_you_from_the_field_is_recorded_in_the_day_naming_who_sent_it_and
     assert_eq!(made["item"]["source"], "field");
     assert_eq!(made["item"]["face"], 4, "where the day sat: face 4");
     assert_eq!(made["item"]["day_ref"], day["day_ref"]);
-    assert_eq!(made["item"]["actor_ref"], "native-service:host");
+    // Received through the shared field and recorded by the Day under the person's Field setting: nobody wrote it,
+    // and the words are the sender's. The credential is the one the person granted, which their setting authorises.
+    assert_eq!(
+        made["item"]["received"],
+        json!({"through":"shared-field","recorded_by":"day:field-source"})
+    );
+    assert_eq!(made["item"]["authorised_by"], "native-service:host");
+    assert!(made["item"].get("actor_ref").is_none(), "{made}");
     assert_eq!(made["automatic_agent_or_model_invocation"], false);
     record(w.path(), first.clone(), AGENT, at(T)).unwrap();
     // The same thing reaching the Day again is the record already made, and nothing is rewritten.
@@ -1972,7 +1979,13 @@ fn what_reached_you_from_the_field_is_recorded_in_the_day_naming_who_sent_it_and
     assert_eq!(reading["day_ref"], day["day_ref"]);
     assert_eq!(
         reading["source"],
-        json!({"name":"field","on":true,"standing":"default"})
+        json!({"name":"field","on":true,"standing":"default","on_since_unix_ms":null})
+    );
+    // What the Day takes: what reached you on its own date (Europe/London, BST: from 2026-10-19T23:00Z).
+    assert_eq!(reading["takes"]["from_unix_ms"], ms("2026-10-19T23:00:00Z"));
+    assert_eq!(
+        reading["takes"]["until_unix_ms"],
+        ms("2026-10-20T23:00:00Z")
     );
     let items = reading["items"].as_array().unwrap();
     assert_eq!(
@@ -2023,6 +2036,14 @@ fn a_field_record_carries_only_who_how_what_and_when_and_never_a_count_of_looks(
     assert_eq!(
         kind_of(record(w.path(), nameless, HOST, at(T))),
         io::ErrorKind::InvalidInput
+    );
+    // A star is named only for what came from a star you are gathered at.
+    let mut starred = base.clone();
+    starred["star"] = json!({"star_ref":"star:rosarium","name":"The Rosarium plates"});
+    let words = words_of(record(w.path(), starred, HOST, at(T)));
+    assert!(
+        words.contains("named only for what came from a star"),
+        "{words}"
     );
     let mut wordless = base.clone();
     wordless["words"] = json!("");
@@ -2311,4 +2332,402 @@ fn a_day_entry_is_named_exactly_and_holds_words_to_show() {
         let refused = words_of(part(w.path(), input.clone(), at(T)));
         assert!(refused.contains(words), "{input}: {refused}");
     }
+}
+
+#[test]
+fn a_day_takes_only_what_reached_you_on_its_own_date() {
+    // Europe/London in BST: the Day of 2026-10-21 begins at 2026-10-20T23:00:00Z.
+    let w = world("Europe/London", 0);
+    let day = ensure(w.path(), at(T));
+    // After local midnight but before the person pressed Open: the Day of that date takes it.
+    let early = reached(
+        "saying:early",
+        "to-you",
+        ms("2026-10-19T23:30:00Z"),
+        "Up early?",
+    );
+    assert_eq!(
+        record(w.path(), early, HOST, at(T)).unwrap()["created"],
+        true
+    );
+    // The earlier Day, still open after midnight, takes nothing of the next date.
+    let next = reached(
+        "saying:next",
+        "to-you",
+        ms("2026-10-20T23:30:00Z"),
+        "After midnight.",
+    );
+    let late = at("2026-10-21T00:10:00Z");
+    let words = words_of(record(w.path(), next.clone(), HOST, late));
+    assert!(
+        words.contains("2026-10-21") && words.contains("2026-10-20") && words.contains("own date"),
+        "{words}"
+    );
+    let mut named = next.clone();
+    named["day_ref"] = day["day_ref"].clone();
+    assert_eq!(
+        kind_of(record(w.path(), named, HOST, late)),
+        io::ErrorKind::InvalidInput
+    );
+    let kept = fs::read_to_string(field_path(w.path(), "2026-10-20")).unwrap();
+    assert_eq!(kept.lines().count(), 1, "only the early one: {kept}");
+    let reading = read(w.path(), "day_field_read", json!({}), late);
+    assert_eq!(reading["civil_date"], "2026-10-20");
+    assert_eq!(reading["takes"]["from_unix_ms"], ms("2026-10-19T23:00:00Z"));
+    assert_eq!(
+        reading["takes"]["until_unix_ms"],
+        ms("2026-10-20T23:00:00Z")
+    );
+    // Once the next Day opens, what reached you after its midnight is its own.
+    let opened = at("2026-10-21T08:00:00Z");
+    let today = ensure(w.path(), opened);
+    let made = record(w.path(), next, HOST, opened).unwrap();
+    assert_eq!(made["item"]["day_ref"], today["day_ref"]);
+    assert!(field_path(w.path(), "2026-10-21").exists());
+    let reading = read(w.path(), "day_field_read", json!({}), opened);
+    assert_eq!(reading["takes"]["from_unix_ms"], ms("2026-10-20T23:00:00Z"));
+    assert_eq!(
+        reading["takes"]["until_unix_ms"],
+        ms("2026-10-21T23:00:00Z")
+    );
+}
+
+#[test]
+fn turning_the_field_off_and_on_again_records_nothing_from_while_it_was_off() {
+    let w = world("Europe/London", 0);
+    ensure(w.path(), at(T));
+    let reading = read(w.path(), "day_field_read", json!({}), at(T));
+    assert_eq!(reading["source"]["on_since_unix_ms"], Value::Null);
+    assert_eq!(reading["takes"]["from_unix_ms"], ms("2026-10-19T23:00:00Z"));
+    save(
+        w.path(),
+        json!({"sources":{"field":false}}),
+        at("2026-10-20T09:20:00Z"),
+    );
+    save(
+        w.path(),
+        json!({"sources":{"field":true}}),
+        at("2026-10-20T09:40:00Z"),
+    );
+    let now = at("2026-10-20T09:41:00Z");
+    let reading = read(w.path(), "day_field_read", json!({}), now);
+    assert_eq!(
+        reading["source"]["on_since_unix_ms"],
+        ms("2026-10-20T09:40:00Z")
+    );
+    assert_eq!(
+        reading["takes"]["from_unix_ms"],
+        ms("2026-10-20T09:40:00Z"),
+        "the later of the Day's midnight and when the field last turned On"
+    );
+    let while_off = reached(
+        "saying:off",
+        "to-you",
+        ms("2026-10-20T09:30:00Z"),
+        "Anyone there?",
+    );
+    let words = words_of(record(w.path(), while_off, HOST, now));
+    assert!(words.contains("turned On"), "{words}");
+    let after = reached("saying:on", "to-you", ms("2026-10-20T09:45:00Z"), "Back?");
+    assert_eq!(
+        record(w.path(), after, HOST, at("2026-10-20T09:46:00Z")).unwrap()["created"],
+        true
+    );
+    // Saving it On again, or another source, leaves when it turned On.
+    save(
+        w.path(),
+        json!({"sources":{"field":true,"techne":false}}),
+        at("2026-10-20T10:00:00Z"),
+    );
+    let reading = read(
+        w.path(),
+        "day_field_read",
+        json!({}),
+        at("2026-10-20T10:01:00Z"),
+    );
+    assert_eq!(
+        reading["source"]["on_since_unix_ms"],
+        ms("2026-10-20T09:40:00Z")
+    );
+    // When it turned On is Central's to keep, never a setting to write.
+    let current = read(w.path(), "day_settings_read", json!({}), at(T));
+    let words = words_of(run(
+        w.path(),
+        "day_settings_write",
+        json!({"expected_revision":current["revision"],"on_since":{"field":0}}),
+        Some(HUMAN),
+        at(T),
+    ));
+    assert!(words.contains("`on_since`"), "{words}");
+}
+
+#[test]
+fn a_thing_the_day_keeps_answers_kept_whatever_the_day_refuses_now() {
+    let w = world("Europe/London", 0);
+    ensure(w.path(), at(T));
+    let item = reached("saying:kept", "to-you", ms("2026-10-20T09:10:00Z"), "Kept?");
+    record(w.path(), item.clone(), HOST, at(T)).unwrap();
+    save(w.path(), json!({"sources":{"field":false}}), at(T));
+    assert_eq!(
+        record(w.path(), item.clone(), HOST, at(T)).unwrap()["created"],
+        false,
+        "kept, though the field is Off now"
+    );
+    let day = read(w.path(), "day_read", json!({"day_ref":TODAY}), at(T));
+    run(
+        w.path(),
+        "day_lifecycle",
+        json!({"day_ref":TODAY,"expected_revision":day["revision"]["revision"],
+            "expected_relations_revision":day["relations_revision"],"lifecycle":"closed"}),
+        Some(HUMAN),
+        at(T),
+    )
+    .unwrap();
+    assert_eq!(
+        record(w.path(), item, HOST, at(T)).unwrap()["created"],
+        false,
+        "kept, though the Day is closed now"
+    );
+}
+
+fn records(root: &Path, list: Vec<Value>, now: u64) -> io::Result<Value> {
+    run(
+        root,
+        "day_field_record",
+        json!({"records":list}),
+        Some(HOST),
+        now,
+    )
+}
+
+#[test]
+fn what_waits_is_recorded_in_one_call_and_each_record_is_answered_on_its_own() {
+    let w = world("Europe/London", 0);
+    let day = ensure(w.path(), at(T));
+    let first = reached("saying:1", "to-you", ms("2026-10-20T09:10:00Z"), "One.");
+    let second = reached("saying:2", "star", ms("2026-10-20T09:20:00Z"), "Two.");
+    let mut bad = reached("saying:bad", "to-you", ms("2026-10-20T09:25:00Z"), "Bad.");
+    bad["how"] = json!("popular");
+    let tomorrow = reached(
+        "saying:3",
+        "to-you",
+        ms("2026-10-20T23:30:00Z"),
+        "Tomorrow's.",
+    );
+    record(w.path(), first.clone(), HOST, at(T)).unwrap();
+    let before = fs::read_to_string(field_path(w.path(), "2026-10-20")).unwrap();
+    let answer = records(
+        w.path(),
+        vec![first, second.clone(), bad, tomorrow.clone(), second],
+        at(T),
+    )
+    .unwrap();
+    assert_eq!(answer["schema"], "central.day-field-records/v1");
+    assert_eq!(answer["day_ref"], day["day_ref"]);
+    let results = answer["results"].as_array().unwrap();
+    assert_eq!(
+        results.len(),
+        5,
+        "one answer per record, in order: {answer}"
+    );
+    assert_eq!(results[0]["item_ref"], "saying:1");
+    assert_eq!(results[0]["created"], false, "kept already");
+    assert!(results[0].get("refused").is_none());
+    assert_eq!(results[1]["item_ref"], "saying:2");
+    assert_eq!(results[1]["created"], true);
+    assert_eq!(results[2]["item_ref"], "saying:bad");
+    assert!(results[2]["refused"]
+        .as_str()
+        .unwrap()
+        .contains("addressed to you"));
+    assert!(results[3]["refused"].as_str().unwrap().contains("own date"));
+    assert_eq!(
+        results[4]["created"], false,
+        "the same record twice is kept once"
+    );
+    assert_eq!(
+        (&answer["created"], &answer["kept"], &answer["refused"]),
+        (&json!(1), &json!(2), &json!(2))
+    );
+    let after = fs::read_to_string(field_path(w.path(), "2026-10-20")).unwrap();
+    assert!(
+        after.starts_with(&before) && after.lines().count() == 2,
+        "{after}"
+    );
+    assert_eq!(
+        answer["revision"],
+        read(w.path(), "day_field_read", json!({}), at(T))["revision"]
+    );
+    assert_eq!(answer["automatic_agent_or_model_invocation"], false);
+
+    // Many new records are one rewrite: every one appended after what was kept.
+    let more: Vec<Value> = (0..3)
+        .map(|n| {
+            reached(
+                &format!("saying:more-{n}"),
+                "watch",
+                ms("2026-10-20T09:40:00Z") + n,
+                "More.",
+            )
+        })
+        .collect();
+    let answer = records(w.path(), more, at(T)).unwrap();
+    assert_eq!(answer["created"], 3);
+    let grown = fs::read_to_string(field_path(w.path(), "2026-10-20")).unwrap();
+    assert!(grown.starts_with(&after) && grown.lines().count() == 5);
+
+    // The call names the Day; a record in it names none.
+    let mut dated = reached(
+        "saying:dated",
+        "to-you",
+        ms("2026-10-20T09:50:00Z"),
+        "Dated.",
+    );
+    dated["day_ref"] = day["day_ref"].clone();
+    let answer = records(w.path(), vec![dated], at(T)).unwrap();
+    assert!(answer["results"][0]["refused"]
+        .as_str()
+        .unwrap()
+        .contains("`day_ref`"));
+    for (input, words) in [
+        (json!({"records":[]}), "at least one"),
+        (json!({"records":"saying:1"}), "a list"),
+        (
+            json!({"records":[reached("saying:x", "to-you", ms("2026-10-20T09:10:00Z"), "x")],"item_ref":"saying:y"}),
+            "either",
+        ),
+    ] {
+        let refused = words_of(run(
+            w.path(),
+            "day_field_record",
+            input.clone(),
+            Some(HOST),
+            at(T),
+        ));
+        assert!(refused.contains(words), "{input}: {refused}");
+    }
+    let many: Vec<Value> = (0..65)
+        .map(|n| {
+            reached(
+                &format!("saying:n-{n}"),
+                "to-you",
+                ms("2026-10-20T09:10:00Z"),
+                "n",
+            )
+        })
+        .collect();
+    assert!(words_of(records(w.path(), many, at(T))).contains("at most 64"));
+
+    // With the field Off, nothing new is recorded and what is kept still answers kept.
+    save(w.path(), json!({"sources":{"field":false}}), at(T));
+    let fresh = reached("saying:off", "to-you", ms("2026-10-20T09:55:00Z"), "Off?");
+    let kept = reached("saying:1", "to-you", ms("2026-10-20T09:10:00Z"), "One.");
+    let answer = records(w.path(), vec![fresh, kept], at(T)).unwrap();
+    assert!(answer["results"][0]["refused"]
+        .as_str()
+        .unwrap()
+        .contains("Off"));
+    assert_eq!(answer["results"][1]["created"], false);
+}
+
+#[test]
+fn a_list_item_keeps_its_part_however_the_list_moves_and_no_part_ref_is_guessed() {
+    let w = world("Europe/London", 0);
+    ensure(w.path(), at(T));
+    make_document(w.path(), TODAY, "day:c1-today", PROPOSAL, at(T));
+    set_field(
+        w.path(),
+        TODAY,
+        "p1_must",
+        json!([{"id":"t-1","text":"Call the harbour master"}, "Write the letter"]),
+        "set:p1",
+        at(T),
+    );
+    let called = part(w.path(), json!({"field_id":"p1_must","index":0}), at(T)).unwrap();
+    assert_eq!(
+        called["entry"],
+        json!({"field_id":"p1_must","item":"t-1"}),
+        "the item's own id"
+    );
+    let letter = part(w.path(), json!({"field_id":"p1_must","index":1}), at(T)).unwrap();
+    let letter_item = letter["entry"]["item"].as_str().unwrap().to_owned();
+    assert!(letter_item.starts_with("words:"), "{letter_item}");
+    assert!(
+        letter["entry"].get("index").is_none(),
+        "an item's place is never its identity"
+    );
+    set_field(
+        w.path(),
+        TODAY,
+        "p1_must",
+        json!(["Write the letter", "Buy rope", {"id":"t-1","text":"Call the harbour master"}]),
+        "set:p1b",
+        at(T),
+    );
+    let id = |input: Value| part(w.path(), input, at(T)).unwrap()["part"]["id"].clone();
+    assert_eq!(
+        id(json!({"field_id":"p1_must","index":2})),
+        called["part"]["id"]
+    );
+    assert_eq!(
+        id(json!({"field_id":"p1_must","item_id":"t-1"})),
+        called["part"]["id"]
+    );
+    assert_eq!(
+        id(json!({"field_id":"p1_must","index":0})),
+        letter["part"]["id"]
+    );
+    let refused = words_of(part(
+        w.path(),
+        json!({"field_id":"p1_must","item_id":"t-9"}),
+        at(T),
+    ));
+    assert!(refused.contains("no item t-9"), "{refused}");
+
+    // The salt is Central's, kept beside the Day and written once: a part ref is no digest of what anyone could guess.
+    let salt_path = w.path().join("Control/user/day/2026-10-20/part-salt.json");
+    let salt = fs::read_to_string(&salt_path).unwrap();
+    id(json!({"field_id":"p1_must","index":0}));
+    assert_eq!(
+        fs::read_to_string(&salt_path).unwrap(),
+        salt,
+        "written once"
+    );
+    let guessed = source::key(
+        &serde_json::to_string(&json!([TODAY, {"field_id":"p1_must","item":"t-1"}])).unwrap(),
+    );
+    assert_ne!(
+        called["part"]["id"],
+        format!("day-entry:{}", &guessed[..16])
+    );
+    let other = world("Europe/London", 0);
+    ensure(other.path(), at(T));
+    make_document(other.path(), TODAY, "day:c1-today", PROPOSAL, at(T));
+    set_field(
+        other.path(),
+        TODAY,
+        "p1_must",
+        json!([{"id":"t-1","text":"Call the harbour master"}]),
+        "set:p1",
+        at(T),
+    );
+    assert_ne!(
+        part(other.path(), json!({"field_id":"p1_must","index":0}), at(T)).unwrap()["part"]["id"],
+        called["part"]["id"],
+        "another ground keeps another salt"
+    );
+
+    // A field's value is text: nothing in it is markup, and nothing is unescaped.
+    set_field(
+        w.path(),
+        TODAY,
+        "p0_quick_thoughts",
+        json!("5 < 6 and R&D <b>stay</b> &amp;"),
+        "set:p0",
+        at(T),
+    );
+    assert_eq!(
+        part(w.path(), json!({"field_id":"p0_quick_thoughts"}), at(T)).unwrap()["part"]["label"],
+        "5 < 6 and R&D <b>stay</b> &amp;"
+    );
 }
