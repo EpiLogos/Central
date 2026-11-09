@@ -1800,9 +1800,14 @@ fn page_world(root: &Path, loc: &CentralPathRef) -> io::Result<Option<String>> {
     }
     if parts.len() > 2 && parts[0] == "Work" {
         let project = Path::new("Work").join(parts[1]);
-        let manifest = crate::projectcentral::read_project_manifest(&root.join(&project))
-            .ok()
-            .filter(|manifest| manifest.validate().valid);
+        // A project page's world is read from its project's manifest: a place it stands on that is missing is named (0R-authority.6).
+        let manifest = match crate::projectcentral::read_project_manifest(&root.join(&project)) {
+            Ok(manifest) => Some(manifest).filter(|manifest| manifest.validate().valid),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Err(missing_ground(root, Some(parts[1]), error))
+            }
+            Err(_) => None,
+        };
         if let Some(manifest) = manifest {
             if let Ok(within) = relative.strip_prefix(project.join(&manifest.human_source)) {
                 if within.components().count() > 2 {
@@ -1965,25 +1970,44 @@ fn absent_page(
     )
 }
 
-/// The trash stands on the world's own folders: its Control and Work, and a project's own folder and its ProjectCentral. One that is
-/// missing is named, in words, never handed on as the system's raw error (O-I #747 round 895: Delete in a walk world with no Work folder
-/// answered "No such file or directory (os error 2)"). Any other failure passes as it came.
+/// The trash stands on every place its world's scope reads (`continuous_work::source::Scope::resolve`, and `page_world` before it): the
+/// world's Control and Work, and for a project's page the project's own folder, its ProjectCentral and the `project.json` there. One that
+/// is missing is named, in words, never handed on as the system's raw error (O-I #747 round 895: Delete in a walk world with no Work folder
+/// answered "No such file or directory (os error 2)"; round 896, 0R-authority.6: a project's missing `project.json` too). Any other
+/// failure passes as it came.
 fn missing_ground(root: &Path, project: Option<&str>, error: io::Error) -> io::Error {
     if error.kind() != io::ErrorKind::NotFound {
         return error;
     }
-    let mut folders = vec![PathBuf::from("Control"), PathBuf::from("Work")];
+    let mut places = vec![
+        (PathBuf::from("Control"), true),
+        (PathBuf::from("Work"), true),
+    ];
     if let Some(project) = project {
-        folders.push(Path::new("Work").join(project));
-        folders.push(Path::new("Work").join(project).join("ProjectCentral"));
+        let own = Path::new("Work").join(project);
+        places.push((own.clone(), true));
+        places.push((own.join(crate::projectcentral::PROJECTCENTRAL_DIR), true));
+        places.push((
+            own.join(crate::projectcentral::PROJECTCENTRAL_DIR)
+                .join(crate::projectcentral::PROJECT_MANIFEST),
+            false,
+        ));
     }
-    let Some(folder) = folders
-        .iter()
-        .find(|folder| directory(root, folder).is_err())
-    else {
+    let Some((place, folder)) = places.iter().find(|(place, folder)| {
+        if *folder {
+            directory(root, place).is_err()
+        } else {
+            fs::symlink_metadata(root.join(place))
+                .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
+        }
+    }) else {
         return error;
     };
-    let said = format!("This world's {} folder is missing", folder.display());
+    let said = format!(
+        "This world's {} {} is missing",
+        place.display(),
+        if *folder { "folder" } else { "file" }
+    );
     io::Error::new(
         io::ErrorKind::NotFound,
         format!("{said}, and Central's trash stands on it: nothing was moved."),
@@ -2012,20 +2036,27 @@ pub fn trash(root: &Path, input: &Value, token: Option<&str>, now: u64) -> io::R
         Some(_) => return Err(invalid("expected_authority_revision must be text")),
     };
     // Who acts, as the caller says it (`actor`, `actor_kind`, as a save says it; O-I #747 round 895, DLW build ruling 2026-11-09): the
-    // trash is the person's own act, authenticated below on their token, so a caller that says another kind is refused in words.
-    match input.get("actor") {
-        None | Some(Value::Null) => {}
-        Some(Value::String(actor)) if !actor.trim().is_empty() => {}
-        Some(_) => return Err(invalid("actor must name who acts")),
-    }
+    // trash is the person's own act, authenticated below on their token, so a caller that says another kind is refused in words. `actor`
+    // is recorded in the trash's event, bounded as a save bounds it (`attribution`); where none is named the authenticated person stands
+    // (round 896, 0R-authority.10). Both stay optional, as not every caller sends them: the O-I kernel's Expressions Delete
+    // (expression.rs `Request::Delete`) sends both, and its page owner's Trash (page.rs `trash`, the Pages device's and the timeline's
+    // Delete) sends neither.
+    let actor = match input.get("actor") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(actor)) if !actor.trim().is_empty() && actor.len() <= 1024 => {
+            Some(actor.clone())
+        }
+        Some(_) => return Err(invalid("actor must be bounded and nonempty")),
+    };
     match input.get("actor_kind") {
         None | Some(Value::Null) => {}
         Some(Value::String(kind)) if kind == "human" => {}
-        Some(_) => {
+        Some(Value::String(_)) => {
             return Err(denied(
                 "Central's trash takes a page by the person's own act: a caller that is not human cannot move it, and nothing was moved",
             ))
         }
+        Some(_) => return Err(invalid("actor_kind must be text")),
     }
     let world = page_world(&root, &loc)?;
     if named != world.as_deref() {
@@ -2116,7 +2147,7 @@ pub fn trash(root: &Path, input: &Value, token: Option<&str>, now: u64) -> io::R
         cursor: next_cursor(&area)?,
         previous_revision: basis.clone(),
         revision: String::new(),
-        actor: principal.principal_ref.clone(),
+        actor: actor.unwrap_or_else(|| principal.principal_ref.clone()),
         actor_kind: "human".into(),
         agent_session_ref: None,
         restored_from: None,
@@ -2163,7 +2194,7 @@ pub fn trash(root: &Path, input: &Value, token: Option<&str>, now: u64) -> io::R
             attributions.insert(
                 source_ref,
                 crate::source_horizon::SourceWriteAttribution {
-                    actor: principal.principal_ref.clone(),
+                    actor: event.actor.clone(),
                     actor_kind: "human".into(),
                     agent_session_ref: None,
                 },
