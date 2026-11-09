@@ -6,7 +6,11 @@ use crate::source_safety::content_revision_bytes;
 use rusqlite::{backup::Backup, Connection, OpenFlags};
 use serde_json::{json, Value};
 use std::os::unix::fs::PermissionsExt;
-use std::{fs, io, path::Path, time::Duration};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 pub(crate) fn adopt(scope: &Scope, input: &Value) -> io::Result<Value> {
     if input["quiesced"] != true {
@@ -215,14 +219,27 @@ pub(crate) fn scope_register(all: &[Scope], input: &Value) -> io::Result<Value> 
             )))
         }
     }
-    if let Some(folder) = folder_declarations(&root.root)?
-        .into_iter()
-        .find(|folder| folder.name == name)
-    {
-        return Err(conflict(format!(
-            "The scope name {name} is already taken: it is the folder scope over {}",
-            folder.root
+    // A folder scope's World is `folder:<name>`: no project's name is spelled so.
+    if name.starts_with(FOLDER_WORLD_PREFIX) {
+        return Err(invalid(format!(
+            "A project scope's name never begins with {FOLDER_WORLD_PREFIX}, which names a folder scope's World, and {name} does"
         )));
+    }
+    for declared in folder_declarations(&root.root)? {
+        match declared {
+            Ok(folder) if folder.name == name => {
+                return Err(conflict(format!(
+                    "The scope name {name} is already taken: it is the folder scope over {}",
+                    folder.root
+                )))
+            }
+            Err((declared, words)) if declared == name => {
+                return Err(conflict(format!(
+                    "The scope name {name} is already taken by a folder scope whose declaration does not read: {words}"
+                )))
+            }
+            _ => {}
+        }
     }
     let raw = text(input, "path")?;
     let external = Path::new(raw).is_absolute();
@@ -317,7 +334,18 @@ fn folder_register(all: &[Scope], root: &Scope, name: &str, input: &Value) -> io
     let media = admitted_media(input)?;
     let exclude = excluded_folders(input)?;
     let world = format!("{FOLDER_WORLD_PREFIX}{name}");
-    let declared = folder_declarations(&root.root)?;
+    let mut declared = Vec::new();
+    for read in folder_declarations(&root.root)? {
+        match read {
+            Ok(folder) => declared.push(folder),
+            Err((unread, words)) if unread == name => {
+                return Err(conflict(format!(
+                    "The scope name {name} is already taken by a folder scope whose declaration does not read: {words}"
+                )))
+            }
+            Err(_) => {}
+        }
+    }
     if let Some(same) = declared.iter().find(|folder| folder.name == name) {
         if same.root == shown && same.media == media && same.exclude == exclude {
             return Ok(json!({"world_ref":world,"kind":"folder","changed":false,
@@ -342,6 +370,41 @@ fn folder_register(all: &[Scope], root: &Scope, name: &str, input: &Value) -> io
             "{raw} is already the folder scope {}",
             other.name
         )));
+    }
+    // A folder scope stands beside every other scope, never inside or around one: each is compared by its canonical path.
+    let others = declared
+        .iter()
+        .map(|folder| {
+            (
+                "folder scope",
+                folder.name.clone(),
+                PathBuf::from(&folder.root),
+            )
+        })
+        .chain(
+            all.iter()
+                .filter(|scope| scope.is_external() && !scope.is_folder())
+                .map(|scope| {
+                    (
+                        "external project scope",
+                        scope.project.clone().unwrap_or_else(|| scope.world.clone()),
+                        scope.root.clone(),
+                    )
+                }),
+        );
+    for (kind, other, at) in others {
+        if target.starts_with(&at) {
+            return Err(conflict(format!(
+                "{raw} is inside the {kind} {other} ({}): a folder scope never stands inside another scope",
+                at.display()
+            )));
+        }
+        if at.starts_with(&target) {
+            return Err(conflict(format!(
+                "{raw} holds the {kind} {other} ({}): a folder scope never stands around another scope",
+                at.display()
+            )));
+        }
     }
     if root.ground()?.scopes.contains_key(name)
         || all

@@ -215,6 +215,10 @@ pub(crate) fn plan(root: &Path, all: &[Scope], input: &Value) -> io::Result<Valu
     // Pin every participating source under the move to its existing ref, rather
     // than letting the pathname fallback mint a second identity after rename.
     for current in all {
+        // A folder scope stands outside the ground and keeps no relation a move could change.
+        if current.is_folder() {
+            continue;
+        }
         let before = document_text(current)?;
         let mut doc = current.document()?;
         let mut ground = current.ground()?;

@@ -386,6 +386,17 @@ pub(crate) fn search(all: &[Scope], input: &Value) -> io::Result<Value> {
             }
         }
     }
+    // A folder scope is listed by its metadata and never indexed: a search leaves it out and names it, so a registered folder never
+    // reads as a map not initialized.
+    let mut listed_not_searched = Vec::new();
+    chosen.retain(|scope| {
+        if scope.is_folder() {
+            listed_not_searched.push(
+                json!({"world_ref": scope.world, "words": "listed by metadata, not searched"}),
+            );
+        }
+        !scope.is_folder()
+    });
     let selected_world = scope.world.clone();
     let raw_query = input["query"].as_str().unwrap_or("");
     let mode = input["mode"].as_str().unwrap_or("fulltext");
@@ -405,7 +416,9 @@ pub(crate) fn search(all: &[Scope], input: &Value) -> io::Result<Value> {
         .map_err(io::Error::other)?;
     let excluded = context_exclusions(all, selected(all, input)?)?;
     if limit == 0 {
-        return Ok(json!({"hits":Vec::<Value>::new(),"absences":Vec::<Value>::new()}));
+        return Ok(
+            json!({"hits":Vec::<Value>::new(),"absences":Vec::<Value>::new(),"listed_not_searched":listed_not_searched}),
+        );
     }
     // Full-text matching requires every token to hit; a long phrase that
     // misses everywhere relaxes by dropping trailing tokens (to a floor of
@@ -549,7 +562,9 @@ pub(crate) fn search(all: &[Scope], input: &Value) -> io::Result<Value> {
             })
     });
     hits.truncate(limit);
-    Ok(json!({"hits":hits,"absences":absences,"query":effective,"query_relaxed":relaxed}))
+    Ok(
+        json!({"hits":hits,"absences":absences,"listed_not_searched":listed_not_searched,"query":effective,"query_relaxed":relaxed}),
+    )
 }
 
 /// The passage of a source's text that best answers a query, and where it sits
