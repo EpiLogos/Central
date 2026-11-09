@@ -1253,17 +1253,13 @@ fn open_folder_root(raw: &str, ground: &Path) -> io::Result<PathBuf> {
             canonical.display()
         )));
     }
+    // Said of the folder's own declared root alone: these words ride on every answer while the folder is unreachable, and the
+    // ground's own path is not theirs to show (DLW build ruling 2026-11-09, 47g item 5).
     if canonical.starts_with(ground) {
-        return Err(invalid(format!(
-            "{raw} is inside this ground ({})",
-            ground.display()
-        )));
+        return Err(invalid(format!("{raw} is inside this ground")));
     }
     if ground.starts_with(&canonical) {
-        return Err(invalid(format!(
-            "{raw} holds this ground ({})",
-            ground.display()
-        )));
+        return Err(invalid(format!("{raw} holds this ground")));
     }
     match fs::symlink_metadata(canonical.join("ProjectCentral/project.json")) {
         Ok(_) => return Err(invalid(format!("{raw} holds a ProjectCentral"))),
@@ -2747,7 +2743,9 @@ impl FolderWalk {
                 let Some(enters) = enters else {
                     return Ok(self.stop_at_deadline());
                 };
-                // Nor past a bundle probe that did not answer at once (DLW build ruling 2026-11-09, 47f item 5).
+                // Nor past a bundle probe that did not answer at once (DLW build ruling 2026-11-09, 47f item 5). No read lies between
+                // here and `dir`'s own check, which holds the folder's listing; this one keeps the test seam (`before_reading`) quiet
+                // once the reader has left (47g item 5).
                 if self.left() {
                     return Ok(false);
                 }
