@@ -13,6 +13,10 @@ use std::{
 };
 
 pub(crate) fn adopt(scope: &Scope, input: &Value) -> io::Result<Value> {
+    // A folder scope keeps no index, whoever calls: nothing is staged, backed up or received for it.
+    if scope.is_folder() {
+        return Err(folder_keeps_no_index(scope));
+    }
     if input["quiesced"] != true {
         return Err(invalid(
             "Adoption requires quiesced=true for the source database",
@@ -134,6 +138,9 @@ pub(crate) fn adopt(scope: &Scope, input: &Value) -> io::Result<Value> {
 }
 
 pub(crate) fn record_adopt(scope: &Scope, input: &Value) -> io::Result<Value> {
+    if scope.is_folder() {
+        return Err(folder_keeps_no_index(scope));
+    }
     expect_basis(scope, input)?;
     let (_, entry) = lookup(std::slice::from_ref(scope), text(input, "source_ref")?)?;
     let id = input["record_id"]

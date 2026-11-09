@@ -118,12 +118,15 @@ fn hidden_flag(metadata: &fs::Metadata) -> bool {
 fn hidden_flag(_: &fs::Metadata) -> bool {
     false
 }
-/// Whether the folder at `path`, named `name`, is a package: its extension is a package's, or it holds a bundle's
-/// `Contents/Info.plist`, seen by `lstat` alone.
-fn folder_is_package(path: &Path, name: &str) -> bool {
+/// Whether a folder named `name` is a package by its extension, whatever its case.
+fn package_by_name(name: &str) -> bool {
     name.rsplit_once('.').is_some_and(|(_, extension)| {
         FOLDER_PACKAGES.contains(&extension.to_ascii_lowercase().as_str())
-    }) || fs::symlink_metadata(path.join("Contents")).is_ok_and(|contents| contents.is_dir())
+    })
+}
+/// Whether the folder at `path` holds a bundle's `Contents/Info.plist`, seen by `lstat` alone: a package whatever its name.
+fn holds_bundle(path: &Path) -> bool {
+    fs::symlink_metadata(path.join("Contents")).is_ok_and(|contents| contents.is_dir())
         && fs::symlink_metadata(path.join("Contents/Info.plist")).is_ok_and(|plist| plist.is_file())
 }
 /// Whether a folder scope's walk enters a folder it meets.
@@ -164,8 +167,20 @@ impl FolderRules {
     /// Whether the walk enters the folder at `path`, named `name`, by its `lstat` `metadata`. An exclusion matches the folder's name
     /// whatever its case, as macOS's file system does.
     fn enters(&self, path: &Path, name: &str, metadata: &fs::Metadata) -> Enters {
+        self.enters_unless(path, name, metadata, || false)
+            .unwrap_or(Enters::No)
+    }
+    /// [`Self::enters`], asking `stop` before the one read it makes (the bundle probe): `None` when `stop` answers true, and then
+    /// the probe is not read.
+    fn enters_unless(
+        &self,
+        path: &Path,
+        name: &str,
+        metadata: &fs::Metadata,
+        stop: impl FnOnce() -> bool,
+    ) -> Option<Enters> {
         if !metadata.is_dir() || folder_hidden(name, metadata) {
-            return Enters::No;
+            return Some(Enters::No);
         }
         let lower = name.to_lowercase();
         if self
@@ -173,14 +188,20 @@ impl FolderRules {
             .exclude
             .iter()
             .any(|excluded| excluded.to_lowercase() == lower)
-            || folder_is_package(path, name)
+            || package_by_name(name)
         {
-            return Enters::No;
+            return Some(Enters::No);
+        }
+        if stop() {
+            return None;
+        }
+        if holds_bundle(path) {
+            return Some(Enters::No);
         }
         if self.device_of(path, metadata) != self.device {
-            return Enters::Skipped("another volume is mounted here");
+            return Some(Enters::Skipped("another volume is mounted here"));
         }
-        Enters::Yes
+        Some(Enters::Yes)
     }
     /// The media kind of the file at `path`, named `name`, when the walk lists it: an ordinary file, not hidden, of a kind the scope
     /// admits.
@@ -201,15 +222,20 @@ pub(crate) struct FolderWalkSeams {
     pub other_volume: Option<PathBuf>,
     pub stall: Option<(PathBuf, PathBuf)>,
     pub vanish: Option<PathBuf>,
-    /// A path the walk is handed under another name, these bytes: a name that is not UTF-8, as a Linux disk or a network share hands
-    /// one (APFS keeps only UTF-8 names).
-    pub not_utf8: Option<(PathBuf, Vec<u8>)>,
+    /// Paths the walk is handed under another name, these bytes: a name that is not UTF-8, as a Linux disk or a network share hands
+    /// one (APFS keeps only UTF-8 names). The walk reads each where it stands.
+    pub not_utf8: Vec<(PathBuf, Vec<u8>)>,
     /// The walk's deadline as a logical clock: it passes once this many folders are read, so a page is the same on any machine.
     pub deadline_after: Option<usize>,
     /// Every path the walk reads (a folder listed, a file's metadata), in order.
     pub read: Option<std::sync::Arc<std::sync::Mutex<Vec<PathBuf>>>>,
     /// The page a read that names no limit gets.
     pub page_default: Option<usize>,
+    /// The stall says nothing to the reader: the reader leaves at its own time bound, as a read that never answers leaves it.
+    pub silent: bool,
+    /// The walk's deadline passes as it reads this path (a folder listed, a folder's metadata or bundle probe, a file's metadata),
+    /// whatever its time bound.
+    pub pass_deadline_at: Option<PathBuf>,
 }
 /// How many entries a page holds when its read names no limit ([`FOLDER_PAGE_DEFAULT`]; a test's seam may set fewer).
 pub(crate) fn folder_page_default() -> usize {
@@ -224,6 +250,17 @@ pub(crate) fn folder_page_default() -> usize {
 static FOLDERS_WALKING: std::sync::Mutex<BTreeSet<PathBuf>> =
     std::sync::Mutex::new(BTreeSet::new());
 static FOLDER_WALK_ENDED: std::sync::Condvar = std::sync::Condvar::new();
+/// The folders a read has found walked by another and waited for (a test releases a parked walk once a read waits for it).
+#[cfg(test)]
+static FOLDERS_WAITED: std::sync::Mutex<BTreeSet<PathBuf>> = std::sync::Mutex::new(BTreeSet::new());
+/// Whether a read has waited for another walk of the folder at `root`.
+#[cfg(test)]
+pub(crate) fn folder_waited(root: &Path) -> bool {
+    FOLDERS_WAITED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .contains(root)
+}
 /// What a page answers when a walk of its folder is still running past its own bound.
 const FOLDER_STILL_WALKING: &str =
     "a walk of this folder is still running, so this page lists none of it: ask again when it ends";
@@ -552,6 +589,15 @@ pub(crate) fn read_failure(
             cause: Some(error),
         },
     )
+}
+/// The words of what made a read fail, beneath Central's own words for it: a folder scope's reader names its folder's own error
+/// plainly, as the folder's walk names it in `skipped_named`.
+pub(crate) fn failure_cause(error: &io::Error) -> String {
+    error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<ReadFailure>())
+        .and_then(|failure| failure.cause.as_ref())
+        .map_or_else(|| error.to_string(), ToString::to_string)
 }
 pub(crate) fn read_refusal(
     kind: io::ErrorKind,
@@ -1085,15 +1131,6 @@ pub(crate) struct UnreachableScope {
     pub world: Option<String>,
     pub root: String,
     pub message: String,
-}
-impl UnreachableScope {
-    /// Whether a read asking for `asked` asked for this scope.
-    pub(crate) fn asked(&self, asked: &str) -> bool {
-        match &self.world {
-            Some(world) => world == asked,
-            None => self.project == asked,
-        }
-    }
 }
 
 type ExternalOpened = (
@@ -2457,7 +2494,7 @@ struct FolderWalk {
     most: usize,
     /// The walk's time bound, and when it passes: past it the walk reads nothing more.
     time: std::time::Duration,
-    deadline: std::time::Instant,
+    deadline: std::cell::Cell<std::time::Instant>,
     progress: std::sync::Arc<std::sync::Mutex<FolderProgress>>,
     #[cfg(test)]
     seams: FolderWalkSeams,
@@ -2489,22 +2526,27 @@ impl FolderWalk {
     fn left(&self) -> bool {
         self.progress().left
     }
-    /// Whether the walk's deadline has passed, before reading a folder (`folder`) or a file. Under a test's logical clock it passes
-    /// once that many folders are read, and only a folder's reading is held to it.
+    /// Whether the walk's deadline has passed, before reading a folder (`folder`: its listing, or its metadata or bundle probe on the
+    /// way into it) or a file. Under a test's logical clock it passes once that many folders are read, and only a folder's reading
+    /// is held to it.
     fn past(&self, folder: bool) -> bool {
         #[cfg(test)]
         if let Some(after) = self.seams.deadline_after {
             return folder && self.directories >= after;
         }
         let _ = folder;
-        std::time::Instant::now() >= self.deadline
+        std::time::Instant::now() >= self.deadline.get()
     }
     /// Stop at the deadline: the page holds what the walk listed by then.
     fn stop_at_deadline(&self) -> bool {
         self.bound(time_bound_words(self.time));
         false
     }
+    /// The walk is past `path`. A name that is not UTF-8 is never a position: no page starts after it.
     fn finish(&self, path: &Path) {
+        if path.to_str().is_none() {
+            return;
+        }
         let mut progress = self.progress();
         if !progress.left {
             progress.page.finished = Some(path.to_path_buf());
@@ -2556,10 +2598,29 @@ impl FolderWalk {
         if self.seams.vanish.as_deref() == Some(path) {
             let _ = fs::remove_dir_all(path).or_else(|_| fs::remove_file(path));
         }
+        if self.seams.pass_deadline_at.as_deref() == Some(path) {
+            self.deadline.set(std::time::Instant::now());
+        }
         if let Some((_, fifo)) = self.seams.stall.as_ref().filter(|(at, _)| at == path) {
-            let _ = self.parked.send(Walked::Parked);
+            if !self.seams.silent {
+                let _ = self.parked.send(Walked::Parked);
+            }
             let _ = fs::File::open(fifo);
         }
+    }
+    /// The `lstat` of `path`. Under a test's seam, a row handed under a name that is not UTF-8 is read where it stands.
+    fn lstat(&self, path: &Path) -> io::Result<fs::Metadata> {
+        #[cfg(test)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            if let Some((at, _)) = self.seams.not_utf8.iter().find(|(at, bytes)| {
+                at.parent()
+                    .is_some_and(|parent| parent.join(std::ffi::OsStr::from_bytes(bytes)) == path)
+            }) {
+                return fs::symlink_metadata(at);
+            }
+        }
+        fs::symlink_metadata(path)
     }
     /// Walk `dir` (`depth` folders under the root). Only the root's own failure to be read fails the page; every other folder or
     /// entry that cannot be read is skipped and named. `Ok(false)` once the walk stops: the page is full, a bound stopped it or the
@@ -2605,7 +2666,7 @@ impl FolderWalk {
             }
         }
         #[cfg(test)]
-        if let Some((at, bytes)) = &self.seams.not_utf8 {
+        for (at, bytes) in &self.seams.not_utf8 {
             use std::os::unix::ffi::OsStringExt;
             for row in rows.iter_mut().filter(|row| row.1 == *at) {
                 row.0 = std::ffi::OsString::from_vec(bytes.clone());
@@ -2618,17 +2679,10 @@ impl FolderWalk {
             if self.left() {
                 return Ok(false);
             }
-            // A Source is named by its path, and a name that is not UTF-8 cannot be one: it is skipped and named (lossily), once, by
-            // the page whose start lies before it, and the rest of the folder answers.
-            if path.to_str().is_none() {
-                if !after
-                    .as_deref()
-                    .is_some_and(|after| path.as_path() <= after)
-                {
-                    self.skip(&path, "its name is not UTF-8".into());
-                }
-                continue;
-            }
+            // A Source is named by its path, and a name that is not UTF-8 cannot be one. A folder of such a name the walk would enter,
+            // or a media file it would list, is skipped and named (lossily) by the page whose start lies before it, and the rest of
+            // the folder answers; anything else of such a name is passed by as it would be under any name.
+            let utf8 = path.to_str().is_some();
             let name = name.to_string_lossy();
             let kind = match kind {
                 Ok(kind) => kind,
@@ -2644,7 +2698,13 @@ impl FolderWalk {
                 }) {
                     continue;
                 }
-                let metadata = match fs::symlink_metadata(&path) {
+                // Past the deadline, not even a folder's metadata is read, nor its bundle probe.
+                if self.past(true) {
+                    return Ok(self.stop_at_deadline());
+                }
+                #[cfg(test)]
+                self.before_reading(&path);
+                let metadata = match self.lstat(&path) {
                     Ok(metadata) => metadata,
                     Err(error) if error.kind() == io::ErrorKind::NotFound => {
                         self.skip(&path, "it was gone when it was read".into());
@@ -2655,12 +2715,32 @@ impl FolderWalk {
                         continue;
                     }
                 };
-                match self.rules.enters(&path, &name, &metadata) {
+                // A read that did not answer at once may have outlasted its reader: past that, nothing more is read.
+                if self.left() {
+                    return Ok(false);
+                }
+                let walk = &*self;
+                let enters = walk.rules.enters_unless(&path, &name, &metadata, || {
+                    if walk.past(true) {
+                        return true;
+                    }
+                    #[cfg(test)]
+                    walk.before_reading(&path.join("Contents"));
+                    false
+                });
+                let Some(enters) = enters else {
+                    return Ok(self.stop_at_deadline());
+                };
+                match enters {
                     Enters::No => {}
                     Enters::Skipped(why) => self.skip(&path, why.into()),
                     Enters::Yes if !self.on_the_way(&path) => {}
                     Enters::Yes if depth + 1 > FOLDER_DEPTH => {
                         self.skip(&path, format!("it is deeper than {FOLDER_DEPTH} folders"));
+                    }
+                    Enters::Yes if !utf8 => {
+                        self.skip(&path, "its name is not UTF-8".into());
+                        continue;
                     }
                     Enters::Yes => {
                         if !self.dir(scan, &path, depth + 1)? {
@@ -2688,7 +2768,7 @@ impl FolderWalk {
             }
             #[cfg(test)]
             self.before_reading(&path);
-            let metadata = match fs::symlink_metadata(&path) {
+            let metadata = match self.lstat(&path) {
                 Ok(metadata) => metadata,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
                     self.skip(&path, "it was gone when it was read".into());
@@ -2703,6 +2783,10 @@ impl FolderWalk {
                 self.finish(&path);
                 continue;
             };
+            if !utf8 {
+                self.skip(&path, "its name is not UTF-8".into());
+                continue;
+            }
             if !scan.retrieval_allowed(&path) {
                 self.finish(&path);
                 continue;
@@ -2755,12 +2839,21 @@ pub(crate) fn folder_page(scope: &Scope, read: FolderRead) -> io::Result<FolderP
     let (most, time) = (FOLDER_WALK_DIRECTORIES, FOLDER_WALK_TIME);
     let began = std::time::Instant::now();
     // One walk of a folder at a time: a read that finds one running waits for it within its own bound, then answers in words.
+    let mut waited = false;
     let walking = {
-        let (mut walking, _) = FOLDER_WALK_ENDED
-            .wait_timeout_while(folders_walking(), time, |walking| {
-                walking.contains(&scope.root)
-            })
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut walking = folders_walking();
+        if walking.contains(&scope.root) {
+            waited = true;
+            #[cfg(test)]
+            FOLDERS_WAITED
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(scope.root.clone());
+            walking = FOLDER_WALK_ENDED
+                .wait_timeout_while(walking, time, |walking| walking.contains(&scope.root))
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
+        }
         if walking.contains(&scope.root) {
             return Ok(FolderPage {
                 bound: Some(FOLDER_STILL_WALKING.into()),
@@ -2779,7 +2872,7 @@ pub(crate) fn folder_page(scope: &Scope, read: FolderRead) -> io::Result<FolderP
         directories: 0,
         most,
         time,
-        deadline: began + time,
+        deadline: std::cell::Cell::new(began + time),
         progress: progress.clone(),
         #[cfg(test)]
         seams,
@@ -2806,16 +2899,31 @@ pub(crate) fn folder_page(scope: &Scope, read: FolderRead) -> io::Result<FolderP
         }
         page
     };
-    match receive.recv_timeout(time.saturating_sub(began.elapsed())) {
-        Ok(Walked::Done(walked)) => walked.map(|()| take(None)).map_err(unread),
+    let page = match receive.recv_timeout(time.saturating_sub(began.elapsed())) {
+        Ok(Walked::Done(walked)) => walked.map(|()| take(None)).map_err(unread)?,
         #[cfg(test)]
-        Ok(Walked::Parked) => Ok(take(Some(time_bound_words(time)))),
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(take(Some(time_bound_words(time)))),
-        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(io::Error::other(format!(
-            "the walk of the folder scope over {} ended without an answer",
-            scope.root.display()
-        ))),
+        Ok(Walked::Parked) => take(Some(time_bound_words(time))),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => take(Some(time_bound_words(time))),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            return Err(io::Error::other(format!(
+                "the walk of the folder scope over {} ended without an answer",
+                scope.root.display()
+            )))
+        }
+    };
+    // A read that spent its bound waiting for another walk, and so walked nothing of its own, says the other walk held it: never an
+    // empty page laid to its own time bound, with nowhere to go on from.
+    if waited
+        && page.found.is_empty()
+        && page.finished.is_none()
+        && page.bound.as_deref() == Some(time_bound_words(time).as_str())
+    {
+        return Ok(FolderPage {
+            bound: Some(FOLDER_STILL_WALKING.into()),
+            ..FolderPage::default()
+        });
     }
+    Ok(page)
 }
 /// The entry a folder scope lists at `member` (a path relative to its root), resolved by `lstat` of each folder on its way and of the
 /// file, under the walk's own rules, never by walking: what the walk leaves out (a hidden file or folder, a package, an excluded
