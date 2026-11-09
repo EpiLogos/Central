@@ -100,6 +100,11 @@ remain necessary where arbitrary same-user filesystem access must be restricted.
 `move-plan` takes a `source_ref` and scope-relative `destination`; it records a
 recovery journal and stages owned link replacements, without moving source bytes.
 `move-apply` and `move-rollback` take the returned `plan_id` and `quiesced:true`.
+Each move is the person's own act: it authenticates on the host's native
+credential (`CENTRAL_NATIVE_TOKEN`) for a human grant naming that exact Action
+at the root, and without one is refused in words, with nothing planned or moved.
+`move-plan` is no read: its journal names where the file goes, and apply and
+rollback carry that out by the plan's id alone.
 The caller must have stopped affected sessions; the operation refuses its own
 live cwd but does not claim to discover every external process. Destinations
 are never overwritten. Source identity, source-relations bases and managed link

@@ -20,6 +20,12 @@ import tomllib
 import unittest
 
 
+# A move is the person's own act (Central file_map.rs `the_persons_move`): each World's moves carry this disposable test credential,
+# which the person's grant written into that World on its first move names (Joined.person_moves).
+PERSON_TOKEN = "bkmr-joined-moves-person-controlled-test-not-a-live-secret"
+MOVES = ("move-plan", "move-apply", "move-rollback")
+
+
 def fnv(data: bytes) -> str:
     value = 0xcbf29ce484222325
     for byte in data:
@@ -60,9 +66,31 @@ class Joined(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, (args, result.stdout, result.stderr))
         return result
 
+    def person_moves(self):
+        """The person's grant for the three moves at the root, written into this disposable World before its first move."""
+        source = "Control/user/file-map-moves-authority.json"
+        path = self.root / "Control/relations/source-relations.json"
+        doc = json.loads(path.read_text()) if path.exists() else {
+            "schema": "central.control.ground-relations/v1", "project_id": "control:root", "relations": []}
+        if any(row.get("path") == source for row in doc["relations"]):
+            return
+        self.write(source, json.dumps({"schema": "central.native-action-authority/v1", "scope_ref": "control:root", "grants": [{
+            "principal_ref": "human:bkmr-joined", "actor_kind": "human",
+            "token_sha256": hashlib.sha256(PERSON_TOKEN.encode()).hexdigest(), "scope_refs": ["control:root"],
+            "actions": [f"central.file-map.{op}" for op in MOVES], "expires_at_unix_seconds": 4_000_000_000}]}))
+        doc["relations"].append({"ref": "central:source:control:root:" + source, "path": source,
+                                 "roles": ["native-action-authority"], "provenance": "human-adopted",
+                                 "standing": "architecture-contract", "treatment": "control-user",
+                                 "recognition": "controlled-test-only", "recorded_at_unix_seconds": 1})
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(doc))
+
     def action(self, op, project=None, *, success=True, env=None, **values):
         if project is not None:
             values["project"] = project
+        if op in MOVES:
+            self.person_moves()
+            env = dict(env or self.env, CENTRAL_NATIVE_TOKEN=PERSON_TOKEN)
         result = self.run_cmd([self.ctrl, "--json", "--root", self.root, "action", "run",
                                f"central.file-map.{op}", json.dumps(values)], success=success, env=env)
         response = json.loads(result.stdout)
