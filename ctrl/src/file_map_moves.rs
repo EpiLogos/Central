@@ -385,7 +385,12 @@ pub(crate) fn resume_scopes(root: &Path, input: &Value) -> io::Result<Vec<Scope>
                 };
             }
         }
-        if world.world != "control:root" {
+        // A folder scope has no Project declaration to check: its own is the ground's.
+        if world.world != "control:root"
+            && !world
+                .world
+                .starts_with(super::file_map_catalog::FOLDER_WORLD_PREFIX)
+        {
             let checked = Scope::project(current.clone(), world.project.clone())?;
             if checked.world != world.world {
                 return Err(conflict("Project identity changed during move"));

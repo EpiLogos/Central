@@ -24,6 +24,164 @@ const ENTRIES_CACHE: &str = ".central/bkmr/entries-cache.json";
 /// (`truncated`) and a search hit carries `indexed_bytes` of `total_bytes`.
 pub(crate) const INDEXED_TEXT_BYTES: usize = 32768;
 pub(crate) const MAX_ENTRIES: usize = 1_000_000;
+/// A plain folder registered as a scope (`scope-register` with `kind: "folder"`): a folder outside the
+/// ground with no ProjectCentral, such as a world's Music folder. Central reads it and writes nothing
+/// inside it. Its declaration is the ground's, at `<ground>/.central/scopes/<name>/scope.json`, beside
+/// the scope's derived state; its World is `folder:<name>`.
+pub(crate) const FOLDER_SCOPE_SCHEMA: &str = "central.file-map.folder-scope/v1";
+pub(crate) const FOLDER_SCOPE_DECLARATION: &str = "scope.json";
+pub(crate) const FOLDER_WORLD_PREFIX: &str = "folder:";
+/// The media a folder scope can admit, by extension, with the kind its entries carry. A media entry is
+/// listed by its metadata (path, size, mtime, kind): no byte of it enters a text index or a whole-file
+/// digest, and a read of its content is refused in words.
+pub(crate) const MEDIA_KINDS: [(&str, &str); 6] = [
+    ("wav", "audio"),
+    ("aif", "audio"),
+    ("aiff", "audio"),
+    ("flac", "audio"),
+    ("mp3", "audio"),
+    ("m4a", "audio"),
+];
+/// A folder scope's declaration, as `scope-register` wrote it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct FolderScope {
+    pub schema: String,
+    pub name: String,
+    /// The folder's absolute, canonical path.
+    pub root: String,
+    pub kind: String,
+    /// The media extensions it admits, lower case and sorted.
+    pub media: Vec<String>,
+    /// Folder names never walked, at any depth (a tool's own folders inside the person's, such as an app's backups), sorted.
+    #[serde(default)]
+    pub exclude: Vec<String>,
+    pub registered_at: String,
+}
+/// Folders a folder scope never walks besides the ones it excludes: macOS packages, which Finder shows as one file (an app, a
+/// plug-in, a Logic or GarageBand project, a media library). A hidden folder and a symbolic link are never walked either.
+pub(crate) const FOLDER_PACKAGES: [&str; 12] = [
+    "app",
+    "bundle",
+    "component",
+    "framework",
+    "vst",
+    "vst3",
+    "logicx",
+    "band",
+    "musiclibrary",
+    "photoslibrary",
+    "tvlibrary",
+    "plugin",
+];
+/// How deep a folder scope is walked: as deep as Central's own scans go.
+const FOLDER_DEPTH: usize = 24;
+/// The most entries one page of a folder scope's listing holds.
+pub(crate) const FOLDER_PAGE_MOST: usize = 5000;
+/// Whether a folder scope walks into the folder named `name`: never a hidden folder, a package or a folder it excludes.
+pub(crate) fn folder_walks(folder: &FolderScope, name: &str) -> bool {
+    let package = name.rsplit_once('.').is_some_and(|(_, extension)| {
+        FOLDER_PACKAGES.contains(&extension.to_ascii_lowercase().as_str())
+    });
+    !name.starts_with('.') && !package && !folder.exclude.iter().any(|excluded| excluded == name)
+}
+/// The kind of media `path` is, when its extension is one the scope admits.
+pub(crate) fn media_kind(media: &[String], path: &Path) -> Option<&'static str> {
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    if !media.contains(&extension) {
+        return None;
+    }
+    MEDIA_KINDS
+        .iter()
+        .find(|(known, _)| *known == extension)
+        .map(|(_, kind)| *kind)
+}
+/// The media extensions Central admits, in words ("wav, aif, aiff, flac, mp3 and m4a").
+pub(crate) fn media_words() -> String {
+    let known: Vec<&str> = MEDIA_KINDS
+        .iter()
+        .map(|(extension, _)| *extension)
+        .collect();
+    match known.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => known.join(""),
+    }
+}
+/// The folder scopes this ground declares: each `.central/scopes/<name>/scope.json`. A folder under
+/// `.central/scopes` without one is an external project's state. A malformed declaration is an error,
+/// never taken for absence.
+pub(crate) fn folder_declarations(root: &Path) -> io::Result<Vec<FolderScope>> {
+    let scopes = root.join(".central/scopes");
+    match fs::symlink_metadata(&scopes) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+        Ok(metadata) if !metadata.is_dir() => {
+            return Err(invalid("The ground's .central/scopes is not a folder"))
+        }
+        Ok(_) => {}
+    }
+    reject_symlink_components(root, Path::new(".central/scopes"))?;
+    let mut names = fs::read_dir(&scopes)?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<io::Result<Vec<_>>>()?;
+    names.sort();
+    let mut result = Vec::new();
+    for name in names {
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let dir = scopes.join(name);
+        if !fs::symlink_metadata(&dir)?.is_dir() {
+            continue;
+        }
+        match fs::symlink_metadata(dir.join(FOLDER_SCOPE_DECLARATION)) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+            Ok(metadata) if !metadata.is_file() => {
+                return Err(invalid(format!(
+                    "The folder scope declaration in .central/scopes/{name} is not an ordinary file"
+                )))
+            }
+            Ok(_) => {}
+        }
+        let (folder, _) = read_folder_declaration(&dir)?;
+        if folder.name != name {
+            return Err(invalid(format!(
+                "The folder scope declared in .central/scopes/{name} names itself {}",
+                folder.name
+            )));
+        }
+        result.push(folder);
+    }
+    Ok(result)
+}
+/// A folder scope's declaration in `dir`, and its revision.
+pub(crate) fn read_folder_declaration(dir: &Path) -> io::Result<(FolderScope, String)> {
+    let path = dir.join(FOLDER_SCOPE_DECLARATION);
+    if fs::symlink_metadata(&path)?.len() > 64 * 1024 {
+        return Err(invalid(format!(
+            "The folder scope declaration {} is larger than a declaration is",
+            path.display()
+        )));
+    }
+    let bytes = fs::read(&path)?;
+    let folder: FolderScope = serde_json::from_slice(&bytes).map_err(|error| {
+        invalid(format!(
+            "The folder scope declaration {} does not read as one: {error}",
+            path.display()
+        ))
+    })?;
+    if folder.schema != FOLDER_SCOPE_SCHEMA
+        || folder.kind != "folder"
+        || !Path::new(&folder.root).is_absolute()
+    {
+        return Err(invalid(format!(
+            "The folder scope declaration {} is not one Central reads: it needs schema \
+             {FOLDER_SCOPE_SCHEMA}, kind folder and an absolute root",
+            path.display()
+        )));
+    }
+    Ok((folder, content_revision_bytes(&bytes)))
+}
 #[derive(Clone, Debug)]
 pub(crate) struct Scope {
     pub root: PathBuf,
@@ -126,6 +284,12 @@ pub(crate) struct Entry {
     pub title: String,
     pub tags: Vec<String>,
     pub native_import: bool,
+    /// A media entry's length and modification time (seconds), from its metadata alone: Central reads
+    /// none of a media file's content (see [`MEDIA_KINDS`]). Absent for every other entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mtime: Option<i64>,
 }
 
 /// Operation-local physical evidence, never semantic World identity.
@@ -407,6 +571,8 @@ pub(crate) fn ownership_bases(all: &[Scope]) -> io::Result<Vec<(String, String, 
             let relation = scope.basis()?;
             let manifest = if scope.world == "control:root" {
                 None
+            } else if scope.is_folder() {
+                Some(scope.folder()?.1)
             } else {
                 let (manifest, basis) = observed_project_manifest(&scope.root)?;
                 if format!("project:{}", manifest.project_id) != scope.world {
@@ -431,6 +597,15 @@ fn optional_directory(path: &Path) -> io::Result<bool> {
 
 pub(crate) fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message.into())
+}
+/// Why nothing is registered, linked, pooled or moved in a folder scope.
+pub(crate) fn folder_writes_nothing(scope: &Scope) -> io::Error {
+    invalid(format!(
+        "{} is a folder scope: Central reads {} and writes nothing inside it, so nothing is \
+         registered, linked, pooled or moved there",
+        scope.project.as_deref().unwrap_or(&scope.world),
+        scope.root.display()
+    ))
 }
 pub(crate) fn conflict(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::AlreadyExists, message.into())
@@ -524,10 +699,35 @@ impl Scope {
     pub fn is_external(&self) -> bool {
         self.state != self.root
     }
+    /// A plain folder registered as a scope ([`FOLDER_SCOPE_SCHEMA`]): no ProjectCentral, its
+    /// declaration in the ground, nothing written inside it.
+    pub fn is_folder(&self) -> bool {
+        self.world.starts_with(FOLDER_WORLD_PREFIX)
+    }
+    /// What kind of scope this is: the root's own ("control"), a project's, or a folder's.
+    pub fn kind(&self) -> &'static str {
+        if self.world == "control:root" {
+            "control"
+        } else if self.is_folder() {
+            "folder"
+        } else {
+            "project"
+        }
+    }
+    /// A folder scope's declaration and its revision.
+    pub(crate) fn folder(&self) -> io::Result<(FolderScope, String)> {
+        if !self.is_folder() {
+            return Err(invalid("Only a folder scope has a folder declaration"));
+        }
+        read_folder_declaration(&self.state)
+    }
     /// The relations document an external scope is read from: its own
     /// ProjectCentral copy until the ground has edited it, then the ground's.
+    /// A folder scope has no ProjectCentral, so nothing of it is read there.
     fn relations_root(&self) -> &Path {
-        if self.is_external() && self.state.join(self.relations_path()).is_file() {
+        if self.is_folder()
+            || self.is_external() && self.state.join(self.relations_path()).is_file()
+        {
             &self.state
         } else {
             &self.root
@@ -584,6 +784,9 @@ impl Scope {
         self.shared_document().map(|observed| observed.1.clone())
     }
     pub fn save(&self, ground: &MapGround, mut doc: Value) -> io::Result<()> {
+        if self.is_folder() {
+            return Err(folder_writes_nothing(self));
+        }
         if doc.is_null() {
             let (schema, id) = if self.world == "control:root" {
                 (
@@ -638,16 +841,26 @@ impl Scope {
     /// work; a query must load the last refresh's walk instead of redoing it.
     /// Staleness stays safe: matched files are content-hashed at query time and
     /// a stale binding is disclosed, not served.
+    ///
+    /// The snapshot is derived state, so it lives with the rest of it under `state`: an external
+    /// scope's tree is never written. A folder scope keeps none: its listing reads metadata only, and
+    /// a file put in the folder is listed at once.
     pub fn save_entries_cache(&self, entries: &[Entry]) -> io::Result<()> {
+        if self.is_folder() {
+            return Ok(());
+        }
         write_atomic(
-            &self.root,
-            &self.root.join(ENTRIES_CACHE),
+            &self.state,
+            &self.state.join(ENTRIES_CACHE),
             &serde_json::to_vec(entries)?,
             crate::file_mutation::RecordDisposition::ReplaceOrCreate,
         )
     }
     pub fn load_entries_cache(&self) -> io::Result<Option<Vec<Entry>>> {
-        match fs::read(self.root.join(ENTRIES_CACHE)) {
+        if self.is_folder() {
+            return Ok(None);
+        }
+        match fs::read(self.state.join(ENTRIES_CACHE)) {
             Ok(bytes) => Ok(serde_json::from_slice(&bytes)
                 .map(Some)
                 .map_err(io::Error::other)?),
@@ -691,9 +904,9 @@ type ExternalOpened = (
     (crate::projectcentral::ProjectCentralManifest, String),
 );
 
-enum ExternalOpening {
-    Held(Box<ExternalOpened>),
-    Waiting(std::sync::mpsc::Receiver<io::Result<ExternalOpened>>),
+enum ExternalOpening<T = ExternalOpened> {
+    Held(Box<T>),
+    Waiting(std::sync::mpsc::Receiver<io::Result<T>>),
     StillOpening,
     Failed(io::Error),
 }
@@ -711,6 +924,13 @@ fn begin_external_open(raw: &str) -> ExternalOpening {
     if let Some(held) = held {
         return ExternalOpening::Held(Box::new((key, held)));
     }
+    begin_open(raw, open_external_root)
+}
+
+/// Open an external root with `open` on a helper thread, unless an earlier opening of it has not
+/// returned yet.
+fn begin_open<T: Send + 'static>(raw: &str, open: fn(&str) -> io::Result<T>) -> ExternalOpening<T> {
+    let key = PathBuf::from(raw);
     if !OPENING_EXTERNAL_ROOTS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -734,7 +954,7 @@ fn begin_external_open(raw: &str) -> ExternalOpening {
             if let Some(fifo) = stall {
                 let _ = fs::File::open(fifo);
             }
-            let opened = open_external_root(&owned);
+            let opened = open(&owned);
             OPENING_EXTERNAL_ROOTS
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -763,9 +983,19 @@ fn open_external_root(raw: &str) -> io::Result<ExternalOpened> {
     Ok((target, observed))
 }
 
-impl ExternalOpening {
+/// What a folder scope's first touch reads: its root, contained and a folder. Nothing in it is read
+/// yet.
+fn open_folder_root(raw: &str) -> io::Result<PathBuf> {
+    let target = safe_member(Path::new("/"), raw.trim_start_matches('/'), true)?;
+    if !fs::metadata(&target)?.is_dir() {
+        return Err(invalid(format!("{raw} is not a folder")));
+    }
+    Ok(target)
+}
+
+impl<T> ExternalOpening<T> {
     /// The opened root, `Ok(None)` when it did not open by `deadline`.
-    fn wait(self, deadline: std::time::Instant) -> io::Result<Option<ExternalOpened>> {
+    fn wait(self, deadline: std::time::Instant) -> io::Result<Option<T>> {
         match self {
             Self::Held(opened) => Ok(Some(*opened)),
             Self::StillOpening => Ok(None),
@@ -841,7 +1071,18 @@ pub(crate) fn participating(root: &Path) -> io::Result<(Vec<Scope>, Vec<Unreacha
                 .or_insert(format!("Work/{name}"));
         }
     }
-    if candidates.len() > 512 {
+    // A folder scope's name is a scope name like any other: one namespace.
+    let folders = folder_declarations(root)?;
+    if let Some(twice) = folders
+        .iter()
+        .find(|folder| candidates.contains_key(&folder.name))
+    {
+        return Err(conflict(format!(
+            "The scope name {} is declared twice: as a folder (.central/scopes/{}) and as a project",
+            twice.name, twice.name
+        )));
+    }
+    if candidates.len() + folders.len() > 512 {
         return Err(invalid("More than 512 participating scopes"));
     }
     let mut result = vec![base];
@@ -853,6 +1094,10 @@ pub(crate) fn participating(root: &Path) -> io::Result<(Vec<Scope>, Vec<Unreacha
         .filter(|(_, path)| Path::new(path).is_absolute())
         .map(|(name, path)| (name.clone(), begin_external_open(path)))
         .collect::<BTreeMap<_, _>>();
+    let folder_openings = folders
+        .iter()
+        .map(|folder| begin_open(&folder.root, open_folder_root))
+        .collect::<Vec<_>>();
     for (name, path) in candidates {
         let (target, scope) = match openings.remove(&name) {
             Some(opening) => match opening.wait(deadline)? {
@@ -892,6 +1137,47 @@ pub(crate) fn participating(root: &Path) -> io::Result<(Vec<Scope>, Vec<Unreacha
         }
         if !seen.insert(scope.world.clone()) {
             return Err(invalid("Duplicate participating Project World identity"));
+        }
+        result.push(scope);
+    }
+    for (folder, opening) in folders.into_iter().zip(folder_openings) {
+        let target = match opening.wait(deadline) {
+            Ok(Some(target)) => target,
+            Ok(None) => {
+                unreachable.push(UnreachableScope {
+                    message: format!(
+                        "unreachable: {} did not open within {}s (a File Provider or network \
+                         volume not answering)",
+                        folder.root,
+                        EXTERNAL_ROOT_DEADLINE.as_secs()
+                    ),
+                    project: folder.name,
+                    root: folder.root,
+                });
+                continue;
+            }
+            // A folder taken away (a drive not mounted, a folder moved) leaves the other scopes standing.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                unreachable.push(UnreachableScope {
+                    message: format!(
+                        "unreachable: the folder scope {} stands over {}, and no folder is there now",
+                        folder.name, folder.root
+                    ),
+                    project: folder.name,
+                    root: folder.root,
+                });
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        let scope = Scope {
+            root: target,
+            state: external_state(root, &folder.name)?,
+            world: format!("{FOLDER_WORLD_PREFIX}{}", folder.name),
+            project: Some(folder.name),
+        };
+        if !seen.insert(scope.world.clone()) {
+            return Err(invalid("Duplicate participating folder scope"));
         }
         result.push(scope);
     }
@@ -1036,6 +1322,19 @@ impl BindingCandidate {
             .map(|resource| resource.title.clone())
             .filter(|title| !title.is_empty())
             .unwrap_or_else(|| source.path.clone());
+        // A folder scope's Source is one of its admitted media, and stays media: never a file whose
+        // bytes a read may take.
+        let media = if self.scope.is_folder() {
+            let (folder, _) = self.scope.folder()?;
+            Some(media_kind(&folder.media, &path).ok_or_else(|| {
+                invalid(format!(
+                    "{} is not media the folder scope {} admits",
+                    source.path, self.scope.world
+                ))
+            })?)
+        } else {
+            None
+        };
         Ok(Entry {
             source,
             world_ref: self.scope.world.clone(),
@@ -1043,7 +1342,7 @@ impl BindingCandidate {
             kind: if metadata.is_dir() {
                 "directory"
             } else {
-                "file"
+                media.unwrap_or("file")
             }
             .into(),
             revision: format!(
@@ -1064,6 +1363,8 @@ impl BindingCandidate {
                 .resource
                 .as_ref()
                 .is_some_and(|resource| resource.native_import),
+            size: media.map(|_| metadata.len()),
+            mtime: media.map(|_| metadata.mtime()),
         })
     }
 }
@@ -1282,6 +1583,9 @@ fn source_candidates(
     reference: Option<&str>,
     location: Option<&Path>,
 ) -> io::Result<Vec<BindingCandidate>> {
+    if scope.is_folder() {
+        return folder_candidates(scope, reference, location);
+    }
     let declarations = scope_declarations(scope)?;
     let ScopeDeclarations {
         basis,
@@ -1525,6 +1829,10 @@ pub(crate) fn require_no_unobserved_route(
     path: Option<&Path>,
 ) -> io::Result<()> {
     for scope in all {
+        // A folder scope's Sources are its admitted media, which its candidates already observed.
+        if scope.is_folder() {
+            continue;
+        }
         let nominated = if let Some(path) = path {
             path.strip_prefix(&scope.root)
                 .ok()
@@ -1651,6 +1959,9 @@ pub(crate) fn metadata_basis(entry: &Entry) -> io::Result<Value> {
 }
 
 pub(crate) fn entries(scope: &Scope) -> io::Result<Vec<Entry>> {
+    if scope.is_folder() {
+        return folder_entries(scope);
+    }
     let ground = scope.ground()?;
     let native = if scope.world == "control:root" {
         source_horizon::control_source_bindings(&scope.root)?
@@ -1695,6 +2006,9 @@ pub(crate) fn entries(scope: &Scope) -> io::Result<Vec<Entry>> {
 /// right now. They change constantly, so they are never served from the
 /// refresh-time snapshot: a reader overlays these on whatever the snapshot holds.
 pub(crate) fn now_entries(scope: &Scope) -> io::Result<Vec<Entry>> {
+    if scope.is_folder() {
+        return Ok(Vec::new());
+    }
     let ground = scope.ground()?;
     let sources = source_horizon::now_record_bindings(&scope.root, &scope.world)?
         .into_iter()
@@ -1776,9 +2090,201 @@ fn finish_entries(
             title,
             tags: spec.map(|s| s.tags.clone()).unwrap_or_default(),
             native_import: spec.is_some_and(|s| s.native_import),
+            size: None,
+            mtime: None,
         });
     }
     Ok(result)
+}
+
+/// A folder scope's entries: each file under its root whose extension the scope admits, by its
+/// metadata alone. No file is opened and nothing is written under the root.
+fn folder_entries(scope: &Scope) -> io::Result<Vec<Entry>> {
+    folder_page(scope, None, None)
+}
+/// A folder scope's media entries in path order (component by component, as the walk meets them): every one, or, with `want`,
+/// the first `want` after the path `after`. The walk never enters a hidden folder, a package, a folder the scope excludes or a
+/// symbolic link, and leaves unopened every folder that lies wholly before `after`, so a page costs what it lists.
+pub(crate) fn folder_page(
+    scope: &Scope,
+    after: Option<&Path>,
+    want: Option<usize>,
+) -> io::Result<Vec<Entry>> {
+    struct Walk<'a> {
+        scope: &'a Scope,
+        folder: FolderScope,
+        scan: source_horizon::ScanMemo<'a>,
+        after: Option<&'a Path>,
+        want: Option<usize>,
+        found: Vec<Entry>,
+    }
+    impl Walk<'_> {
+        fn full(&self) -> bool {
+            self.want.is_some_and(|want| self.found.len() >= want)
+        }
+        fn dir(&mut self, dir: &Path, depth: usize) -> io::Result<()> {
+            if depth > FOLDER_DEPTH {
+                return Ok(());
+            }
+            let mut rows = fs::read_dir(dir)?.collect::<Result<Vec<_>, _>>()?;
+            rows.sort_by_key(|row| row.file_name());
+            for row in rows {
+                if self.full() {
+                    return Ok(());
+                }
+                let path = row.path();
+                let kind = row.file_type()?;
+                let name = row.file_name().to_string_lossy().into_owned();
+                if kind.is_symlink() {
+                    continue;
+                }
+                if kind.is_dir() {
+                    // A folder wholly before the page's start holds nothing the page lists.
+                    let before = self
+                        .after
+                        .is_some_and(|after| path.as_path() < after && !after.starts_with(&path));
+                    if folder_walks(&self.folder, &name) && !before {
+                        self.dir(&path, depth + 1)?;
+                    }
+                    continue;
+                }
+                // A hidden file, macOS's AppleDouble companion (`._name`) among them, is not the person's media.
+                if !kind.is_file() || name.starts_with('.') {
+                    continue;
+                }
+                let Some(media) = media_kind(&self.folder.media, &path) else {
+                    continue;
+                };
+                if self.after.is_some_and(|after| path.as_path() <= after) {
+                    continue;
+                }
+                if self.found.len() >= MAX_ENTRIES {
+                    return Err(invalid("File map exceeds the 1000000-source bound"));
+                }
+                if !self.scan.retrieval_allowed(&path) {
+                    continue;
+                }
+                let relative = source_horizon::normalize_relative(
+                    path.strip_prefix(&self.scope.root)
+                        .map_err(|_| invalid("A folder entry escaped its root"))?,
+                );
+                let metadata = fs::symlink_metadata(&path)?;
+                if !metadata.is_file() {
+                    continue;
+                }
+                let entry = media_entry(
+                    self.scope,
+                    media_binding(self.scope, &relative),
+                    path,
+                    media,
+                    &metadata,
+                );
+                self.found.push(entry);
+            }
+            Ok(())
+        }
+    }
+    let (folder, _) = scope.folder()?;
+    let mut walk = Walk {
+        scope,
+        folder,
+        scan: source_horizon::ScanMemo::new(&scope.root),
+        after,
+        want,
+        found: Vec::new(),
+    };
+    walk.dir(&scope.root, 0)?;
+    Ok(walk.found)
+}
+/// A folder scope's media file as a Source: its identity is its path in the folder.
+fn media_binding(scope: &Scope, relative: &str) -> SourceBinding {
+    SourceBinding {
+        source_ref: source_horizon::source_ref(&scope.world, relative),
+        path: relative.to_owned(),
+        roles: vec!["folder-media".into()],
+        provenance: "folder-scope".into(),
+        standing: "media-metadata".into(),
+        treatment: "retain-native-in-place".into(),
+        agent_retrieval_allowed: true,
+    }
+}
+fn media_entry(
+    scope: &Scope,
+    source: SourceBinding,
+    path: PathBuf,
+    kind: &str,
+    metadata: &fs::Metadata,
+) -> Entry {
+    Entry {
+        title: source.path.clone(),
+        source,
+        world_ref: scope.world.clone(),
+        path,
+        kind: kind.into(),
+        revision: format!(
+            "metadata:{}:{}:{}:{}:{}",
+            metadata.dev(),
+            metadata.ino(),
+            metadata.len(),
+            metadata.mtime(),
+            metadata.mtime_nsec()
+        ),
+        tags: Vec::new(),
+        native_import: false,
+        size: Some(metadata.len()),
+        mtime: Some(metadata.mtime()),
+    }
+}
+/// The member a SourceRef names in `world`, when it is that world's spelling of one.
+fn member_of_ref(world: &str, reference: &str) -> Option<String> {
+    let prefix = format!("central:source:{world}:");
+    reference
+        .strip_prefix(&prefix)
+        .map(|suffix| {
+            suffix
+                .replace("%20", " ")
+                .replace("%3A", ":")
+                .replace("%25", "%")
+        })
+        .filter(|member| source_horizon::source_ref(world, member) == reference)
+}
+/// A folder scope's candidate for a selected read: the admitted media file the reference or
+/// location names, if it stands.
+fn folder_candidates(
+    scope: &Scope,
+    reference: Option<&str>,
+    location: Option<&Path>,
+) -> io::Result<Vec<BindingCandidate>> {
+    let (folder, basis) = scope.folder()?;
+    let member = match (location, reference) {
+        (Some(location), _) => location
+            .strip_prefix(&scope.root)
+            .ok()
+            .and_then(Path::to_str)
+            .map(str::to_owned),
+        (None, Some(reference)) => member_of_ref(&scope.world, reference),
+        (None, None) => None,
+    };
+    let Some(member) = member.filter(|member| relative(member).is_ok()) else {
+        return Ok(Vec::new());
+    };
+    let path = scope.root.join(&member);
+    if media_kind(&folder.media, &path).is_none()
+        || !fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_file())
+    {
+        return Ok(Vec::new());
+    }
+    let source = media_binding(scope, &member);
+    if reference.is_some_and(|reference| reference != source.source_ref) {
+        return Ok(Vec::new());
+    }
+    Ok(vec![BindingCandidate {
+        scope: scope.clone(),
+        source,
+        resource: None,
+        relation_revision: scope.basis()?,
+        selection_metadata_basis: Some(basis),
+    }])
 }
 pub(crate) fn lookup(all: &[Scope], reference: &str) -> io::Result<(Scope, Entry)> {
     for scope in all {
@@ -1803,9 +2309,21 @@ pub(crate) fn with_revision(mut entry: Entry) -> io::Result<Entry> {
     }
     Ok(entry)
 }
+/// Why an entry that is not a file has no content to give.
+fn no_payload(entry: &Entry) -> io::Error {
+    if entry.kind == "directory" {
+        invalid("A directory has no byte payload")
+    } else {
+        invalid(format!(
+            "{} is a media entry ({}), and a media entry is not text: Central lists it by its \
+             path, size and time and reads none of its content",
+            entry.source.path, entry.kind
+        ))
+    }
+}
 pub(crate) fn payload(entry: &Entry) -> io::Result<Vec<u8>> {
     if entry.kind != "file" {
-        return Err(invalid("A directory has no byte payload"));
+        return Err(no_payload(entry));
     }
     let allowed = || source_horizon::retrieval_admission(Path::new("/"), &entry.path);
     if !allowed()? {
@@ -1875,7 +2393,7 @@ impl Extent {
 /// read past `max`, so a source of any size has a start to index.
 pub(crate) fn text_prefix(entry: &Entry, max: usize) -> io::Result<(String, u64)> {
     if entry.kind != "file" {
-        return Err(invalid("A directory has no byte payload"));
+        return Err(no_payload(entry));
     }
     let allowed = || source_horizon::retrieval_admission(Path::new("/"), &entry.path);
     let revoked = || {
@@ -1968,7 +2486,7 @@ pub(crate) fn context_exclusions(all: &[Scope], scope: &Scope) -> io::Result<BTr
             graph.insert(record).map_err(io::Error::other)?;
         }
     }
-    if scope.world != "control:root" {
+    if scope.world != "control:root" && !scope.is_folder() {
         for record in RelationRecordStore::worlds_in_project(&scope.root)
             .load_typed::<WorldRecord>()
             .map_err(|error| {

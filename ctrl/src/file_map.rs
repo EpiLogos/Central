@@ -495,6 +495,39 @@ fn inspect(all: &[Scope], input: &Value) -> io::Result<Value> {
             .iter()
             .all(|s| s.index().is_ok_and(|i| i.embeddings));
     let excluded = context_exclusions(all, scope)?;
+    // A page of the roster: with `limit`, at most that many entries in path order after `after` (the last path of the page before),
+    // and the answer says whether more stand (`page.truncated`) and where the next page starts (`page.next`). A folder scope's walk
+    // stops at the page's end.
+    let page = match input.get("limit").filter(|value| !value.is_null()) {
+        None => None,
+        Some(limit) => {
+            let limit = limit
+                .as_u64()
+                .map(|n| n as usize)
+                .filter(|n| (1..=crate::file_map_catalog::FOLDER_PAGE_MOST).contains(n))
+                .ok_or_else(|| {
+                    invalid(format!(
+                        "limit is how many entries one page holds, from 1 to {}",
+                        crate::file_map_catalog::FOLDER_PAGE_MOST
+                    ))
+                })?;
+            let after = match input.get("after").filter(|value| !value.is_null()) {
+                None => None,
+                Some(after) => Some(
+                    after
+                        .as_str()
+                        .map(std::path::PathBuf::from)
+                        .filter(|path| path.is_absolute())
+                        .ok_or_else(|| {
+                            invalid(
+                                "after is the absolute path of the last entry of the page before",
+                            )
+                        })?,
+                ),
+            };
+            Some((limit, after))
+        }
+    };
     let mut resources = Vec::new();
     // `{"resources": false}` turns inspect into a cheap capability and scope
     // probe: attachments that only need provider state skip the full walk.
@@ -527,19 +560,24 @@ fn inspect(all: &[Scope], input: &Value) -> io::Result<Value> {
         for chosen in &choices {
             // Serve from the refresh-time enumeration snapshot when present;
             // the live walk is refresh-scale work (see entries cache).
-            let mut scoped: Vec<crate::file_map_catalog::Entry> = {
-                let cached = chosen.load_entries_cache().ok().flatten();
-                match cached.filter(|items| !items.is_empty()) {
-                    Some(items) => items,
-                    None => {
-                        let mut items = entries(chosen)?;
-                        // NOW records change constantly: the snapshot never holds them.
-                        items.retain(|entry| !crate::file_map_catalog::is_now_record_entry(entry));
-                        let _ = chosen.save_entries_cache(&items);
-                        items
+            let mut scoped: Vec<crate::file_map_catalog::Entry> =
+                if let (true, Some((limit, after))) = (chosen.is_folder(), page.as_ref()) {
+                    crate::file_map_catalog::folder_page(chosen, after.as_deref(), Some(limit + 1))?
+                } else {
+                    let cached = chosen.load_entries_cache().ok().flatten();
+                    match cached.filter(|items| !items.is_empty()) {
+                        Some(items) => items,
+                        None => {
+                            let mut items = entries(chosen)?;
+                            // NOW records change constantly: the snapshot never holds them.
+                            items.retain(|entry| {
+                                !crate::file_map_catalog::is_now_record_entry(entry)
+                            });
+                            let _ = chosen.save_entries_cache(&items);
+                            items
+                        }
                     }
-                }
-            };
+                };
             // NOW records are always read live and overlaid on the snapshot. A
             // registered relation for the same path keeps its own entry.
             scoped.retain(|entry| !crate::file_map_catalog::is_now_record_entry(entry));
@@ -568,6 +606,19 @@ fn inspect(all: &[Scope], input: &Value) -> io::Result<Value> {
             }
         }
     }
+    let mut paged = Value::Null;
+    if let Some((limit, after)) = &page {
+        resources.sort_by(|a, b| a.path.cmp(&b.path));
+        if let Some(after) = after {
+            resources.retain(|entry| entry.path.as_path() > after.as_path());
+        }
+        let truncated = resources.len() > *limit;
+        resources.truncate(*limit);
+        let next = truncated
+            .then(|| resources.last().map(|entry| entry.path.clone()))
+            .flatten();
+        paged = json!({"limit": limit, "after": after, "truncated": truncated, "next": next});
+    }
     let native_record = if let Some(id) = input["record_id"].as_i64() {
         let row = backend
             .records()?
@@ -591,15 +642,23 @@ fn inspect(all: &[Scope], input: &Value) -> io::Result<Value> {
                 "reason":error.to_string()}),
         };
     }
-    Ok(
-        json!({"native_record":native_record,"world_ref":scope.world,"revision":scope.basis()?,
+    let mut answer = json!({"native_record":native_record,"world_ref":scope.world,"revision":scope.basis()?,
         "scopes":all.iter().map(|s| {
             let pooled = s.ground().map(|g| g.content_pool.enabled).unwrap_or(false);
-            json!({"world_ref":s.world,"project":s.project,"path":s.root,"content_pool":pooled})
+            let mut listed = json!({"world_ref":s.world,"project":s.project,"path":s.root,
+                "content_pool":pooled,"kind":s.kind()});
+            if let Ok((folder, _)) = s.folder() {
+                listed["media"] = json!(folder.media);
+                listed["exclude"] = json!(folder.exclude);
+            }
+            listed
         }).collect::<Vec<_>>(),
         "resources":resources,"links":scope.ground()?.links,"database":backend.db(),
-        "provider":provider}),
-    )
+        "provider":provider});
+    if !paged.is_null() {
+        answer["page"] = paged;
+    }
+    Ok(answer)
 }
 
 fn link(all: &[Scope], input: &Value) -> io::Result<Value> {
@@ -801,6 +860,10 @@ pub fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
                 io::Error::new(io::ErrorKind::TimedOut, scope.message.clone())
             })
     })?;
+    // A folder scope is read where it stands: nothing is registered, linked or pooled inside it.
+    if scope.is_folder() && matches!(op, "register" | "link" | "pool") {
+        return Err(folder_writes_nothing(scope));
+    }
     let read_roots = if read_root.is_some() {
         all.iter()
             .map(|scope| ReadRoot::capture(&scope.root))
@@ -1537,13 +1600,16 @@ pub fn register(registry: &mut ActionRegistry) {
             "destination",
             "plan_id",
             "quiesced",
+            "kind",
+            "media",
+            "exclude",
         ]
         .iter()
         .map(|name| ActionInputDefinition {
             name: (*name).into(),
             input_type: match *name {
                 "limit" | "snippet_chars" | "record_id" => "number",
-                "tags" | "allowed_sources" | "selected_capsules" => "array",
+                "tags" | "allowed_sources" | "selected_capsules" | "media" | "exclude" => "array",
                 "content" | "federated" | "allow_external" | "native_import" | "embeddings"
                 | "quiesced" => "boolean",
                 _ => "string",
@@ -1563,6 +1629,7 @@ pub fn register(registry: &mut ActionRegistry) {
                 ("resources", "boolean"),
                 ("path_prefixes", "array"),
                 ("embedding_coverage", "boolean"),
+                ("after", "string"),
             ] {
                 inputs.push(ActionInputDefinition {
                     name: name.into(),
@@ -2797,6 +2864,31 @@ mod external_scope_tests {
         );
     }
 
+    /// The listing snapshot `inspect` keeps is derived state, so it is kept with the scope's other
+    /// state in the ground. Before, it was written into the external tree wherever that tree held a
+    /// `.central/bkmr` folder of its own.
+    #[test]
+    fn an_external_scopes_listing_snapshot_is_kept_in_the_ground_not_its_tree() {
+        let world = World::new();
+        fs::create_dir_all(world.external.join(".central/bkmr")).unwrap();
+        let all = scopes(&world.root).unwrap();
+        let epi = all.iter().find(|s| s.world == "project:epi").unwrap();
+        safe_directory(&epi.state, Path::new(".central/bkmr")).unwrap();
+        let before = world.external_listing();
+        execute(
+            &world.root,
+            "inspect",
+            &json!({"project":"epi","resources":true}),
+        )
+        .unwrap();
+        assert_eq!(
+            world.external_listing(),
+            before,
+            "external tree was written"
+        );
+        assert!(epi.state.join(".central/bkmr/entries-cache.json").is_file());
+    }
+
     #[test]
     fn external_relations_read_from_the_tree_until_the_ground_edits_them() {
         let world = World::new();
@@ -3045,5 +3137,554 @@ mod external_scope_tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
+    }
+}
+
+#[cfg(test)]
+mod folder_scope_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    /// An act's answer: its envelope's `result`.
+    fn run(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
+        execute(root, op, input).map(|envelope| envelope["result"].clone())
+    }
+    /// A ground with one Work project, and beside it a plain Music folder: sound files, a text note,
+    /// a set, an AppleDouble companion and a nested folder. No ProjectCentral anywhere in it.
+    struct World {
+        base: PathBuf,
+        root: PathBuf,
+        music: PathBuf,
+    }
+    impl World {
+        fn new() -> Self {
+            let scratch = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ProjectCentral/now/tmp");
+            fs::create_dir_all(&scratch).unwrap();
+            let base = scratch.canonicalize().unwrap().join(format!(
+                "file-map-folder-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            let root = base.join("ground");
+            let music = base.join("Music");
+            fs::create_dir_all(root.join("Control/user")).unwrap();
+            fs::create_dir_all(root.join("Work/Alpha/ProjectCentral")).unwrap();
+            fs::write(
+                root.join("Work/Alpha/ProjectCentral/project.json"),
+                serde_json::to_vec(&json!({"schema":"central.project/v1","project_id":"alpha",
+                    "human_source":"ProjectCentral/user",
+                    "wiki":{"profile":"okf-wiki/v1","source":"ProjectCentral/agents/wiki/wiki.json"}}))
+                .unwrap(),
+            )
+            .unwrap();
+            let relations = root.join(source_horizon::CONTROL_GROUND_RELATIONS_SOURCE);
+            fs::create_dir_all(relations.parent().unwrap()).unwrap();
+            fs::write(
+                &relations,
+                serde_json::to_vec(&json!({
+                    "schema":source_horizon::CONTROL_GROUND_RELATIONS_SCHEMA,
+                    "project_id":"control:root","relations":[]
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            fs::create_dir_all(music.join("Field recordings")).unwrap();
+            fs::create_dir_all(music.join("Sets")).unwrap();
+            fs::write(
+                music.join("Field recordings/estuary low tide.wav"),
+                b"RIFF....WAVEfmt sound",
+            )
+            .unwrap();
+            fs::write(
+                music.join("Field recordings/._estuary low tide.wav"),
+                b"Mac OS X attrs",
+            )
+            .unwrap();
+            fs::write(
+                music.join("market-hall.AIFF"),
+                b"FORM....AIFFCOMM sound sound",
+            )
+            .unwrap();
+            fs::write(music.join("voice.mp3"), b"ID3 sound").unwrap();
+            fs::write(music.join("notes.txt"), "what I recorded\n").unwrap();
+            fs::write(music.join("Sets/first.als"), b"gzip").unwrap();
+            Self { base, root, music }
+        }
+        fn music(&self) -> String {
+            self.music.to_str().unwrap().to_owned()
+        }
+        /// Every path under the Music folder with its bytes and modification time, so a test can
+        /// prove that no byte under it changed.
+        fn music_bytes(&self) -> BTreeMap<PathBuf, (Vec<u8>, i64, i64)> {
+            let mut out = BTreeMap::new();
+            let mut stack = vec![self.music.clone()];
+            while let Some(dir) = stack.pop() {
+                let meta = fs::symlink_metadata(&dir).unwrap();
+                out.insert(dir.clone(), (Vec::new(), meta.mtime(), meta.mtime_nsec()));
+                for entry in fs::read_dir(&dir).unwrap() {
+                    let path = entry.unwrap().path();
+                    if path.is_dir() {
+                        stack.push(path);
+                    } else {
+                        let meta = fs::symlink_metadata(&path).unwrap();
+                        out.insert(
+                            path.clone(),
+                            (fs::read(&path).unwrap(), meta.mtime(), meta.mtime_nsec()),
+                        );
+                    }
+                }
+            }
+            out
+        }
+        fn revision(&self) -> String {
+            run(&self.root, "inspect", &json!({"resources":false})).unwrap()["revision"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        }
+        fn register(&self, name: &str, path: &str, media: Value) -> io::Result<Value> {
+            run(
+                &self.root,
+                "scope-register",
+                &json!({"name":name,"path":path,"kind":"folder","allow_external":true,
+                    "media":media,"expected_revision":self.revision()}),
+            )
+        }
+    }
+    impl Drop for World {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.base);
+        }
+    }
+    fn refused(result: io::Result<Value>) -> String {
+        result.unwrap_err().to_string()
+    }
+
+    /// Central issue: a plain folder (a world's Music) is a scope its readers can ask for, its media
+    /// listed by metadata, and Central writes nothing inside it.
+    #[test]
+    fn a_plain_folder_is_a_scope_its_media_listed_by_metadata_and_nothing_written_inside_it() {
+        let world = World::new();
+        let before = world.music_bytes();
+        let registered = world
+            .register(
+                "Music",
+                &world.music(),
+                json!(["wav", ".AIFF", "aif", "mp3"]),
+            )
+            .unwrap();
+        assert_eq!(registered["world_ref"], "folder:Music");
+        assert_eq!(registered["kind"], "folder");
+        assert_eq!(registered["changed"], true);
+        assert_eq!(registered["media"], json!(["aif", "aiff", "mp3", "wav"]));
+
+        // Its declaration is the ground's, beside its derived state.
+        let declared: Value = serde_json::from_slice(
+            &fs::read(world.root.join(".central/scopes/Music/scope.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(declared["schema"], "central.file-map.folder-scope/v1");
+        assert_eq!(declared["name"], "Music");
+        assert_eq!(declared["root"], world.music());
+        assert_eq!(declared["kind"], "folder");
+        assert_eq!(declared["media"], json!(["aif", "aiff", "mp3", "wav"]));
+        assert!(declared["registered_at"].as_str().unwrap().ends_with('Z'));
+
+        // It stands among the scopes, as the kind it is.
+        let scopes = run(&world.root, "inspect", &json!({"resources":false})).unwrap();
+        let listed = scopes["scopes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|scope| scope["world_ref"] == "folder:Music")
+            .unwrap()
+            .clone();
+        assert_eq!(listed["kind"], "folder");
+        assert_eq!(listed["project"], "Music");
+        assert_eq!(listed["path"], world.music());
+        assert_eq!(listed["media"], json!(["aif", "aiff", "mp3", "wav"]));
+        let kinds: BTreeSet<String> = scopes["scopes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|scope| scope["kind"].as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(
+            kinds,
+            BTreeSet::from(["control".into(), "folder".into(), "project".into()])
+        );
+
+        // Its entries are its admitted media, each by path, size, time and kind; nothing else in it.
+        let read = run(
+            &world.root,
+            "inspect",
+            &json!({"project":"folder:Music","resources":true,"path_prefixes":[world.music()]}),
+        )
+        .unwrap();
+        let mut entries: Vec<(String, String, u64)> = read["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| {
+                assert!(entry["mtime"].as_i64().is_some(), "{entry}");
+                (
+                    entry["path"].as_str().unwrap().to_owned(),
+                    entry["kind"].as_str().unwrap().to_owned(),
+                    entry["size"].as_u64().unwrap(),
+                )
+            })
+            .collect();
+        entries.sort();
+        let at = |name: &str| world.music.join(name).to_str().unwrap().to_owned();
+        assert_eq!(
+            entries,
+            vec![
+                (
+                    at("Field recordings/estuary low tide.wav"),
+                    "audio".into(),
+                    21
+                ),
+                (at("market-hall.AIFF"), "audio".into(), 28),
+                (at("voice.mp3"), "audio".into(), 9),
+            ]
+        );
+
+        // A selected read answers it as any Source, by its metadata; its content is never read: asked
+        // for, it is refused in words.
+        let reference = read["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["path"] == at("voice.mp3"))
+            .unwrap()["source"]["ref"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let resolved = run(&world.root, "resolve", &json!({"source_ref":reference})).unwrap();
+        assert_eq!(resolved["kind"], "audio");
+        assert_eq!(resolved["size"], 9);
+        assert_eq!(resolved["project"], "Music");
+        let words = refused(run(
+            &world.root,
+            "resolve",
+            &json!({"source_ref":reference,"content":true}),
+        ));
+        assert!(
+            words.contains("voice.mp3 is a media entry (audio)"),
+            "{words}"
+        );
+        assert!(words.contains("reads none of its content"), "{words}");
+
+        // Asked again, the same folder is the same scope; and nothing is pooled, registered or linked
+        // inside it.
+        let again = world
+            .register(
+                "Music",
+                &world.music(),
+                json!(["mp3", "wav", "aiff", "aif"]),
+            )
+            .unwrap();
+        assert_eq!(again["changed"], false);
+        let pooled = refused(run(
+            &world.root,
+            "pool",
+            &json!({"project":"folder:Music","enable":true}),
+        ));
+        assert!(
+            pooled.contains("Music is a folder scope: Central reads"),
+            "{pooled}"
+        );
+        assert!(pooled.contains("writes nothing inside it"), "{pooled}");
+
+        // A sound put there is listed at once: the folder's listing keeps no snapshot.
+        assert_eq!(
+            world.music_bytes(),
+            before,
+            "a byte under the folder changed"
+        );
+        fs::write(world.music.join("later.wav"), b"RIFF").unwrap();
+        let put = world.music_bytes();
+        let later = run(&world.root, "inspect", &json!({"project":"folder:Music"})).unwrap();
+        assert!(later["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["path"] == at("later.wav")));
+        assert_eq!(
+            world.music_bytes(),
+            put,
+            "reading it again changed a byte under the folder"
+        );
+    }
+
+    #[test]
+    fn a_folder_scope_that_cannot_be_registered_is_refused_in_words() {
+        let world = World::new();
+        let words =
+            |name: &str, path: &str, media: Value| refused(world.register(name, path, media));
+        let missing = world.base.join("Nowhere");
+        assert_eq!(
+            words("Music", missing.to_str().unwrap(), json!(["wav"])),
+            format!("There is no folder at {}", missing.display())
+        );
+        let inside = world.root.join("Control/user");
+        assert!(words("Music", inside.to_str().unwrap(), json!(["wav"]))
+            .starts_with(&format!("{} is inside this ground", inside.display())));
+        assert!(words("Music", world.base.to_str().unwrap(), json!(["wav"]))
+            .contains("holds this ground"));
+        assert!(words("Music", "Music", json!(["wav"]))
+            .contains("is named by its absolute path, and Music is not one"));
+        let note = world.music.join("notes.txt");
+        assert_eq!(
+            words("Music", note.to_str().unwrap(), json!(["wav"])),
+            format!("{} is a file, not a folder", note.display())
+        );
+        assert_eq!(
+            words("Music", &world.music(), json!(["wav", "ogg"])),
+            "Central lists no media of kind ogg: it admits wav, aif, aiff, flac, mp3 and m4a"
+        );
+        assert!(words("Music", &world.music(), json!([]))
+            .starts_with("A folder scope names the media it admits"));
+        assert!(words("Alpha", &world.music(), json!(["wav"]))
+            .contains("The scope name Alpha is already taken by a project of this ground"));
+        let unasked = refused(run(
+            &world.root,
+            "scope-register",
+            &json!({"name":"Music","path":world.music(),"kind":"folder","media":["wav"],
+                "expected_revision":world.revision()}),
+        ));
+        assert!(
+            unasked
+                .contains("a folder scope is registered only when asked, with allow_external=true"),
+            "{unasked}"
+        );
+        let other = world.base.join("Samples");
+        fs::create_dir_all(other.join("ProjectCentral")).unwrap();
+        fs::write(other.join("ProjectCentral/project.json"), b"{}").unwrap();
+        assert_eq!(
+            words("Samples", other.to_str().unwrap(), json!(["wav"])),
+            format!(
+                "{} holds a ProjectCentral: register it as a project, not as a folder",
+                other.display()
+            )
+        );
+        world
+            .register("Music", &world.music(), json!(["wav"]))
+            .unwrap();
+        fs::remove_dir_all(other.join("ProjectCentral")).unwrap();
+        assert_eq!(
+            words("Music", other.to_str().unwrap(), json!(["wav"])),
+            format!(
+                "The scope name Music is already taken: it is the folder scope over {}",
+                world.music()
+            )
+        );
+        assert_eq!(
+            words("Sounds", &world.music(), json!(["wav"])),
+            format!("{} is already the folder scope Music", world.music())
+        );
+        // Nothing of the refusals was written: one declaration stands.
+        let declared: Vec<String> = fs::read_dir(world.root.join(".central/scopes"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|dir| dir.join("scope.json").is_file())
+            .map(|dir| dir.file_name().unwrap().to_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(declared, vec!["Music".to_owned()]);
+    }
+
+    /// A folder scope's reader asks for its entries page by page, and an app's own folders inside
+    /// the person's (its backups, its packs) never fill a page: the scope excludes them by name,
+    /// and no folder scope walks a hidden folder, a package or a symbolic link.
+    #[test]
+    fn a_folder_scope_pages_its_media_and_never_walks_what_it_excludes_a_hidden_folder_or_a_package(
+    ) {
+        let world = World::new();
+        for (relative, bytes) in [
+            ("Album Project/Samples/kick.wav", &b"RIFF kick"[..]),
+            (
+                "Album Project/Backup/Album [2026-10-01 120000].wav",
+                b"RIFF old",
+            ),
+            ("Album Project/Ableton Project Info/cache.wav", b"RIFF info"),
+            ("Ableton/Factory Packs/Pack/Samples/loop.wav", b"RIFF pack"),
+            (".hidden/secret.wav", b"RIFF secret"),
+            ("Logic.logicx/Media/take.wav", b"RIFF logic"),
+            ("a/d.wav", b"RIFF d"),
+            ("a b/c.wav", b"RIFF c"),
+        ] {
+            let path = world.music.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        }
+        let elsewhere = world.base.join("Elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+        fs::write(elsewhere.join("linked.wav"), b"RIFF linked").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, world.music.join("Linked")).unwrap();
+        let registered = run(
+            &world.root,
+            "scope-register",
+            &json!({"name":"Music","path":world.music(),"kind":"folder","allow_external":true,
+                "media":["wav","aiff","mp3"],"exclude":["Factory Packs","Backup","Ableton Project Info","Backup"],
+                "expected_revision":world.revision()}),
+        )
+        .unwrap();
+        assert_eq!(
+            registered["exclude"],
+            json!(["Ableton Project Info", "Backup", "Factory Packs"])
+        );
+        let listed = run(&world.root, "inspect", &json!({"resources":false})).unwrap();
+        let music = listed["scopes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|scope| scope["world_ref"] == "folder:Music")
+            .unwrap()
+            .clone();
+        assert_eq!(
+            music["exclude"],
+            json!(["Ableton Project Info", "Backup", "Factory Packs"])
+        );
+        let read = |extra: Value| {
+            let mut input =
+                json!({"project":"folder:Music","resources":true,"path_prefixes":[world.music()]});
+            input
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            run(&world.root, "inspect", &input)
+        };
+        let paths = |answer: &Value| -> Vec<String> {
+            answer["resources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| {
+                    entry["path"]
+                        .as_str()
+                        .unwrap()
+                        .strip_prefix(&format!("{}/", world.music()))
+                        .unwrap()
+                        .to_owned()
+                })
+                .collect()
+        };
+        // The whole listing: the person's own media, in path order, and nothing the walk leaves out.
+        let whole = read(json!({})).unwrap();
+        let mut all = paths(&whole);
+        all.sort_by(|a, b| Path::new(a).cmp(Path::new(b)));
+        assert_eq!(
+            all,
+            [
+                "Album Project/Samples/kick.wav",
+                "Field recordings/estuary low tide.wav",
+                "a/d.wav",
+                "a b/c.wav",
+                "market-hall.AIFF",
+                "voice.mp3",
+            ]
+        );
+        assert!(
+            whole.get("page").is_none(),
+            "an unpaged answer carries no page"
+        );
+        // Page by page, two at a time: each page says whether more stand and where the next starts.
+        let mut pages = Vec::new();
+        let mut after = Value::Null;
+        loop {
+            let answer = read(json!({"limit":2,"after":after})).unwrap();
+            let page = answer["page"].clone();
+            assert_eq!(page["limit"], 2);
+            pages.push((paths(&answer), page["truncated"].clone()));
+            if page["truncated"] != true {
+                assert_eq!(page["next"], Value::Null);
+                break;
+            }
+            assert_eq!(
+                page["next"].as_str().unwrap(),
+                answer["resources"][1]["path"].as_str().unwrap()
+            );
+            after = page["next"].clone();
+        }
+        assert_eq!(
+            pages,
+            vec![
+                (
+                    vec![
+                        "Album Project/Samples/kick.wav".to_owned(),
+                        "Field recordings/estuary low tide.wav".to_owned()
+                    ],
+                    json!(true)
+                ),
+                (
+                    vec!["a/d.wav".to_owned(), "a b/c.wav".to_owned()],
+                    json!(true)
+                ),
+                (
+                    vec!["market-hall.AIFF".to_owned(), "voice.mp3".to_owned()],
+                    json!(false)
+                ),
+            ]
+        );
+        // A page asked for wrongly is refused in words, and so is an exclusion that is not one folder's name.
+        assert_eq!(
+            refused(read(json!({"limit":0}))),
+            "limit is how many entries one page holds, from 1 to 5000"
+        );
+        assert_eq!(
+            refused(read(json!({"limit":2,"after":"Music/a"}))),
+            "after is the absolute path of the last entry of the page before"
+        );
+        assert_eq!(
+            refused(run(
+                &world.root,
+                "scope-register",
+                &json!({"name":"Samples","path":elsewhere,"kind":"folder","allow_external":true,
+                    "media":["wav"],"exclude":["Album Project/Backup"],"expected_revision":world.revision()}),
+            )),
+            "A folder scope excludes folders by name, one plain path component each, and Album Project/Backup is not one"
+        );
+        assert_eq!(
+            refused(run(
+                &world.root,
+                "scope-register",
+                &json!({"name":"Music","path":world.music(),"kind":"folder","allow_external":true,
+                    "media":["wav","aiff","mp3"],"exclude":["Backup"],"expected_revision":world.revision()}),
+            )),
+            format!(
+                "The folder scope Music already stands over {} admitting aiff, mp3, wav and excluding Ableton Project Info, Backup, Factory Packs: it is registered once, as it was asked first",
+                world.music()
+            )
+        );
+    }
+
+    #[test]
+    fn a_folder_taken_away_is_named_unreachable_and_the_other_scopes_stand() {
+        let world = World::new();
+        world
+            .register("Music", &world.music(), json!(["wav"]))
+            .unwrap();
+        let moved = world.base.join("Music moved");
+        fs::rename(&world.music, &moved).unwrap();
+        let (all, unreachable) = participating(&world.root.canonicalize().unwrap()).unwrap();
+        assert!(all.iter().any(|scope| scope.world == "project:alpha"));
+        assert!(all.iter().all(|scope| scope.world != "folder:Music"));
+        assert_eq!(unreachable.len(), 1);
+        assert_eq!(
+            unreachable[0].message,
+            format!(
+                "unreachable: the folder scope Music stands over {}, and no folder is there now",
+                world.music()
+            )
+        );
+        run(&world.root, "inspect", &json!({"resources":false})).unwrap();
+        fs::rename(&moved, &world.music).unwrap();
+        assert!(participating(&world.root)
+            .unwrap()
+            .0
+            .iter()
+            .any(|scope| scope.world == "folder:Music"));
     }
 }
