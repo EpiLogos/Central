@@ -306,6 +306,159 @@ fn a_project_page_leaves_its_world_attributed_to_the_person_and_comes_back_throu
     assert_eq!(added["actor_kind"], "human");
 }
 
+/// Central's trash stands on the world's own folders, its Control and Work. A world missing one cannot take a page to the trash, and says
+/// which, in words, never as the system's raw error (O-I #747 round 895, DLW build ruling 2026-11-08: Delete in a walk world with no Work
+/// folder answered "No such file or directory (os error 2)"). Nothing moves.
+#[test]
+fn a_world_missing_a_folder_the_trash_stands_on_says_which_in_words_and_nothing_moves() {
+    let home = made(&["central.files.trash"]);
+    let path = format!("{FLOWS}/flow-2026-11-09-0900.html");
+    home.put(&path, PAGE);
+    let (location, revision) = located(&home, FLOWS, "flow-2026-11-09-0900.html");
+    fs::rename(home.ground().join("Work"), home.ground().join("Work.away")).unwrap();
+    let refused = cli(
+        &home,
+        "central.files.trash",
+        json!({"location":location,"expected_revision":revision,"project":Value::Null}),
+        Some(TOKEN),
+    );
+    assert_eq!(refused["ok"], false, "{refused}");
+    let said = refused.to_string();
+    assert!(!said.contains("os error"), "{refused}");
+    assert!(
+        said.contains(
+            "This world's Work folder is missing, and Central's trash stands on it: nothing was moved."
+        ),
+        "{refused}"
+    );
+    assert!(home.exists(&path), "nothing moved");
+}
+
+/// The trash carries who acts, as a save does (`actor`, `actor_kind`; O-I #747 round 895, DLW build ruling 2026-11-09): the act is the
+/// person's own, so a caller that says it is an agent is refused in words even on the person's token, and nothing moves; the person's
+/// own attribution goes.
+#[test]
+fn the_trash_takes_who_acts_and_refuses_a_caller_that_is_not_human_in_words() {
+    let home = made(&["central.files.trash"]);
+    let path = format!("{FLOWS}/flow-2026-11-09-1000.html");
+    home.put(&path, PAGE);
+    let (location, revision) = located(&home, FLOWS, "flow-2026-11-09-1000.html");
+    let trash = |actor: &str, kind: &str| {
+        cli(
+            &home,
+            "central.files.trash",
+            json!({"location":location,"expected_revision":revision,"project":Value::Null,"actor":actor,"actor_kind":kind}),
+            Some(TOKEN),
+        )
+    };
+    let agent = trash("agent:lane", "agent");
+    assert_eq!(agent["ok"], false, "{agent}");
+    assert!(
+        agent.to_string().contains(
+            "Central's trash takes a page by the person's own act: a caller that is not human cannot move it, and nothing was moved"
+        ),
+        "{agent}"
+    );
+    assert!(home.exists(&path), "nothing moved");
+    // O-I #747 round 896, 0R-authority.10: a kind that is not text is refused by that cause, and an actor is bounded as a save bounds it.
+    let said = |input: Value| {
+        let refused = cli(&home, "central.files.trash", input, Some(TOKEN));
+        assert_eq!(refused["ok"], false, "{refused}");
+        assert!(home.exists(&path), "nothing moved: {refused}");
+        refused.to_string()
+    };
+    let numeric = said(
+        json!({"location":location,"expected_revision":revision,"project":Value::Null,"actor":"human:test","actor_kind":7}),
+    );
+    assert!(numeric.contains("actor_kind must be text"), "{numeric}");
+    for actor in [json!("x".repeat(1025)), json!("  "), json!(7)] {
+        let refused = said(
+            json!({"location":location,"expected_revision":revision,"project":Value::Null,"actor":actor,"actor_kind":"human"}),
+        );
+        assert!(
+            refused.contains("actor must be bounded and nonempty"),
+            "{refused}"
+        );
+    }
+    let person = trash("human:test", "human");
+    assert_eq!(person["ok"], true, "{person}");
+    assert_eq!(person["data"]["outcome"], "trashed", "{person}");
+    assert!(!home.exists(&path));
+    // Who acted is recorded in the trash's event, as the caller said it; the person the token authenticated is the receipt's principal.
+    assert_eq!(person["data"]["change"]["actor"], "human:test", "{person}");
+    assert_eq!(person["data"]["principal_ref"], PRINCIPAL);
+    let history = cli(
+        &home,
+        "central.files.history",
+        json!({"location":location}),
+        None,
+    );
+    assert_eq!(history["ok"], true, "{history}");
+    let newest = &history["data"]["entries"][0];
+    assert_eq!(
+        (&newest["revision"], &newest["actor"], &newest["actor_kind"]),
+        (&json!(""), &json!("human:test"), &json!("human")),
+        "the trash is the newest event: {history}"
+    );
+}
+
+/// A project page's trash stands on every place its project's scope reads: the world's Work, the project's own folder, its ProjectCentral
+/// and the `project.json` there. Each, missing, is named in words, never as the system's raw error or as a page outside a page folder,
+/// and nothing moves (O-I #747 round 896, 0R-authority.6).
+#[test]
+fn a_project_page_whose_ground_is_missing_names_the_place_in_words_and_nothing_moves() {
+    let home = made(&["central.files.trash"]);
+    let path = format!("{HUMAN}/flow-2026-11-09-1100.html");
+    home.put(&path, PAGE);
+    let (location, revision) = located(&home, HUMAN, "flow-2026-11-09-1100.html");
+    for (place, said) in [
+        (
+            "Work/field-notes/ProjectCentral/project.json",
+            "This world's Work/field-notes/ProjectCentral/project.json file is missing",
+        ),
+        (
+            "Work/field-notes/ProjectCentral",
+            "This world's Work/field-notes/ProjectCentral folder is missing",
+        ),
+        (
+            "Work/field-notes",
+            "This world's Work/field-notes folder is missing",
+        ),
+        ("Work", "This world's Work folder is missing"),
+    ] {
+        let away = format!("{place}.away");
+        fs::rename(home.ground().join(place), home.ground().join(&away)).unwrap();
+        let refused = cli(
+            &home,
+            "central.files.trash",
+            json!({"location":location,"expected_revision":revision,"project":PROJECT}),
+            Some(TOKEN),
+        );
+        fs::rename(home.ground().join(&away), home.ground().join(place)).unwrap();
+        assert_eq!(refused["ok"], false, "{place}: {refused}");
+        let words = refused.to_string();
+        assert!(
+            !words.contains("os error") && !words.contains("page folder"),
+            "{place}: {refused}"
+        );
+        assert!(
+            words.contains(&format!(
+                "{said}, and Central's trash stands on it: nothing was moved."
+            )),
+            "{place}: {refused}"
+        );
+        assert!(home.exists(&path), "{place}: nothing moved");
+    }
+    // Its ground whole again, the same page leaves.
+    let trashed = cli(
+        &home,
+        "central.files.trash",
+        json!({"location":location,"expected_revision":revision,"project":PROJECT}),
+        Some(TOKEN),
+    );
+    assert_eq!(trashed["data"]["outcome"], "trashed", "{trashed}");
+}
+
 #[test]
 fn only_a_page_in_a_world_s_page_folder_leaves_and_an_untrashed_absence_is_no_restore() {
     let home = made(&["central.files.trash"]);
