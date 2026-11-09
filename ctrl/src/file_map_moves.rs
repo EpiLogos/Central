@@ -133,6 +133,10 @@ fn move_exclusive(from: &Path, to: &Path) -> io::Result<()> {
 }
 pub(crate) fn plan(root: &Path, all: &[Scope], input: &Value) -> io::Result<Value> {
     let (owner, entry) = lookup(all, text(input, "source_ref")?)?;
+    // A folder scope's file is the person's, where it stands: Central writes nothing inside the folder, so it moves nothing there.
+    if owner.is_folder() {
+        return Err(folder_writes_nothing(&owner));
+    }
     if owner.is_external() {
         return Err(invalid(
             "External scopes are read-only (placement.json grants no writes there); move the file with the owner's own tools and refresh",

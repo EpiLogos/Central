@@ -132,6 +132,8 @@ pub(crate) struct Backend {
     /// the ground, the ground-side state directory for an external scope.
     pub state: PathBuf,
     pub area: PathBuf,
+    /// The tree is a folder scope's: Central reads it where it stands, so bkmr is never run there and no index is made for it.
+    pub folder: bool,
 }
 impl Backend {
     pub fn with_state(root: &Path, state: &Path) -> Self {
@@ -139,10 +141,27 @@ impl Backend {
             root: root.into(),
             state: state.into(),
             area: state.join(".central/bkmr"),
+            folder: false,
         }
     }
     pub fn for_scope(scope: &super::file_map_catalog::Scope) -> Self {
-        Self::with_state(&scope.root, &scope.state)
+        Self {
+            folder: scope.is_folder(),
+            ..Self::with_state(&scope.root, &scope.state)
+        }
+    }
+    /// Refuses, in words, any bkmr run or index for a folder scope.
+    fn never_for_a_folder(&self) -> io::Result<()> {
+        if self.folder {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "bkmr is never run for a folder scope: Central reads {} where it stands",
+                    self.root.display()
+                ),
+            ));
+        }
+        Ok(())
     }
     pub fn db(&self) -> PathBuf {
         self.area.join("index.db")
@@ -161,6 +180,7 @@ impl Backend {
         Ok(parse_embedding_coverage(&self.run(&["info".into()])?))
     }
     pub fn prepare(&self) -> io::Result<()> {
+        self.never_for_a_folder()?;
         super::file_map::safe_directory(&self.state, Path::new(".central/bkmr/home/.config/bkmr"))?;
         let config = format!(
             "db_url = {}\n[base_paths]\nWORLD = {}\n\n[embeddings]\nmodel = {}\n",
@@ -191,6 +211,7 @@ impl Backend {
     /// Commands that legitimately re-embed a whole scope — `backfill` after a
     /// model switch — need minutes, not the default per-call ceiling.
     pub fn run_allowance(&self, args: &[String], timeout_secs: u64) -> io::Result<String> {
+        self.never_for_a_folder()?;
         super::file_map::safe_member(&self.state, ".central/bkmr", true)?;
         for name in [
             "index.db",

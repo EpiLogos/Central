@@ -278,6 +278,17 @@ pub(crate) fn scope_register(all: &[Scope], input: &Value) -> io::Result<Value> 
 /// written inside the folder, then or later. It is asked for explicitly (`kind: "folder"`,
 /// `allow_external: true`) and names the media it admits (`media`), which it lists by metadata only.
 fn folder_register(all: &[Scope], root: &Scope, name: &str, input: &Value) -> io::Result<Value> {
+    // A name is kept as spelled: one with a trailing slash would name a World (`folder:Music/`) no read spells.
+    if let [std::path::Component::Normal(plain)] =
+        Path::new(name).components().collect::<Vec<_>>()[..]
+    {
+        if plain.to_str() != Some(name) && !name.starts_with('.') {
+            return Err(invalid(format!(
+                "A folder scope's name is one plain name, and {name} is not: name it {}",
+                plain.to_string_lossy()
+            )));
+        }
+    }
     if Path::new(name).components().count() != 1 || name.starts_with('.') {
         return Err(invalid(format!(
             "A folder scope's name is one plain path component, and {name} is not"
