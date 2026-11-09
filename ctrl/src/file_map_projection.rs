@@ -7,6 +7,14 @@ use std::{fs, io, path::Path};
 const RECEIPTS: &str = ".central/bkmr/projections.json";
 pub(crate) fn execute(all: &[Scope], input: &Value, write: bool) -> io::Result<Value> {
     let scope = selected(all, input)?;
+    // A folder scope is read where it stands: no receipt is kept inside it, and none for it.
+    if scope.is_folder() {
+        return Err(invalid(format!(
+            "{} is a folder scope: Central reads {} where it stands and keeps no projection receipt for it",
+            scope.project.as_deref().unwrap_or(&scope.world),
+            scope.root.display()
+        )));
+    }
     let path = safe_member(&scope.root, RECEIPTS, false)?;
     let mut state = if path.exists() {
         read_json(&path)?

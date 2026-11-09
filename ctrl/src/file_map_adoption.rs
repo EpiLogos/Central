@@ -6,7 +6,11 @@ use crate::source_safety::content_revision_bytes;
 use rusqlite::{backup::Backup, Connection, OpenFlags};
 use serde_json::{json, Value};
 use std::os::unix::fs::PermissionsExt;
-use std::{fs, io, path::Path, time::Duration};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 pub(crate) fn adopt(scope: &Scope, input: &Value) -> io::Result<Value> {
     if input["quiesced"] != true {
@@ -202,6 +206,41 @@ pub(crate) fn scope_register(all: &[Scope], input: &Value) -> io::Result<Value> 
     expect_basis(root, input)?;
     let name = text(input, "name")?;
     relative(name)?;
+    match input
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("project")
+    {
+        "project" => {}
+        "folder" => return folder_register(all, root, name, input),
+        other => {
+            return Err(invalid(format!(
+                "A scope is a project or a folder, and {other} is neither"
+            )))
+        }
+    }
+    // A folder scope's World is `folder:<name>`: no project's name is spelled so.
+    if name.starts_with(FOLDER_WORLD_PREFIX) {
+        return Err(invalid(format!(
+            "A project scope's name never begins with {FOLDER_WORLD_PREFIX}, which names a folder scope's World, and {name} does"
+        )));
+    }
+    for declared in folder_declarations(&root.root)? {
+        match declared {
+            Ok(folder) if folder.name == name => {
+                return Err(conflict(format!(
+                    "The scope name {name} is already taken: it is the folder scope over {}",
+                    folder.root
+                )))
+            }
+            Err((declared, words)) if declared == name => {
+                return Err(conflict(format!(
+                    "The scope name {name} is already taken by a folder scope whose declaration does not read: {words}"
+                )))
+            }
+            _ => {}
+        }
+    }
     let raw = text(input, "path")?;
     let external = Path::new(raw).is_absolute();
     if external && input["allow_external"] != true {
@@ -232,4 +271,243 @@ pub(crate) fn scope_register(all: &[Scope], input: &Value) -> io::Result<Value> 
     ground.scopes.insert(name.into(), raw.into());
     root.save(&ground, root.document()?)?;
     Ok(json!({"world_ref":target.world,"changed":true,"revision":root.basis()?}))
+}
+
+/// Register a plain folder outside the ground as a scope: one with no ProjectCentral, read where it
+/// stands. Its declaration is written in the ground (`.central/scopes/<name>/scope.json`); nothing is
+/// written inside the folder, then or later. It is asked for explicitly (`kind: "folder"`,
+/// `allow_external: true`) and names the media it admits (`media`), which it lists by metadata only.
+fn folder_register(all: &[Scope], root: &Scope, name: &str, input: &Value) -> io::Result<Value> {
+    if Path::new(name).components().count() != 1 || name.starts_with('.') {
+        return Err(invalid(format!(
+            "A folder scope's name is one plain path component, and {name} is not"
+        )));
+    }
+    let raw = text(input, "path")?;
+    if !Path::new(raw).is_absolute() {
+        return Err(invalid(format!(
+            "A folder scope is named by its absolute path, and {raw} is not one"
+        )));
+    }
+    if input["allow_external"] != true {
+        return Err(invalid(format!(
+            "{raw} is outside this ground: a folder scope is registered only when asked, with \
+             allow_external=true"
+        )));
+    }
+    let target = match fs::canonicalize(raw) {
+        Ok(target) => target,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("There is no folder at {raw}"),
+            ))
+        }
+        Err(error) => return Err(error),
+    };
+    if !fs::metadata(&target)?.is_dir() {
+        return Err(invalid(format!("{raw} is a file, not a folder")));
+    }
+    let ground = root.root.canonicalize()?;
+    if target.starts_with(&ground) {
+        return Err(invalid(format!(
+            "{raw} is inside this ground ({}): a folder scope stands outside it, and the ground's \
+             own folders are read through Central and its projects",
+            ground.display()
+        )));
+    }
+    if ground.starts_with(&target) {
+        return Err(invalid(format!(
+            "{raw} holds this ground ({}): a folder scope stands beside the ground, never around it",
+            ground.display()
+        )));
+    }
+    if target.join("ProjectCentral/project.json").exists() {
+        return Err(invalid(format!(
+            "{raw} holds a ProjectCentral: register it as a project, not as a folder"
+        )));
+    }
+    let shown = target
+        .to_str()
+        .ok_or_else(|| invalid(format!("{raw} is not a UTF-8 path")))?
+        .to_owned();
+    let media = admitted_media(input)?;
+    let exclude = excluded_folders(input)?;
+    let world = format!("{FOLDER_WORLD_PREFIX}{name}");
+    let mut declared = Vec::new();
+    for read in folder_declarations(&root.root)? {
+        match read {
+            Ok(folder) => declared.push(folder),
+            Err((unread, words)) if unread == name => {
+                return Err(conflict(format!(
+                    "The scope name {name} is already taken by a folder scope whose declaration does not read: {words}"
+                )))
+            }
+            Err(_) => {}
+        }
+    }
+    if let Some(same) = declared.iter().find(|folder| folder.name == name) {
+        if same.root == shown && same.media == media && same.exclude == exclude {
+            return Ok(json!({"world_ref":world,"kind":"folder","changed":false,
+                "path":same.root,"media":same.media,"exclude":same.exclude}));
+        }
+        if same.root == shown {
+            return Err(conflict(format!(
+                "The folder scope {name} already stands over {} admitting {} and excluding {}: it is \
+                 registered once, as it was asked first",
+                same.root,
+                words_or_none(&same.media),
+                words_or_none(&same.exclude)
+            )));
+        }
+        return Err(conflict(format!(
+            "The scope name {name} is already taken: it is the folder scope over {}",
+            same.root
+        )));
+    }
+    if let Some(other) = declared.iter().find(|folder| folder.root == shown) {
+        return Err(conflict(format!(
+            "{raw} is already the folder scope {}",
+            other.name
+        )));
+    }
+    // A folder scope stands beside every other scope, never inside or around one: each is compared by its canonical path.
+    let others = declared
+        .iter()
+        .map(|folder| {
+            (
+                "folder scope",
+                folder.name.clone(),
+                PathBuf::from(&folder.root),
+            )
+        })
+        .chain(
+            all.iter()
+                .filter(|scope| scope.is_external() && !scope.is_folder())
+                .map(|scope| {
+                    (
+                        "external project scope",
+                        scope.project.clone().unwrap_or_else(|| scope.world.clone()),
+                        scope.root.clone(),
+                    )
+                }),
+        );
+    for (kind, other, at) in others {
+        if target.starts_with(&at) {
+            return Err(conflict(format!(
+                "{raw} is inside the {kind} {other} ({}): a folder scope never stands inside another scope",
+                at.display()
+            )));
+        }
+        if at.starts_with(&target) {
+            return Err(conflict(format!(
+                "{raw} holds the {kind} {other} ({}): a folder scope never stands around another scope",
+                at.display()
+            )));
+        }
+    }
+    if root.ground()?.scopes.contains_key(name)
+        || all
+            .iter()
+            .any(|scope| scope.project.as_deref() == Some(name))
+    {
+        return Err(conflict(format!(
+            "The scope name {name} is already taken by a project of this ground"
+        )));
+    }
+    let state = external_state(&root.root, name)?;
+    let folder = FolderScope {
+        schema: FOLDER_SCOPE_SCHEMA.into(),
+        name: name.into(),
+        root: shown,
+        kind: "folder".into(),
+        media,
+        exclude,
+        registered_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    };
+    write_atomic(
+        &state,
+        &state.join(FOLDER_SCOPE_DECLARATION),
+        &serde_json::to_vec_pretty(&folder)?,
+        crate::file_mutation::RecordDisposition::CreateNew,
+    )?;
+    Ok(
+        json!({"world_ref":world,"kind":"folder","changed":true,"path":folder.root,
+        "media":folder.media,"exclude":folder.exclude,"registered_at":folder.registered_at,
+        "declaration":state.join(FOLDER_SCOPE_DECLARATION)}),
+    )
+}
+
+/// A list in words, or "none".
+fn words_or_none(items: &[String]) -> String {
+    if items.is_empty() {
+        "none".into()
+    } else {
+        items.join(", ")
+    }
+}
+
+/// The folders a folder scope never walks, from `exclude` (optional): each one folder's name, matched at any depth, once.
+fn excluded_folders(input: &Value) -> io::Result<Vec<String>> {
+    let Some(list) = input.get("exclude").filter(|value| !value.is_null()) else {
+        return Ok(Vec::new());
+    };
+    let shape = || {
+        invalid("A folder scope's exclude is a list of folder names, each one plain path component")
+    };
+    let mut exclude = Vec::new();
+    for value in list.as_array().ok_or_else(shape)? {
+        let name = value.as_str().ok_or_else(shape)?;
+        if name.is_empty()
+            || name == "."
+            || name == ".."
+            || name.contains('/')
+            || Path::new(name).components().count() != 1
+        {
+            return Err(invalid(format!(
+                "A folder scope excludes folders by name, one plain path component each, and {name} is not one"
+            )));
+        }
+        if !exclude.iter().any(|kept: &String| kept == name) {
+            exclude.push(name.to_owned());
+        }
+    }
+    exclude.sort();
+    Ok(exclude)
+}
+
+/// The media a folder scope admits, from `media`: each a known extension, lower case, once.
+fn admitted_media(input: &Value) -> io::Result<Vec<String>> {
+    let missing = || {
+        invalid(format!(
+            "A folder scope names the media it admits, in media: Central admits {}",
+            media_words()
+        ))
+    };
+    let mut media = Vec::new();
+    for value in input
+        .get("media")
+        .and_then(Value::as_array)
+        .ok_or_else(missing)?
+    {
+        let extension = value
+            .as_str()
+            .ok_or_else(missing)?
+            .trim_start_matches('.')
+            .to_ascii_lowercase();
+        if !MEDIA_KINDS.iter().any(|(known, _)| *known == extension) {
+            return Err(invalid(format!(
+                "Central lists no media of kind {extension}: it admits {}",
+                media_words()
+            )));
+        }
+        if !media.contains(&extension) {
+            media.push(extension);
+        }
+    }
+    if media.is_empty() {
+        return Err(missing());
+    }
+    media.sort();
+    Ok(media)
 }
