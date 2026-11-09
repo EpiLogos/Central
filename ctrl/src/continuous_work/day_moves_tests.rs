@@ -3066,3 +3066,458 @@ fn source_history_names_the_days_field_source_as_what_recorded_a_field_record_no
     assert_eq!(change["actor"], "day:field-source", "{change}");
     assert_eq!(change["actor_kind"], "native-service", "{change}");
 }
+
+// ---- central-be1d: the delta review of #326 (DLW build ruling 2026-11-09) -------------------------------------
+
+fn p1_must(root: &Path, value: Value, request: &str) {
+    set_field(root, TODAY, "p1_must", value, request, at(T));
+}
+
+#[test]
+fn an_item_with_no_id_keeps_its_part_only_while_the_identical_items_before_it_stand_and_says_so_when_they_change(
+) {
+    let w = world("Europe/London", 0);
+    ensure(w.path(), at(T));
+    make_document(w.path(), TODAY, "day:c1-today", PROPOSAL, at(T));
+    p1_must(
+        w.path(),
+        json!(["Write the letter", "Write the letter"]),
+        "set:twins",
+    );
+    let item = |input: Value| part(w.path(), input, at(T));
+    let first = item(json!({"field_id":"p1_must","index":0})).unwrap();
+    let second = item(json!({"field_id":"p1_must","index":1})).unwrap();
+    let second_id = second["entry"]["item"].as_str().unwrap().to_owned();
+    // The first twin goes: the second is named by its place among them anew.
+    p1_must(w.path(), json!(["Write the letter"]), "set:one-twin");
+    let moved = words_of(item(json!({"field_id":"p1_must","item_id":second_id})));
+    assert!(
+        moved.contains(&format!("has no item {second_id} now")),
+        "{moved}"
+    );
+    assert!(
+        moved.contains("an identical item before it changed or went (1 now hold those words)"),
+        "{moved}"
+    );
+    assert!(
+        moved.contains("The part it was shown as still holds its words"),
+        "{moved}"
+    );
+    let survivor = item(json!({"field_id":"p1_must","index":0})).unwrap();
+    assert_eq!(
+        survivor["part"]["id"], first["part"]["id"],
+        "the survivor stands in the first twin's place, so it is that part, and showing it again is already shown"
+    );
+    assert_eq!(survivor["part"]["label"], first["part"]["label"]);
+    // An item with its own id keeps its part however the list moves.
+    p1_must(
+        w.path(),
+        json!([{"id":"t1","text":"Call"}, {"id":"t2","text":"Write"}]),
+        "set:ids",
+    );
+    let own = item(json!({"field_id":"p1_must","item_id":"t2"})).unwrap();
+    p1_must(
+        w.path(),
+        json!([{"id":"t2","text":"Write"}]),
+        "set:ids-moved",
+    );
+    assert_eq!(
+        item(json!({"field_id":"p1_must","item_id":"t2"})).unwrap()["part"]["id"],
+        own["part"]["id"]
+    );
+    // An unknown id is still said plainly as no item.
+    assert!(
+        words_of(item(json!({"field_id":"p1_must","item_id":"t9"}))).ends_with("has no item t9")
+    );
+}
+
+#[test]
+fn a_list_whose_items_repeat_an_id_is_refused_naming_the_id() {
+    let w = world("Europe/London", 0);
+    ensure(w.path(), at(T));
+    make_document(w.path(), TODAY, "day:c1-today", PROPOSAL, at(T));
+    p1_must(
+        w.path(),
+        json!([{"id":"t1","text":"Call"}, {"id":"t1","text":"Write"}, "Rest"]),
+        "set:dup",
+    );
+    for input in [
+        json!({"field_id":"p1_must","index":0}),
+        json!({"field_id":"p1_must","item_id":"t1"}),
+        json!({"field_id":"p1_must","index":2}),
+    ] {
+        let refused = words_of(part(w.path(), input.clone(), at(T)));
+        assert!(
+            refused.contains("p1_must holds more than one item with the id t1"),
+            "{input}: {refused}"
+        );
+    }
+}
+
+#[test]
+fn invisible_characters_and_a_lone_carriage_return_are_refused_once_the_kept_records_are_looked_up()
+{
+    let w = world("Europe/London", 0);
+    ensure(w.path(), at(T));
+    let at_ms = ms("2026-10-20T09:10:00Z");
+    let invisible = [
+        '\u{2028}', '\u{2029}', '\u{202A}', '\u{202E}', '\u{2066}', '\u{2069}', '\u{200B}',
+        '\u{200D}', '\u{2060}', '\u{FEFF}',
+    ];
+    let mut list = Vec::new();
+    for (index, c) in invisible.iter().enumerate() {
+        let mut named = reached(&format!("saying:name-{index}"), "to-you", at_ms, "Hello.");
+        named["from"]["name"] = json!(format!("ma{c}ra"));
+        list.push(named);
+        list.push(reached(
+            &format!("saying:words-{index}"),
+            "to-you",
+            at_ms,
+            &format!("Which{c}plate?"),
+        ));
+    }
+    let mut starred = reached("saying:star", "star", at_ms, "Hello.");
+    starred["star"]["name"] = json!("The \u{202E}Rosarium");
+    list.push(starred);
+    list.push(reached(
+        "saying:lone-cr",
+        "to-you",
+        at_ms,
+        "Which plate?\rThe second.",
+    ));
+    list.push(reached(
+        "saying:crlf",
+        "to-you",
+        at_ms,
+        "Which plate?\r\nThe second.\r\n",
+    ));
+    let answers = records(w.path(), list, at(T)).unwrap();
+    let results = answers["results"].as_array().unwrap();
+    let (refused, made) = results.split_at(results.len() - 1);
+    for result in refused {
+        let words = result["refused"].as_str().unwrap_or_default();
+        assert!(
+            words.contains("invisible") && words.contains("control"),
+            "{result}"
+        );
+        let named = result["item_ref"].as_str().unwrap();
+        let what = if named.contains("name-") {
+            "from.name"
+        } else if named.contains("star") {
+            "star.name"
+        } else {
+            "words"
+        };
+        assert!(words.starts_with(what), "{result}");
+    }
+    assert_eq!(made[0]["created"], true, "a \\r\\n is a line break");
+
+    // What #325 kept stays kept: its retry answers kept, whatever is refused now.
+    let kept = reached("saying:kept-before", "to-you", at_ms, "Kept.");
+    record(w.path(), kept.clone(), HOST, at(T)).unwrap();
+    let path = field_path(w.path(), "2026-10-20");
+    let raw = fs::read_to_string(&path).unwrap();
+    let line = raw
+        .lines()
+        .find(|line| line.contains("saying:kept-before"))
+        .unwrap();
+    assert!(line.contains("\"name\":\"mara\""), "{line}");
+    fs::write(
+        &path,
+        raw.replace(
+            line,
+            &line.replace("\"name\":\"mara\"", "\"name\":\"ma\\u001bra\""),
+        ),
+    )
+    .unwrap();
+    let mut retry = kept;
+    retry["from"]["name"] = json!("ma\u{1b}ra");
+    assert_eq!(
+        record(w.path(), retry.clone(), HOST, at(T)).unwrap()["created"],
+        false,
+        "the single form"
+    );
+    assert_eq!(
+        records(w.path(), vec![retry], at(T)).unwrap()["results"][0]["created"],
+        false,
+        "a batch"
+    );
+}
+
+#[test]
+fn close_at_day_start_in_a_spring_forward_gap_closes_the_day_that_ends_there() {
+    // Europe/London with the Day boundary at 01:30: on 2026-03-29 01:30 never stands on the wall. The boundary's
+    // occurrence resolves forward to 02:30 BST (01:30Z), half an hour after the date flipped at 01:00Z, so the instant
+    // before it is the 29th's already: Close at Day start closes the 28th, the Day that ended at the flip.
+    let w = world("Europe/London", 90);
+    ensure(w.path(), at("2026-03-28T12:00:00Z"));
+    save(
+        w.path(),
+        json!({"moves":{"close":{"runs_at":{"kind":"day_start"}}}}),
+        at("2026-03-28T12:00:00Z"),
+    );
+    let due = read(
+        w.path(),
+        "day_moves_due",
+        json!({"since_unix_ms":ms("2026-03-28T12:00:00Z"),"now_unix_ms":ms("2026-03-29T12:00:00Z")}),
+        at("2026-03-29T12:00:00Z"),
+    );
+    let close: Vec<&Value> = due["due"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["move"] == "close")
+        .collect();
+    assert_eq!(close.len(), 1, "{due}");
+    assert_eq!(
+        close[0]["due_unix_ms"],
+        ms("2026-03-29T01:30:00Z"),
+        "resolved forward, as time.occurrences does"
+    );
+    assert_eq!(close[0]["civil_date"], "2026-03-28", "{due}");
+}
+
+#[test]
+fn the_field_reading_answers_with_no_spans_and_a_note_where_the_days_date_cannot_be_named() {
+    let w = world("Europe/London", 0);
+    ensure(w.path(), at(T));
+    record(
+        w.path(),
+        reached("saying:kept", "to-you", ms("2026-10-20T09:10:00Z"), "Kept?"),
+        HOST,
+        at(T),
+    )
+    .unwrap();
+    let policy = w.path().join("Control/user/time.json");
+    let mut value: Value = serde_json::from_slice(&fs::read(&policy).unwrap()).unwrap();
+    value["timezone"] = json!("Nowhere/Never");
+    fs::write(&policy, serde_json::to_vec(&value).unwrap()).unwrap();
+    let reading = read(w.path(), "day_field_read", json!({}), at(T));
+    let takes = &reading["takes"];
+    assert_eq!(takes["spans"], json!([]), "{reading}");
+    assert!(
+        takes["from_unix_ms"].is_null() && takes["until_unix_ms"].is_null(),
+        "{takes}"
+    );
+    assert!(
+        takes["note"].as_str().unwrap().starts_with(
+            "The Day's own date cannot be named now, so it takes nothing from the field"
+        ),
+        "{takes}"
+    );
+    assert_eq!(
+        reading["items"].as_array().unwrap().len(),
+        1,
+        "what it keeps still reads"
+    );
+}
+
+#[test]
+fn a_part_salt_that_cannot_be_read_names_its_file_and_the_way_on() {
+    let w = world("Europe/London", 0);
+    ensure(w.path(), at(T));
+    make_document(w.path(), TODAY, "day:c1-today", PROPOSAL, at(T));
+    set_field(
+        w.path(),
+        TODAY,
+        "p0_quick_thoughts",
+        json!("Bring this."),
+        "set:p0",
+        at(T),
+    );
+    let salt = w.path().join(".central/day-part-salt.json");
+    fs::create_dir_all(salt.parent().unwrap()).unwrap();
+    for (raw, what) in [
+        ("not json", "is not JSON"),
+        (
+            "{\"schema\":\"central.day-part-salt/v1\",\"salt\":\"short\"}",
+            "is not a central.day-part-salt/v1",
+        ),
+    ] {
+        fs::write(&salt, raw).unwrap();
+        let refused = words_of(part(
+            w.path(),
+            json!({"field_id":"p0_quick_thoughts"}),
+            at(T),
+        ));
+        assert!(
+            refused.contains(&format!(".central/day-part-salt.json {what}")),
+            "{refused}"
+        );
+        assert!(
+            refused.contains("Move it aside and press again"),
+            "{refused}"
+        );
+    }
+}
+
+#[test]
+fn a_day_in_a_half_hour_zone_across_its_fold_takes_only_its_own_spans() {
+    // Australia/Lord_Howe shifts by half an hour: on 2026-04-05 the wall goes back from 02:00 (+11:00) to 01:30
+    // (+10:30). With the Day boundary at 01:45, the wall reads 01:45 twice, at 14:45Z and at 15:15Z on the 4th: the
+    // Day of the 5th holds two spans, and the repeated quarter hour between the change (15:00Z) and 15:15Z is the 4th's.
+    let w = world("Australia/Lord_Howe", 105);
+    let now = at("2026-04-05T02:00:00Z");
+    assert_eq!(
+        ensure(w.path(), now)["day_ref"],
+        "central:day:control:root:2026-04-05"
+    );
+    let takes = takes_of(w.path(), now);
+    assert_eq!(
+        takes["spans"],
+        json!([
+            span("2026-04-04T14:45:00Z", "2026-04-04T15:00:00Z"),
+            span("2026-04-04T15:15:00Z", "2026-04-05T15:15:00Z")
+        ])
+    );
+    assert_eq!(takes["from_unix_ms"], ms("2026-04-04T14:45:00Z"));
+    assert_eq!(takes["until_unix_ms"], ms("2026-04-05T15:15:00Z"));
+    let answers = records(
+        w.path(),
+        vec![
+            said("first-start", ms("2026-04-04T14:45:00Z")),
+            said("at-change", ms("2026-04-04T15:00:00Z")),
+            said("in-the-repeat", ms("2026-04-04T15:14:59Z")),
+            said("second-start", ms("2026-04-04T15:15:00Z")),
+        ],
+        now,
+    )
+    .unwrap();
+    assert_eq!(
+        created_of(&answers),
+        [json!(true), json!(false), json!(false), json!(true)],
+        "{answers}"
+    );
+    assert!(answers["results"][1]["refused"]
+        .as_str()
+        .unwrap()
+        .contains("on 2026-04-04"));
+}
+
+#[test]
+fn the_earlier_day_across_an_autumn_fold_takes_the_repeated_half_hour() {
+    // Europe/London with the Day boundary at 01:30: the Day of 2026-10-24 runs from 00:30Z on the 24th to the 25th's
+    // first 01:30 (00:30Z), and again through the repeated half hour, from the change (01:00Z) to the second 01:30.
+    let w = world("Europe/London", 90);
+    let now = at("2026-10-24T12:00:00Z");
+    assert_eq!(
+        ensure(w.path(), now)["day_ref"],
+        "central:day:control:root:2026-10-24"
+    );
+    let takes = takes_of(w.path(), now);
+    assert_eq!(
+        takes["spans"],
+        json!([
+            span("2026-10-24T00:30:00Z", "2026-10-25T00:30:00Z"),
+            span("2026-10-25T01:00:00Z", "2026-10-25T01:30:00Z")
+        ])
+    );
+    let answers = records(
+        w.path(),
+        vec![
+            said("first-of-the-25th", ms("2026-10-25T00:45:00Z")),
+            said("in-the-repeat", ms("2026-10-25T01:15:00Z")),
+            said("second-of-the-25th", ms("2026-10-25T01:30:00Z")),
+        ],
+        at("2026-10-25T02:00:00Z"),
+    )
+    .unwrap();
+    assert_eq!(
+        created_of(&answers),
+        [json!(false), json!(true), json!(false)],
+        "{answers}"
+    );
+}
+
+#[test]
+fn a_day_closed_before_the_first_press_is_never_touched_and_the_salt_is_written_outside_it() {
+    let w = world("Europe/London", 0);
+    ensure(w.path(), at(T));
+    make_document(w.path(), TODAY, "day:c1-today", PROPOSAL, at(T));
+    set_field(
+        w.path(),
+        TODAY,
+        "p0_quick_thoughts",
+        json!("Bring this."),
+        "set:p0",
+        at(T),
+    );
+    let day = read(w.path(), "day_read", json!({"day_ref":TODAY}), at(T));
+    run(
+        w.path(),
+        "day_lifecycle",
+        json!({"day_ref":TODAY,"expected_revision":day["revision"]["revision"],
+            "expected_relations_revision":day["relations_revision"],"lifecycle":"closed"}),
+        Some(HUMAN),
+        at(T),
+    )
+    .unwrap();
+    let salt = w.path().join(".central/day-part-salt.json");
+    assert!(!salt.exists(), "no part was read yet");
+    let day_dir = w.path().join("Control/user/day/2026-10-20");
+    let closed = listing(&day_dir);
+    part(
+        w.path(),
+        json!({"day_ref":TODAY,"field_id":"p0_quick_thoughts"}),
+        at(T),
+    )
+    .unwrap();
+    assert!(salt.exists(), "the first press writes the world's salt");
+    assert_eq!(listing(&day_dir), closed, "and nothing into the closed Day");
+}
+
+#[test]
+fn each_refusal_of_the_persons_own_act_opens_with_whose_act_it_is_then_its_cause() {
+    let w = world("Europe/London", 0);
+    ensure(w.path(), at(T));
+    make_document(w.path(), TODAY, "day:c1-today", PROPOSAL, at(T));
+    set_field(
+        w.path(),
+        TODAY,
+        "p0_quick_thoughts",
+        json!("Bring this."),
+        "set:p0",
+        at(T),
+    );
+    let input = json!({"day_ref":TODAY,"field_id":"p0_quick_thoughts"});
+    let unknown = "an-unknown-token-that-no-grant-holds-0000";
+    let press = |token: Option<&str>| {
+        words_of(run(w.path(), "day_entry_part", input.clone(), token, at(T)))
+    };
+    let agent = press(Some(AGENT));
+    assert_eq!(
+        agent,
+        "Showing an entry is the person's own press: this credential is agent:test's, a credential of kind agent, not the person's"
+    );
+    for (refused, cause) in [
+        (press(None), "CENTRAL_NATIVE_TOKEN"),
+        (press(Some(unknown)), "not authorised"),
+    ] {
+        assert!(
+            refused.starts_with("Showing an entry is the person's own press: "),
+            "{refused}"
+        );
+        assert!(refused.contains(cause), "{refused}");
+    }
+    let item = reached(
+        "saying:press",
+        "to-you",
+        ms("2026-10-20T09:10:00Z"),
+        "Hello.",
+    );
+    for token in [None, Some(unknown)] {
+        let refused = words_of(run(
+            w.path(),
+            "day_field_record",
+            item.clone(),
+            token,
+            at(T),
+        ));
+        assert!(
+            refused.starts_with(
+                "Recording what reached you is the person's own Field setting at work: "
+            ),
+            "{refused}"
+        );
+    }
+}

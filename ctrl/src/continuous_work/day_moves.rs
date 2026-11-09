@@ -22,7 +22,10 @@ use crate::result::ActionResult;
 use chrono::{DateTime, Duration, LocalResult, NaiveDate, Offset, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
 use serde_json::{json, Map, Value};
-use std::{collections::BTreeMap, io};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io,
+};
 
 pub(crate) const MOVES: [&str; 5] = ["tasks", "patterns", "context", "synthesis", "close"];
 /// What sends entries to the Day (manual 18.2 Sources): each mode, and the shared
@@ -640,24 +643,37 @@ fn civil_date_at(scope: &Scope, instant_ms: i64) -> io::Result<String> {
     Ok(temporal::time_policy(scope, seconds)?.civil_date)
 }
 
-/// The civil date of the Day an occurrence belongs to: the Day it falls in, except
-/// that Close at Day start closes the Day that ends at that instant.
+/// The civil date of the Day an occurrence belongs to, by the one rule the
+/// civil date is named by (temporal::civil_date_in, DLW build ruling
+/// 2026-11-09): the Day it falls on, except that Close at Day start closes the
+/// Day before the one its occurrence falls on. That is the Day that ends there:
+/// in a spring-forward gap the boundary's occurrence resolves forward, past the
+/// instant the date flips, so the instant before it is the new Day's already.
 fn occurrence_civil_date(
     scope: &Scope,
     mv: &str,
     kind: &str,
     instant_ms: i64,
 ) -> io::Result<String> {
-    let basis = if mv == "close" && kind == "day_start" {
-        instant_ms - 1
+    let date = civil_date_at(scope, instant_ms)?;
+    if mv == "close" && kind == "day_start" {
+        previous_civil_date(&date)
     } else {
-        instant_ms
-    };
-    civil_date_at(scope, basis)
+        Ok(date)
+    }
 }
 
 fn day_ref_of(scope: &Scope, civil_date: &str) -> String {
     format!("central:day:{}:{}", scope.world_ref, civil_date)
+}
+
+fn previous_civil_date(civil_date: &str) -> io::Result<String> {
+    let date = NaiveDate::parse_from_str(civil_date, "%Y-%m-%d")
+        .map_err(|_| invalid("a Day's civil date is YYYY-MM-DD"))?;
+    Ok(date
+        .checked_sub_signed(Duration::days(1))
+        .ok_or_else(|| invalid("civil date out of range"))?
+        .to_string())
 }
 
 fn next_civil_date(civil_date: &str) -> io::Result<String> {
@@ -1691,21 +1707,78 @@ fn bounded_ref<'a>(value: &'a Value, what: &str) -> io::Result<&'a str> {
         .ok_or_else(|| invalid(format!("{what} is a ref of at most 512 bytes")))
 }
 
-/// Bounded words: not blank, at most `max` characters, with no NUL or other
-/// control character, save line breaks and tabs where the words may run to
-/// `lines` (a record's words; a name stands on one line).
-fn bounded_words<'a>(value: &'a Value, what: &str, max: usize, lines: bool) -> io::Result<&'a str> {
-    let kept = |c: char| !c.is_control() || (lines && matches!(c, '\n' | '\r' | '\t'));
+/// Bounded words: not blank and at most `max` characters. What characters they
+/// hold is checked once the Day's kept records are looked up (`plain_record`),
+/// so a record the Day keeps already answers kept whatever is refused now.
+fn bounded_words<'a>(value: &'a Value, what: &str, max: usize) -> io::Result<&'a str> {
     value
         .as_str()
-        .filter(|w| !w.trim().is_empty() && w.chars().count() <= max && w.chars().all(kept))
+        .filter(|w| !w.trim().is_empty() && w.chars().count() <= max)
         .ok_or_else(|| {
-            invalid(if lines {
-                format!("{what} is text of at most {max} characters, with no control characters but line breaks and tabs")
-            } else {
-                format!("{what} is text of at most {max} characters on one line, with no control characters")
-            })
+            invalid(format!(
+                "{what} is text of at most {max} characters, not blank"
+            ))
         })
+}
+
+/// The characters that make text read other than it is (DLW build ruling
+/// 2026-11-09): the line and paragraph separators, the bidi controls and the
+/// zero-width characters.
+fn invisible(c: char) -> bool {
+    matches!(
+        c,
+        '\u{2028}'
+            | '\u{2029}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{200B}'..='\u{200D}'
+            | '\u{2060}'
+            | '\u{FEFF}'
+    )
+}
+
+/// Text that reads as it is: no control or invisible character, save, where it
+/// may run to `lines` (a record's words; a name stands on one line), a line
+/// break or a tab, and a `\r` only as the start of `\r\n`.
+fn plain_characters(text: &str, lines: bool) -> bool {
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        let kept = match c {
+            '\n' | '\t' => lines,
+            '\r' => lines && chars.peek() == Some(&'\n'),
+            c => !c.is_control() && !invisible(c),
+        };
+        if !kept {
+            return false;
+        }
+    }
+    true
+}
+
+/// A record's names and words, as `plain_characters` reads them.
+fn plain_record(item: &Value) -> io::Result<()> {
+    for (what, text) in [
+        ("from.name", &item["from"]["name"]),
+        ("star.name", &item["star"]["name"]),
+    ] {
+        if text
+            .as_str()
+            .is_some_and(|name| !plain_characters(name, false))
+        {
+            return Err(invalid(format!(
+                "{what} stands on one line, with no control character and no invisible one (a line or paragraph separator, a bidi control or a zero-width character)"
+            )));
+        }
+    }
+    if item["words"]
+        .as_str()
+        .is_some_and(|words| !plain_characters(words, true))
+    {
+        return Err(invalid(
+            "words hold no control character but line breaks and tabs (a \\r only before a \\n), and no invisible one (a line or paragraph separator, a bidi control or a zero-width character)",
+        ));
+    }
+    Ok(())
 }
 
 fn exact_keys(object: &Map<String, Value>, allowed: &[&str], what: &str) -> io::Result<()> {
@@ -1750,7 +1823,7 @@ fn field_item(input: &Value, call_keys: &[&str]) -> io::Result<Value> {
         .ok_or_else(|| invalid("from is {world_ref, name}: who sent it"))?;
     exact_keys(from, &["world_ref", "name"], "from")?;
     let from = json!({"world_ref":bounded_ref(&input["from"]["world_ref"], "from.world_ref")?,
-        "name":bounded_words(&input["from"]["name"], "from.name", 120, false)?.trim()});
+        "name":bounded_words(&input["from"]["name"], "from.name", 120)?.trim()});
     let how = input["how"]
         .as_str()
         .filter(|how| FIELD_HOWS.iter().any(|(known, _)| known == how))
@@ -1763,7 +1836,7 @@ fn field_item(input: &Value, call_keys: &[&str]) -> io::Result<Value> {
         ("star", Some(Value::Object(star))) => {
             exact_keys(star, &["star_ref", "name"], "star")?;
             json!({"star_ref":bounded_ref(&input["star"]["star_ref"], "star.star_ref")?,
-                "name":bounded_words(&input["star"]["name"], "star.name", 160, false)?.trim()})
+                "name":bounded_words(&input["star"]["name"], "star.name", 160)?.trim()})
         }
         ("star", Some(_)) => return Err(invalid("star is {star_ref, name}")),
         (_, Some(_)) => {
@@ -1784,7 +1857,7 @@ fn field_item(input: &Value, call_keys: &[&str]) -> io::Result<Value> {
         .ok_or_else(|| {
             invalid("what is the kind of thing it is, as the field names it (question, finding, showed, …)")
         })?;
-    let words = bounded_words(&input["words"], "words", 4096, true)?;
+    let words = bounded_words(&input["words"], "words", 4096)?;
     Ok(
         json!({"item_ref":item_ref,"from":from,"how":how,"star":star,"what":what,"words":words,
         "at_unix_ms":instant_ms(input)?}),
@@ -1978,7 +2051,9 @@ fn record_field_items(
             continue;
         }
         let at = item["at_unix_ms"].as_i64().unwrap_or(0);
-        let refusal = if !on {
+        let refusal = if let Err(error) = plain_record(&item) {
+            Some(error)
+        } else if !on {
             Some(denied(
                 "The Day's Sources keep the field Off, so nothing that reached you from the field is recorded into the Day.",
             ))
@@ -2129,13 +2204,31 @@ pub(crate) fn field_read(scope: &Scope, input: &Value) -> io::Result<Value> {
     let (day_ref, entry) = target_day(&relations, input)?;
     let civil_date = civil_date_of(&entry)?;
     let settings = load_settings(scope)?;
-    let day = day_spans(scope, &civil_date)?;
-    let spans = field_takes(&day, settings.on_since("field"));
-    let end = day.last().map_or(0, |last| last.1);
-    let (from, until) = match (spans.first(), spans.last()) {
-        (Some(first), Some(last)) => (first.0, last.1),
-        _ => (end, end),
+    // Where the Day's own date cannot be named, it takes nothing, and says why
+    // (DLW build ruling 2026-11-09): the reading still answers, as a record does.
+    let (day, note) = match day_spans(scope, &civil_date) {
+        Ok(day) => (day, None),
+        Err(error) => (
+            Vec::new(),
+            Some(format!(
+                "The Day's own date cannot be named now, so it takes nothing from the field: {error}"
+            )),
+        ),
     };
+    let spans = field_takes(&day, settings.on_since("field"));
+    // The first span's start and the last span's end: across a fold they hold
+    // the repeated time, which is the earlier Day's; `spans` is the exact window.
+    let (from, until) = match (spans.first(), spans.last(), day.last()) {
+        (Some(first), Some(last), _) => (json!(first.0), json!(last.1)),
+        (_, _, Some(end)) => (json!(end.1), json!(end.1)),
+        _ => (Value::Null, Value::Null),
+    };
+    let mut takes = json!({"from_unix_ms":from,"until_unix_ms":until,
+        "spans":spans.iter().map(|(from, until)| json!({"from_unix_ms":from,"until_unix_ms":until})).collect::<Vec<_>>(),
+        "basis":"what reached you on the Day's own date, as its civil date names it, from when the field last turned On"});
+    if let Some(note) = note {
+        takes["note"] = json!(note);
+    }
     let log = load_lines(
         scope,
         &field_record_path(scope, &civil_date),
@@ -2147,9 +2240,7 @@ pub(crate) fn field_read(scope: &Scope, input: &Value) -> io::Result<Value> {
         "day_ref":day_ref,
         "civil_date":civil_date,
         "source":field_source(&settings),
-        "takes":{"from_unix_ms":from,"until_unix_ms":until,
-            "spans":spans.iter().map(|(from, until)| json!({"from_unix_ms":from,"until_unix_ms":until})).collect::<Vec<_>>(),
-            "basis":"what reached you on the Day's own date, as its civil date names it, from when the field last turned On"},
+        "takes":takes,
         "face":FIELD_FACE,
         "items":field_items(&log),
         "revision":log.revision,
@@ -2213,15 +2304,21 @@ const PART_SALT_PATH: &str = ".central/day-part-salt.json";
 fn part_salt(scope: &Scope) -> io::Result<String> {
     const SALT_SCHEMA: &str = "central.day-part-salt/v1";
     let path = PART_SALT_PATH;
+    // A salt that cannot be read names its file and the way on; nothing is
+    // guessed from it (DLW build ruling 2026-11-09).
+    let unreadable = |what: &str| {
+        invalid(format!(
+            "The world's part salt at {} is {what}, so no part is read from it. Move it aside and press again: Central makes a new salt, and a part shown before is shown again under a new ref.",
+            scope.root.join(path).display()
+        ))
+    };
     let kept = |raw: &str| -> io::Result<String> {
-        let value: Value = serde_json::from_str(raw).map_err(|_| {
-            invalid("the world's part salt is not JSON; nothing is guessed from it")
-        })?;
+        let value: Value = serde_json::from_str(raw).map_err(|_| unreadable("not JSON"))?;
         value["salt"]
             .as_str()
             .filter(|salt| value["schema"] == SALT_SCHEMA && salt.len() >= 32)
             .map(str::to_owned)
-            .ok_or_else(|| invalid("the world's part salt is not a central.day-part-salt/v1"))
+            .ok_or_else(|| unreadable("not a central.day-part-salt/v1"))
     };
     if let Some(raw) = read_optional(scope, path)? {
         return kept(&raw);
@@ -2240,27 +2337,53 @@ fn part_salt(scope: &Scope) -> io::Result<String> {
 /// has one, else a digest of its words with its occurrence among the id-less
 /// items that hold the same words — never its place in the list, which moves.
 /// Every identity is a ref `item_id` takes: an own id that is no such ref, or
-/// that could pose as another form, is named by its digest (`id:`).
-fn list_identities(items: &[Value], words_of: impl Fn(&Value) -> String) -> Vec<String> {
+/// that could pose as another form, is named by its digest (`id:`). An item
+/// with its own id keeps its part however the list moves; an id-less one keeps
+/// it only while the identical items before it are unchanged (DLW build ruling
+/// 2026-11-09). An own id two items share names neither: it is answered `Err`.
+fn list_identities(
+    items: &[Value],
+    words_of: impl Fn(&Value) -> String,
+) -> Result<Vec<String>, String> {
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+    let mut own: BTreeSet<&str> = BTreeSet::new();
     items
         .iter()
         .map(
             |item| match item["id"].as_str().filter(|id| !id.trim().is_empty()) {
+                Some(id) if !own.insert(id) => Err(id.to_owned()),
                 Some(id) if is_ref(id) && !id.starts_with("words:") && !id.starts_with("id:") => {
-                    id.to_owned()
+                    Ok(id.to_owned())
                 }
-                Some(id) => format!("id:{}", &source::key(id)[..32]),
+                Some(id) => Ok(format!("id:{}", &source::key(id)[..32])),
                 None => {
                     let digest = source::key(&words_of(item))[..16].to_owned();
                     let occurrence = seen.entry(digest.clone()).or_insert(0);
                     let identity = format!("words:{digest}:{occurrence}");
                     *occurrence += 1;
-                    identity
+                    Ok(identity)
                 }
             },
         )
         .collect()
+}
+
+/// Why an `item_id` of an id-less item no longer names one (DLW build ruling
+/// 2026-11-09): it was named by its place among the items holding its words,
+/// and one before it changed or went. Plain words, never a bare "no item".
+fn twins_moved(field_id: &str, item_id: &str, identities: &[String]) -> Option<String> {
+    let rest = item_id.strip_prefix("words:")?;
+    let (digest, occurrence) = rest.rsplit_once(':')?;
+    if digest.len() != 16 || occurrence.parse::<usize>().is_err() {
+        return None;
+    }
+    let holding = identities
+        .iter()
+        .filter(|identity| identity.starts_with(&format!("words:{digest}:")))
+        .count();
+    Some(format!(
+        "{field_id} has no item {item_id} now. An item with no id is named by its place among the items that hold the same words, and an identical item before it changed or went ({holding} now hold those words), so it is named anew. The part it was shown as still holds its words; name the item by its index to read it as it stands."
+    ))
 }
 
 /// The label the field receives: the words whole when they fit, else cut at a
@@ -2277,10 +2400,35 @@ fn part_label(words: &str) -> (String, bool) {
     (format!("{head}…"), true)
 }
 
+/// What each refusal of the person's own act opens with, before its cause (DLW
+/// build ruling 2026-11-09).
+pub(crate) const ENTRY_PART_IS_THE_PERSONS: &str = "Showing an entry is the person's own press";
+pub(crate) const FIELD_RECORD_IS_THE_PERSONS: &str =
+    "Recording what reached you is the person's own Field setting at work";
+
+/// A refusal of the credential that carried the person's own act, opening with
+/// whose act it is, then the cause.
+pub(crate) fn the_persons_own(operation: &str, error: io::Error) -> io::Error {
+    let opening = match operation {
+        "day_entry_part" => ENTRY_PART_IS_THE_PERSONS,
+        "day_field_record" => FIELD_RECORD_IS_THE_PERSONS,
+        _ => return error,
+    };
+    io::Error::new(error.kind(), format!("{opening}: {error}"))
+}
+
 /// Bringing a Day entry to a star is the person's press (DLW build ruling
 /// 2026-11-08): only a human-scoped credential reads one as a part.
 pub(crate) fn entry_part(scope: &Scope, input: &Value, principal: &Principal) -> io::Result<Value> {
-    principal.require_human()?;
+    if !principal.is_human() {
+        return Err(the_persons_own(
+            "day_entry_part",
+            denied(format!(
+                "this credential is {}'s, a credential of kind {}, not the person's",
+                principal.principal_ref, principal.actor_kind
+            )),
+        ));
+    }
     let field_id = match input.get("field_id") {
         None | Some(Value::Null) => None,
         Some(value) => Some(bounded_ref(value, "field_id")?),
@@ -2346,7 +2494,11 @@ pub(crate) fn entry_part(scope: &Scope, input: &Value, principal: &Principal) ->
                     )))
                 }
                 (Value::Array(items), index, item_id) => {
-                    let identities = list_identities(items, item_words);
+                    let identities = list_identities(items, item_words).map_err(|id| {
+                        invalid(format!(
+                            "{field_id} holds more than one item with the id {id}: an id names one item, so none of them is read as a part until each has its own"
+                        ))
+                    })?;
                     let at = match (index, item_id) {
                         (Some(index), _) => (index as usize) < items.len(),
                         _ => true,
@@ -2360,7 +2512,11 @@ pub(crate) fn entry_part(scope: &Scope, input: &Value, principal: &Principal) ->
                     .ok_or_else(|| {
                         invalid(match (index, item_id) {
                             (Some(index), _) => format!("{field_id} has no item {index}"),
-                            (_, item_id) => format!("{field_id} has no item {}", item_id.unwrap_or_default()),
+                            (_, item_id) => {
+                                let item_id = item_id.unwrap_or_default();
+                                twins_moved(field_id, item_id, &identities)
+                                    .unwrap_or_else(|| format!("{field_id} has no item {item_id}"))
+                            }
                         })
                     })?;
                     (item_words(&items[at]), Some(identities[at].clone()))
@@ -2520,9 +2676,9 @@ pub(crate) fn register_actions(registry: &mut ActionRegistry) {
         ("central.day.moves.read", "Read the Day's moves", "Read the Day's settings and, for each move, its effective prompt, Runs at with its standing, the next time it runs by itself (only for a schedule the person saved), the open run, the last ended run, and every run of the Day oldest first. Read-only.", false, moves_read_action, &[("day_ref","string",false)]),
         ("central.day.moves.due", "List the Day's moves that are due", "List the scheduled occurrences in (since, now] for every move whose Runs at the person saved, each with a stable occurrence_ref and whether it has begun. With only the defaults it lists nothing and says why. The native host polls this; Central runs nothing.", false, moves_due_action, &[("now_unix_ms","integer",true),("since_unix_ms","integer",true)]),
         ("central.day.rollover", "Open tomorrow's Day beside today's", "Open the Day of the civil date after today without moving today, through the same Day creation as central.day.ensure, and record it as the Day's tomorrow. Idempotent. A human may open it at any time; another authenticated principal only once the Rollover time the person saved has been reached.", true, rollover_action, &[("expected_time_policy_revision","string",true),("expected_authority_revision","string",false)]),
-        ("central.day.field.record", "Record what reached you from the field", "Authenticated, append-only record of what reached you from the shared field, into the Day under its field source (face 4): who sent it (from: world_ref, name), how it came (how: to-you, star, watch or search; only a star names star_ref and name), what it is, its words and when it reached you. Each record says it was received through the shared field and recorded by the Day under your Field setting (received), with the credential that setting authorises (authorised_by); the words are the sender's. It carries nothing else: no count of looks and no ranking. Name one record, or records: a list of at most 64, recorded in one rewrite and each answered on its own (created, kept already, or refused in words), so one refused refuses none of the others. A record the Day keeps already answers kept first. Otherwise each is refused while the Day's Sources keep the field Off, on a closed Day, when it did not reach you on the Day's own date (as its civil date names it, through a spring-forward gap or an autumn fold alike), and when it reached you before the field last turned On; the same ref with other content is refused. A name holds no control character; the words hold none but line breaks and tabs.", true, field_record_action, &[("day_ref","string",false),("records","array",false),("item_ref","string",false),("from","object",false),("how","string",false),("star","object",false),("what","string",false),("words","string",false),("at_unix_ms","integer",false),("expected_authority_revision","string",false)]),
-        ("central.day.field.read", "Read what reached the Day from the field", "Read the Day's field source (on or off, default or saved, and when it last turned On), what the Day takes (takes: the spans of instants on which the Day's own civil date stands, one on most Days and two where an autumn fold carries the wall back across the Day's boundary, each from the later of its start and when the field last turned On; from and until bound them all), and every thing recorded into the Day from the shared field, ordered by when it reached you and by nothing else, each naming who sent it and how it came. Read-only.", false, field_read_action, &[("day_ref","string",false)]),
-        ("central.day.entry.part", "Read a Day entry as a part to show", "Human-authenticated: bringing an entry to a star is the person's press. Read one entry of the Day exactly as the shared field would receive it if you showed it: an opaque part ref, its kind (page) and its label (the entry's words, at most 160 characters: a field's value as its text, a contribution's markup as plain words), with who wrote it. Name a field (field_id, and for one item of a list field its index or its item_id) or one contribution (contribution_id). A list item keeps its part however the list moves: its identity is its own id, else a digest of its words with its occurrence among the items holding the same words, and item_id takes every identity a part names. Nothing else of the Day goes with it, and the reading shows nothing: showing it is your own act in the field. The first part read in a world writes the random salt Central keeps for it, once, in the world's own state outside every Day, so no part ref can be guessed from a Day's date and fields; nothing is written into any Day.", true, entry_part_action, &[("day_ref","string",false),("field_id","string",false),("index","integer",false),("item_id","string",false),("contribution_id","string",false),("expected_authority_revision","string",false)]),
+        ("central.day.field.record", "Record what reached you from the field", "Authenticated, append-only record of what reached you from the shared field, into the Day under its field source (face 4): who sent it (from: world_ref, name), how it came (how: to-you, star, watch or search; only a star names star_ref and name), what it is, its words and when it reached you. Each record says it was received through the shared field and recorded by the Day under your Field setting (received), with the credential that setting authorises (authorised_by); the words are the sender's. It carries nothing else: no count of looks and no ranking. Name one record, or records: a list of at most 64, recorded in one rewrite and each answered on its own (created, kept already, or refused in words), so one refused refuses none of the others. A record the Day keeps already answers kept first. Otherwise each is refused while the Day's Sources keep the field Off, on a closed Day, when it did not reach you on the Day's own date (as its civil date names it, through a spring-forward gap or an autumn fold alike), and when it reached you before the field last turned On; the same ref with other content is refused. A name holds no control character and no invisible one (a line or paragraph separator, a bidi control or a zero-width character); the words hold none but line breaks and tabs (a \\r only before a \\n), and no invisible one. A refusal of the credential opens with \"Recording what reached you is the person's own Field setting at work\", then its cause.", true, field_record_action, &[("day_ref","string",false),("records","array",false),("item_ref","string",false),("from","object",false),("how","string",false),("star","object",false),("what","string",false),("words","string",false),("at_unix_ms","integer",false),("expected_authority_revision","string",false)]),
+        ("central.day.field.read", "Read what reached the Day from the field", "Read the Day's field source (on or off, default or saved, and when it last turned On), what the Day takes (takes: spans, the exact window: the spans of instants on which the Day's own civil date stands, one on most Days and two where an autumn fold carries the wall back across the Day's boundary, each from the later of its start and when the field last turned On; from and until are the first span's start and the last span's end, so across a fold they also hold the repeated time, which is the earlier Day's; where the Day's own date cannot be named, spans is empty and a note says why), and every thing recorded into the Day from the shared field, ordered by when it reached you and by nothing else, each naming who sent it and how it came. Read-only.", false, field_read_action, &[("day_ref","string",false)]),
+        ("central.day.entry.part", "Read a Day entry as a part to show", "Human-authenticated: bringing an entry to a star is the person's press, and a refusal of the credential opens with \"Showing an entry is the person's own press\", then its cause. Read one entry of the Day exactly as the shared field would receive it if you showed it: an opaque part ref, its kind (page) and its label (the entry's words, at most 160 characters: a field's value as its text, a contribution's markup as plain words), with who wrote it. Name a field (field_id, and for one item of a list field its index or its item_id) or one contribution (contribution_id). A list item with its own id keeps its part however the list moves. An item with no id is named by a digest of its words and its occurrence among the id-less items holding the same words, so it keeps its part only while the identical items before it are unchanged; when they change, its item_id says so in words. An id two items share is refused. item_id takes every identity a part names. Nothing else of the Day goes with it, and the reading shows nothing: showing it is your own act in the field. The first part read in a world writes the random salt Central keeps for it, once, in the world's own state outside every Day, so no part ref can be guessed from a Day's date and fields; nothing is written into any Day.", true, entry_part_action, &[("day_ref","string",false),("field_id","string",false),("index","integer",false),("item_id","string",false),("contribution_id","string",false),("expected_authority_revision","string",false)]),
         ("central.day.close-carry", "Close a Day and carry face 5 to tomorrow", "Run the close routine on exact revisions: carry face 5's proposal for tomorrow into tomorrow's face 0 (a human writes it; an agent's entry is returned as a proposal for receiving), then close the Day as central.day.lifecycle does, and return both revisions. A human may call it at any time; another authenticated principal only when the person saved Close at Day start and the Day boundary has passed.", true, close_carry_action, &[("day_ref","string",true),("expected_revision","string",true),("expected_relations_revision","string",true),("expected_authority_revision","string",false)]),
     ]);
 }
