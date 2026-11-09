@@ -370,8 +370,8 @@ pub(crate) fn search(all: &[Scope], input: &Value) -> io::Result<Value> {
     } else {
         vec![scope]
     };
-    let linked = if input["federated"] == true {
-        Vec::new()
+    let (linked, broken_links) = if input["federated"] == true {
+        (Vec::new(), Vec::new())
     } else {
         verified_links(all, scope)?
     };
@@ -415,10 +415,16 @@ pub(crate) fn search(all: &[Scope], input: &Value) -> io::Result<Value> {
         .transpose()
         .map_err(io::Error::other)?;
     let excluded = context_exclusions(all, selected(all, input)?)?;
+    let with_broken = |mut answer: Value| {
+        if !broken_links.is_empty() {
+            answer["broken_links"] = json!(broken_links);
+        }
+        answer
+    };
     if limit == 0 {
-        return Ok(
+        return Ok(with_broken(
             json!({"hits":Vec::<Value>::new(),"absences":Vec::<Value>::new(),"listed_not_searched":listed_not_searched}),
-        );
+        ));
     }
     // Full-text matching requires every token to hit; a long phrase that
     // misses everywhere relaxes by dropping trailing tokens (to a floor of
@@ -562,9 +568,9 @@ pub(crate) fn search(all: &[Scope], input: &Value) -> io::Result<Value> {
             })
     });
     hits.truncate(limit);
-    Ok(
+    Ok(with_broken(
         json!({"hits":hits,"absences":absences,"listed_not_searched":listed_not_searched,"query":effective,"query_relaxed":relaxed}),
-    )
+    ))
 }
 
 /// The passage of a source's text that best answers a query, and where it sits

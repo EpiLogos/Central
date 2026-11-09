@@ -115,10 +115,29 @@ fn register_source(all: &[Scope], scope: &Scope, input: &Value) -> io::Result<Va
         json!({"source_ref":reference,"world_ref":scope.world,"revision":scope.basis()?,"source_bytes_changed":false}),
     )
 }
+/// The words for a project's link into a folder scope whose file the folder does not answer for now: the folder is not reachable, or
+/// it no longer lists the file (gone, or outside its rules).
+fn broken_folder_link(all: &[Scope], relative: &str, link: &Link) -> Value {
+    let words = if all.iter().any(|owner| owner.world == link.world_ref) {
+        format!(
+            "{relative} links to a file {} no longer lists (gone, or outside its rules), so it is not listed",
+            link.world_ref
+        )
+    } else {
+        format!(
+            "{relative} links to a file of {}, which is not reachable now, so it is not listed",
+            link.world_ref
+        )
+    };
+    json!({"path": relative, "source_ref": link.source_ref, "world_ref": link.world_ref, "words": words})
+}
+/// The project's registered links that reach their Source now. With `broken`, a link into a folder scope that does not answer for
+/// its file now is named there and left out, so the rest of the read stands; without it, as for every other link, the read refuses.
 fn link_descriptors(
     all: &[Scope],
     scope: &Scope,
     requested: Option<&str>,
+    mut broken: Option<&mut Vec<Value>>,
 ) -> io::Result<Vec<(PathBuf, Entry)>> {
     let mut result = Vec::new();
     for (relative, link) in scope.ground()?.links {
@@ -134,7 +153,14 @@ fn link_descriptors(
         {
             return Err(conflict("Registered link was replaced or redirected"));
         }
-        let candidate = binding_by_ref(all, &link.source_ref)?.ok_or_else(|| {
+        let found = binding_by_ref(all, &link.source_ref)?;
+        if found.is_none() && link.world_ref.starts_with("folder:") {
+            if let Some(broken) = broken.as_deref_mut() {
+                broken.push(broken_folder_link(all, &relative, &link));
+                continue;
+            }
+        }
+        let candidate = found.ok_or_else(|| {
             read_refusal(
                 io::ErrorKind::NotFound,
                 "Registered link owner is unavailable",
@@ -151,11 +177,18 @@ fn link_descriptors(
     }
     Ok(result)
 }
-pub(crate) fn verified_links(all: &[Scope], scope: &Scope) -> io::Result<Vec<(PathBuf, Entry)>> {
-    link_descriptors(all, scope, None)?
+/// A project's links that reach their Source (where each stands, and its Source), and those into a folder scope that does not answer
+/// for its file now, each named in words.
+pub(crate) type VerifiedLinks = (Vec<(PathBuf, Entry)>, Vec<Value>);
+/// The project's links that reach their Source, each with its revision, and the links into a folder scope that does not answer for
+/// its file now, each named in words (a read lists them as `broken_links`).
+pub(crate) fn verified_links(all: &[Scope], scope: &Scope) -> io::Result<VerifiedLinks> {
+    let mut broken = Vec::new();
+    let links = link_descriptors(all, scope, None, Some(&mut broken))?
         .into_iter()
         .map(|(path, source)| Ok((path, with_revision(source)?)))
-        .collect()
+        .collect::<io::Result<_>>()?;
+    Ok((links, broken))
 }
 fn binding_only(input: &Value) -> io::Result<bool> {
     let selected = match input.get("binding_only") {
@@ -182,7 +215,7 @@ fn read_admission(
     let scope = selected(all, input)?;
     if input["project"].is_string()
         && scope.world != candidate.scope.world
-        && !link_descriptors(all, scope, Some(&candidate.source.source_ref))?
+        && !link_descriptors(all, scope, Some(&candidate.source.source_ref), None)?
             .iter()
             .any(|(_, entry)| entry.source.source_ref == candidate.source.source_ref)
     {
@@ -253,7 +286,7 @@ fn locate(all: &[Scope], input: &Value) -> io::Result<Value> {
             continue;
         };
         if let Some(link) = scope.ground()?.links.get(member) {
-            let actual = link_descriptors(all, scope, Some(&link.source_ref))?;
+            let actual = link_descriptors(all, scope, Some(&link.source_ref), None)?;
             if !actual.iter().any(|(path, _)| *path == lexical) {
                 return Err(conflict("Selected registered link changed"));
             }
@@ -478,18 +511,12 @@ fn resolve_within(
 /// Why a federated read lists no entry of a folder scope it did not ask for.
 const FOLDER_NOT_ASKED: &str =
     "a folder scope is listed only when a read names it or a path_prefixes entry reaches into it";
-/// Whether `path` is under one of `prefixes` (absolute paths, compared as spelled), or there are none.
+/// Why a read names a folder scope and lists none of it: none of its path prefixes reaches into the folder.
+const FOLDER_NOT_REACHED: &str = "no path_prefixes entry reaches into it";
+/// Whether `path` is under one of `prefixes` (absolute paths, compared component by component, so `/` and a trailing slash read as
+/// the folder they name), or there are none.
 fn under_prefixes(prefixes: &[String], path: &Path) -> bool {
-    prefixes.is_empty() || {
-        let Some(path_str) = path.to_str() else {
-            return false;
-        };
-        prefixes.iter().any(|prefix| {
-            path_str.starts_with(prefix)
-                && (path_str.len() == prefix.len()
-                    || path_str.as_bytes().get(prefix.len()) == Some(&b'/'))
-        })
-    }
+    prefixes.is_empty() || prefixes.iter().any(|prefix| path.starts_with(prefix))
 }
 /// Whether one of `prefixes` reaches into the folder at `root`: under it, at it, or around it.
 fn prefixes_reach(prefixes: &[String], root: &Path) -> bool {
@@ -519,10 +546,14 @@ fn inspect(all: &[Scope], input: &Value) -> io::Result<Value> {
     let mut linked_refs = BTreeSet::new();
     // A folder scope's entries a read reaches through its links, each resolved where it stands: the folder is never walked for them.
     let mut linked_media = Vec::new();
+    // A project's links into a folder scope that does not answer for their file now, each named: the rest of the read stands.
+    let mut broken_links = Vec::new();
     if federated {
         choices = all.iter().collect();
     } else {
-        for (_, entry) in verified_links(all, scope)? {
+        let (links, broken) = verified_links(all, scope)?;
+        broken_links = broken;
+        for (_, entry) in links {
             linked_refs.insert(entry.source.source_ref.clone());
             if let Some(owner) = all.iter().find(|owner| owner.world == entry.world_ref) {
                 if owner.is_folder() && owner.world != scope.world {
@@ -536,15 +567,20 @@ fn inspect(all: &[Scope], input: &Value) -> io::Result<Value> {
     // A folder scope is walked only when the read names it or a path prefix reaches into it.
     let mut folders = Vec::new();
     choices.retain(|chosen| {
-        let walked = !chosen.is_folder()
-            || chosen.world == scope.world
-            || prefixes_reach(&prefixes, &chosen.root);
-        if !walked {
-            folders.push(
-                json!({"world_ref": chosen.world, "listed": false, "words": FOLDER_NOT_ASKED}),
-            );
+        if !chosen.is_folder() || prefixes.is_empty() && chosen.world == scope.world {
+            return true;
         }
-        walked
+        // Named or not, a folder no path prefix reaches into is not walked: the read answers at once, reading nothing of it.
+        let reached = prefixes_reach(&prefixes, &chosen.root);
+        if !reached {
+            let words = if chosen.world == scope.world {
+                FOLDER_NOT_REACHED
+            } else {
+                FOLDER_NOT_ASKED
+            };
+            folders.push(json!({"world_ref": chosen.world, "listed": false, "words": words}));
+        }
+        reached
     });
     let initialized: Vec<_> = choices
         .iter()
@@ -562,13 +598,15 @@ fn inspect(all: &[Scope], input: &Value) -> io::Result<Value> {
     let want_resources = input["resources"] != false;
     // A page of the roster: with `limit`, at most that many entries in path order after `after` (the last path of the page before),
     // and the answer says whether more stand (`page.truncated`) and where the next page starts (`page.next`). A read that walks a
-    // folder scope is always a page: of `limit`, or of FOLDER_PAGE_DEFAULT when it names none.
-    let walks_folder = want_resources && choices.iter().any(|chosen| chosen.is_folder());
+    // folder scope, or names one, is always a page: of `limit`, or of FOLDER_PAGE_DEFAULT when it names none.
+    let walks_folder =
+        want_resources && (scope.is_folder() || choices.iter().any(|chosen| chosen.is_folder()));
+    let asked_page = input.get("limit").is_some_and(|value| !value.is_null());
     let page = match input.get("limit").filter(|value| !value.is_null()) {
         None if !walks_folder => None,
         limit => {
             let limit = match limit {
-                None => crate::file_map_catalog::FOLDER_PAGE_DEFAULT,
+                None => crate::file_map_catalog::folder_page_default(),
                 Some(limit) => limit
                     .as_u64()
                     .map(|n| n as usize)
@@ -626,7 +664,7 @@ fn inspect(all: &[Scope], input: &Value) -> io::Result<Value> {
                         folders.push(json!({"world_ref": chosen.world, "listed": true,
                             "entries": walked.found.len(), "skipped": walked.skipped,
                             "skipped_named": walked.skipped_named.iter()
-                                .map(|(path, why)| json!({"path": path, "why": why}))
+                                .map(|(path, why)| json!({"path": path.to_string_lossy(), "why": why}))
                                 .collect::<Vec<_>>(),
                             "bound": walked.bound}));
                         if let Some(words) = walked.bound {
@@ -694,6 +732,19 @@ fn inspect(all: &[Scope], input: &Value) -> io::Result<Value> {
     }
     let mut paged = Value::Null;
     if let Some((limit, after)) = &page {
+        // A page no read asked for (one that walks a folder scope and names no limit) cuts only the folder scopes' entries: every
+        // other entry stands whole, as a read naming no limit has always had it.
+        let mut whole = Vec::new();
+        if !asked_page {
+            let walked: BTreeSet<_> = choices
+                .iter()
+                .filter(|chosen| chosen.is_folder())
+                .map(|chosen| chosen.world.clone())
+                .collect();
+            (resources, whole) = std::mem::take(&mut resources)
+                .into_iter()
+                .partition(|entry| walked.contains(&entry.world_ref));
+        }
         resources.sort_by(|a, b| a.path.cmp(&b.path));
         if let Some(after) = after {
             resources.retain(|entry| entry.path.as_path() > after.as_path());
@@ -729,6 +780,10 @@ fn inspect(all: &[Scope], input: &Value) -> io::Result<Value> {
         paged = json!({"limit": limit, "after": after, "truncated": full || cut.is_some(), "next": next});
         if let Some((_, _, words)) = cut {
             paged["bound"] = json!(words);
+        }
+        if !whole.is_empty() {
+            resources.extend(whole);
+            resources.sort_by(|a, b| a.path.cmp(&b.path));
         }
     }
     let native_record = if let Some(id) = input["record_id"].as_i64() {
@@ -775,6 +830,9 @@ fn inspect(all: &[Scope], input: &Value) -> io::Result<Value> {
     }
     if !absences.is_empty() {
         answer["absences"] = json!(absences);
+    }
+    if !broken_links.is_empty() {
+        answer["broken_links"] = json!(broken_links);
     }
     Ok(answer)
 }
@@ -960,7 +1018,7 @@ pub fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
                     .iter()
                     .find(|scope| scope.asked(asked))
                     .map_or(invalid("Unknown Project map"), |scope| {
-                        io::Error::new(io::ErrorKind::TimedOut, scope.message.clone())
+                        io::Error::new(scope.kind, scope.message.clone())
                     })
             })?;
         let mut envelope = json!({"schema":SCHEMA,"operation":op,"result":folder_not_indexed(scope),
@@ -1000,12 +1058,30 @@ pub fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
             .iter()
             .find(|scope| asked.is_some_and(|asked| scope.asked(asked)))
             .map_or(error, |scope| {
-                io::Error::new(io::ErrorKind::TimedOut, scope.message.clone())
+                io::Error::new(scope.kind, scope.message.clone())
             })
     })?;
+    // A Source of a folder scope that is unreachable now is named with the folder's own words, whatever act asks for it.
+    if let Some(reference) = input.get("source_ref").and_then(Value::as_str) {
+        if let Some((world, gone)) = unreachable.iter().find_map(|gone| {
+            gone.world
+                .as_deref()
+                .filter(|world| reference.starts_with(&format!("central:source:{world}:")))
+                .map(|world| (world, gone))
+        }) {
+            return Err(io::Error::new(
+                gone.kind,
+                format!("Source is in {world}, which is {}", gone.message),
+            ));
+        }
+    }
     // A folder scope is read where it stands: nothing is registered, linked or pooled inside it.
     if scope.is_folder() && matches!(op, "register" | "link" | "pool") {
         return Err(folder_writes_nothing(scope));
+    }
+    // Nor is an index kept for it: adoption makes one, as a refresh would.
+    if scope.is_folder() && matches!(op, "adopt-db" | "record-adopt") {
+        return Err(folder_keeps_no_index(scope));
     }
     let read_roots = if read_root.is_some() {
         all.iter()
@@ -1244,14 +1320,14 @@ fn world_refresh_reports(
 ) -> Vec<Value> {
     let mut reports = refresh_each(all, refresh_one);
     reports.extend(unreachable.iter().map(|scope| {
-        json!({
+        with_no_counts(json!({
             "world_ref": scope.world,
             "project": scope.project,
             "root": scope.root,
             "ok": false,
             "unreachable": true,
             "error": scope.message,
-        })
+        }))
     }));
     reports
 }
@@ -1410,6 +1486,18 @@ fn folder_not_indexed(scope: &Scope) -> Value {
     })
 }
 
+/// A world refresh's row for a scope that refreshed nothing (a folder scope, one that failed, one unreachable): the same numbers as
+/// every other row, each none, so a reader of the rows reads one shape.
+fn with_no_counts(mut report: Value) -> Value {
+    for key in ["entries", "changes", "truncated"] {
+        report[key] = json!(0);
+    }
+    report["diagnostics"] = json!([]);
+    if !report["seconds"].is_number() {
+        report["seconds"] = json!(0.0);
+    }
+    report
+}
 /// One report per scope, in scope order, whatever each refresh answers.
 fn refresh_each(
     all: &[Scope],
@@ -1419,10 +1507,9 @@ fn refresh_each(
         .map(|scope| {
             // A folder scope is listed by metadata, never indexed: nothing of it is refreshed, and no lock is taken for it.
             if scope.is_folder() {
-                let mut report = folder_not_indexed(scope);
+                let mut report = with_no_counts(folder_not_indexed(scope));
                 report["project"] = json!(scope.project);
                 report["ok"] = json!(true);
-                report["seconds"] = json!(0.0);
                 return report;
             }
             let began = std::time::Instant::now();
@@ -1433,20 +1520,20 @@ fn refresh_each(
                     "world_ref": scope.world,
                     "project": scope.project,
                     "ok": true,
-                    "entries": done["entries"],
+                    "entries": done["entries"].as_u64().unwrap_or(0),
                     "changes": done["changes"].as_array().map_or(0, Vec::len),
                     "diagnostics": done["diagnostics"],
                     "truncated": done["truncated"].as_array().map_or(0, Vec::len),
                     "seconds": seconds,
                 }),
                 Err(error) => {
-                    let mut report = json!({
+                    let mut report = with_no_counts(json!({
                         "world_ref": scope.world,
                         "project": scope.project,
                         "ok": false,
                         "error": error.to_string(),
                         "seconds": seconds,
-                    });
+                    }));
                     match scope_wait(&error) {
                         Some(ScopeWait::GroundHeld(_) | ScopeWait::Held(_)) => {
                             report["held"] = json!(true)
@@ -4048,7 +4135,7 @@ mod folder_scope_tests {
 
         // No projection receipt is kept for it, inside it or beside it.
         let words = format!(
-            "Music is a folder scope: Central reads {} where it stands and keeps no projection receipt for it",
+            "Music is a folder scope: Central reads {} where it stands and keeps no index or projection receipt for it",
             world.music()
         );
         assert_eq!(
@@ -4784,41 +4871,599 @@ mod folder_scope_tests {
         }
         assert!(pages > 2, "{pages}");
         assert_eq!(listed, whole);
-        // A walk that stops answering is left at the time bound, and the page holds what it listed before.
+        // The time bound is a_folder_walk_runs_once_at_a_time_and_reads_nothing_after_its_deadline's: a logical clock, not load.
+    }
+
+    // ---- #328's delta review (DLW build ruling 2026-11-09, round 48 item 0C, central-47d) ----
+
+    /// The time bound's words, as the walk and its reader both say them.
+    fn time_words() -> String {
+        format!(
+            "the time bound stopped the walk: {}s passed before the page filled",
+            crate::file_map_catalog::FOLDER_WALK_TIME.as_secs_f64()
+        )
+    }
+    fn walk_log() -> std::sync::Arc<std::sync::Mutex<Vec<PathBuf>>> {
+        std::sync::Arc::default()
+    }
+
+    /// 0C item 1: a name that is not UTF-8 never aborts a read. The walk skips it, counts it, names it lossily with why, and the rest
+    /// answers. Where the filesystem refuses such a name (APFS keeps only UTF-8 names), the walk is handed one through its seam, as a
+    /// Linux disk or a network share would hand it.
+    #[test]
+    fn a_name_that_is_not_utf8_is_skipped_and_named_and_the_rest_answers() {
+        use std::os::unix::ffi::OsStrExt;
+        let world = World::new();
+        let raw = world
+            .music
+            .join(std::ffi::OsStr::from_bytes(b"caf\xe9.wav"));
+        let seams = match fs::write(&raw, b"RIFF sound") {
+            Ok(()) => Default::default(),
+            Err(_) => {
+                put(&world, "cafe.wav");
+                crate::file_map_catalog::FolderWalkSeams {
+                    not_utf8: Some((world.music.join("cafe.wav"), b"caf\xe9.wav".to_vec())),
+                    ..Default::default()
+                }
+            }
+        };
+        world
+            .register("Music", &world.music(), json!(["wav", "aiff", "mp3"]))
+            .unwrap();
+        let answer = with_seams(seams, || {
+            run(&world.root, "inspect", &json!({"project":"folder:Music"}))
+        })
+        .unwrap();
+        assert_eq!(
+            music_paths(&world, &answer),
+            [
+                "Field recordings/estuary low tide.wav",
+                "market-hall.AIFF",
+                "voice.mp3"
+            ]
+        );
+        assert_eq!(answer["folders"][0]["skipped"], 1, "{answer}");
+        assert_eq!(
+            answer["folders"][0]["skipped_named"],
+            json!([{"path": format!("{}/caf\u{FFFD}.wav", world.music()), "why": "its name is not UTF-8"}])
+        );
+    }
+
+    /// 0C item 2: a project's link into a folder scope stands when the folder does not. Unplugged, or the file outside the folder's
+    /// rules, the link is named broken in words, and the project's own inspect and search still answer.
+    #[test]
+    fn a_project_link_into_a_folder_stands_when_the_folder_does_not() {
+        let world = World::new();
+        world
+            .register("Music", &world.music(), json!(["wav", "aiff", "mp3"]))
+            .unwrap();
+        let voice = source_horizon::source_ref("folder:Music", "voice.mp3");
+        let alpha = |input: Value| {
+            let mut input = input;
+            input["project"] = json!("Alpha");
+            input
+        };
+        let revision = run(&world.root, "inspect", &alpha(json!({"resources":false}))).unwrap()
+            ["revision"]
+            .clone();
+        run(
+            &world.root,
+            "link",
+            &alpha(json!({"path":"sounds/voice.mp3","source_ref":voice,"owner":"aikit","expected_revision":revision})),
+        )
+        .unwrap();
+        let linked = run(&world.root, "inspect", &alpha(json!({}))).unwrap();
+        assert!(
+            linked["resources"].to_string().contains("voice.mp3"),
+            "{linked}"
+        );
+        assert!(linked.get("broken_links").is_none(), "{linked}");
+        let broken = |words: &str| json!([{"path":"sounds/voice.mp3","source_ref":voice,"world_ref":"folder:Music","words":words}]);
+        // Unplugged: the folder is not there.
+        let away = world.base.join("Music away");
+        fs::rename(&world.music, &away).unwrap();
+        let unplugged = "sounds/voice.mp3 links to a file of folder:Music, which is not reachable now, so it is not listed";
+        let read = run(&world.root, "inspect", &alpha(json!({}))).unwrap();
+        assert_eq!(read["broken_links"], broken(unplugged), "{read}");
+        assert!(!read["resources"].to_string().contains("voice.mp3"));
+        let searched = run(
+            &world.root,
+            "search",
+            &alpha(json!({"query":"sound","limit":0})),
+        )
+        .unwrap();
+        assert_eq!(searched["broken_links"], broken(unplugged), "{searched}");
+        fs::rename(&away, &world.music).unwrap();
+        // Back, but the folder's declaration no longer admits the file's kind: outside its rules.
+        let declaration = world.root.join(".central/scopes/Music/scope.json");
+        let mut declared: Value = serde_json::from_slice(&fs::read(&declaration).unwrap()).unwrap();
+        declared["media"] = json!(["wav"]);
+        fs::write(&declaration, serde_json::to_vec(&declared).unwrap()).unwrap();
+        let outside = "sounds/voice.mp3 links to a file folder:Music no longer lists (gone, or outside its rules), so it is not listed";
+        let read = run(&world.root, "inspect", &alpha(json!({}))).unwrap();
+        assert_eq!(read["broken_links"], broken(outside), "{read}");
+        let searched = run(
+            &world.root,
+            "search",
+            &alpha(json!({"query":"sound","limit":0})),
+        )
+        .unwrap();
+        assert_eq!(searched["broken_links"], broken(outside), "{searched}");
+    }
+
+    /// 0C item 3: no index for a folder. adopt-db and record-adopt refuse a folder scope in the projection acts' own words, and
+    /// bkmr is never run with a folder as its working directory; the folder's tree stays as it was, byte for byte.
+    #[test]
+    fn no_act_keeps_an_index_for_a_folder_scope_nor_runs_bkmr_in_it() {
+        let world = World::new();
+        world
+            .register("Music", &world.music(), json!(["wav", "aiff", "mp3"]))
+            .unwrap();
+        let before = world.music_bytes();
+        let words = format!(
+            "Music is a folder scope: Central reads {} where it stands and keeps no index or projection receipt for it",
+            world.music()
+        );
+        let voice = source_horizon::source_ref("folder:Music", "voice.mp3");
+        for (op, input) in [
+            (
+                "adopt-db",
+                json!({"project":"folder:Music","source":world.base.join("index.db"),"expected_revision":world.revision()}),
+            ),
+            (
+                "record-adopt",
+                json!({"project":"folder:Music","source_ref":voice,"expected_revision":world.revision()}),
+            ),
+            ("projection-read", json!({"project":"folder:Music"})),
+        ] {
+            assert_eq!(refused(run(&world.root, op, &input)), words, "{op}");
+        }
+        let all = scopes(&world.root).unwrap();
+        let folder = all.iter().find(|scope| scope.is_folder()).unwrap();
+        let ran = Backend::for_scope(folder).run(&["info".into()]);
+        assert_eq!(
+            ran.unwrap_err().to_string(),
+            format!(
+                "bkmr is never run for a folder scope: Central reads {} where it stands",
+                world.music()
+            )
+        );
+        assert_eq!(world.music_bytes(), before);
+        assert!(!world.music.join(".central").exists());
+        assert!(!world
+            .root
+            .join(".central/scopes/Music/.central/bkmr")
+            .exists());
+    }
+
+    /// 0C items 4 and 5: one walk of a folder runs at a time, and it reads nothing after its deadline. The deadline here is a logical
+    /// clock (the walk's count of folders read), so the page is the same on any machine; a walk parked in a read that never answers
+    /// is left at the bound, and a second read of the folder meanwhile answers at once.
+    #[test]
+    fn a_folder_walk_runs_once_at_a_time_and_reads_nothing_after_its_deadline() {
+        let world = World::new();
+        for folder in ["A", "B", "C", "D", "E"] {
+            put(&world, &format!("{folder}/one.wav"));
+            put(&world, &format!("{folder}/Deeper/two.wav"));
+        }
+        world
+            .register("Music", &world.music(), json!(["wav", "aiff", "mp3"]))
+            .unwrap();
+        let first = [
+            "A/Deeper/two.wav",
+            "A/one.wav",
+            "B/Deeper/two.wav",
+            "B/one.wav",
+        ];
+        let read = walk_log();
+        let answer = with_seams(
+            crate::file_map_catalog::FolderWalkSeams {
+                deadline_after: Some(5),
+                read: Some(read.clone()),
+                ..Default::default()
+            },
+            || run(&world.root, "inspect", &json!({"project":"folder:Music"})),
+        )
+        .unwrap();
+        let page = &answer["page"];
+        assert_eq!(page["truncated"], true, "{answer}");
+        assert_eq!(page["bound"], time_words());
+        assert_eq!(music_paths(&world, &answer), first);
+        assert_eq!(page["next"], json!(world.music.join("B")));
+        let late: Vec<_> = read
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|path| {
+                ["C", "D", "E"]
+                    .iter()
+                    .any(|after| path.starts_with(world.music.join(after)))
+            })
+            .cloned()
+            .collect();
+        assert_eq!(late, Vec::<PathBuf>::new(), "read after the deadline");
+
+        // A walk parked in a read that never answers: the reader leaves it at the bound with what it listed.
         let fifo = world.base.join("stall");
         assert!(std::process::Command::new("mkfifo")
             .arg(&fifo)
             .status()
             .unwrap()
             .success());
-        let answer = with_seams(
+        let parked = with_seams(
             crate::file_map_catalog::FolderWalkSeams {
-                time: Some(std::time::Duration::from_millis(300)),
                 stall: Some((world.music.join("C"), fifo.clone())),
                 ..Default::default()
             },
-            || run(&world.root, "inspect", &json!({"project":"folder:Music"})).unwrap(),
-        );
-        // Let the stalled walk go, so its thread ends (never waiting: with no reader the open fails at once).
-        let _ = fs::OpenOptions::new()
-            .write(true)
-            .custom_flags(libc::O_NONBLOCK)
-            .open(&fifo);
-        let page = &answer["page"];
-        assert_eq!(page["truncated"], true, "{answer}");
+            || run(&world.root, "inspect", &json!({"project":"folder:Music"})),
+        )
+        .unwrap();
+        assert_eq!(parked["page"]["bound"], time_words(), "{parked}");
+        assert_eq!(music_paths(&world, &parked), first);
+        // While it is parked, another read of the folder starts no second walk: it answers within its own bound, in words.
+        let again = with_seams(
+            crate::file_map_catalog::FolderWalkSeams {
+                time: Some(std::time::Duration::from_millis(20)),
+                ..Default::default()
+            },
+            || run(&world.root, "inspect", &json!({"project":"folder:Music"})),
+        )
+        .unwrap();
         assert_eq!(
-            page["bound"],
-            "the time bound stopped the walk: 0.3s passed before the page filled"
+            again["page"]["bound"],
+            "a walk of this folder is still running, so this page lists none of it: ask again when it ends",
+            "{again}"
+        );
+        assert_eq!(music_paths(&world, &again), Vec::<String>::new());
+        assert_eq!(again["page"]["truncated"], true);
+        // Let the parked walk go; once it has ended, the folder is walked again.
+        let mut released = false;
+        for _ in 0..400 {
+            if fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&fifo)
+                .is_ok()
+            {
+                released = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(released);
+        let root = fs::canonicalize(&world.music).unwrap();
+        for _ in 0..400 {
+            if !crate::file_map_catalog::folder_walk_running(&root) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let whole = run(&world.root, "inspect", &json!({"project":"folder:Music"})).unwrap();
+        assert_eq!(music_paths(&world, &whole).len(), 13, "{whole}");
+    }
+
+    /// 0C item 4: a prefix is read by its components, so a trailing slash or `/` reads as the folder it names; a prefix outside the
+    /// folder answers at once, reading nothing.
+    #[test]
+    fn a_prefix_is_read_by_its_components_and_one_outside_answers_at_once() {
+        let world = World::new();
+        world
+            .register("Music", &world.music(), json!(["wav", "aiff", "mp3"]))
+            .unwrap();
+        for prefix in [format!("{}/", world.music()), "/".to_owned()] {
+            let answer = run(
+                &world.root,
+                "inspect",
+                &json!({"project":"folder:Music","path_prefixes":[prefix]}),
+            )
+            .unwrap();
+            assert_eq!(music_paths(&world, &answer).len(), 3, "{prefix}: {answer}");
+            assert_eq!(answer["page"]["truncated"], false, "{prefix}");
+        }
+        let read = walk_log();
+        let elsewhere = world.base.join("Elsewhere");
+        let answer = with_seams(
+            crate::file_map_catalog::FolderWalkSeams {
+                read: Some(read.clone()),
+                ..Default::default()
+            },
+            || {
+                run(
+                    &world.root,
+                    "inspect",
+                    &json!({"project":"folder:Music","path_prefixes":[elsewhere]}),
+                )
+            },
+        )
+        .unwrap();
+        assert_eq!(music_paths(&world, &answer), Vec::<String>::new());
+        assert_eq!(answer["page"]["truncated"], false, "{answer}");
+        assert_eq!(
+            answer["folders"][0],
+            json!({"world_ref":"folder:Music","listed":false,"words":"no path_prefixes entry reaches into it"})
         );
         assert_eq!(
-            music_paths(&world, &answer),
-            [
-                "A/Deeper/two.wav",
-                "A/one.wav",
-                "B/Deeper/two.wav",
-                "B/one.wav"
-            ]
+            *read.lock().unwrap(),
+            Vec::<PathBuf>::new(),
+            "the folder was read"
         );
-        assert_eq!(page["next"], json!(world.music.join("B")));
+    }
+
+    /// 0C item 4: the default page of a federated read that reaches a folder cuts only the folder's entries; a project's keep their
+    /// old paging, whole.
+    #[test]
+    fn the_federated_default_page_cuts_only_folder_entries() {
+        let world = World::new();
+        world
+            .register("Music", &world.music(), json!(["wav", "aiff", "mp3"]))
+            .unwrap();
+        // The ground's own entry: a NOW record, which every read lists live.
+        let record = world.root.join("Control/agents/now/agents/handoff.json");
+        fs::create_dir_all(record.parent().unwrap()).unwrap();
+        fs::write(&record, b"{\"kind\":\"handoff\"}").unwrap();
+        let ground = world.root.to_str().unwrap().to_owned();
+        let projects = |answer: &Value| -> Vec<String> {
+            answer["resources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|entry| !entry["world_ref"].as_str().unwrap().starts_with("folder:"))
+                .map(|entry| entry["path"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        let alone = run(
+            &world.root,
+            "inspect",
+            &json!({"federated":true,"path_prefixes":[ground]}),
+        )
+        .unwrap();
+        assert!(!projects(&alone).is_empty(), "{alone}");
+        let both = with_seams(
+            crate::file_map_catalog::FolderWalkSeams {
+                page_default: Some(1),
+                ..Default::default()
+            },
+            || {
+                run(
+                    &world.root,
+                    "inspect",
+                    &json!({"federated":true,"path_prefixes":[ground, world.music()]}),
+                )
+            },
+        )
+        .unwrap();
+        assert_eq!(projects(&both), projects(&alone), "{both}");
+        assert_eq!(music_paths(&world, &both).len(), 1, "{both}");
+        assert_eq!(both["page"]["truncated"], true);
+    }
+
+    /// 0C item 4: a project named `folder:…` never shadows a folder scope: it is unreachable in words, and the folder scope is read.
+    #[test]
+    fn a_project_named_like_a_folder_scope_never_shadows_it() {
+        let world = World::new();
+        world
+            .register("Music", &world.music(), json!(["wav", "aiff", "mp3"]))
+            .unwrap();
+        let shadow = world.root.join("Work/folder:Music/ProjectCentral");
+        fs::create_dir_all(&shadow).unwrap();
+        fs::write(
+            shadow.join("project.json"),
+            serde_json::to_vec(&json!({"schema":"central.project/v1","project_id":"shadow",
+                "human_source":"ProjectCentral/user",
+                "wiki":{"profile":"okf-wiki/v1","source":"ProjectCentral/agents/wiki/wiki.json"}}))
+            .unwrap(),
+        )
+        .unwrap();
+        let (all, unreachable) = participating(&world.root.canonicalize().unwrap()).unwrap();
+        assert!(all
+            .iter()
+            .any(|scope| scope.world == "folder:Music" && scope.is_folder()));
+        assert!(all
+            .iter()
+            .all(|scope| scope.project.as_deref() != Some("folder:Music") || scope.is_folder()));
+        assert_eq!(
+            unreachable.iter().map(|scope| scope.message.as_str()).collect::<Vec<_>>(),
+            ["unreachable: a project named folder:Music (Work/folder:Music) does not stand: folder: names a folder scope, so the project is not read"]
+        );
+        let read = run(&world.root, "inspect", &json!({"project":"folder:Music"})).unwrap();
+        assert_eq!(read["world_ref"], "folder:Music");
+        assert_eq!(music_paths(&world, &read).len(), 3);
+    }
+
+    /// 0C item 4: a folder scope's name is one plain name: `Music/` is refused at registration, and nothing is made.
+    #[test]
+    fn a_folder_scope_name_with_a_trailing_slash_is_refused_at_registration() {
+        let world = World::new();
+        let words = refused(world.register("Music/", &world.music(), json!(["wav"])));
+        assert_eq!(
+            words,
+            "A folder scope's name is one plain name, and Music/ is not: name it Music"
+        );
+        assert!(!world.root.join(".central/scopes/Music").exists());
+        world
+            .register("Music", &world.music(), json!(["wav"]))
+            .unwrap();
+    }
+
+    /// 0C items 4 and 5: the world's refresh, run directly: every row has one shape (numbers for entries, changes and truncated),
+    /// a folder's row says it builds no index, and an unreachable folder is named, its row shaped as the others.
+    #[test]
+    fn the_world_refresh_answers_one_shape_for_every_row() {
+        let world = World::new();
+        world
+            .register("Music", &world.music(), json!(["wav", "aiff", "mp3"]))
+            .unwrap();
+        let sounds = world.base.join("Sounds");
+        fs::create_dir_all(&sounds).unwrap();
+        world
+            .register("Sounds", sounds.to_str().unwrap(), json!(["wav"]))
+            .unwrap();
+        fs::remove_dir_all(&sounds).unwrap();
+        let answer = execute(&world.root, "refresh", &json!({"federated":true})).unwrap();
+        let result = &answer["result"];
+        let rows = result["scopes"].as_array().unwrap();
+        for row in rows {
+            for key in ["entries", "changes", "truncated"] {
+                assert!(row[key].is_u64(), "{key} of {row}");
+            }
+            assert!(row["diagnostics"].is_array(), "{row}");
+            assert!(row["seconds"].is_number(), "{row}");
+            assert!(row["ok"].is_boolean(), "{row}");
+        }
+        let music = rows
+            .iter()
+            .find(|row| row["world_ref"] == "folder:Music")
+            .unwrap();
+        assert_eq!(
+            (music["ok"].clone(), music["indexed"].clone()),
+            (json!(true), json!(false)),
+            "{music}"
+        );
+        let gone = rows
+            .iter()
+            .find(|row| row["world_ref"] == "folder:Sounds")
+            .unwrap();
+        assert_eq!(
+            (gone["ok"].clone(), gone["unreachable"].clone()),
+            (json!(false), json!(true)),
+            "{gone}"
+        );
+        let failed = rows.iter().filter(|row| row["ok"] != true).count();
+        assert_eq!(result["failed"], failed);
+        assert_eq!(result["refreshed"], rows.len() - failed);
+        assert!(!world.music.join(".central").exists());
+    }
+
+    /// 0C item 4: the words and kinds name their own cause: a folder gone is not found, not a timeout; a resolve of a file of an
+    /// unreachable folder names the folder; a move of a folder's file says Central moves nothing there.
+    #[test]
+    fn a_folder_scope_failure_names_its_own_cause() {
+        let world = World::new();
+        world
+            .register("Music", &world.music(), json!(["wav", "aiff", "mp3"]))
+            .unwrap();
+        let voice = source_horizon::source_ref("folder:Music", "voice.mp3");
+        let moved = refused(run(
+            &world.root,
+            "move-plan",
+            &json!({"source_ref":voice,"destination":"Elsewhere/voice.mp3","expected_revision":world.revision()}),
+        ));
+        assert!(moved.contains("writes nothing inside it"), "{moved}");
+        let away = world.base.join("Music away");
+        fs::rename(&world.music, &away).unwrap();
+        let gone = run(&world.root, "inspect", &json!({"project":"folder:Music"})).unwrap_err();
+        assert_eq!(gone.kind(), io::ErrorKind::NotFound, "{gone}");
+        let resolved = refused(run(&world.root, "resolve", &json!({"source_ref":voice})));
+        assert_eq!(
+            resolved,
+            format!(
+                "Source is in folder:Music, which is unreachable: the folder scope Music stands over {}, and no folder is there now",
+                world.music()
+            )
+        );
+        fs::rename(&away, &world.music).unwrap();
+    }
+
+    /// 0C item 5: every one of the 24 package extensions is a package, in the walk and in a resolve: nothing inside one is listed.
+    #[test]
+    fn every_package_extension_is_a_package_in_the_walk_and_in_a_resolve() {
+        let world = World::new();
+        let packages = [
+            "aaxplugin",
+            "app",
+            "appex",
+            "band",
+            "bundle",
+            "clap",
+            "component",
+            "fcpbundle",
+            "framework",
+            "kext",
+            "key",
+            "logic",
+            "logicx",
+            "lv2",
+            "musiclibrary",
+            "numbers",
+            "pages",
+            "photoslibrary",
+            "plugin",
+            "sparsebundle",
+            "tvlibrary",
+            "vst",
+            "vst3",
+            "xpc",
+        ];
+        assert_eq!(packages.len(), 24);
+        for extension in packages {
+            put(&world, &format!("Inside.{extension}/kept.wav"));
+        }
+        world
+            .register("Music", &world.music(), json!(["wav", "aiff", "mp3"]))
+            .unwrap();
+        let answer = run(&world.root, "inspect", &json!({"project":"folder:Music"})).unwrap();
+        assert_eq!(music_paths(&world, &answer).len(), 3, "{answer}");
+        for extension in packages {
+            let reference =
+                source_horizon::source_ref("folder:Music", &format!("Inside.{extension}/kept.wav"));
+            assert!(
+                run(&world.root, "resolve", &json!({"source_ref":reference})).is_err(),
+                "{extension}"
+            );
+        }
+    }
+
+    /// 0C item 5: the spellings registration refuses are refused in a hand-edited declaration too: a trailing slash, `..`, a link,
+    /// another case. Each is unreachable in words; the declaration as Central wrote it opens again.
+    #[test]
+    fn a_hand_edited_declaration_is_refused_for_every_spelling_registration_refuses() {
+        let world = World::new();
+        world
+            .register("Music", &world.music(), json!(["wav"]))
+            .unwrap();
+        let ground = world.root.canonicalize().unwrap();
+        let declaration = world.root.join(".central/scopes/Music/scope.json");
+        let declared: Value = serde_json::from_slice(&fs::read(&declaration).unwrap()).unwrap();
+        let canonical = declared["root"].as_str().unwrap().to_owned();
+        let link = world.base.join("Music link");
+        std::os::unix::fs::symlink(&canonical, &link).unwrap();
+        let parent = Path::new(&canonical).parent().unwrap();
+        let mut spellings = vec![
+            format!("{canonical}/"),
+            format!("{}/Field recordings/../", canonical),
+            format!("{}/../Music", canonical.trim_end_matches('/'))
+                .replace("/Music/../Music", "/Music/../Music"),
+            link.to_str().unwrap().to_owned(),
+        ];
+        // Another case names the same folder only on a volume that folds case.
+        let upper = parent.join("MUSIC");
+        if upper.is_dir() {
+            spellings.push(upper.to_str().unwrap().to_owned());
+        }
+        let mut opened = Vec::new();
+        for spelling in &spellings {
+            let mut edited = declared.clone();
+            edited["root"] = json!(spelling);
+            fs::write(&declaration, serde_json::to_vec(&edited).unwrap()).unwrap();
+            let (all, unreachable) = participating(&ground).unwrap();
+            let refused = !all.iter().any(|scope| scope.world == "folder:Music")
+                && unreachable.iter().any(|scope| {
+                    scope.message.starts_with(&format!(
+                        "unreachable: the folder scope Music stands over {spelling}, and it did not open: "
+                    ))
+                });
+            if !refused {
+                opened.push(spelling.clone());
+            }
+        }
+        assert_eq!(
+            opened,
+            Vec::<String>::new(),
+            "opened by a spelling that is not the folder's own"
+        );
+        fs::write(&declaration, serde_json::to_vec(&declared).unwrap()).unwrap();
+        let (all, unreachable) = participating(&ground).unwrap();
+        assert!(unreachable.is_empty());
+        assert!(all.iter().any(|scope| scope.world == "folder:Music"));
     }
 }

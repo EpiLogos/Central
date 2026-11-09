@@ -98,7 +98,7 @@ pub(crate) const FOLDER_PAGE_DEFAULT: usize = 2000;
 const FOLDER_WALK_DIRECTORIES: usize = 10_000;
 /// How long one page's walk may take. Past it the page holds what the walk listed by then: a File Provider or a network volume
 /// answering slowly, or not at all, costs the reader this long and no longer.
-const FOLDER_WALK_TIME: std::time::Duration = std::time::Duration::from_secs(5);
+pub(crate) const FOLDER_WALK_TIME: std::time::Duration = std::time::Duration::from_secs(5);
 /// How many of the folders and entries a walk skipped its answer names, with why; past this they are counted only.
 const FOLDER_SKIPPED_NAMED: usize = 32;
 /// The flag Finder hides a file or a folder by (`chflags hidden`): `UF_HIDDEN` in <sys/stat.h>.
@@ -201,6 +201,49 @@ pub(crate) struct FolderWalkSeams {
     pub other_volume: Option<PathBuf>,
     pub stall: Option<(PathBuf, PathBuf)>,
     pub vanish: Option<PathBuf>,
+    /// A path the walk is handed under another name, these bytes: a name that is not UTF-8, as a Linux disk or a network share hands
+    /// one (APFS keeps only UTF-8 names).
+    pub not_utf8: Option<(PathBuf, Vec<u8>)>,
+    /// The walk's deadline as a logical clock: it passes once this many folders are read, so a page is the same on any machine.
+    pub deadline_after: Option<usize>,
+    /// Every path the walk reads (a folder listed, a file's metadata), in order.
+    pub read: Option<std::sync::Arc<std::sync::Mutex<Vec<PathBuf>>>>,
+    /// The page a read that names no limit gets.
+    pub page_default: Option<usize>,
+}
+/// How many entries a page holds when its read names no limit ([`FOLDER_PAGE_DEFAULT`]; a test's seam may set fewer).
+pub(crate) fn folder_page_default() -> usize {
+    #[cfg(test)]
+    if let Some(page) = FOLDER_WALK_SEAMS.with(|seams| seams.borrow().page_default) {
+        return page;
+    }
+    FOLDER_PAGE_DEFAULT
+}
+/// The folders (their canonical paths) a walk is running in now: one walk of a folder at a time, so a folder that stops answering
+/// holds one helper thread, never one for every read of it.
+static FOLDERS_WALKING: std::sync::Mutex<BTreeSet<PathBuf>> =
+    std::sync::Mutex::new(BTreeSet::new());
+static FOLDER_WALK_ENDED: std::sync::Condvar = std::sync::Condvar::new();
+/// What a page answers when a walk of its folder is still running past its own bound.
+const FOLDER_STILL_WALKING: &str =
+    "a walk of this folder is still running, so this page lists none of it: ask again when it ends";
+fn folders_walking() -> std::sync::MutexGuard<'static, BTreeSet<PathBuf>> {
+    FOLDERS_WALKING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+/// A walk running in its folder: the folder is free again when its walk ends, however it ends.
+struct FolderWalking(PathBuf);
+impl Drop for FolderWalking {
+    fn drop(&mut self) {
+        folders_walking().remove(&self.0);
+        FOLDER_WALK_ENDED.notify_all();
+    }
+}
+/// Whether a walk of the folder at `root` (its canonical path) is running now (a test waits on it for a parked walk to end).
+#[cfg(test)]
+pub(crate) fn folder_walk_running(root: &Path) -> bool {
+    folders_walking().contains(root)
 }
 #[cfg(test)]
 thread_local! {
@@ -739,6 +782,14 @@ pub(crate) fn folder_writes_nothing(scope: &Scope) -> io::Error {
         scope.root.display()
     ))
 }
+/// What every act that would keep an index or a projection receipt for a folder scope answers instead.
+pub(crate) fn folder_keeps_no_index(scope: &Scope) -> io::Error {
+    invalid(format!(
+        "{} is a folder scope: Central reads {} where it stands and keeps no index or projection receipt for it",
+        scope.project.as_deref().unwrap_or(&scope.world),
+        scope.root.display()
+    ))
+}
 pub(crate) fn conflict(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::AlreadyExists, message.into())
 }
@@ -1027,6 +1078,9 @@ thread_local! {
 #[derive(Clone, Debug)]
 pub(crate) struct UnreachableScope {
     pub project: String,
+    /// What kind of failure it is, so a read that asks for it fails as its cause does: a folder gone is not found, a root that does
+    /// not answer timed out.
+    pub kind: io::ErrorKind,
     /// A folder scope's World (`folder:<name>`): its name alone never selects it.
     pub world: Option<String>,
     pub root: String,
@@ -1142,6 +1196,14 @@ fn open_folder_root(raw: &str, ground: &Path) -> io::Result<PathBuf> {
         return Err(invalid(format!("{raw} is not a folder")));
     }
     let canonical = target.canonicalize()?;
+    // Registration writes the folder's canonical path: any other spelling (a trailing slash, `.` or `..`, a link, another case) is a
+    // declaration edited by hand, refused as registration would refuse it.
+    if canonical.as_os_str() != std::ffi::OsStr::new(raw) {
+        return Err(invalid(format!(
+            "{raw} is not the folder's own spelling ({}), the one registration writes",
+            canonical.display()
+        )));
+    }
     if canonical.starts_with(ground) {
         return Err(invalid(format!(
             "{raw} is inside this ground ({})",
@@ -1247,12 +1309,33 @@ pub(crate) fn participating(root: &Path) -> io::Result<(Vec<Scope>, Vec<Unreacha
     // A folder scope's name is a scope name like any other: one namespace. A folder scope that cannot stand (its declaration does
     // not read, or a project holds its name) is unreachable, in words, and every other scope stands.
     let mut unreachable = Vec::new();
+    // `folder:` names a folder scope's World: a project spelled so (a folder under Work, or a hand-edited register) would shadow
+    // one, so it does not stand, in words.
+    let shadowing: Vec<String> = candidates
+        .keys()
+        .filter(|name| name.starts_with(FOLDER_WORLD_PREFIX))
+        .cloned()
+        .collect();
+    for name in shadowing {
+        let path = candidates.remove(&name).unwrap_or_default();
+        unreachable.push(UnreachableScope {
+            kind: io::ErrorKind::InvalidInput,
+            world: None,
+            message: format!(
+                "unreachable: a project named {name} ({path}) does not stand: {FOLDER_WORLD_PREFIX} names a folder scope, so the \
+                 project is not read"
+            ),
+            project: name,
+            root: path,
+        });
+    }
     let mut folders = Vec::new();
     for declared in folder_declarations(root)? {
         let folder = match declared {
             Ok(folder) => folder,
             Err((name, words)) => {
                 unreachable.push(UnreachableScope {
+                    kind: io::ErrorKind::InvalidData,
                     world: Some(format!("{FOLDER_WORLD_PREFIX}{name}")),
                     message: format!(
                         "unreachable: the folder scope declared in .central/scopes/{name} does not read: {words}"
@@ -1265,6 +1348,7 @@ pub(crate) fn participating(root: &Path) -> io::Result<(Vec<Scope>, Vec<Unreacha
         };
         if let Some(path) = candidates.get(&folder.name) {
             unreachable.push(UnreachableScope {
+                kind: io::ErrorKind::AlreadyExists,
                 world: Some(format!("{FOLDER_WORLD_PREFIX}{}", folder.name)),
                 message: format!(
                     "unreachable: the folder scope {} shares its name with a project of this ground ({path}): the project \
@@ -1311,6 +1395,7 @@ pub(crate) fn participating(root: &Path) -> io::Result<(Vec<Scope>, Vec<Unreacha
                 }
                 None => {
                     unreachable.push(UnreachableScope {
+                        kind: io::ErrorKind::TimedOut,
                         world: None,
                         message: format!(
                             "unreachable: {path} did not open within {}s (a File Provider or \
@@ -1346,6 +1431,7 @@ pub(crate) fn participating(root: &Path) -> io::Result<(Vec<Scope>, Vec<Unreacha
             Ok(Some(target)) => target,
             Ok(None) => {
                 unreachable.push(UnreachableScope {
+                    kind: io::ErrorKind::TimedOut,
                     message: format!(
                         "unreachable: {} did not open within {}s (a File Provider or network \
                          volume not answering)",
@@ -1361,6 +1447,7 @@ pub(crate) fn participating(root: &Path) -> io::Result<(Vec<Scope>, Vec<Unreacha
             // A folder taken away (a drive not mounted, a folder moved) leaves the other scopes standing.
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 unreachable.push(UnreachableScope {
+                    kind: io::ErrorKind::NotFound,
                     message: format!(
                         "unreachable: the folder scope {} stands over {}, and no folder is there now",
                         folder.name, folder.root
@@ -1375,6 +1462,7 @@ pub(crate) fn participating(root: &Path) -> io::Result<(Vec<Scope>, Vec<Unreacha
             // link, a declaration edited to name what registration refuses) is the same: this scope is unreachable, in its words.
             Err(error) => {
                 unreachable.push(UnreachableScope {
+                    kind: error.kind(),
                     message: format!(
                         "unreachable: the folder scope {} stands over {}, and it did not open: {error}",
                         folder.name, folder.root
@@ -2367,9 +2455,30 @@ struct FolderWalk {
     /// Folders read, and the most a page's walk reads.
     directories: usize,
     most: usize,
+    /// The walk's time bound, and when it passes: past it the walk reads nothing more.
+    time: std::time::Duration,
+    deadline: std::time::Instant,
     progress: std::sync::Arc<std::sync::Mutex<FolderProgress>>,
     #[cfg(test)]
     seams: FolderWalkSeams,
+    /// Where a walk parked by a test's stall says so, as a read that never answers leaves its reader at the bound.
+    #[cfg(test)]
+    parked: std::sync::mpsc::Sender<Walked>,
+}
+/// What a page's walk hands its reader.
+enum Walked {
+    /// The walk ended: the page as far as it went, or the folder's own failure to be read.
+    Done(io::Result<()>),
+    /// The walk is parked in a read that does not answer (a test's stall): the reader goes with what it has, at the time bound.
+    #[cfg(test)]
+    Parked,
+}
+/// The time bound's words for a walk bounded at `time`.
+fn time_bound_words(time: std::time::Duration) -> String {
+    format!(
+        "the time bound stopped the walk: {}s passed before the page filled",
+        time.as_secs_f64()
+    )
 }
 impl FolderWalk {
     fn progress(&self) -> std::sync::MutexGuard<'_, FolderProgress> {
@@ -2379,6 +2488,21 @@ impl FolderWalk {
     }
     fn left(&self) -> bool {
         self.progress().left
+    }
+    /// Whether the walk's deadline has passed, before reading a folder (`folder`) or a file. Under a test's logical clock it passes
+    /// once that many folders are read, and only a folder's reading is held to it.
+    fn past(&self, folder: bool) -> bool {
+        #[cfg(test)]
+        if let Some(after) = self.seams.deadline_after {
+            return folder && self.directories >= after;
+        }
+        let _ = folder;
+        std::time::Instant::now() >= self.deadline
+    }
+    /// Stop at the deadline: the page holds what the walk listed by then.
+    fn stop_at_deadline(&self) -> bool {
+        self.bound(time_bound_words(self.time));
+        false
     }
     fn finish(&self, path: &Path) {
         let mut progress = self.progress();
@@ -2426,10 +2550,14 @@ impl FolderWalk {
     }
     #[cfg(test)]
     fn before_reading(&self, path: &Path) {
+        if let Some(read) = &self.seams.read {
+            read.lock().unwrap().push(path.to_path_buf());
+        }
         if self.seams.vanish.as_deref() == Some(path) {
             let _ = fs::remove_dir_all(path).or_else(|_| fs::remove_file(path));
         }
         if let Some((_, fifo)) = self.seams.stall.as_ref().filter(|(at, _)| at == path) {
+            let _ = self.parked.send(Walked::Parked);
             let _ = fs::File::open(fifo);
         }
     }
@@ -2442,13 +2570,19 @@ impl FolderWalk {
         dir: &Path,
         depth: usize,
     ) -> io::Result<bool> {
-        #[cfg(test)]
-        self.before_reading(dir);
+        if self.past(true) {
+            return Ok(self.stop_at_deadline());
+        }
         if self.directories >= self.most {
             self.bound(format!(
                 "the directory bound stopped the walk: {} folders were read before the page filled",
                 self.most
             ));
+            return Ok(false);
+        }
+        #[cfg(test)]
+        self.before_reading(dir);
+        if self.left() {
             return Ok(false);
         }
         self.directories += 1;
@@ -2462,9 +2596,20 @@ impl FolderWalk {
         };
         let mut rows = Vec::new();
         for row in listing {
+            if self.left() {
+                return Ok(false);
+            }
             match row {
                 Ok(row) => rows.push((row.file_name(), row.path(), row.file_type())),
                 Err(error) => self.skip(dir, format!("an entry in it could not be read: {error}")),
+            }
+        }
+        #[cfg(test)]
+        if let Some((at, bytes)) = &self.seams.not_utf8 {
+            use std::os::unix::ffi::OsStringExt;
+            for row in rows.iter_mut().filter(|row| row.1 == *at) {
+                row.0 = std::ffi::OsString::from_vec(bytes.clone());
+                row.1 = dir.join(&row.0);
             }
         }
         rows.sort_by(|a, b| a.0.cmp(&b.0));
@@ -2472,6 +2617,17 @@ impl FolderWalk {
         for (name, path, kind) in rows {
             if self.left() {
                 return Ok(false);
+            }
+            // A Source is named by its path, and a name that is not UTF-8 cannot be one: it is skipped and named (lossily), once, by
+            // the page whose start lies before it, and the rest of the folder answers.
+            if path.to_str().is_none() {
+                if !after
+                    .as_deref()
+                    .is_some_and(|after| path.as_path() <= after)
+                {
+                    self.skip(&path, "its name is not UTF-8".into());
+                }
+                continue;
             }
             let name = name.to_string_lossy();
             let kind = match kind {
@@ -2526,6 +2682,9 @@ impl FolderWalk {
             if name.starts_with('.') || media_kind(&self.rules.folder.media, &path).is_none() {
                 self.finish(&path);
                 continue;
+            }
+            if self.past(false) {
+                return Ok(self.stop_at_deadline());
             }
             #[cfg(test)]
             self.before_reading(&path);
@@ -2594,26 +2753,47 @@ pub(crate) fn folder_page(scope: &Scope, read: FolderRead) -> io::Result<FolderP
     );
     #[cfg(not(test))]
     let (most, time) = (FOLDER_WALK_DIRECTORIES, FOLDER_WALK_TIME);
+    let began = std::time::Instant::now();
+    // One walk of a folder at a time: a read that finds one running waits for it within its own bound, then answers in words.
+    let walking = {
+        let (mut walking, _) = FOLDER_WALK_ENDED
+            .wait_timeout_while(folders_walking(), time, |walking| {
+                walking.contains(&scope.root)
+            })
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if walking.contains(&scope.root) {
+            return Ok(FolderPage {
+                bound: Some(FOLDER_STILL_WALKING.into()),
+                ..FolderPage::default()
+            });
+        }
+        walking.insert(scope.root.clone());
+        FolderWalking(scope.root.clone())
+    };
     let progress = std::sync::Arc::new(std::sync::Mutex::new(FolderProgress::default()));
+    let (send, receive) = std::sync::mpsc::channel();
     let mut walk = FolderWalk {
         scope: scope.clone(),
         rules,
         read,
         directories: 0,
         most,
+        time,
+        deadline: began + time,
         progress: progress.clone(),
         #[cfg(test)]
         seams,
+        #[cfg(test)]
+        parked: send.clone(),
     };
-    let (send, receive) = std::sync::mpsc::channel();
-    let began = std::time::Instant::now();
     std::thread::Builder::new()
         .name("file-map-folder-walk".into())
         .spawn(move || {
             let root = walk.scope.root.clone();
             let mut scan = source_horizon::ScanMemo::new(&root);
             let walked = walk.dir(&mut scan, &root, 0);
-            let _ = send.send(walked.map(|_| ()));
+            drop(walking);
+            let _ = send.send(Walked::Done(walked.map(|_| ())));
         })?;
     let take = |bound: Option<String>| {
         let mut progress = progress
@@ -2627,11 +2807,10 @@ pub(crate) fn folder_page(scope: &Scope, read: FolderRead) -> io::Result<FolderP
         page
     };
     match receive.recv_timeout(time.saturating_sub(began.elapsed())) {
-        Ok(walked) => walked.map(|()| take(None)).map_err(unread),
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(take(Some(format!(
-            "the time bound stopped the walk: {}s passed before the page filled",
-            time.as_secs_f64()
-        )))),
+        Ok(Walked::Done(walked)) => walked.map(|()| take(None)).map_err(unread),
+        #[cfg(test)]
+        Ok(Walked::Parked) => Ok(take(Some(time_bound_words(time)))),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(take(Some(time_bound_words(time)))),
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(io::Error::other(format!(
             "the walk of the folder scope over {} ended without an answer",
             scope.root.display()
