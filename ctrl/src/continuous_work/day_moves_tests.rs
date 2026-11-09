@@ -2148,8 +2148,28 @@ fn append_contribution(root: &Path, day_ref: &str, field: &str, id: &str, html: 
     )
     .unwrap();
 }
+/// The press as the World sends it: on the revision of the Day the entry was
+/// offered from, read here just before (DLW build ruling 2026-11-09).
 fn part(root: &Path, input: Value, now: u64) -> io::Result<Value> {
-    run(root, "day_entry_part", input, Some(HUMAN), now)
+    run(
+        root,
+        "day_entry_part",
+        offered(root, input, now),
+        Some(HUMAN),
+        now,
+    )
+}
+fn offered(root: &Path, mut input: Value, now: u64) -> Value {
+    if input.get("expected_revision").is_none() {
+        let day = match input.get("day_ref") {
+            Some(day_ref) => json!({"day_ref":day_ref}),
+            None => json!({}),
+        };
+        if let Ok(day) = execute_at(root, "day_read", &day, now) {
+            input["expected_revision"] = day["revision"]["revision"].clone();
+        }
+    }
+    input
 }
 
 #[test]
@@ -3025,9 +3045,11 @@ fn bringing_an_entry_to_a_star_is_the_persons_press_and_writes_nothing_into_any_
     )
     .unwrap();
     let closed = listing(&day_dir);
+    assert!(made["part"]["id"].is_string());
     assert_eq!(
-        part(w.path(), input, at(T)).unwrap()["part"]["id"],
-        made["part"]["id"]
+        words_of(part(w.path(), input, at(T))),
+        "The Day of 2026-10-20 is closed; a closed Day is kept, and none of its entries is shown from it",
+        "a closed Day shows none of its entries (DLW build ruling 2026-11-09)"
     );
     assert_eq!(
         listing(&day_dir),
@@ -3430,7 +3452,7 @@ fn the_earlier_day_across_an_autumn_fold_takes_the_repeated_half_hour() {
 }
 
 #[test]
-fn a_day_closed_before_the_first_press_is_never_touched_and_the_salt_is_written_outside_it() {
+fn a_day_closed_before_the_first_press_is_refused_never_touched_and_no_salt_is_written() {
     let w = world("Europe/London", 0);
     ensure(w.path(), at(T));
     make_document(w.path(), TODAY, "day:c1-today", PROPOSAL, at(T));
@@ -3456,13 +3478,16 @@ fn a_day_closed_before_the_first_press_is_never_touched_and_the_salt_is_written_
     assert!(!salt.exists(), "no part was read yet");
     let day_dir = w.path().join("Control/user/day/2026-10-20");
     let closed = listing(&day_dir);
-    part(
+    let refused = part(
         w.path(),
         json!({"day_ref":TODAY,"field_id":"p0_quick_thoughts"}),
         at(T),
-    )
-    .unwrap();
-    assert!(salt.exists(), "the first press writes the world's salt");
+    );
+    assert_eq!(kind_of(refused), io::ErrorKind::AlreadyExists);
+    assert!(
+        !salt.exists(),
+        "a press on a closed Day is refused before anything is written, the world's salt too (DLW build ruling 2026-11-09)"
+    );
     assert_eq!(listing(&day_dir), closed, "and nothing into the closed Day");
 }
 
@@ -3520,4 +3545,168 @@ fn each_refusal_of_the_persons_own_act_opens_with_whose_act_it_is_then_its_cause
             "{refused}"
         );
     }
+}
+
+// ---- central-be1e: the press shows exactly what was offered (DLW build ruling 2026-11-09) ----------------------
+
+#[test]
+fn the_press_reads_the_entry_only_on_the_revision_it_was_offered_from() {
+    let w = world("Europe/London", 0);
+    ensure(w.path(), at(T));
+    make_document(w.path(), TODAY, "day:c1-today", PROPOSAL, at(T));
+    set_field(
+        w.path(),
+        TODAY,
+        "p0_quick_thoughts",
+        json!("As it was offered."),
+        "set:p0",
+        at(T),
+    );
+    let offered_on =
+        read(w.path(), "day_read", json!({"day_ref":TODAY}), at(T))["revision"]["revision"].clone();
+    set_field(
+        w.path(),
+        TODAY,
+        "p0_quick_thoughts",
+        json!("Changed after the offer."),
+        "set:p0:again",
+        at(T),
+    );
+    let press = |input: Value| run(w.path(), "day_entry_part", input, Some(HUMAN), at(T));
+    let moved = press(
+        json!({"day_ref":TODAY,"field_id":"p0_quick_thoughts","expected_revision":offered_on}),
+    );
+    assert_eq!(
+        words_of(moved),
+        "The Day changed since this was offered; look again."
+    );
+    assert_eq!(
+        kind_of(press(
+            json!({"day_ref":TODAY,"field_id":"p0_quick_thoughts","expected_revision":offered_on})
+        )),
+        io::ErrorKind::AlreadyExists
+    );
+    assert!(
+        !w.path().join(".central/day-part-salt.json").exists(),
+        "a refused press writes nothing, the world's salt neither"
+    );
+    assert!(
+        words_of(press(
+            json!({"day_ref":TODAY,"field_id":"p0_quick_thoughts"})
+        ))
+        .contains("expected_revision"),
+        "the press names the revision it was offered from"
+    );
+    assert_eq!(
+        part(w.path(), json!({"field_id":"p0_quick_thoughts"}), at(T)).unwrap()["part"]["label"],
+        "Changed after the offer.",
+        "on the revision it stands at, it is read as it stands"
+    );
+}
+
+#[test]
+fn only_the_open_day_central_names_as_today_shows_its_entries() {
+    let w = world("Europe/London", 0);
+    ensure(w.path(), at(T));
+    make_document(w.path(), TODAY, "day:c1-today", PROPOSAL, at(T));
+    set_field(
+        w.path(),
+        TODAY,
+        "p0_quick_thoughts",
+        json!("A thought of the 20th."),
+        "set:p0",
+        at(T),
+    );
+    let time = read(w.path(), "time_policy", json!({}), at(T));
+    run(
+        w.path(),
+        "day_rollover",
+        json!({"expected_time_policy_revision":time["revision"]}),
+        Some(HUMAN),
+        at(T),
+    )
+    .unwrap();
+    assert_eq!(
+        words_of(part(
+            w.path(),
+            json!({"day_ref":TOMORROW,"field_id":"p0_quick_thoughts"}),
+            at(T)
+        )),
+        "The Day of 2026-10-21 is not today: Central's today is 2026-10-20, and only today's open Day shows its entries",
+        "tomorrow's Day, open beside today's, is not today"
+    );
+    assert!(part(w.path(), json!({"field_id":"p0_quick_thoughts"}), at(T)).is_ok());
+    // Past the boundary the Day of the 20th still stands open, and Central's pointer still names it until today's Day is
+    // ensured: it is not today, by day_ref or by the pointer.
+    let after = at("2026-10-21T08:00:00Z");
+    for input in [
+        json!({"day_ref":TODAY,"field_id":"p0_quick_thoughts"}),
+        json!({"field_id":"p0_quick_thoughts"}),
+    ] {
+        assert_eq!(
+            words_of(part(w.path(), input.clone(), after)),
+            "The Day of 2026-10-20 is not today: Central's today is 2026-10-21, and only today's open Day shows its entries",
+            "{input}"
+        );
+    }
+}
+
+#[test]
+fn a_label_reads_as_it_is_and_a_field_that_holds_no_text_offers_none() {
+    let w = world("Europe/London", 0);
+    ensure(w.path(), at(T));
+    make_document(w.path(), TODAY, "day:c1-today", PROPOSAL, at(T));
+    set_field(
+        w.path(),
+        TODAY,
+        "p0_quick_thoughts",
+        json!("Read\u{7}the\u{200B} plate\u{2028}now\u{202E}, \u{2066}here\u{2069}.\u{FEFF}"),
+        "set:p0",
+        at(T),
+    );
+    set_field(
+        w.path(),
+        TODAY,
+        "p1_must",
+        json!([{"text":"Call\u{200D} the\u{1B} harbour"}, {"text":"An item as an object"}]),
+        "set:p1",
+        at(T),
+    );
+    append_contribution(
+        w.path(),
+        TODAY,
+        "p0_quick_thoughts",
+        "c:marks",
+        "<p>A\u{2060} line\u{2029}apart</p>",
+        at(T),
+    );
+    let label = |input: Value| part(w.path(), input, at(T)).unwrap()["part"]["label"].clone();
+    assert_eq!(
+        label(json!({"field_id":"p0_quick_thoughts"})),
+        "Read the plate now, here.",
+        "a control character or a separator stands as a space; a bidi control or a zero-width character is left out"
+    );
+    assert_eq!(
+        label(json!({"field_id":"p1_must","index":0})),
+        "Call the harbour"
+    );
+    assert_eq!(
+        label(json!({"field_id":"p1_must","index":1})),
+        "An item as an object",
+        "a list item is read by its text"
+    );
+    assert_eq!(label(json!({"contribution_id":"c:marks"})), "A line apart");
+    set_field(
+        w.path(),
+        TODAY,
+        "p0_adjacencies",
+        json!({"text":"An object in a field of its own"}),
+        "set:p0a",
+        at(T),
+    );
+    assert!(
+        words_of(part(w.path(), json!({"field_id":"p0_adjacencies"}), at(T)))
+            .contains("holds no words to show"),
+        "a field's own value is read only as text: the World offers no other"
+    );
 }
