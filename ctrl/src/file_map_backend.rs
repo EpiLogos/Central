@@ -169,8 +169,15 @@ impl Backend {
     pub fn present(&self) -> bool {
         self.db().is_file()
     }
+    /// bkmr's version, asked with the scope's state as its working directory: never a folder scope's own folder, nor wherever the
+    /// host process happened to start.
     pub fn version(&self) -> io::Result<String> {
-        invoke(&["--version".into()], None, None, DEFAULT_TIMEOUT_SECS)
+        invoke(
+            &["--version".into()],
+            Some(&self.state),
+            None,
+            DEFAULT_TIMEOUT_SECS,
+        )
     }
     /// What the scope's meaning index actually holds, read from bkmr's own
     /// `info`. The provider's `semantic` flag says the embedder is configured;
@@ -458,6 +465,19 @@ fn drain(mut stream: impl Read) -> io::Result<Vec<u8>> {
 }
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 
+/// What a test sets for bkmr's runs on this thread: another binary, and a home that stands for the invoking user's, so no run
+/// reads or writes under the real one.
+#[cfg(test)]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct BkmrSeams {
+    pub binary: Option<PathBuf>,
+    pub home: Option<PathBuf>,
+}
+#[cfg(test)]
+thread_local! {
+    pub(crate) static BKMR_SEAMS: std::cell::RefCell<BkmrSeams> = std::cell::RefCell::new(BkmrSeams::default());
+}
+
 fn invoke(
     args: &[String],
     cwd: Option<&Path>,
@@ -465,6 +485,14 @@ fn invoke(
     timeout_secs: u64,
 ) -> io::Result<String> {
     let binary = std::env::var_os("CENTRAL_BKMR_BIN").unwrap_or_else(|| "bkmr".into());
+    let user_home = std::env::var_os("HOME");
+    #[cfg(test)]
+    let seams = BKMR_SEAMS.with(|seams| seams.borrow().clone());
+    #[cfg(test)]
+    let (binary, user_home) = (
+        seams.binary.clone().map_or(binary, Into::into),
+        seams.home.clone().map(Into::into).or(user_home),
+    );
     let mut command = Command::new(binary);
     command
         .args(args)
@@ -481,7 +509,7 @@ fn invoke(
         // model download; share the invoking user's cache unless the caller
         // pinned one.
         if std::env::var_os("FASTEMBED_CACHE_DIR").is_none() {
-            if let Some(user_home) = std::env::var_os("HOME") {
+            if let Some(user_home) = &user_home {
                 #[cfg(target_os = "macos")]
                 let cache = PathBuf::from(&user_home).join("Library/Caches/bkmr/models");
                 #[cfg(not(target_os = "macos"))]
@@ -489,6 +517,10 @@ fn invoke(
                 command.env("FASTEMBED_CACHE_DIR", cache);
             }
         }
+    }
+    #[cfg(test)]
+    if let (None, Some(own)) = (home, &seams.home) {
+        command.env("HOME", own);
     }
     command.env_remove("BKMR_DB_URL").env("NO_COLOR", "1");
     let deleting = args
