@@ -160,6 +160,7 @@ fn create_ordinary(root: &Path, input: &Value) -> io::Result<Value> {
             actor_kind,
             agent_session_ref,
             restored_from: None,
+            principal_ref: None,
         };
         snapshot_bytes(&root, &area, &content_bytes)?;
         atomic_record(&root, record.strip_prefix(&root).map_err(io::Error::other)?, &serde_json::to_vec(&request)?, if resuming_creation { RecordDisposition::ReplaceOrCreate } else { RecordDisposition::CreateNew })?;

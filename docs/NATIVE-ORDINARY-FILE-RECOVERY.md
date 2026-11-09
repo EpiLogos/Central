@@ -30,7 +30,10 @@ cannot override the protected-ground refusal.
 A mutation success has `outcome: written | unchanged`, `location`,
 `previous_revision`, `revision`, `changed`, and, when written, `change`. A change
 contains `cursor`, `previous_revision`, `revision`, `actor`, `actor_kind`,
-`agent_session_ref`, and optional `restored_from`. No agent/model is invoked.
+`agent_session_ref`, and optional `restored_from`. A trash's change
+(`central.files.trash`) also keeps `principal_ref`, the person its native
+authority authenticated, beside the `actor` the caller claims. No agent/model
+is invoked.
 
 An initially stale basis returns successful Action delivery with
 `outcome: conflict`, `expected_revision`, `current` (the complete current native

@@ -1159,6 +1159,11 @@ struct Change {
     actor_kind: String,
     agent_session_ref: Option<String>,
     restored_from: Option<String>,
+    /// The person the native authority authenticated, beside the `actor` the caller claims: written by the trash, the person's own
+    /// act, so a holder of the token who names another actor is still known by the grant it held (O-I #747 round 896, F8). Absent on
+    /// every other change, which no token authenticates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    principal_ref: Option<String>,
 }
 fn events(area: &Path, limit: usize, before: Option<u64>) -> io::Result<Vec<Change>> {
     let mut selected = BTreeMap::new();
@@ -1398,6 +1403,7 @@ fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
         actor_kind,
         agent_session_ref,
         restored_from: restored.map(str::to_owned),
+        principal_ref: None,
     };
     let mut committed = false;
     let result = (|| {
@@ -1686,6 +1692,7 @@ fn create_flow_file(
         actor_kind,
         agent_session_ref,
         restored_from: restored_from.map(str::to_owned),
+        principal_ref: None,
     };
     if area.join("pending.json").exists() {
         return Err(io::Error::other(
@@ -1933,6 +1940,7 @@ fn absent_page(
         actor_kind: actor_kind.clone(),
         agent_session_ref: agent_session_ref.clone(),
         restored_from: Some(revision.to_owned()),
+        principal_ref: None,
     };
     let pending = area.join("pending.json");
     atomic_record(
@@ -2014,6 +2022,50 @@ fn missing_ground(root: &Path, project: Option<&str>, error: io::Error) -> io::E
     )
 }
 
+/// The trash reads the person's authority (`continuous_work::authority::authenticate`) from the world's source relations and the authority
+/// source they recognise, at the root for every page. Where the authority is refused and one of those two is missing, the missing one is
+/// named in words, as `missing_ground` names the scope's places, never handed on as the system's raw error or as the authority's refusal
+/// of a relation it could not read (O-I #747 round 896, F7). Any other refusal passes as it came.
+fn missing_authority(root: &Path, error: io::Error) -> io::Error {
+    let absent = |place: &Path| {
+        fs::symlink_metadata(root.join(place))
+            .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
+    };
+    let relations = Path::new(crate::source_horizon::CONTROL_GROUND_RELATIONS_SOURCE);
+    let place = if absent(relations) {
+        Some(relations.to_path_buf())
+    } else {
+        fs::read(root.join(relations))
+            .ok()
+            .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
+            .and_then(|value| {
+                value["relations"].as_array()?.iter().find_map(|relation| {
+                    relation["roles"]
+                        .as_array()?
+                        .iter()
+                        .any(|role| role == crate::continuous_work::authority::AUTHORITY_ROLE)
+                        .then(|| relation["path"].as_str().map(PathBuf::from))?
+                })
+            })
+            .filter(|source| {
+                source
+                    .components()
+                    .all(|part| matches!(part, std::path::Component::Normal(_)))
+                    && absent(source)
+            })
+    };
+    let Some(place) = place else {
+        return error;
+    };
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        format!(
+            "This world's {} file is missing, and Central's trash reads the person's authority from it: nothing was moved.",
+            place.display()
+        ),
+    )
+}
+
 /// `central.files.trash`: a page leaves its world, recoverably (O-I #743; manual §10.9 Delete). Only the person does it: the act
 /// authenticates on their native authority, at the root for your world's page and at the project for a project's. The page's bytes
 /// stay in its owner-kept history beside every earlier revision, its trash recorded there as one more event (to the absent revision
@@ -2038,7 +2090,8 @@ pub fn trash(root: &Path, input: &Value, token: Option<&str>, now: u64) -> io::R
     // Who acts, as the caller says it (`actor`, `actor_kind`, as a save says it; O-I #747 round 895, DLW build ruling 2026-11-09): the
     // trash is the person's own act, authenticated below on their token, so a caller that says another kind is refused in words. `actor`
     // is recorded in the trash's event, bounded as a save bounds it (`attribution`); where none is named the authenticated person stands
-    // (round 896, 0R-authority.10). Both stay optional, as not every caller sends them: the O-I kernel's Expressions Delete
+    // (round 896, 0R-authority.10). The event keeps that person, `principal_ref`, beside the claimed `actor` (round 896, F8): the
+    // claim is the caller's, the principal the grant's. Both stay optional, as not every caller sends them: the O-I kernel's Expressions Delete
     // (expression.rs `Request::Delete`) sends both, and its page owner's Trash (page.rs `trash`, the Pages device's and the timeline's
     // Delete) sends neither.
     let actor = match input.get("actor") {
@@ -2073,7 +2126,8 @@ pub fn trash(root: &Path, input: &Value, token: Option<&str>, now: u64) -> io::R
         TRASH_ACTION,
         expected_authority,
         now,
-    )?;
+    )
+    .map_err(|error| missing_authority(&root, error))?;
     principal.require_human()?;
     let relative = Path::new(&loc.path);
     reject_symlink_components(&root, relative)?;
@@ -2151,6 +2205,7 @@ pub fn trash(root: &Path, input: &Value, token: Option<&str>, now: u64) -> io::R
         actor_kind: "human".into(),
         agent_session_ref: None,
         restored_from: None,
+        principal_ref: Some(principal.principal_ref.clone()),
     };
     let pending = area.join("pending.json");
     atomic_record(
