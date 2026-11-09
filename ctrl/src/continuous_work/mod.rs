@@ -137,6 +137,7 @@ pub fn execute_with_token_at(
         "day_moves_due" => day_moves::moves_due(&scope, input, now),
         "day_field_read" => day_moves::field_read(&scope, input),
         operation if day_moves::authenticated_action(operation).is_some() => {
+            // A refusal of the person's own act says whose act it is first.
             let principal = authority::authenticate(
                 &scope,
                 token,
@@ -145,7 +146,8 @@ pub fn execute_with_token_at(
                     .get("expected_authority_revision")
                     .and_then(Value::as_str),
                 now,
-            )?;
+            )
+            .map_err(|error| day_moves::the_persons_own(operation, error))?;
             day_moves::authenticated_operation(&scope, operation, input, &principal, now)
         }
         "day_ensure" | "day_lifecycle" | "now_lifecycle" | "now_obligations" => {
