@@ -1150,7 +1150,68 @@ fn may_be_in(all: &[Scope], unreachable: &[UnreachableScope], location: &Path) -
     (!rootless.is_empty()).then(|| format!("it may be in {}", rootless.join("; or in ")))
 }
 
+/// The file map's moves, each the person's own act, and what a refusal of the credential that carried it opens with, before its cause.
+const PERSON_MOVES: [(&str, &str); 3] = [
+    ("move-plan", "Planning a move is the person's own press"),
+    ("move-apply", "Moving a file is the person's own press"),
+    (
+        "move-rollback",
+        "Moving a file back is the person's own press",
+    ),
+];
+/// What a move's Action says of its authority, in its description.
+const PERSON_MOVE_WORDS: &str = " A move is the person's own act: it authenticates on their native authority \
+    (CENTRAL_NATIVE_TOKEN) at the root, and without it is refused in words, and nothing is planned or moved. move-plan writes the \
+    move's journal, which names where the file goes; move-apply and move-rollback carry it out by its plan_id alone.";
+
+/// A move is the person's own act (DLW build ruling 2026-11-09, round 53 item 2; O-I 0G's review). A plan is no read here: this
+/// Action is classed locally-mutating (`register`), and `move-plan` writes the durable journal under `.central/bkmr/moves` that names
+/// where the file goes, which `move-apply` and `move-rollback` then carry out by its id alone. A move can bring a project-shaped folder
+/// into Work, where Central counts it a scope by its place. So each authenticates on the host's native credential
+/// (`CENTRAL_NATIVE_TOKEN`, never a request field) for a human grant naming that exact Action at the root, as Central's other
+/// owner-authority acts do (`authority::authenticate`), before anything is read, locked or written. A refusal opens with whose act it
+/// is, then its cause, and nothing is planned or moved. Every other operation reads no credential.
+fn the_persons_move(root: &Path, op: &str, input: &Value, token: Option<&str>) -> io::Result<()> {
+    let Some((_, opening)) = PERSON_MOVES.iter().find(|(asked, _)| *asked == op) else {
+        return Ok(());
+    };
+    let nothing = if op == "move-plan" {
+        "planned"
+    } else {
+        "moved"
+    };
+    let words = |error: io::Error| {
+        io::Error::new(
+            error.kind(),
+            format!("{opening}: {error}; nothing was {nothing}"),
+        )
+    };
+    let scope = crate::continuous_work::source::Scope::resolve(root, None).map_err(words)?;
+    crate::continuous_work::authority::authenticate(
+        &scope,
+        token,
+        &format!("central.file-map.{op}"),
+        input
+            .get("expected_authority_revision")
+            .and_then(Value::as_str),
+        crate::civil_time_adoption::now(),
+    )
+    .and_then(|principal| principal.require_human())
+    .map_err(words)
+}
+
 pub fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
+    execute_with_token(root, op, input, None)
+}
+
+/// [`execute`] with the host's native credential, which the three moves authenticate on (`the_persons_move`).
+pub fn execute_with_token(
+    root: &Path,
+    op: &str,
+    input: &Value,
+    token: Option<&str>,
+) -> io::Result<Value> {
+    the_persons_move(root, op, input, token)?;
     if op == "resolve-batch" {
         return execute_resolve_batch(root, input);
     }
@@ -1921,9 +1982,10 @@ fn failure_code(error: &io::Error) -> &'static str {
 
 fn action(op: &str, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
     let id = format!("central.file-map.{op}");
+    let token = std::env::var("CENTRAL_NATIVE_TOKEN").ok();
     let result = crate::root::resolve_central_root(context.root_options)
         .map_err(io::Error::other)
-        .and_then(|r| execute(&r.path, op, input));
+        .and_then(|r| execute_with_token(&r.path, op, input, token.as_deref()));
     match result {
         Ok(data) => ActionResult::success(&id, data),
         Err(e) if crate::file_mutation::record_failure_result(&id, &e).is_some() => {
@@ -2026,6 +2088,8 @@ pub fn register(registry: &mut ActionRegistry) {
             "exclude",
         ]
         .iter()
+        // A move is the root's to grant (`the_persons_move`), and its scope is its Source's, so it names no project.
+        .filter(|name| !(op.starts_with("move-") && **name == "project"))
         .map(|name| ActionInputDefinition {
             name: (*name).into(),
             input_type: match *name {
@@ -2082,9 +2146,21 @@ pub fn register(registry: &mut ActionRegistry) {
                 selection: None,
             });
         }
+        if op.starts_with("move-") {
+            inputs.push(ActionInputDefinition {
+                name: "expected_authority_revision".into(),
+                input_type: "string".into(),
+                required: false,
+                choices: None,
+                selection: None,
+            });
+        }
         let mut description = "Persistent bkmr file map; source and placement meaning remain in Central. Reads never rebuild the owner's database or execute openers. Writes require current source-relations revision.".to_owned();
         if op == "inspect" {
             description.push_str(FOLDER_INSPECT_WORDS);
+        }
+        if op.starts_with("move-") {
+            description.push_str(PERSON_MOVE_WORDS);
         }
         registry
             .register(
@@ -3741,6 +3817,29 @@ mod folder_scope_tests {
                 &json!({"name":name,"path":path,"kind":"folder","allow_external":true,
                     "media":media,"expected_revision":self.revision()}),
             )
+        }
+        /// The person's grant for the three moves at the root, written into this disposable ground; the token it authenticates.
+        fn person_moves(&self) -> &'static str {
+            const TOKEN: &str = "file-map-folder-moves-controlled-test-not-a-live-secret";
+            let source = "Control/user/file-map-moves-authority.json";
+            let actions: Vec<_> = PERSON_MOVES
+                .iter()
+                .map(|(op, _)| format!("central.file-map.{op}"))
+                .collect();
+            fs::write(self.root.join(source), serde_json::to_vec(&json!({"schema":"central.native-action-authority/v1",
+                "scope_ref":"control:root","grants":[{"principal_ref":"human:file-map-folder-test","actor_kind":"human",
+                    "token_sha256":crate::continuous_work::source::key(TOKEN),"scope_refs":["control:root"],"actions":actions,
+                    "expires_at_unix_seconds":u64::MAX}]})).unwrap()).unwrap();
+            let path = self
+                .root
+                .join(source_horizon::CONTROL_GROUND_RELATIONS_SOURCE);
+            let mut relations: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            relations["relations"].as_array_mut().unwrap().push(json!({"ref":source_horizon::source_ref("control:root", source),
+                "path":source,"roles":[crate::continuous_work::authority::AUTHORITY_ROLE],"provenance":"human-adopted",
+                "standing":"architecture-contract","treatment":"control-user","recognition":"controlled-test-only",
+                "recorded_at_unix_seconds":1}));
+            fs::write(path, serde_json::to_vec(&relations).unwrap()).unwrap();
+            TOKEN
         }
     }
     impl Drop for World {
@@ -5732,10 +5831,13 @@ mod folder_scope_tests {
             .register("Music", &world.music(), json!(["wav", "aiff", "mp3"]))
             .unwrap();
         let voice = source_horizon::source_ref("folder:Music", "voice.mp3");
-        let moved = refused(run(
+        // A move is the person's own act (`the_persons_move`): it is their press that meets the folder's words.
+        let person = world.person_moves();
+        let moved = refused(execute_with_token(
             &world.root,
             "move-plan",
             &json!({"source_ref":voice,"destination":"Elsewhere/voice.mp3","expected_revision":world.revision()}),
+            Some(person),
         ));
         assert!(moved.contains("writes nothing inside it"), "{moved}");
         let away = world.base.join("Music away");

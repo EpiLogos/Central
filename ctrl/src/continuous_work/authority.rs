@@ -21,6 +21,9 @@ pub const AUTHENTICATED_ACTIONS: &[&str] = &[
     "central.day.settings.write",
     "central.document.create",
     "central.document.mutate",
+    "central.file-map.move-apply",
+    "central.file-map.move-plan",
+    "central.file-map.move-rollback",
     "central.files.trash",
     "central.flow.append",
     "central.migration.apply",
@@ -43,7 +46,8 @@ pub const AUTHENTICATED_ACTIONS: &[&str] = &[
     "projectcentral.source.return_reject",
 ];
 /// The authenticated Actions that take a project scope: every one of `AUTHENTICATED_ACTIONS` whose Action names a `project`
-/// (the two left out, `central.flow.append` and `control.apply-proposal`, always resolve the root). `authenticate` refuses any other
+/// (those left out, `central.flow.append`, `control.apply-proposal` and the file map's three moves, always resolve the root: a move
+/// can bring a folder into Work, so it is the root's to grant). `authenticate` refuses any other
 /// Action at a project, so this list is exactly what a grant covering `project:<id>` lets its holder do there; extending a person's
 /// grant to a project they bring in (crate::ground_projects) grants these.
 pub const PROJECT_AUTHENTICATED_ACTIONS: &[&str] = &[
