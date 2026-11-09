@@ -2284,13 +2284,25 @@ fn plain_words(html: &str) -> String {
         .replace("&#39;", "'")
         .replace("&nbsp;", " ")
         .replace("&amp;", "&");
-    out.split_whitespace().collect::<Vec<_>>().join(" ")
+    plain_text_words(&out)
 }
 
 /// A field's own value as words: it is text, so nothing in it is markup and
 /// nothing is unescaped ("5 < 6", "R&D"); only its whitespace is collapsed.
+/// Words read as they are, in the field too (DLW build ruling 2026-11-09): a
+/// control character, or a line or paragraph separator, stands as a space, and
+/// the other invisible characters (a bidi control, a zero-width character) are
+/// left out.
 fn plain_text_words(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    let readable: String = text
+        .chars()
+        .filter_map(|c| match c {
+            c if c.is_control() || c == '\u{2028}' || c == '\u{2029}' => Some(' '),
+            c if invisible(c) => None,
+            c => Some(c),
+        })
+        .collect();
+    readable.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Where Central keeps the world's part salt: one file in the world's own
@@ -2418,8 +2430,16 @@ pub(crate) fn the_persons_own(operation: &str, error: io::Error) -> io::Error {
 }
 
 /// Bringing a Day entry to a star is the person's press (DLW build ruling
-/// 2026-11-08): only a human-scoped credential reads one as a part.
-pub(crate) fn entry_part(scope: &Scope, input: &Value, principal: &Principal) -> io::Result<Value> {
+/// 2026-11-08): only a human-scoped credential reads one as a part. The press
+/// shows exactly what was offered (DLW build ruling 2026-11-09): only the open
+/// Day Central names as today, and only on the revision the entry was offered
+/// from.
+pub(crate) fn entry_part(
+    scope: &Scope,
+    input: &Value,
+    principal: &Principal,
+    now: u64,
+) -> io::Result<Value> {
     if !principal.is_human() {
         return Err(the_persons_own(
             "day_entry_part",
@@ -2453,13 +2473,30 @@ pub(crate) fn entry_part(scope: &Scope, input: &Value, principal: &Principal) ->
             "Name one item of a list by its index or by its item_id, not both",
         ));
     }
+    let expected_revision = text(input, "expected_revision")?;
     let (relations, _) = scope.relations()?;
     let (day_ref, entry) = target_day(&relations, input)?;
+    let civil_date = civil_date_of(&entry)?;
+    if entry["temporal"]["lifecycle"] == "closed" {
+        return Err(conflict(format!(
+            "The Day of {civil_date} is closed; a closed Day is kept, and none of its entries is shown from it"
+        )));
+    }
+    let today = temporal::time_policy(scope, now)?.civil_date;
+    if civil_date != today {
+        return Err(conflict(format!(
+            "The Day of {civil_date} is not today: Central's today is {today}, and only today's open Day shows its entries"
+        )));
+    }
     let day = temporal::day_read(scope, &json!({"day_ref":day_ref}))?;
+    if day["revision"]["revision"] != expected_revision {
+        return Err(conflict(
+            "The Day changed since this was offered; look again.",
+        ));
+    }
     if day["document"].is_null() {
         return Err(conflict(format!(
-            "No Day document stands for the Day of {}, so it holds no entry to show",
-            civil_date_of(&entry)?
+            "No Day document stands for the Day of {civil_date}, so it holds no entry to show"
         )));
     }
     let document = &day["document"]["document"];
@@ -2609,7 +2646,7 @@ pub(crate) fn authenticated_operation(
         "day_rollover" => rollover(scope, input, principal, now),
         "day_close_carry" => close_carry(scope, input, principal, now),
         "day_field_record" => field_record(scope, input, principal, now),
-        "day_entry_part" => entry_part(scope, input, principal),
+        "day_entry_part" => entry_part(scope, input, principal, now),
         _ => Err(invalid("unknown continuous-work operation")),
     }
 }
@@ -2678,7 +2715,7 @@ pub(crate) fn register_actions(registry: &mut ActionRegistry) {
         ("central.day.rollover", "Open tomorrow's Day beside today's", "Open the Day of the civil date after today without moving today, through the same Day creation as central.day.ensure, and record it as the Day's tomorrow. Idempotent. A human may open it at any time; another authenticated principal only once the Rollover time the person saved has been reached.", true, rollover_action, &[("expected_time_policy_revision","string",true),("expected_authority_revision","string",false)]),
         ("central.day.field.record", "Record what reached you from the field", "Authenticated, append-only record of what reached you from the shared field, into the Day under its field source (face 4): who sent it (from: world_ref, name), how it came (how: to-you, star, watch or search; only a star names star_ref and name), what it is, its words and when it reached you. Each record says it was received through the shared field and recorded by the Day under your Field setting (received), with the credential that setting authorises (authorised_by); the words are the sender's. It carries nothing else: no count of looks and no ranking. Name one record, or records: a list of at most 64, recorded in one rewrite and each answered on its own (created, kept already, or refused in words), so one refused refuses none of the others. A record the Day keeps already answers kept first. Otherwise each is refused while the Day's Sources keep the field Off, on a closed Day, when it did not reach you on the Day's own date (as its civil date names it, through a spring-forward gap or an autumn fold alike), and when it reached you before the field last turned On; the same ref with other content is refused. A name holds no control character and no invisible one (a line or paragraph separator, a bidi control or a zero-width character); the words hold none but line breaks and tabs (a \\r only before a \\n), and no invisible one. A refusal of the credential opens with \"Recording what reached you is the person's own Field setting at work\", then its cause.", true, field_record_action, &[("day_ref","string",false),("records","array",false),("item_ref","string",false),("from","object",false),("how","string",false),("star","object",false),("what","string",false),("words","string",false),("at_unix_ms","integer",false),("expected_authority_revision","string",false)]),
         ("central.day.field.read", "Read what reached the Day from the field", "Read the Day's field source (on or off, default or saved, and when it last turned On), what the Day takes (takes: spans, the exact window: the spans of instants on which the Day's own civil date stands, one on most Days and two where an autumn fold carries the wall back across the Day's boundary, each from the later of its start and when the field last turned On; from and until are the first span's start and the last span's end, so across a fold they also hold the repeated time, which is the earlier Day's; where the Day's own date cannot be named, spans is empty and a note says why), and every thing recorded into the Day from the shared field, ordered by when it reached you and by nothing else, each naming who sent it and how it came. Read-only.", false, field_read_action, &[("day_ref","string",false)]),
-        ("central.day.entry.part", "Read a Day entry as a part to show", "Human-authenticated: bringing an entry to a star is the person's press, and a refusal of the credential opens with \"Showing an entry is the person's own press\", then its cause. Read one entry of the Day exactly as the shared field would receive it if you showed it: an opaque part ref, its kind (page) and its label (the entry's words, at most 160 characters: a field's value as its text, a contribution's markup as plain words), with who wrote it. Name a field (field_id, and for one item of a list field its index or its item_id) or one contribution (contribution_id). A list item with its own id keeps its part however the list moves. An item with no id is named by a digest of its words and its occurrence among the id-less items holding the same words, so it keeps its part only while the identical items before it are unchanged; when they change, its item_id says so in words. An id two items share is refused. item_id takes every identity a part names. Nothing else of the Day goes with it, and the reading shows nothing: showing it is your own act in the field. The first part read in a world writes the random salt Central keeps for it, once, in the world's own state outside every Day, so no part ref can be guessed from a Day's date and fields; nothing is written into any Day.", true, entry_part_action, &[("day_ref","string",false),("field_id","string",false),("index","integer",false),("item_id","string",false),("contribution_id","string",false),("expected_authority_revision","string",false)]),
+        ("central.day.entry.part", "Read a Day entry as a part to show", "Human-authenticated: bringing an entry to a star is the person's press, and a refusal of the credential opens with \"Showing an entry is the person's own press\", then its cause. Read one entry of the Day exactly as the shared field would receive it if you showed it: an opaque part ref, its kind (page) and its label (the entry's words, at most 160 characters, cut at a word: a field's value as its text, a list item's text, a contribution's markup as plain words; a control character or a line or paragraph separator stands as a space, and the other invisible characters, a bidi control or a zero-width one, are left out), with who wrote it. A field that holds neither text nor a list holds no words to show. Only the open Day Central names as today (its civil-time policy's date) is read, and only on the revision the entry was offered from (expected_revision, the Day's revision as its reading gives it): a closed Day, a Day that is not today, and a Day that changed since are each refused in words, and nothing is read from them. Name a field (field_id, and for one item of a list field its index or its item_id) or one contribution (contribution_id). A list item with its own id keeps its part however the list moves. An item with no id is named by a digest of its words and its occurrence among the id-less items holding the same words, so it keeps its part only while the identical items before it are unchanged; when they change, its item_id says so in words. An id two items share is refused. item_id takes every identity a part names. Nothing else of the Day goes with it, and the reading shows nothing: showing it is your own act in the field. The first part read in a world writes the random salt Central keeps for it, once, in the world's own state outside every Day, so no part ref can be guessed from a Day's date and fields; nothing is written into any Day.", true, entry_part_action, &[("day_ref","string",false),("expected_revision","string",true),("field_id","string",false),("index","integer",false),("item_id","string",false),("contribution_id","string",false),("expected_authority_revision","string",false)]),
         ("central.day.close-carry", "Close a Day and carry face 5 to tomorrow", "Run the close routine on exact revisions: carry face 5's proposal for tomorrow into tomorrow's face 0 (a human writes it; an agent's entry is returned as a proposal for receiving), then close the Day as central.day.lifecycle does, and return both revisions. A human may call it at any time; another authenticated principal only when the person saved Close at Day start and the Day boundary has passed.", true, close_carry_action, &[("day_ref","string",true),("expected_revision","string",true),("expected_relations_revision","string",true),("expected_authority_revision","string",false)]),
     ]);
 }
