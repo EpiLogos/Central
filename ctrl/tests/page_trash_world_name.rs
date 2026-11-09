@@ -306,6 +306,66 @@ fn a_project_page_leaves_its_world_attributed_to_the_person_and_comes_back_throu
     assert_eq!(added["actor_kind"], "human");
 }
 
+/// Central's trash stands on the world's own folders, its Control and Work. A world missing one cannot take a page to the trash, and says
+/// which, in words, never as the system's raw error (O-I #747 round 895, DLW build ruling 2026-11-08: Delete in a walk world with no Work
+/// folder answered "No such file or directory (os error 2)"). Nothing moves.
+#[test]
+fn a_world_missing_a_folder_the_trash_stands_on_says_which_in_words_and_nothing_moves() {
+    let home = made(&["central.files.trash"]);
+    let path = format!("{FLOWS}/flow-2026-11-09-0900.html");
+    home.put(&path, PAGE);
+    let (location, revision) = located(&home, FLOWS, "flow-2026-11-09-0900.html");
+    fs::rename(home.ground().join("Work"), home.ground().join("Work.away")).unwrap();
+    let refused = cli(
+        &home,
+        "central.files.trash",
+        json!({"location":location,"expected_revision":revision,"project":Value::Null}),
+        Some(TOKEN),
+    );
+    assert_eq!(refused["ok"], false, "{refused}");
+    let said = refused.to_string();
+    assert!(!said.contains("os error"), "{refused}");
+    assert!(
+        said.contains(
+            "This world's Work folder is missing, and Central's trash stands on it: nothing was moved."
+        ),
+        "{refused}"
+    );
+    assert!(home.exists(&path), "nothing moved");
+}
+
+/// The trash carries who acts, as a save does (`actor`, `actor_kind`; O-I #747 round 895, DLW build ruling 2026-11-09): the act is the
+/// person's own, so a caller that says it is an agent is refused in words even on the person's token, and nothing moves; the person's
+/// own attribution goes.
+#[test]
+fn the_trash_takes_who_acts_and_refuses_a_caller_that_is_not_human_in_words() {
+    let home = made(&["central.files.trash"]);
+    let path = format!("{FLOWS}/flow-2026-11-09-1000.html");
+    home.put(&path, PAGE);
+    let (location, revision) = located(&home, FLOWS, "flow-2026-11-09-1000.html");
+    let trash = |actor: &str, kind: &str| {
+        cli(
+            &home,
+            "central.files.trash",
+            json!({"location":location,"expected_revision":revision,"project":Value::Null,"actor":actor,"actor_kind":kind}),
+            Some(TOKEN),
+        )
+    };
+    let agent = trash("agent:lane", "agent");
+    assert_eq!(agent["ok"], false, "{agent}");
+    assert!(
+        agent.to_string().contains(
+            "Central's trash takes a page by the person's own act: a caller that is not human cannot move it, and nothing was moved"
+        ),
+        "{agent}"
+    );
+    assert!(home.exists(&path), "nothing moved");
+    let person = trash("human:test", "human");
+    assert_eq!(person["ok"], true, "{person}");
+    assert_eq!(person["data"]["outcome"], "trashed", "{person}");
+    assert!(!home.exists(&path));
+}
+
 #[test]
 fn only_a_page_in_a_world_s_page_folder_leaves_and_an_untrashed_absence_is_no_restore() {
     let home = made(&["central.files.trash"]);

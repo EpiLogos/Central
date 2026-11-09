@@ -1965,6 +1965,31 @@ fn absent_page(
     )
 }
 
+/// The trash stands on the world's own folders: its Control and Work, and a project's own folder and its ProjectCentral. One that is
+/// missing is named, in words, never handed on as the system's raw error (O-I #747 round 895: Delete in a walk world with no Work folder
+/// answered "No such file or directory (os error 2)"). Any other failure passes as it came.
+fn missing_ground(root: &Path, project: Option<&str>, error: io::Error) -> io::Error {
+    if error.kind() != io::ErrorKind::NotFound {
+        return error;
+    }
+    let mut folders = vec![PathBuf::from("Control"), PathBuf::from("Work")];
+    if let Some(project) = project {
+        folders.push(Path::new("Work").join(project));
+        folders.push(Path::new("Work").join(project).join("ProjectCentral"));
+    }
+    let Some(folder) = folders
+        .iter()
+        .find(|folder| directory(root, folder).is_err())
+    else {
+        return error;
+    };
+    let said = format!("This world's {} folder is missing", folder.display());
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("{said}, and Central's trash stands on it: nothing was moved."),
+    )
+}
+
 /// `central.files.trash`: a page leaves its world, recoverably (O-I #743; manual §10.9 Delete). Only the person does it: the act
 /// authenticates on their native authority, at the root for your world's page and at the project for a project's. The page's bytes
 /// stay in its owner-kept history beside every earlier revision, its trash recorded there as one more event (to the absent revision
@@ -1986,6 +2011,22 @@ pub fn trash(root: &Path, input: &Value, token: Option<&str>, now: u64) -> io::R
         Some(Value::String(revision)) if !revision.trim().is_empty() => Some(revision.as_str()),
         Some(_) => return Err(invalid("expected_authority_revision must be text")),
     };
+    // Who acts, as the caller says it (`actor`, `actor_kind`, as a save says it; O-I #747 round 895, DLW build ruling 2026-11-09): the
+    // trash is the person's own act, authenticated below on their token, so a caller that says another kind is refused in words.
+    match input.get("actor") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(actor)) if !actor.trim().is_empty() => {}
+        Some(_) => return Err(invalid("actor must name who acts")),
+    }
+    match input.get("actor_kind") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(kind)) if kind == "human" => {}
+        Some(_) => {
+            return Err(denied(
+                "Central's trash takes a page by the person's own act: a caller that is not human cannot move it, and nothing was moved",
+            ))
+        }
+    }
     let world = page_world(&root, &loc)?;
     if named != world.as_deref() {
         return Err(invalid(&match &world {
@@ -1993,7 +2034,8 @@ pub fn trash(root: &Path, input: &Value, token: Option<&str>, now: u64) -> io::R
             None => "A page of your world's Flows home is in no project: name none".to_owned(),
         }));
     }
-    let scope = crate::continuous_work::source::Scope::resolve(&root, world.as_deref())?;
+    let scope = crate::continuous_work::source::Scope::resolve(&root, world.as_deref())
+        .map_err(|error| missing_ground(&root, world.as_deref(), error))?;
     let principal = crate::continuous_work::authority::authenticate(
         &scope,
         token,
@@ -2191,6 +2233,8 @@ pub fn register_trash(registry: &mut ActionRegistry) {
                     input("expected_revision", "string", true),
                     input("project", "string", false),
                     input("expected_authority_revision", "string", false),
+                    input("actor", "string", false),
+                    input("actor_kind", "string", false),
                 ],
             ),
             trash_action,
