@@ -459,6 +459,127 @@ fn a_project_page_whose_ground_is_missing_names_the_place_in_words_and_nothing_m
     assert_eq!(trashed["data"]["outcome"], "trashed", "{trashed}");
 }
 
+/// The trash reads the person's authority before anything moves: the world's source relations, and the authority source they recognise.
+/// A world missing either says which, in words, never as the system's raw error, and nothing moves (O-I #747 round 896, F7: the
+/// missing-place words covered the scope's own reads, not the authority's). Its ground whole again, the same page leaves.
+#[test]
+fn a_world_missing_the_ground_of_the_person_s_authority_says_which_in_words_and_nothing_moves() {
+    let home = made(&["central.files.trash"]);
+    let path = format!("{FLOWS}/flow-2026-11-09-1200.html");
+    home.put(&path, PAGE);
+    let (location, revision) = located(&home, FLOWS, "flow-2026-11-09-1200.html");
+    for place in [
+        "Control/user/native-action-authority.json",
+        "Control/relations/source-relations.json",
+    ] {
+        let away = format!("{place}.away");
+        fs::rename(home.ground().join(place), home.ground().join(&away)).unwrap();
+        let refused = cli(
+            &home,
+            "central.files.trash",
+            json!({"location":location,"expected_revision":revision,"project":Value::Null}),
+            Some(TOKEN),
+        );
+        fs::rename(home.ground().join(&away), home.ground().join(place)).unwrap();
+        assert_eq!(refused["ok"], false, "{place}: {refused}");
+        let words = refused.to_string();
+        assert!(!words.contains("os error"), "{place}: {refused}");
+        assert!(
+            words.contains(&format!(
+                "This world's {place} file is missing, and Central's trash reads the person's authority from it: nothing was moved."
+            )),
+            "{place}: {refused}"
+        );
+        assert!(home.exists(&path), "{place}: nothing moved");
+    }
+    let trashed = cli(
+        &home,
+        "central.files.trash",
+        json!({"location":location,"expected_revision":revision,"project":Value::Null}),
+        Some(TOKEN),
+    );
+    assert_eq!(trashed["data"]["outcome"], "trashed", "{trashed}");
+}
+
+/// A trash keeps who the caller says acted and, beside it, the person the token authenticated (O-I #747 round 896, F8): the claim is
+/// the caller's, as a save's is, and the principal is the grant's. The event carries both, and so does its history; the project's source
+/// horizon is attributed to the claimed actor, read back here.
+#[test]
+fn a_trash_keeps_the_authenticated_person_beside_the_actor_it_claims() {
+    let home = made(&["central.files.trash"]);
+    let path = format!("{HUMAN}/flow-2026-11-09-1300.html");
+    home.put(&path, PAGE);
+    let (location, revision) = located(&home, HUMAN, "flow-2026-11-09-1300.html");
+    let trashed = cli(
+        &home,
+        "central.files.trash",
+        json!({"location":location,"expected_revision":revision,"project":PROJECT,"actor":"human:named-by-the-caller","actor_kind":"human"}),
+        Some(TOKEN),
+    );
+    assert_eq!(trashed["data"]["outcome"], "trashed", "{trashed}");
+    let change = &trashed["data"]["change"];
+    assert_eq!(
+        (&change["actor"], &change["principal_ref"]),
+        (&json!("human:named-by-the-caller"), &json!(PRINCIPAL)),
+        "{trashed}"
+    );
+    let history = cli(
+        &home,
+        "central.files.history",
+        json!({"location":location}),
+        None,
+    );
+    let newest = &history["data"]["entries"][0];
+    assert_eq!(
+        (
+            &newest["revision"],
+            &newest["actor"],
+            &newest["principal_ref"]
+        ),
+        (
+            &json!(""),
+            &json!("human:named-by-the-caller"),
+            &json!(PRINCIPAL)
+        ),
+        "{history}"
+    );
+    let horizon = cli(
+        &home,
+        "projectcentral.change.horizon",
+        json!({"project":PROJECT}),
+        None,
+    );
+    let removed = horizon["data"]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|change| change["source_path"] == "ProjectCentral/user/flow-2026-11-09-1300.html")
+        .unwrap_or_else(|| panic!("{horizon}"));
+    assert_eq!(
+        (&removed["kind"], &removed["actor"], &removed["actor_kind"]),
+        (
+            &json!("removed"),
+            &json!("human:named-by-the-caller"),
+            &json!("human")
+        ),
+        "{removed}"
+    );
+    // A restore names no principal, as no token authenticated it.
+    let restored = cli(
+        &home,
+        "central.files.restore",
+        json!({"location":location,"expected_revision":"","revision":revision,
+        "actor":"oi-desktop-user","actor_kind":"human"}),
+        None,
+    );
+    assert_eq!(restored["data"]["outcome"], "created", "{restored}");
+    assert!(
+        restored["data"]["change"].get("principal_ref").is_none(),
+        "{restored}"
+    );
+}
+
 #[test]
 fn only_a_page_in_a_world_s_page_folder_leaves_and_an_untrashed_absence_is_no_restore() {
     let home = made(&["central.files.trash"]);
