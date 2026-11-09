@@ -165,16 +165,28 @@ fn link_descriptors(
             return Err(conflict("Registered link was replaced or redirected"));
         }
         let into_folder = link.world_ref.starts_with("folder:");
-        let found = match binding_by_ref(all, &link.source_ref) {
-            // A folder that errs as it is asked (a folder on the way it may not read, a disk's error, its root gone since it
-            // opened) is the link's cause, named in words, and the rest of the read stands.
-            Err(error) if into_folder && broken.is_some() => {
-                if let Some(broken) = broken.as_deref_mut() {
-                    broken.push(broken_folder_link(all, &relative, &link, Some(&error)));
+        // A link into a folder is looked up in that folder's scope alone (47f item 2): another scope's error never reads as the
+        // folder's cause. A folder that is not among the scopes now (unplugged, its declaration unread) finds none.
+        let found = if into_folder {
+            let folder = all
+                .iter()
+                .find(|candidate| candidate.world == link.world_ref);
+            match folder
+                .map(|folder| binding_by_ref(std::slice::from_ref(folder), &link.source_ref))
+            {
+                // The folder errs as it is asked (a folder on the way it may not read, a disk's error, its root gone since it
+                // opened): that is the link's cause, named in words, and the rest of the read stands.
+                Some(Err(error)) if broken.is_some() => {
+                    if let Some(broken) = broken.as_deref_mut() {
+                        broken.push(broken_folder_link(all, &relative, &link, Some(&error)));
+                    }
+                    continue;
                 }
-                continue;
+                Some(found) => found?,
+                None => None,
             }
-            found => found?,
+        } else {
+            binding_by_ref(all, &link.source_ref)?
         };
         if found.is_none() && into_folder {
             if let Some(broken) = broken.as_deref_mut() {
@@ -564,10 +576,9 @@ fn path_prefixes(input: &Value) -> io::Result<Vec<PathBuf>> {
                     "The path_prefixes entry {prefix} climbs with ..: name the folder it means"
                 )));
             }
-            Ok(path
-                .components()
-                .filter(|part| *part != std::path::Component::CurDir)
-                .collect())
+            // `components` already leaves out every `.` and a trailing slash of an absolute path, so its components are the prefix
+            // normalised (47f item 5).
+            Ok(path.components().collect())
         })
         .collect()
 }
@@ -651,8 +662,11 @@ fn inspect(all: &[Scope], input: &Value) -> io::Result<Value> {
     let walks_folder =
         want_resources && (scope.is_folder() || choices.iter().any(|chosen| chosen.is_folder()));
     let asked_page = input.get("limit").is_some_and(|value| !value.is_null());
+    // A read that carries `after` continues a page even where no folder is walked now (the folder unplugged between its pages), so it
+    // lists none of the entries the first page listed whole (DLW build ruling 2026-11-09, 47f item 3).
+    let continued = want_resources && input.get("after").is_some_and(|value| !value.is_null());
     let page = match input.get("limit").filter(|value| !value.is_null()) {
-        None if !walks_folder => None,
+        None if !walks_folder && !continued => None,
         limit => {
             let limit = match limit {
                 None => crate::file_map_catalog::folder_page_default(),
@@ -1092,19 +1106,50 @@ fn unreachable_source(unreachable: &[UnreachableScope], reference: &str) -> Opti
             })
     })
 }
-/// A location (an absolute path) in a folder scope that is unreachable now, in the folder's own words.
-fn unreachable_location(unreachable: &[UnreachableScope], location: &Path) -> Option<io::Error> {
-    unreachable.iter().find_map(|gone| {
+/// A location (an absolute path) in a folder scope that is unreachable now, in the folder's own words. A folder whose declaration
+/// does not read names no root, so it never claims a location: a location a scope that reads holds answers as it would, and only
+/// one that no scope holds may be in that folder, which is said in the folder's words rather than as an unregistered location
+/// (DLW build ruling 2026-11-09, 47f item 1).
+fn unreachable_location(
+    all: &[Scope],
+    unreachable: &[UnreachableScope],
+    location: &Path,
+) -> Option<io::Error> {
+    let held = unreachable.iter().find_map(|gone| {
         gone.world
             .as_deref()
-            .filter(|_| location.starts_with(&gone.root))
+            .filter(|_| {
+                gone.root
+                    .as_deref()
+                    .is_some_and(|root| location.starts_with(root))
+            })
             .map(|world| {
                 io::Error::new(
                     gone.kind,
                     format!("Location is in {world}, which is {}", gone.message),
                 )
             })
-    })
+    });
+    if held.is_some() || all.iter().any(|scope| location.starts_with(&scope.root)) {
+        return held;
+    }
+    let rootless = unreachable
+        .iter()
+        .filter(|gone| gone.root.is_none())
+        .filter_map(|gone| gone.world.as_deref().map(|world| (gone, world)))
+        .collect::<Vec<_>>();
+    let (first, _) = rootless.first()?;
+    Some(io::Error::new(
+        first.kind,
+        format!(
+            "Location is in no scope that reads now, and it may be in {}",
+            rootless
+                .iter()
+                .map(|(gone, world)| format!("{world}, which is {}", gone.message))
+                .collect::<Vec<_>>()
+                .join("; or in ")
+        ),
+    ))
 }
 
 pub fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
@@ -1176,7 +1221,7 @@ pub fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
             .as_str()
             .map(Path::new)
             .filter(|location| location.is_absolute())
-            .and_then(|location| unreachable_location(&unreachable, location))
+            .and_then(|location| unreachable_location(&all, &unreachable, location))
         {
             return Err(error);
         }
@@ -1902,7 +1947,8 @@ fn action(op: &str, input: &Value, context: &ActionExecutionContext<'_>) -> Acti
 }
 /// What `inspect` says of a folder scope's pages, in its Action's description.
 const FOLDER_INSPECT_WORDS: &str = " A folder scope is listed page by page: a page's walk stops at its time bound or its count of \
-    folders, and says which. One walk of a folder runs at a time, so after a call into the folder that never returns (a stalled \
+    folders, and says which. With no `limit`, only the folders' entries are paged: a read's first page lists every project entry \
+    whole, and `after` (the `next` of the page before) continues a page and lists none of them; a `limit` pages all entries. One walk of a folder runs at a time, so after a call into the folder that never returns (a stalled \
     share or volume), every read of that folder costs a full time bound and lists none of it, until the call returns.";
 pub fn register(registry: &mut ActionRegistry) {
     for op in [
@@ -5204,6 +5250,71 @@ mod folder_scope_tests {
         }
     }
 
+    /// DLW build ruling 2026-11-09, 47f item 2 (review 2): a link into a folder is looked up in that folder alone, so only the
+    /// folder's own errors are its cause. Project Beta's relations that do not read, beside Alpha's healthy link into the folder,
+    /// are never named as the folder's: Alpha's read, which no longer reads Beta for that link, lists the link as before, and a
+    /// read of Beta fails in Beta's own words.
+    #[test]
+    fn another_scopes_error_is_never_a_folder_links_cause() {
+        let world = World::new();
+        put(&world, "Samples/kick.wav");
+        world
+            .register("Music", &world.music(), json!(["wav", "aiff", "mp3"]))
+            .unwrap();
+        let beta = world.root.join("Work/Beta/ProjectCentral");
+        fs::create_dir_all(beta.join("relations")).unwrap();
+        fs::write(
+            beta.join("project.json"),
+            serde_json::to_vec(&json!({"schema":"central.project/v1","project_id":"beta",
+                "human_source":"ProjectCentral/user",
+                "wiki":{"profile":"okf-wiki/v1","source":"ProjectCentral/agents/wiki/wiki.json"}}))
+            .unwrap(),
+        )
+        .unwrap();
+        let kick = source_horizon::source_ref("folder:Music", "Samples/kick.wav");
+        let alpha = |input: Value| {
+            let mut input = input;
+            input["project"] = json!("Alpha");
+            input
+        };
+        let revision = run(&world.root, "inspect", &alpha(json!({"resources":false}))).unwrap()
+            ["revision"]
+            .clone();
+        run(
+            &world.root,
+            "link",
+            &alpha(json!({"path":"sounds/kick.wav","source_ref":kick,"owner":"aikit","expected_revision":revision})),
+        )
+        .unwrap();
+        let healthy = run(&world.root, "inspect", &alpha(json!({}))).unwrap();
+        assert!(healthy.get("broken_links").is_none(), "{healthy}");
+        fs::write(beta.join("relations/source-relations.json"), b"{not json").unwrap();
+        let reads = [
+            run(&world.root, "inspect", &alpha(json!({}))),
+            run(
+                &world.root,
+                "search",
+                &alpha(json!({"query":"sound","limit":0})),
+            ),
+            run(&world.root, "search", &alpha(json!({"query":"sound"}))),
+        ];
+        for read in reads {
+            let read = read.unwrap();
+            assert!(read.get("broken_links").is_none(), "{read}");
+        }
+        let listed = run(&world.root, "inspect", &alpha(json!({}))).unwrap();
+        assert!(
+            listed["resources"].to_string().contains("kick.wav"),
+            "{listed}"
+        );
+        let beta = refused(run(&world.root, "inspect", &json!({"project":"Beta"})));
+        assert!(
+            beta.contains("key must be a string at line 1 column 2"),
+            "{beta}"
+        );
+        assert!(!beta.contains("folder:Music"), "{beta}");
+    }
+
     /// 0C item 3: no index for a folder. adopt-db and record-adopt refuse a folder scope in the projection acts' own words, and
     /// bkmr is never run with a folder as its working directory; the folder's tree stays as it was, byte for byte.
     #[test]
@@ -5749,8 +5860,9 @@ mod folder_scope_tests {
 
     /// central-47e item 1 (review 1): the reader's own time bound, not a word from the walk, lets it go. The walk parks in its first
     /// read and says nothing; at 50 ms the reader answers an empty page in the time bound's words, with nowhere to go on from. Let
-    /// go after the reader has left, the walk reads nothing more. The walk's own deadline is a logical clock that never passes, so
-    /// only the reader's leaving stops it, on any machine.
+    /// go after the reader has left, the walk reads nothing more: not even the listing it was parked before (47f item 5, the check
+    /// after a folder's own read). The walk's own deadline is a logical clock that never passes, so only the reader's leaving stops
+    /// it, on any machine.
     #[test]
     fn a_reader_leaves_a_walk_that_never_answers_at_its_own_time_bound() {
         let world = World::new();
@@ -5770,7 +5882,7 @@ mod folder_scope_tests {
                     .open(&fifo);
             });
         }
-        let read = walk_log();
+        let (read, listed) = (walk_log(), walk_log());
         let answer = with_seams(
             crate::file_map_catalog::FolderWalkSeams {
                 time: Some(std::time::Duration::from_millis(50)),
@@ -5778,6 +5890,7 @@ mod folder_scope_tests {
                 silent: true,
                 deadline_after: Some(usize::MAX),
                 read: Some(read.clone()),
+                listed: Some(listed.clone()),
                 ..Default::default()
             },
             || run(&world.root, "inspect", &json!({"project":"folder:Music"})),
@@ -5800,11 +5913,68 @@ mod folder_scope_tests {
             vec![root.clone()],
             "the walk read on after its reader left"
         );
+        assert_eq!(
+            *listed.lock().unwrap(),
+            Vec::<PathBuf>::new(),
+            "the walk listed its folder after its reader left"
+        );
+    }
+
+    /// DLW build ruling 2026-11-09, 47f item 5 (review 5): a folder row's `lstat`, or its bundle probe, that does not answer at once
+    /// outlasts its reader, and once let go the walk reads nothing more: not the probe after the `lstat`, not the folder's listing
+    /// after the probe. Each stall says nothing; the reader leaves at its own time bound, and the walk's deadline is a logical clock
+    /// that never passes.
+    #[test]
+    fn a_folder_rows_read_that_stalls_reads_nothing_after_its_reader_left() {
+        let world = World::new();
+        world
+            .register("Music", &world.music(), json!(["wav", "aiff", "mp3"]))
+            .unwrap();
+        let root = fs::canonicalize(&world.music).unwrap();
+        let field = root.join("Field recordings");
+        let probe = field.join("Contents");
+        for (at, expected) in [
+            (field.clone(), vec![root.clone(), field.clone()]),
+            (
+                probe.clone(),
+                vec![root.clone(), field.clone(), probe.clone()],
+            ),
+        ] {
+            let fifo = fifo(&world);
+            let (read, listed) = (walk_log(), walk_log());
+            let answer = with_seams(
+                crate::file_map_catalog::FolderWalkSeams {
+                    time: Some(std::time::Duration::from_millis(300)),
+                    stall: Some((at.clone(), fifo.clone())),
+                    silent: true,
+                    deadline_after: Some(usize::MAX),
+                    read: Some(read.clone()),
+                    listed: Some(listed.clone()),
+                    ..Default::default()
+                },
+                || run(&world.root, "inspect", &json!({"project":"folder:Music"})),
+            )
+            .unwrap();
+            assert_eq!(
+                answer["page"]["bound"],
+                "the time bound stopped the walk: 0.3s passed before the page filled",
+                "{answer}"
+            );
+            assert!(release(&fifo), "the walk was not parked at {at:?}");
+            assert!(walk_ends(&root), "the walk did not end");
+            fs::remove_file(&fifo).unwrap();
+            assert_eq!(
+                *read.lock().unwrap(),
+                expected,
+                "the walk read on after its reader left, parked at {at:?}"
+            );
+            assert_eq!(*listed.lock().unwrap(), vec![root.clone()], "{at:?}");
+        }
     }
 
     /// central-47e items 1 and 8 (reviews 1 and 8): past its deadline the walk reads nothing more: not a file's metadata, not a
-    /// folder's, not a folder's bundle probe. The deadline passes as the walk reads a chosen path, its time bound an hour, so the
-    /// outcome is the same on any machine.
+    /// folder's, not a folder's bundle probe. The deadline passes as the walk reads a chosen path, its time bound 20 s (so a walk that
+    /// never ends fails the test then, not after an hour), so the outcome is the same on any machine.
     #[test]
     fn past_its_deadline_the_walk_reads_no_file_folder_or_bundle_probe() {
         let world = World::new();
@@ -5817,7 +5987,7 @@ mod folder_scope_tests {
             let read = walk_log();
             let answer = with_seams(
                 crate::file_map_catalog::FolderWalkSeams {
-                    time: Some(std::time::Duration::from_secs(3600)),
+                    time: Some(std::time::Duration::from_secs(20)),
                     pass_deadline_at: Some(at.to_path_buf()),
                     read: Some(read.clone()),
                     ..Default::default()
@@ -5827,7 +5997,7 @@ mod folder_scope_tests {
             .unwrap();
             assert_eq!(
                 answer["page"]["bound"],
-                "the time bound stopped the walk: 3600s passed before the page filled",
+                "the time bound stopped the walk: 20s passed before the page filled",
                 "{answer}"
             );
             assert_eq!(music_paths(&world, &answer), Vec::<String>::new());
@@ -5857,12 +6027,14 @@ mod folder_scope_tests {
         );
     }
 
-    /// central-47e item 8 (review 8): a read that spends its bound waiting for another walk of its folder says so, in the
-    /// still-walking words, never with an empty page laid to its own time bound. Its own walk's time is a logical clock that has
-    /// passed by the time the other walk ends.
+    /// DLW build ruling 2026-11-09, 47f items 4 and 5 (reviews 4 and 5): a read that waited for another walk of its folder walks its
+    /// own bound after the wait, and its page is its own: the still-walking words are said only while a walk runs, and the page keeps
+    /// what its walk skipped. Its own walk's deadline is a logical clock (it passes as the walk reads `Field recordings`), and its
+    /// time bound is short, so a walk never let go fails the test in that bound rather than holding it for an hour.
     #[test]
-    fn a_read_that_waits_out_another_walk_answers_in_the_still_walking_words() {
+    fn a_read_that_waited_out_another_walk_walks_its_own_bound_and_keeps_its_page() {
         let world = World::new();
+        put(&world, "Entered-e/inside.wav");
         world
             .register("Music", &world.music(), json!(["wav", "aiff", "mp3"]))
             .unwrap();
@@ -5892,24 +6064,34 @@ mod folder_scope_tests {
         };
         let second = with_seams(
             crate::file_map_catalog::FolderWalkSeams {
-                time: Some(std::time::Duration::from_secs(3600)),
-                deadline_after: Some(0),
+                time: Some(std::time::Duration::from_secs(20)),
+                not_utf8: vec![(root.join("Entered-e"), b"Ent\xe9red".to_vec())],
+                pass_deadline_at: Some(root.join("Field recordings")),
                 ..Default::default()
             },
             || run(&world.root, "inspect", &json!({"project":"folder:Music"})),
         )
         .unwrap();
+        let running = crate::file_map_catalog::folder_walk_running(&root);
         assert!(releaser.join().unwrap(), "the first walk was not let go");
+        assert!(!running, "a walk still ran when the read answered");
         assert_eq!(
             second["page"]["bound"],
-            "a walk of this folder is still running, so this page lists none of it: ask again when it ends",
+            "the time bound stopped the walk: 20s passed before the page filled",
             "{second}"
         );
         assert_eq!(music_paths(&world, &second), Vec::<String>::new());
         assert_eq!(second["page"]["next"], Value::Null);
+        let folder = &second["folders"][0];
+        assert_eq!(folder["skipped"], 1, "{second}");
+        assert_eq!(
+            folder["skipped_named"].as_array().map(Vec::len),
+            Some(1),
+            "{second}"
+        );
         assert!(walk_ends(&root));
         let whole = run(&world.root, "inspect", &json!({"project":"folder:Music"})).unwrap();
-        assert_eq!(music_paths(&world, &whole).len(), 3, "{whole}");
+        assert_eq!(music_paths(&world, &whole).len(), 4, "{whole}");
     }
 
     /// central-47e item 3 (review 3): a read's path prefixes are normalised once, and every use reads them so. One that climbs with
@@ -6034,6 +6216,70 @@ mod folder_scope_tests {
         assert_eq!(once, expected);
     }
 
+    /// DLW build ruling 2026-11-09, 47f item 3 (review 3): `after` continues a page even when no folder is walked on it, the
+    /// folder unplugged between the pages: the project entries the first page listed whole are not listed again. The Action's
+    /// description says what `after` and a `limit` page.
+    #[test]
+    fn a_continuation_with_the_folder_unplugged_lists_no_project_entry_again() {
+        let world = World::new();
+        world
+            .register("Music", &world.music(), json!(["wav", "aiff", "mp3"]))
+            .unwrap();
+        let record = world.root.join("Control/agents/now/agents/handoff.json");
+        fs::create_dir_all(record.parent().unwrap()).unwrap();
+        fs::write(&record, b"{\"kind\":\"handoff\"}").unwrap();
+        let ground = world.root.to_str().unwrap().to_owned();
+        let read = |after: &Value| {
+            with_seams(
+                crate::file_map_catalog::FolderWalkSeams {
+                    page_default: Some(1),
+                    ..Default::default()
+                },
+                || {
+                    run(
+                        &world.root,
+                        "inspect",
+                        &json!({"federated":true,"path_prefixes":[ground, world.music()],"after":after}),
+                    )
+                },
+            )
+            .unwrap()
+        };
+        let first = read(&Value::Null);
+        let projects = first["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["world_ref"] != "folder:Music")
+            .count();
+        assert!(projects > 0, "{first}");
+        assert_eq!(first["page"]["truncated"], true, "{first}");
+        let next = first["page"]["next"].clone();
+        let away = world.base.join("Music away");
+        fs::rename(&world.music, &away).unwrap();
+        let continued = read(&next);
+        fs::rename(&away, &world.music).unwrap();
+        assert_eq!(continued["resources"], json!([]), "{continued}");
+        assert_eq!(
+            continued["page"],
+            json!({"limit":1,"after":next,"truncated":false,"next":null})
+        );
+
+        let mut registry = ActionRegistry::default();
+        register(&mut registry);
+        let description = registry
+            .get("central.file-map.inspect")
+            .unwrap()
+            .description
+            .clone();
+        assert!(
+            description.contains("With no `limit`, only the folders' entries are paged: a read's first page lists every project \
+                 entry whole, and `after` (the `next` of the page before) continues a page and lists none of them; a `limit` pages \
+                 all entries."),
+            "{description}"
+        );
+    }
+
     /// central-47e item 5 (review 5): a folder that is unreachable names its own cause in every read: asked for by its World (a
     /// project that only shares its spelling never answers for it), a Source of it in a batch, and a location in it.
     #[test]
@@ -6093,6 +6339,59 @@ mod folder_scope_tests {
                 format!("Location is in folder:Music, which is {cause}")
             )
         );
+    }
+
+    /// DLW build ruling 2026-11-09, 47f item 1 (review 1): a folder whose declaration does not read names no root, so it never
+    /// fails another scope's `locate`: a project's location answers as it did. A location no scope holds may be in that folder, so
+    /// it gets the folder's words, and no absolute path is in them.
+    #[test]
+    fn a_folder_declaration_that_does_not_read_fails_no_other_scopes_locate() {
+        let world = World::new();
+        world
+            .register("Music", &world.music(), json!(["wav", "aiff", "mp3"]))
+            .unwrap();
+        fs::write(world.root.join("Work/Alpha/notes.md"), "a note\n").unwrap();
+        let located = || {
+            [
+                json!({"path": world.root.join("Work/Alpha/notes.md"), "binding_only": true}),
+                json!({"project": "Alpha", "path": "notes.md", "binding_only": true}),
+                json!({"path": world.root.join("Work/Alpha/notes.md")}),
+            ]
+            .map(|input| {
+                run(&world.root, "locate", &input)
+                    .map_err(|error| (error.kind(), error.to_string()))
+            })
+        };
+        let before = located();
+        assert!(before[0].is_ok(), "{before:?}");
+        fs::write(
+            world.root.join(".central/scopes/Music/scope.json"),
+            b"not json",
+        )
+        .unwrap();
+        assert_eq!(located(), before);
+
+        let cause = "unreachable: the folder scope declared in .central/scopes/Music does not read: The folder scope \
+                     declaration .central/scopes/Music/scope.json does not read as one: expected ident at line 1 column 2";
+        for input in [
+            json!({"path": world.music.join("voice.mp3")}),
+            json!({"path": world.music.join("voice.mp3"), "binding_only": true}),
+        ] {
+            let refused = run(&world.root, "locate", &input).unwrap_err();
+            assert_eq!(
+                (refused.kind(), refused.to_string()),
+                (
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "Location is in no scope that reads now, and it may be in folder:Music, which is {cause}"
+                    )
+                )
+            );
+            assert!(
+                !refused.to_string().contains(world.base.to_str().unwrap()),
+                "{refused}"
+            );
+        }
     }
 
     /// central-47e item 6 (review 6): the skip of a name that is not UTF-8 counts and names only what the walk would have listed:

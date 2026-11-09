@@ -229,6 +229,8 @@ pub(crate) struct FolderWalkSeams {
     pub deadline_after: Option<usize>,
     /// Every path the walk reads (a folder listed, a file's metadata), in order.
     pub read: Option<std::sync::Arc<std::sync::Mutex<Vec<PathBuf>>>>,
+    /// Every folder whose listing the walk opens, in order: as it opens it, after every seam of the read has run.
+    pub listed: Option<std::sync::Arc<std::sync::Mutex<Vec<PathBuf>>>>,
     /// The page a read that names no limit gets.
     pub page_default: Option<usize>,
     /// The stall says nothing to the reader: the reader leaves at its own time bound, as a read that never answers leaves it.
@@ -366,20 +368,24 @@ pub(crate) fn folder_declarations(
     }
     Ok(result)
 }
-/// A folder scope's declaration in `dir`, and its revision.
+/// A folder scope's declaration in `dir` (`.central/scopes/<name>` of the ground), and its revision. Its words name the
+/// declaration by its place in the ground, never by the ground's absolute path: they reach a client as an unreachable folder's
+/// cause (DLW build ruling 2026-11-09, 47f item 1).
 pub(crate) fn read_folder_declaration(dir: &Path) -> io::Result<(FolderScope, String)> {
     let path = dir.join(FOLDER_SCOPE_DECLARATION);
+    let named = format!(
+        ".central/scopes/{}/{FOLDER_SCOPE_DECLARATION}",
+        dir.file_name().unwrap_or_default().to_string_lossy()
+    );
     if fs::symlink_metadata(&path)?.len() > 64 * 1024 {
         return Err(invalid(format!(
-            "The folder scope declaration {} is larger than a declaration is",
-            path.display()
+            "The folder scope declaration {named} is larger than a declaration is"
         )));
     }
     let bytes = fs::read(&path)?;
     let folder: FolderScope = serde_json::from_slice(&bytes).map_err(|error| {
         invalid(format!(
-            "The folder scope declaration {} does not read as one: {error}",
-            path.display()
+            "The folder scope declaration {named} does not read as one: {error}"
         ))
     })?;
     if folder.schema != FOLDER_SCOPE_SCHEMA
@@ -387,9 +393,8 @@ pub(crate) fn read_folder_declaration(dir: &Path) -> io::Result<(FolderScope, St
         || !Path::new(&folder.root).is_absolute()
     {
         return Err(invalid(format!(
-            "The folder scope declaration {} is not one Central reads: it needs schema \
-             {FOLDER_SCOPE_SCHEMA}, kind folder and an absolute root",
-            path.display()
+            "The folder scope declaration {named} is not one Central reads: it needs schema \
+             {FOLDER_SCOPE_SCHEMA}, kind folder and an absolute root"
         )));
     }
     Ok((folder, content_revision_bytes(&bytes)))
@@ -1129,8 +1134,15 @@ pub(crate) struct UnreachableScope {
     pub kind: io::ErrorKind,
     /// A folder scope's World (`folder:<name>`): its name alone never selects it.
     pub world: Option<String>,
-    pub root: String,
+    /// Where it stands, where that is known: none for a folder whose declaration does not read, which so holds no location
+    /// (DLW build ruling 2026-11-09, 47f item 1).
+    pub root: Option<PathBuf>,
     pub message: String,
+}
+
+/// An unreachable scope's root, from the path it was named by: none where it was named by none.
+fn unreachable_root(path: String) -> Option<PathBuf> {
+    (!path.is_empty()).then(|| PathBuf::from(path))
 }
 
 type ExternalOpened = (
@@ -1363,7 +1375,7 @@ pub(crate) fn participating(root: &Path) -> io::Result<(Vec<Scope>, Vec<Unreacha
                  project is not read"
             ),
             project: name,
-            root: path,
+            root: unreachable_root(path),
         });
     }
     let mut folders = Vec::new();
@@ -1378,7 +1390,7 @@ pub(crate) fn participating(root: &Path) -> io::Result<(Vec<Scope>, Vec<Unreacha
                         "unreachable: the folder scope declared in .central/scopes/{name} does not read: {words}"
                     ),
                     project: name,
-                    root: String::new(),
+                    root: None,
                 });
                 continue;
             }
@@ -1393,7 +1405,7 @@ pub(crate) fn participating(root: &Path) -> io::Result<(Vec<Scope>, Vec<Unreacha
                     folder.name
                 ),
                 project: folder.name,
-                root: folder.root,
+                root: unreachable_root(folder.root),
             });
             continue;
         }
@@ -1440,7 +1452,7 @@ pub(crate) fn participating(root: &Path) -> io::Result<(Vec<Scope>, Vec<Unreacha
                             EXTERNAL_ROOT_DEADLINE.as_secs()
                         ),
                         project: name,
-                        root: path,
+                        root: unreachable_root(path),
                     });
                     continue;
                 }
@@ -1477,7 +1489,7 @@ pub(crate) fn participating(root: &Path) -> io::Result<(Vec<Scope>, Vec<Unreacha
                     ),
                     world,
                     project: folder.name,
-                    root: folder.root,
+                    root: unreachable_root(folder.root),
                 });
                 continue;
             }
@@ -1491,7 +1503,7 @@ pub(crate) fn participating(root: &Path) -> io::Result<(Vec<Scope>, Vec<Unreacha
                     ),
                     world,
                     project: folder.name,
-                    root: folder.root,
+                    root: unreachable_root(folder.root),
                 });
                 continue;
             }
@@ -1506,7 +1518,7 @@ pub(crate) fn participating(root: &Path) -> io::Result<(Vec<Scope>, Vec<Unreacha
                     ),
                     world,
                     project: folder.name,
-                    root: folder.root,
+                    root: unreachable_root(folder.root),
                 });
                 continue;
             }
@@ -2647,6 +2659,10 @@ impl FolderWalk {
             return Ok(false);
         }
         self.directories += 1;
+        #[cfg(test)]
+        if let Some(listed) = &self.seams.listed {
+            listed.lock().unwrap().push(dir.to_path_buf());
+        }
         let listing = match fs::read_dir(dir) {
             Ok(listing) => listing,
             Err(error) if depth == 0 => return Err(error),
@@ -2731,6 +2747,10 @@ impl FolderWalk {
                 let Some(enters) = enters else {
                     return Ok(self.stop_at_deadline());
                 };
+                // Nor past a bundle probe that did not answer at once (DLW build ruling 2026-11-09, 47f item 5).
+                if self.left() {
+                    return Ok(false);
+                }
                 match enters {
                     Enters::No => {}
                     Enters::Skipped(why) => self.skip(&path, why.into()),
@@ -2837,13 +2857,12 @@ pub(crate) fn folder_page(scope: &Scope, read: FolderRead) -> io::Result<FolderP
     );
     #[cfg(not(test))]
     let (most, time) = (FOLDER_WALK_DIRECTORIES, FOLDER_WALK_TIME);
-    let began = std::time::Instant::now();
-    // One walk of a folder at a time: a read that finds one running waits for it within its own bound, then answers in words.
-    let mut waited = false;
+    // One walk of a folder at a time: a read that finds one running waits for it within its own bound, and answers in words while it
+    // still runs. The wait and the walk each have a bound of their own: a read that waited still walks its whole bound (DLW build
+    // ruling 2026-11-09, 47f item 4).
     let walking = {
         let mut walking = folders_walking();
         if walking.contains(&scope.root) {
-            waited = true;
             #[cfg(test)]
             FOLDERS_WAITED
                 .lock()
@@ -2863,6 +2882,7 @@ pub(crate) fn folder_page(scope: &Scope, read: FolderRead) -> io::Result<FolderP
         walking.insert(scope.root.clone());
         FolderWalking(scope.root.clone())
     };
+    let began = std::time::Instant::now();
     let progress = std::sync::Arc::new(std::sync::Mutex::new(FolderProgress::default()));
     let (send, receive) = std::sync::mpsc::channel();
     let mut walk = FolderWalk {
@@ -2911,18 +2931,6 @@ pub(crate) fn folder_page(scope: &Scope, read: FolderRead) -> io::Result<FolderP
             )))
         }
     };
-    // A read that spent its bound waiting for another walk, and so walked nothing of its own, says the other walk held it: never an
-    // empty page laid to its own time bound, with nowhere to go on from.
-    if waited
-        && page.found.is_empty()
-        && page.finished.is_none()
-        && page.bound.as_deref() == Some(time_bound_words(time).as_str())
-    {
-        return Ok(FolderPage {
-            bound: Some(FOLDER_STILL_WALKING.into()),
-            ..FolderPage::default()
-        });
-    }
     Ok(page)
 }
 /// The entry a folder scope lists at `member` (a path relative to its root), resolved by `lstat` of each folder on its way and of the
