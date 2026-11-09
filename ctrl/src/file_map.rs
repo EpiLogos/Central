@@ -6546,7 +6546,10 @@ mod folder_scope_tests {
 
     /// DLW build ruling 2026-11-09, central-47h item 2 (#334 review, finding 2): while a folder's declaration does not read, a typed
     /// refusal of `locate` keeps its kind, its words and its details. A file under a `.no-agent-retrieval` folder that no scope holds
-    /// is refused the same, details and all, on a ground with a corrupt folder declaration as on a healthy one.
+    /// is refused the same, details and all, on a ground with a corrupt folder declaration as on a healthy one. The guards are the
+    /// answers expected (central-47i item 1, #336 review, finding 1): on the healthy ground both spellings are the source treatment's
+    /// refusal, held at source admission and withheld; and the corruption is seen to bite, a plain location no scope holds then
+    /// saying it may be in folder:Music, before the refusals are compared.
     #[test]
     fn typed_refusals_keep_their_details_while_a_folder_declaration_does_not_read() {
         let world = World::new();
@@ -6557,6 +6560,16 @@ mod folder_scope_tests {
         fs::create_dir_all(&denied).unwrap();
         fs::write(denied.join(".no-agent-retrieval"), b"").unwrap();
         fs::write(denied.join("x.txt"), b"x").unwrap();
+        let open = world.base.join("Open");
+        fs::create_dir_all(&open).unwrap();
+        fs::write(open.join("y.txt"), b"y").unwrap();
+        let plain = || {
+            located_shape(execute(
+                &world.root,
+                "locate",
+                &json!({"path": open.join("y.txt")}),
+            ))
+        };
         let inputs = [
             json!({"path": denied.join("x.txt")}),
             json!({"path": denied.join("x.txt"), "binding_only": true}),
@@ -6567,21 +6580,34 @@ mod folder_scope_tests {
                 .map(|input| located_shape(execute(&world.root, "locate", &input)))
         };
         let before = located();
-        assert!(
-            before.iter().all(|shape| shape.starts_with("ERR ")),
-            "{before:?}"
-        );
+        for shape in &before {
+            assert!(
+                shape.starts_with(
+                    "ERR PermissionDenied Location is excluded by current source treatment DETAILS "
+                ) && shape.contains(r#""failure_stage":"source_admission""#)
+                    && shape.contains(r#""material_state":"withheld""#),
+                "{shape}"
+            );
+        }
+        assert!(!plain().contains("folder:Music"), "{}", plain());
         fs::write(
             world.root.join(".central/scopes/Music/scope.json"),
             b"not json",
         )
         .unwrap();
+        assert!(
+            plain().contains("it may be in folder:Music"),
+            "the corrupt declaration is read as corrupt: {}",
+            plain()
+        );
         assert_eq!(located(), before);
     }
 
     /// DLW build ruling 2026-11-09, central-47h item 1 (#334 review, finding 1): a folder that is unplugged but whose declaration
     /// reads names its root, so it claims no location outside that root. A location no scope holds answers as on a healthy ground
-    /// while such a folder is away, and when a second folder's declaration does not read, only that folder's words are added.
+    /// while such a folder is away, and when a second folder's declaration does not read, only that folder's words are added. And
+    /// the folder is reported while it is away (central-47i item 2, #336 review, finding 1): a location under its own root answers
+    /// that it is in folder:Other, which is unreachable.
     #[test]
     fn an_unplugged_folder_with_a_root_claims_no_location_it_does_not_hold() {
         let world = World::new();
@@ -6602,6 +6628,11 @@ mod folder_scope_tests {
         let away = world.base.join("Other away");
         fs::rename(&other, &away).unwrap();
         let unplugged = located_shape(execute(&world.root, "locate", &input));
+        let own = located_shape(execute(
+            &world.root,
+            "locate",
+            &json!({"path": other.join("o.wav")}),
+        ));
         fs::write(
             world.root.join(".central/scopes/Music/scope.json"),
             b"not json",
@@ -6616,6 +6647,10 @@ mod folder_scope_tests {
         assert_eq!(
             unplugged, healthy,
             "the unplugged folder's root does not hold the location"
+        );
+        assert!(
+            own.contains("Location is in folder:Other, which is "),
+            "a location under the away folder's root is reported in it: {own}"
         );
         assert!(
             both.contains("it may be in folder:Music") && !both.contains("folder:Other"),
