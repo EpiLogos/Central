@@ -67,13 +67,7 @@ pub fn time_policy(scope: &Scope, now: u64) -> io::Result<TimeReading> {
     let local = DateTime::<Utc>::from_timestamp(seconds, 0)
         .ok_or_else(|| invalid("time outside supported range"))?
         .with_timezone(&timezone);
-    // Boundary is a civil-wall-time cut, not an assumed 24-hour UTC duration.
-    let civil = local
-        .naive_local()
-        .checked_sub_signed(Duration::minutes(policy.day_boundary_minutes as i64))
-        .ok_or_else(|| invalid("civil date underflow"))?
-        .date()
-        .to_string();
+    let civil = civil_date_in(&timezone, policy.day_boundary_minutes, seconds)?.to_string();
     Ok(TimeReading {
         schema: "central.civil-time-reading/v1".into(),
         source_ref: reading.source.source_ref,
@@ -84,6 +78,24 @@ pub fn time_policy(scope: &Scope, now: u64) -> io::Result<TimeReading> {
         local_time: local.to_rfc3339(),
         observed_at_unix_seconds: now,
     })
+}
+/// The civil date an instant (seconds since the epoch) falls on: its wall time
+/// in the policy's zone, less the day boundary. The boundary is a civil
+/// wall-time cut, not an assumed 24-hour UTC duration. It is the one rule today's
+/// date is named by here, and the one each Day's own span of instants is read by
+/// (day_moves.rs day_spans), so the two never disagree on when a date flips.
+pub(crate) fn civil_date_in(
+    timezone: &Tz,
+    day_boundary_minutes: u32,
+    seconds: i64,
+) -> io::Result<chrono::NaiveDate> {
+    Ok(DateTime::<Utc>::from_timestamp(seconds, 0)
+        .ok_or_else(|| invalid("time outside supported range"))?
+        .with_timezone(timezone)
+        .naive_local()
+        .checked_sub_signed(Duration::minutes(day_boundary_minutes as i64))
+        .ok_or_else(|| invalid("civil date underflow"))?
+        .date())
 }
 /// Deterministic occurrence resolution for scheduled automations, over the
 /// recognised root civil-time policy.

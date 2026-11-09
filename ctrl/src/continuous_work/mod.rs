@@ -136,7 +136,6 @@ pub fn execute_with_token_at(
         "day_moves_read" => day_moves::moves_read(&scope, input, now),
         "day_moves_due" => day_moves::moves_due(&scope, input, now),
         "day_field_read" => day_moves::field_read(&scope, input),
-        "day_entry_part" => day_moves::entry_part(&scope, input),
         operation if day_moves::authenticated_action(operation).is_some() => {
             let principal = authority::authenticate(
                 &scope,
