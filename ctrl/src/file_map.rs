@@ -6151,8 +6151,9 @@ mod folder_scope_tests {
 
     /// DLW build ruling 2026-11-09, 47g item 4 (47f review, point b): a read that waited out another walk of its folder takes its
     /// own bound from the end of the wait, not from its start. The first walk is let go 400 ms after the second read is known to
-    /// wait; the second walk parks at the root and says nothing, so only its reader's own bound of 1 s ends the read, and the read
-    /// answers no sooner than that bound after the release. The assertion is a least time, so a loaded machine never fails it.
+    /// wait; the second walk parks at the root and says nothing, so only its reader's own bound of 2 s ends the read, and the read
+    /// answers no sooner than that bound after the release. The assertion is a least time: a loaded machine cannot fail the least
+    /// time; it can only fail the wait, which has 1.6 s (central-47h item 3: the bound was 1 s, a margin of 600 ms).
     #[test]
     fn a_read_that_waited_walks_its_own_bound_after_the_wait() {
         let world = World::new();
@@ -6190,7 +6191,7 @@ mod folder_scope_tests {
                 (false, None)
             })
         };
-        let bound = std::time::Duration::from_secs(1);
+        let bound = std::time::Duration::from_secs(2);
         let second = with_seams(
             crate::file_map_catalog::FolderWalkSeams {
                 time: Some(bound),
@@ -6207,7 +6208,7 @@ mod folder_scope_tests {
         assert!(let_go, "the first walk was not let go");
         assert_eq!(
             second["page"]["bound"],
-            "the time bound stopped the walk: 1s passed before the page filled",
+            "the time bound stopped the walk: 2s passed before the page filled",
             "{second}"
         );
         let after_release = answered.duration_since(released.unwrap());
@@ -6529,6 +6530,97 @@ mod folder_scope_tests {
                 "{words}"
             );
         }
+    }
+
+    /// A `locate` answer as one line: the result, or the error's kind, words and typed details (`read_failure_details`).
+    fn located_shape(result: io::Result<Value>) -> String {
+        match result {
+            Ok(envelope) => format!("OK {}", envelope["result"]),
+            Err(error) => format!(
+                "ERR {:?} {error} DETAILS {}",
+                error.kind(),
+                crate::file_map_catalog::read_failure_details(&error)
+            ),
+        }
+    }
+
+    /// DLW build ruling 2026-11-09, central-47h item 2 (#334 review, finding 2): while a folder's declaration does not read, a typed
+    /// refusal of `locate` keeps its kind, its words and its details. A file under a `.no-agent-retrieval` folder that no scope holds
+    /// is refused the same, details and all, on a ground with a corrupt folder declaration as on a healthy one.
+    #[test]
+    fn typed_refusals_keep_their_details_while_a_folder_declaration_does_not_read() {
+        let world = World::new();
+        world
+            .register("Music", &world.music(), json!(["wav", "aiff", "mp3"]))
+            .unwrap();
+        let denied = world.base.join("Elsewhere");
+        fs::create_dir_all(&denied).unwrap();
+        fs::write(denied.join(".no-agent-retrieval"), b"").unwrap();
+        fs::write(denied.join("x.txt"), b"x").unwrap();
+        let inputs = [
+            json!({"path": denied.join("x.txt")}),
+            json!({"path": denied.join("x.txt"), "binding_only": true}),
+        ];
+        let located = || {
+            inputs
+                .clone()
+                .map(|input| located_shape(execute(&world.root, "locate", &input)))
+        };
+        let before = located();
+        assert!(
+            before.iter().all(|shape| shape.starts_with("ERR ")),
+            "{before:?}"
+        );
+        fs::write(
+            world.root.join(".central/scopes/Music/scope.json"),
+            b"not json",
+        )
+        .unwrap();
+        assert_eq!(located(), before);
+    }
+
+    /// DLW build ruling 2026-11-09, central-47h item 1 (#334 review, finding 1): a folder that is unplugged but whose declaration
+    /// reads names its root, so it claims no location outside that root. A location no scope holds answers as on a healthy ground
+    /// while such a folder is away, and when a second folder's declaration does not read, only that folder's words are added.
+    #[test]
+    fn an_unplugged_folder_with_a_root_claims_no_location_it_does_not_hold() {
+        let world = World::new();
+        world
+            .register("Music", &world.music(), json!(["wav", "aiff", "mp3"]))
+            .unwrap();
+        let other = world.base.join("Other");
+        fs::create_dir_all(&other).unwrap();
+        fs::write(other.join("o.wav"), b"RIFF....WAVEfmt sound").unwrap();
+        world
+            .register("Other", other.to_str().unwrap(), json!(["wav"]))
+            .unwrap();
+        let open = world.base.join("Open");
+        fs::create_dir_all(&open).unwrap();
+        fs::write(open.join("y.txt"), b"y").unwrap();
+        let input = json!({"path": open.join("y.txt")});
+        let healthy = located_shape(execute(&world.root, "locate", &input));
+        let away = world.base.join("Other away");
+        fs::rename(&other, &away).unwrap();
+        let unplugged = located_shape(execute(&world.root, "locate", &input));
+        fs::write(
+            world.root.join(".central/scopes/Music/scope.json"),
+            b"not json",
+        )
+        .unwrap();
+        let both = located_shape(execute(&world.root, "locate", &input));
+        fs::rename(&away, &other).unwrap();
+        assert!(
+            healthy.starts_with("ERR NotFound Location is unregistered DETAILS"),
+            "{healthy}"
+        );
+        assert_eq!(
+            unplugged, healthy,
+            "the unplugged folder's root does not hold the location"
+        );
+        assert!(
+            both.contains("it may be in folder:Music") && !both.contains("folder:Other"),
+            "only the folder that does not read is named: {both}"
+        );
     }
 
     /// central-47e item 6 (review 6): the skip of a name that is not UTF-8 counts and names only what the walk would have listed:
