@@ -59,13 +59,24 @@ fn write(path: &Path, text: &str) {
     fs::write(path, text).unwrap();
 }
 
+/// Git in `repository`, with its automatic maintenance and gc off: a commit
+/// otherwise starts `git maintenance run --auto --detach`, whose lock
+/// (`.git/objects/maintenance.lock`) may stand while a test lists the tree,
+/// as it did in Central #330's macos-native run.
 fn git(repository: &Path, arguments: &[&str]) -> String {
+    git_with(repository, arguments, &[])
+}
+
+/// [`git`] with more of git's environment, such as `GIT_TRACE2_EVENT`.
+fn git_with(repository: &Path, arguments: &[&str], environment: &[(&str, &Path)]) -> String {
     let output = Command::new("git")
         .arg("-C")
         .arg(repository)
+        .args(["-c", "maintenance.auto=false", "-c", "gc.auto=0"])
         .args(arguments)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("HOME", repository)
+        .envs(environment.iter().copied())
         .output()
         .unwrap();
     assert!(
@@ -137,6 +148,31 @@ fn tree(root: &Path) -> Vec<String> {
     let mut out = Vec::new();
     walk(root, root, &mut out);
     out
+}
+
+/// Assert two listings of [`tree`] are the same, naming each entry only one
+/// of them holds (each cut to 200 characters), not dumping both trees.
+fn same_tree(expected: &[String], actual: &[String], what: &str) {
+    let cut = |entry: &String| entry.chars().take(200).collect::<String>();
+    let only = |of: &[String], not_in: &[String]| -> Vec<String> {
+        of.iter()
+            .filter(|entry| !not_in.contains(entry))
+            .map(cut)
+            .collect()
+    };
+    let missing = only(expected, actual);
+    let added = only(actual, expected);
+    let listed = |entries: &[String]| match entries {
+        [] => "(none)".to_owned(),
+        _ => entries.join("\n  "),
+    };
+    assert!(
+        missing.is_empty() && added.is_empty(),
+        "{what}: {} entries differ.\nonly before:\n  {}\nonly after:\n  {}",
+        missing.len() + added.len(),
+        listed(&missing),
+        listed(&added)
+    );
 }
 
 fn relatives(result: &ActionResult) -> Vec<(String, Vec<String>)> {
@@ -267,7 +303,7 @@ fn candidates_are_the_folders_of_work_under_home_outside_the_ground_and_the_prod
     let first = &data["items"][2];
     assert_eq!(first["name"], "field-notes");
     assert_eq!(first["path"], json!(home.join("code/field-notes")));
-    assert_eq!(tree(&home), before, "reading candidates changes nothing");
+    same_tree(&before, &tree(&home), "reading candidates changes nothing");
 }
 
 #[test]
@@ -359,10 +395,10 @@ fn bring_copies_a_folder_into_work_with_its_history_modes_and_links_and_keeps_th
     assert_eq!(receipt["target_ref"], "Work/field-notes");
     assert_eq!(receipt["verified"], json!(true));
     let target = root.join("Work/field-notes");
-    assert_eq!(
-        tree(&target),
-        original,
-        "every file, mode and link as it was"
+    same_tree(
+        &original,
+        &tree(&target),
+        "every file, mode and link as it was",
     );
     assert_eq!(
         git(&target, &["log", "--format=%H %s"]),
@@ -370,7 +406,7 @@ fn bring_copies_a_folder_into_work_with_its_history_modes_and_links_and_keeps_th
         "the history came with it"
     );
     assert_eq!(git(&target, &["status", "--porcelain"]), "?? draft.md\n");
-    assert_eq!(tree(&source), original, "the original stays as it was");
+    same_tree(&original, &tree(&source), "the original stays as it was");
     let leftovers: Vec<_> = fs::read_dir(root.join("Work"))
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
@@ -410,6 +446,44 @@ fn bring_copies_a_folder_into_work_with_its_history_modes_and_links_and_keeps_th
         named.data.as_ref().unwrap()["target_ref"],
         "Work/listening-log"
     );
+}
+
+/// Central #330: a commit these tests make starts no background maintenance,
+/// so nothing writes under `.git` while a test lists a tree. Read from git's
+/// own trace of the commit: the processes it starts.
+#[test]
+fn the_tests_own_commits_start_no_background_maintenance() {
+    let path = scratch("no-maintenance");
+    let repo = path.join("repo");
+    repository(&repo);
+    write(&repo.join("more.md"), "more\n");
+    git(&repo, &["add", "-A"]);
+    let trace = path.join("commit.trace2.json");
+    git_with(
+        &repo,
+        &["commit", "-q", "-m", "More"],
+        &[("GIT_TRACE2_EVENT", trace.as_path())],
+    );
+    let events = fs::read_to_string(&trace).unwrap();
+    let started: Vec<Value> = events
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|event| event["event"] == "child_start")
+        .map(|event| event["argv"].clone())
+        .collect();
+    assert!(
+        events.contains("\"event\":\"exit\""),
+        "git traced the commit: {events}"
+    );
+    assert!(
+        !started.iter().any(|argv| argv
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|word| word == "maintenance" || word == "gc")),
+        "the commit started {started:?}"
+    );
+    fs::remove_dir_all(&path).unwrap();
 }
 
 #[test]

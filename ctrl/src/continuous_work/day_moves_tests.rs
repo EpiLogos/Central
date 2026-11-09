@@ -3183,8 +3183,22 @@ fn invisible_characters_and_a_lone_carriage_return_are_refused_once_the_kept_rec
     ensure(w.path(), at(T));
     let at_ms = ms("2026-10-20T09:10:00Z");
     let invisible = [
-        '\u{2028}', '\u{2029}', '\u{202A}', '\u{202E}', '\u{2066}', '\u{2069}', '\u{200B}',
-        '\u{200D}', '\u{2060}', '\u{FEFF}',
+        '\u{2028}',
+        '\u{2029}',
+        '\u{202A}',
+        '\u{202E}',
+        '\u{2066}',
+        '\u{2069}',
+        '\u{200B}',
+        '\u{200D}',
+        '\u{2060}',
+        '\u{FEFF}',
+        '\u{200E}',
+        '\u{200F}',
+        '\u{061C}',
+        '\u{E0000}',
+        '\u{E0041}',
+        '\u{E007F}',
     ];
     let mut list = Vec::new();
     for (index, c) in invisible.iter().enumerate() {
@@ -3492,6 +3506,62 @@ fn a_day_closed_before_the_first_press_is_refused_never_touched_and_no_salt_is_w
 }
 
 #[test]
+fn a_close_that_lands_after_the_press_looks_its_day_up_is_seen_on_the_reading_it_shows_from() {
+    let w = world("Europe/London", 0);
+    ensure(w.path(), at(T));
+    make_document(w.path(), TODAY, "day:c1-today", PROPOSAL, at(T));
+    set_field(
+        w.path(),
+        TODAY,
+        "p0_quick_thoughts",
+        json!("Bring this."),
+        "set:p0",
+        at(T),
+    );
+    let day = read(w.path(), "day_read", json!({"day_ref":TODAY}), at(T));
+    let offered = day["revision"]["revision"].clone();
+    // Another hand closes the Day while the press is between its lookup and
+    // the Day's reading. The close moves the relation only, so the revision
+    // the entry was offered from still stands.
+    let root = w.path().to_path_buf();
+    let (revision, relations) = (
+        offered.as_str().unwrap().to_owned(),
+        day["relations_revision"].as_str().unwrap().to_owned(),
+    );
+    super::day_moves::BETWEEN_PART_READS.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move || {
+            let scope = Scope::resolve(&root, None).unwrap();
+            temporal::change_lifecycle(
+                &scope,
+                TODAY,
+                &revision,
+                &relations,
+                "closed",
+                "test:closer",
+                at(T),
+            )
+            .unwrap();
+        }));
+    });
+    let refused = part(
+        w.path(),
+        json!({"day_ref":TODAY,"field_id":"p0_quick_thoughts","expected_revision":offered}),
+        at(T),
+    );
+    let words = words_of(refused);
+    assert!(
+        words.contains("is closed"),
+        "the press reads lifecycle, date and revision from the one reading its words come from (DLW build ruling 2026-11-09): {words}"
+    );
+    let after = read(w.path(), "day_read", json!({"day_ref":TODAY}), at(T));
+    assert_eq!(after["temporal"]["lifecycle"], "closed");
+    assert_eq!(
+        after["revision"]["revision"], offered,
+        "a close moves no revision, so expected_revision alone never sees it"
+    );
+}
+
+#[test]
 fn each_refusal_of_the_persons_own_act_opens_with_whose_act_it_is_then_its_cause() {
     let w = world("Europe/London", 0);
     ensure(w.path(), at(T));
@@ -3660,7 +3730,7 @@ fn a_label_reads_as_it_is_and_a_field_that_holds_no_text_offers_none() {
         w.path(),
         TODAY,
         "p0_quick_thoughts",
-        json!("Read\u{7}the\u{200B} plate\u{2028}now\u{202E}, \u{2066}here\u{2069}.\u{FEFF}"),
+        json!("Read\u{7}the\u{200B} plate\u{2028}now\u{202E}, \u{2066}he\u{200E}r\u{200F}e\u{061C}\u{2069}.\u{FEFF}\u{E0001}\u{E0067}\u{E007F}"),
         "set:p0",
         at(T),
     );
