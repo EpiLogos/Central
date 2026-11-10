@@ -65,10 +65,11 @@ fn path(root: &Path, id: &str) -> io::Result<PathBuf> {
     }
     Ok(root.join(".central/bkmr/moves").join(format!("{id}.json")))
 }
-/// The places a move's journal moves its Source between (its `from` and its `to`, each under its owner's root), read without
-/// changing anything, for the person's gate (file_map.rs `act_places`; round 54d F1). A journal that does not read names none: the
-/// act itself then refuses it.
-pub(crate) fn journal_places(root: &Path, input: &Value) -> Vec<(String, PathBuf)> {
+/// The places a move's journal writes, read without changing anything, for the person's gate (file_map.rs `act_places`; round 54d
+/// F1): where it moves its Source between (its `from` and its `to`, each under its owner's root), and the relations document of each
+/// scope it rewrites a relation or a link in, as that scope stands among `all`, the scopes the move runs from (round 54g item 4). A
+/// journal that does not read names none: the act itself then refuses it.
+pub(crate) fn journal_places(root: &Path, all: &[Scope], input: &Value) -> Vec<(String, PathBuf)> {
     let Some(plan) = input
         .get("plan_id")
         .and_then(Value::as_str)
@@ -86,10 +87,25 @@ pub(crate) fn journal_places(root: &Path, input: &Value) -> Vec<(String, PathBuf
     } else {
         root.join(&owner.path)
     };
-    vec![
+    let mut places = vec![
         (plan.from.clone(), base.join(&plan.from)),
         (plan.to.clone(), base.join(&plan.to)),
-    ]
+    ];
+    let written = plan
+        .documents
+        .iter()
+        .map(|document| &document.world)
+        .chain(plan.links.iter().map(|step| &step.world))
+        .collect::<std::collections::BTreeSet<_>>();
+    for world in written {
+        if let Some(scope) = all.iter().find(|scope| &scope.world == world) {
+            places.push((
+                format!("the relations of {world}"),
+                scope.root.join(scope.relations_path()),
+            ));
+        }
+    }
+    places
 }
 fn save(
     root: &Path,
@@ -296,41 +312,17 @@ pub(crate) fn plan(root: &Path, all: &[Scope], input: &Value) -> io::Result<Valu
         }
         let old_links = ground.links.clone();
         for (link_path, before_link) in old_links {
-            let (_, target) = lookup(all, &before_link.source_ref)?;
             let original = current.root.join(&link_path);
-            let after_path = if current.world == owner.world {
-                transform(&link_path, &from, &to)
-            } else {
-                link_path.clone()
-            };
-            let after_target = if target.path.starts_with(&entry.path) {
-                {
-                    let rest = target.path.strip_prefix(&entry.path).unwrap();
-                    if rest.as_os_str().is_empty() {
-                        owner.root.join(&to)
-                    } else {
-                        owner.root.join(&to).join(rest)
-                    }
-                }
-            } else {
-                target.path
-            };
-            let new_scope_root = if let Ok(rest) = current.root.strip_prefix(&entry.path) {
-                if rest.as_os_str().is_empty() {
-                    owner.root.join(&to)
-                } else {
-                    owner.root.join(&to).join(rest)
-                }
-            } else {
-                current.root.clone()
-            };
-            let new_target = relative_between(
-                new_scope_root.join(&after_path).parent().unwrap(),
-                &after_target,
-            );
-            if after_path == link_path && Path::new(&before_link.target) == new_target {
+            let Some((after_path, new_target)) = link_after(
+                all,
+                (&owner, &entry.path, &from, &to),
+                current,
+                &link_path,
+                &before_link,
+            )?
+            else {
                 continue;
-            }
+            };
             if !identity(&original, before_link.device, before_link.inode)
                 || fs::read_link(&original)? != Path::new(&before_link.target)
             {
@@ -382,6 +374,100 @@ pub(crate) fn plan(root: &Path, all: &[Scope], input: &Value) -> io::Result<Valu
         json!({"plan_id":id,"source_ref":entry.source.source_ref,"from":from,"destination":to,"state":"prepared","links":plan.links.len(),"requires_quiesced":true,"source_bytes_changed":false}),
     )
 }
+/// A move of the Source at `moved` (`from` to `to`, under `owner`'s root).
+type Moving<'a> = (&'a Scope, &'a Path, &'a str, &'a str);
+/// Where `current`'s managed link at `link_path` stands and points once the move is carried out, or None when the move leaves it as
+/// it is. One reading for `plan`, which rewrites the link, and for the person's gate, which asks the grant of each scope the move
+/// rewrites a link in (`rewritten_scopes`).
+fn link_after(
+    all: &[Scope],
+    (owner, moved, from, to): Moving<'_>,
+    current: &Scope,
+    link_path: &str,
+    before: &Link,
+) -> io::Result<Option<(String, PathBuf)>> {
+    let (_, target) = lookup(all, &before.source_ref)?;
+    let after_path = if current.world == owner.world {
+        transform(link_path, from, to)
+    } else {
+        link_path.to_owned()
+    };
+    let moved_to = |rest: &Path| {
+        if rest.as_os_str().is_empty() {
+            owner.root.join(to)
+        } else {
+            owner.root.join(to).join(rest)
+        }
+    };
+    let after_target = match target.path.strip_prefix(moved) {
+        Ok(rest) => moved_to(rest),
+        Err(_) => target.path,
+    };
+    let new_scope_root = match current.root.strip_prefix(moved) {
+        Ok(rest) => moved_to(rest),
+        Err(_) => current.root.clone(),
+    };
+    let new_target = relative_between(
+        new_scope_root.join(&after_path).parent().unwrap(),
+        &after_target,
+    );
+    if after_path == link_path && Path::new(&before.target) == new_target {
+        return Ok(None);
+    }
+    Ok(Some((after_path, new_target)))
+}
+/// The scopes whose managed links a move of the Source at `moved` to `to`, under `owner`, rewrites, as `plan` rewrites them: in each,
+/// the move stages the new link in its `.central/bkmr/moves`, replaces the link and rewrites its relations document, so the
+/// person's gate asks each one's grant (DLW build ruling 2026-11-09, round 54g item 4). A link whose Source does not read is counted
+/// as rewritten: `plan` refuses it, and the gate asks no less than the act would write.
+pub(crate) fn rewritten_scopes<'a>(
+    all: &'a [Scope],
+    owner: &Scope,
+    moved: &Path,
+    to: &str,
+) -> Vec<&'a Scope> {
+    let Some(from) = moved.strip_prefix(&owner.root).ok().and_then(Path::to_str) else {
+        return Vec::new();
+    };
+    all.iter()
+        .filter(|current| !current.is_folder())
+        .filter(|current| {
+            current.ground().map_or(true, |ground| {
+                ground.links.iter().any(|(link_path, before)| {
+                    link_after(all, (owner, moved, from, to), current, link_path, before)
+                        .map_or(true, |after| after.is_some())
+                })
+            })
+        })
+        .collect()
+}
+/// What a move's journal may write, as `plan` writes it (round 54g item 4): a relations document only at the move's own scope or at
+/// one it rewrites a link in, and each link step only at the link it replaces, contained in its scope, and its own staged and kept
+/// links in the moves folder. An edited journal that names any other place is refused before anything is written.
+fn checked(plan: &Plan) -> io::Result<()> {
+    for (index, step) in plan.links.iter().enumerate() {
+        let slot = format!(".central/bkmr/moves/{}-{index}", plan.id);
+        if relative(&step.path).is_err()
+            || relative(&step.after_path).is_err()
+            || step.staged != format!("{slot}-new")
+            || step.backup != format!("{slot}-old")
+        {
+            return Err(invalid(format!(
+                "Invalid move journal: its link step at {} names a place its move does not write",
+                step.path
+            )));
+        }
+    }
+    if let Some(document) = plan.documents.iter().find(|document| {
+        document.world != plan.world && !plan.links.iter().any(|step| step.world == document.world)
+    }) {
+        return Err(invalid(format!(
+            "Invalid move journal: it rewrites the relations of {}, where its move changes no link",
+            document.world
+        )));
+    }
+    Ok(())
+}
 /// The scopes a move carried out from its journal runs from: the journal's own, each where the move has left it, so a scope inside
 /// the moved folder is read where it now stands though its declaration still names where it stood. An external scope's state folder
 /// is made where missing.
@@ -401,6 +487,8 @@ fn resume_scopes_as(root: &Path, input: &Value, make_state: bool) -> io::Result<
     if plan.schema != "central.file-map-move/v1" || plan.id != id {
         return Err(invalid("Invalid move journal"));
     }
+    // The gate reads the journal here too, so an edited one is refused before any grant is asked of it (round 54g item 4).
+    checked(&plan)?;
     let owner = plan
         .worlds
         .iter()
@@ -443,7 +531,18 @@ fn resume_scopes_as(root: &Path, input: &Value, make_state: bool) -> io::Result<
                 .world
                 .starts_with(super::file_map_catalog::FOLDER_WORLD_PREFIX)
         {
-            let checked = Scope::project(current.clone(), world.project.clone())?;
+            // A project the journal runs from whose declaration does not read is named, as the gate names one the move reaches
+            // (round 54g item 12): the error keeps its kind, so a link loop is a failure and no permission is a denial.
+            let checked =
+                Scope::project(current.clone(), world.project.clone()).map_err(|error| {
+                    io::Error::new(
+                        error.kind(),
+                        format!(
+                            "its journal runs from the project {}, which does not read: {error}",
+                            world.project.as_deref().unwrap_or(&world.world)
+                        ),
+                    )
+                })?;
             if checked.world != world.world {
                 return Err(conflict("Project identity changed during move"));
             }
@@ -487,6 +586,7 @@ pub(crate) fn apply(
     if plan.schema != "central.file-map-move/v1" || plan.id != id {
         return Err(invalid("Invalid move journal"));
     }
+    checked(&plan)?;
     let owner = scope(all, &plan.world)?;
     let from = safe_member(&owner.root, &plan.from, false)?;
     let to = safe_member(&owner.root, &plan.to, false)?;

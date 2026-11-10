@@ -1254,11 +1254,13 @@ fn open_folder_root(raw: &str, ground: &Path) -> io::Result<PathBuf> {
         )));
     }
     // Said of the folder's own declared root alone: these words ride on every answer while the folder is unreachable, and the
-    // ground's own path is not theirs to show (DLW build ruling 2026-11-09, 47g item 5).
-    if canonical.starts_with(ground) {
+    // ground's own path is not theirs to show (DLW build ruling 2026-11-09, 47g item 5). Inside and around are asked of the folders
+    // themselves (their device and inode), as registration asks them, so no spelling of the ground stands for another place
+    // (round 54g item 7).
+    if crate::file_map::within(&canonical, ground) {
         return Err(invalid(format!("{raw} is inside this ground")));
     }
-    if ground.starts_with(&canonical) {
+    if crate::file_map::within(ground, &canonical) {
         return Err(invalid(format!("{raw} holds this ground")));
     }
     match fs::symlink_metadata(canonical.join("ProjectCentral/project.json")) {
@@ -3050,7 +3052,7 @@ fn media_entry(
     }
 }
 /// The member a SourceRef names in `world`, when it is that world's spelling of one.
-fn member_of_ref(world: &str, reference: &str) -> Option<String> {
+pub(crate) fn member_of_ref(world: &str, reference: &str) -> Option<String> {
     let prefix = format!("central:source:{world}:");
     reference
         .strip_prefix(&prefix)

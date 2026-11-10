@@ -885,9 +885,10 @@ pub(crate) fn insert_pool_bindings(
     exclude: &[String],
     bindings: &mut BTreeMap<String, SourceBinding>,
 ) -> io::Result<usize> {
-    // A scope's pool is its own tree. A folder below it that is a project's own (it holds `ProjectCentral/project.json`, as each
-    // project of Work does) is that project's, pooled there on its grant, so the pool stops at it: the root's pool makes no Source
-    // of a Work project's file (DLW build ruling 2026-11-09, round 54d F1: a root grant does not cover a Work tree).
+    // The root's pool is its own tree. A folder below it that is a project's own (it holds `ProjectCentral/project.json`, as each
+    // project of Work does) is that project's, pooled there on its grant, so the root's pool stops at it: it makes no Source of a
+    // Work project's file (DLW build ruling 2026-11-09, round 54d F1: a root grant does not cover a Work tree). A project's own pool
+    // keeps the subtrees in it that hold a manifest of their own, as it did before (round 54g item 9): its grant holds its tree.
     let projects = std::cell::RefCell::new(BTreeMap::<PathBuf, bool>::new());
     let own = |relative: &str| {
         let mut projects = projects.borrow_mut();
@@ -911,7 +912,7 @@ pub(crate) fn insert_pool_bindings(
         "pooled-content",
         exclude,
         bindings,
-        |relative| holds_text(relative) && own(relative),
+        |relative| holds_text(relative) && (world_ref != CONTROL_WORLD_REF || own(relative)),
     )
 }
 
@@ -2183,6 +2184,29 @@ mod retrieval_tests {
         let mut pooled = BTreeMap::new();
         insert_pool_bindings(root, "project:p", &["b".to_owned()], &mut pooled).unwrap();
         assert_eq!(paths(&pooled), vec!["a/one.md"]);
+    }
+
+    /// Round 54g item 9 (review of #343, finding 8): the stop at a project's folder is the root's pool's alone. A project's own pool
+    /// is its own tree, the subtrees in it that hold a manifest of their own included, as before round 54d.
+    #[test]
+    fn a_project_s_own_pool_keeps_the_subtrees_in_it_that_hold_a_manifest() {
+        let ground = Ground::new();
+        let root = &ground.0;
+        for (relative, bytes) in [
+            ("ProjectCentral/project.json", &b"{}"[..]),
+            ("plan.md", b"x"),
+            ("nested/ProjectCentral/project.json", b"{}"),
+            ("nested/page.md", b"x"),
+        ] {
+            let path = root.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        }
+        let mut pooled = BTreeMap::new();
+        insert_pool_bindings(root, "project:p", &[], &mut pooled).unwrap();
+        let kept = paths(&pooled);
+        assert!(kept.iter().any(|path| path == "plan.md"), "{kept:?}");
+        assert!(kept.iter().any(|path| path == "nested/page.md"), "{kept:?}");
     }
 
     /// Round 54d F1 (review of #340): a scope's pool is its own tree. A folder below it that holds a project's manifest is that
