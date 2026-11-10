@@ -541,6 +541,64 @@ fn your_worlds_place_kept_before_be2i_stays_through_a_chain_order_and_reads_clea
     assert_eq!(stored["place"], hastings());
 }
 
+/// be2j.c2 item 1 (DLW build ruling 2026-11-10): your world's record read and saved through the real `ctrl`, as O-I's Scope does it
+/// (it spreads the record it read, changes what it excludes and saves it at the revision), keeps the bytes of a place the read
+/// showed cleaned: a label kept with a character that draws nothing, and a reference with nothing visible, which the read
+/// shows as an unnamed place. Declared again as shown (`central.world.place`), the place is kept so.
+#[test]
+fn your_world_record_read_and_saved_keeps_the_bytes_of_a_place_the_read_showed_cleaned() {
+    let home = made(&[ACTION]);
+    let declared = cli(
+        &home,
+        "central.world-relations.save",
+        json!({"scope":"root","record":{"schema":"central.world-relations/v1","ref":"control:root","revision":"w1",
+            "parent":null,"place":hastings()}}),
+        None,
+    );
+    assert_eq!(declared["ok"], true, "{declared}");
+    let file = home
+        .ground()
+        .join(declared["data"]["source_path"].as_str().unwrap());
+    let mut kept: Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+    kept["place"]["label"] = json!("Hast\u{200D}ings");
+    kept["place"]["reference"] = json!("\u{200B}");
+    fs::write(&file, serde_json::to_vec_pretty(&kept).unwrap()).unwrap();
+
+    let read = cli(
+        &home,
+        "central.world-relations.read",
+        json!({"scope":"root","ref":"control:root"}),
+        None,
+    );
+    let mut record = read["data"]["record"].clone();
+    assert_eq!(record["place"]["label"], "Hastings", "{read}");
+    assert_eq!(record["place"]["reference"], "unnamed place aiq2");
+    let shown = record["place"].clone();
+    record["revision"] = json!("w2");
+    record["excluded_sources"] = json!(["central:source:x"]);
+    let saved = cli(
+        &home,
+        "central.world-relations.save",
+        json!({"scope":"root","record":record,"expected_revision":"w1"}),
+        None,
+    );
+    assert_eq!(saved["ok"], true, "{saved}");
+    let stored: Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+    assert_eq!(stored["place"], kept["place"], "the place, kept as it was");
+    assert_eq!(stored["revision"], "w2");
+    assert_eq!(stored["excluded_sources"], json!(["central:source:x"]));
+
+    let placed = cli(
+        &home,
+        ACTION,
+        json!({"place":shown,"expected_revision":"w2"}),
+        Some(TOKEN),
+    );
+    assert_eq!(placed["data"]["outcome"], "placed", "{placed}");
+    let stored: Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+    assert_eq!(stored["place"], shown);
+}
+
 /// be2j items 16 and 17: a project's world named before be2i with a character that draws nothing still takes a place and a chain
 /// order, keeping its name as kept; renamed, the receipt shows the kept old name cleaned. A name with nothing visible left calls
 /// the world by its folder on the map, which says so once, and a rename's receipt calls it an unnamed world, never blank.

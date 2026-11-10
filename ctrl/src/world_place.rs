@@ -125,6 +125,48 @@ impl WorldPlace {
         )
     }
 
+    /// This place as a save keeps it over the place the record held, word by word (be2j.c2 item 1, DLW build ruling 2026-11-10).
+    /// A label or a reference given as the kept one's bytes is unchanged and is not checked again, so a place kept before be2i
+    /// with a character that draws nothing stays through a change of its time zone or its numbers. Where the record is one a
+    /// reader gives back (`read_back`), a word given as a read shows the kept one is the kept word too, and its kept bytes are
+    /// what the save keeps: reading a record and saving it changes no word of its place, and never writes "unnamed place" over
+    /// a blank one. A read shows a kept place other than it is kept only where it says so (`kept_note`, then `shown`); a place
+    /// it shows as kept has no second form. Any other word is a changed word, checked as a person gives it. The numbers and
+    /// the time zone are checked on every save, with the record (`WorldRecord::validate`).
+    pub(crate) fn saved_over(&self, kept: Option<&Self>, read_back: bool) -> Result<Self, String> {
+        let shown = kept
+            .filter(|kept| read_back && kept.kept_note().is_some())
+            .map(Self::shown);
+        let word = |given: &str,
+                    kept: Option<&str>,
+                    shown: Option<&str>,
+                    field: &str,
+                    most: usize|
+         -> Result<String, String> {
+            match kept {
+                Some(kept) if kept == given || shown == Some(given) => Ok(kept.to_owned()),
+                _ => words(given, field, most, true).map(|()| given.to_owned()),
+            }
+        };
+        Ok(Self {
+            reference: word(
+                &self.reference,
+                kept.map(|kept| kept.reference.as_str()),
+                shown.as_ref().map(|shown| shown.reference.as_str()),
+                "reference",
+                PLACE_REFERENCE_MAX_CHARS,
+            )?,
+            label: word(
+                &self.label,
+                kept.map(|kept| kept.label.as_str()),
+                shown.as_ref().map(|shown| shown.label.as_str()),
+                "label",
+                PLACE_LABEL_MAX_CHARS,
+            )?,
+            ..self.clone()
+        })
+    }
+
     fn checked(&self, given: bool) -> Result<(), String> {
         words(
             &self.reference,
@@ -399,8 +441,10 @@ fn keep_world_field<T: Serialize + DeserializeOwned + PartialEq>(
         set(fields);
         let next = next_record_revision(&reading.revision);
         fields.insert("revision".into(), json!(next));
+        // The record is the one this store keeps, with one field set here: its words are as given (`save_given`), so a place
+        // declared again as a read shows it replaces the kept one (be2j.c2 item 1, DLW build ruling 2026-11-10).
         store
-            .save(&record, Some(&reading.revision))
+            .save_given(&record, Some(&reading.revision))
             .map_err(|error| store_error(error, what))?;
         kept.outcome = Kept::Written;
         kept.revision = next;
@@ -772,5 +816,82 @@ mod tests {
         assert_eq!(hidden.shown(), hastings());
         assert!(hidden.kept_note().unwrap().contains("central.world.place"));
         assert_eq!(hastings().kept_note(), None);
+    }
+
+    /// be2j.c2 item 1 (DLW build ruling 2026-11-10): a place saved over a kept one keeps the bytes of each word given back as the
+    /// kept one or as a read shows it, and checks each changed word as a person gives it.
+    #[test]
+    fn a_place_saved_over_a_kept_one_keeps_each_word_given_back_and_checks_each_changed_one() {
+        let no_invisible = |field: &str| {
+            Err(format!(
+                "{field} must hold no control character and no invisible one"
+            ))
+        };
+        let kept = WorldPlace {
+            reference: "\u{200B}".into(),
+            label: "Hast\u{200D}ings".into(),
+            ..hastings()
+        };
+        let shown = kept.shown();
+        assert_eq!(
+            (shown.reference.as_str(), shown.label.as_str()),
+            ("unnamed place aiq2", "Hastings")
+        );
+        // Given back as the read showed it, or as it is kept: the kept bytes.
+        assert_eq!(shown.saved_over(Some(&kept), true), Ok(kept.clone()));
+        assert_eq!(kept.saved_over(Some(&kept), true), Ok(kept.clone()));
+        assert_eq!(kept.saved_over(Some(&kept), false), Ok(kept.clone()));
+        let blank = WorldPlace {
+            label: "\u{3164}".into(),
+            ..hastings()
+        };
+        assert_eq!(blank.shown().label, "unnamed place dbwp");
+        assert_eq!(
+            blank.shown().saved_over(Some(&blank), true),
+            Ok(blank.clone())
+        );
+        // Word by word: another time zone leaves both words as kept; a new label leaves the reference as kept.
+        let moved = WorldPlace {
+            timezone: "Europe/Paris".into(),
+            ..kept.clone()
+        };
+        assert_eq!(moved.saved_over(Some(&kept), true), Ok(moved.clone()));
+        let relabelled = WorldPlace {
+            label: "St Leonards".into(),
+            ..shown.clone()
+        };
+        assert_eq!(
+            relabelled.saved_over(Some(&kept), true),
+            Ok(WorldPlace {
+                label: "St Leonards".into(),
+                ..kept.clone()
+            })
+        );
+        // A changed word is checked with the whole set, whichever word it is.
+        let hidden = WorldPlace {
+            label: "Hast\u{200B}ings".into(),
+            ..shown.clone()
+        };
+        assert_eq!(hidden.saved_over(Some(&kept), true), no_invisible("label"));
+        let tagged = WorldPlace {
+            reference: "geonames:2647356\u{E0041}".into(),
+            ..shown.clone()
+        };
+        assert_eq!(
+            tagged.saved_over(Some(&kept), true),
+            no_invisible("reference")
+        );
+        // A place a read shows as it is kept has no second form: a label given without its kept space is a changed label.
+        let spaced = WorldPlace {
+            label: " Hastings".into(),
+            ..hastings()
+        };
+        assert_eq!(spaced.kept_note(), None);
+        assert_eq!(hastings().saved_over(Some(&spaced), true), Ok(hastings()));
+        // As given (the record Central edits itself): the shown words are changed words, and replace the kept ones.
+        assert_eq!(shown.saved_over(Some(&kept), false), Ok(shown.clone()));
+        // With no place kept, every word is given.
+        assert_eq!(kept.saved_over(None, true), no_invisible("reference"));
+        assert_eq!(hastings().saved_over(None, true), Ok(hastings()));
     }
 }

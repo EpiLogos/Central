@@ -248,6 +248,8 @@ mod tests {
 
     /// be2j ruling 7 (DLW build ruling 2026-11-09): the raw-bidi guard in Central's verify job, run as CI runs it, refuses a raw
     /// override or isolate in tracked text, passes a tree that writes one as its escape, and passes nothing outside a checkout.
+    /// Each of the nine is planted in a tree of its own (be2j.c2 item 3, DLW build ruling 2026-11-10): the five embeddings and
+    /// overrides, U+202A to U+202E, and the four isolates, U+2066 to U+2069, so a pattern dropped from the step is a red test.
     #[test]
     fn the_raw_bidi_guard_refuses_a_raw_override_passes_a_clean_tree_and_nothing_outside_a_checkout(
     ) {
@@ -291,8 +293,19 @@ mod tests {
             }
             dir
         };
-        let raw = tree("raw", "Hast\u{202E}ings\n", true);
-        let isolate = tree("isolate", "Hast\u{2068}ings\n", true);
+        let planted: Vec<(u32, std::path::PathBuf)> = ('\u{202A}'..='\u{202E}')
+            .chain('\u{2066}'..='\u{2069}')
+            .map(|bidi| {
+                let code = bidi as u32;
+                let dir = tree(
+                    &format!("raw-{code:04x}"),
+                    &format!("Hast{bidi}ings\n"),
+                    true,
+                );
+                (code, dir)
+            })
+            .collect();
+        assert_eq!(planted.len(), 9);
         let clean = tree("clean", "Hast\\u{202E}ings\n", true);
         let none = tree("none", "Hast\u{202E}ings\n", false);
         let guard = |dir: &std::path::Path| {
@@ -306,12 +319,12 @@ mod tests {
                 String::from_utf8_lossy(&ran.stdout).into_owned(),
             )
         };
-        for dir in [&raw, &isolate] {
+        for (bidi, dir) in &planted {
             let (code, said) = guard(dir);
-            assert_eq!(code, Some(1), "{said}");
+            assert_eq!(code, Some(1), "U+{bidi:04X}: {said}");
             assert!(
                 said.contains("a raw bidi override or isolate in tracked source"),
-                "{said}"
+                "U+{bidi:04X}: {said}"
             );
         }
         assert_eq!(guard(&clean).0, Some(0));

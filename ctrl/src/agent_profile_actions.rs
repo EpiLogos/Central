@@ -533,8 +533,10 @@ fn chain_edit(
     if let Err(error) = validate_ingested_profile(&profile) {
         return invalid_input(action, error);
     }
+    // The profile is the one this store keeps, edited here: every word is as given (`save_given`), so a rename to the name as
+    // a read shows it replaces the kept bytes (be2j.c2 item 1, DLW build ruling 2026-11-10).
     store
-        .save(&profile, Some(&expected_revision))
+        .save_given(&profile, Some(&expected_revision))
         .map(|receipt| {
             let mut data = to_value(receipt).expect("AgentProfile receipt serializes");
             data["state"] = json!("saved");
@@ -1592,6 +1594,74 @@ mod tests {
             .contains(AGENT_PROFILE_RENAME_ACTION));
         let stored: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(stored["name"], "Guar\u{200D}dian");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// be2j.c2 item 1 (DLW build ruling 2026-11-10): a profile read, changed in something else and saved keeps its name's bytes,
+    /// whether the read showed the name without a character that draws nothing or as an unnamed agent. Before, the first
+    /// replaced the kept name with the shown one, and the second wrote "unnamed agent 8p9z" as the agent's name.
+    #[test]
+    fn a_profile_read_and_saved_keeps_the_bytes_of_a_name_the_read_showed_cleaned() {
+        for (kept, shown) in [
+            ("Guar\u{200D}dian", "Guardian"),
+            ("\u{200B}\u{3164}", "unnamed agent 8p9z"),
+        ] {
+            let (root, registry, path) = kept_name_fixture(kept, &["skill-set:personal"]);
+            let mut options = None;
+            let mut connectors = None;
+            let mut connector_context = None;
+            let context = context(&root, &mut options, &mut connectors, &mut connector_context);
+            let read = registry.execute(
+                AGENT_PROFILE_READ_ACTION,
+                &json!({"scope":"personal", "profile_ref":"agent-profile:guardian"}),
+                &context,
+            );
+            assert!(read.ok, "{read:?}");
+            let mut profile = read.data.unwrap()["profile"].clone();
+            assert_eq!(profile["name"], shown);
+            profile["revision"] = json!("p2");
+            profile["purpose"] = json!("Keeps the ground, changed.");
+            let saved = registry.execute(
+                AGENT_PROFILE_SAVE_ACTION,
+                &json!({"scope":"personal", "profile": profile, "expected_revision":"p1"}),
+                &context,
+            );
+            assert!(saved.ok, "{kept:?}: {saved:?}");
+            let stored: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(stored["name"], kept, "read as {shown:?}");
+            assert_eq!(stored["revision"], "p2");
+            assert_eq!(stored["purpose"], "Keeps the ground, changed.");
+            let _ = std::fs::remove_dir_all(&root);
+        }
+    }
+
+    /// be2j.c2 item 1: the rename a reading's note names still keeps the name as shown. `agent-profile.rename` gives a word, not a
+    /// profile read back, so the shown name replaces the kept bytes and the note goes.
+    #[test]
+    fn a_rename_to_the_name_as_shown_replaces_the_kept_bytes() {
+        let (root, registry, path) = kept_name_fixture("Guar\u{200D}dian", &["skill-set:personal"]);
+        let mut options = None;
+        let mut connectors = None;
+        let mut connector_context = None;
+        let context = context(&root, &mut options, &mut connectors, &mut connector_context);
+        let renamed = registry.execute(
+            AGENT_PROFILE_RENAME_ACTION,
+            &json!({"scope":"personal", "profile_ref":"agent-profile:guardian", "expected_revision":"p1",
+                "name": "Guardian"}),
+            &context,
+        );
+        assert!(renamed.ok, "{renamed:?}");
+        let renamed = renamed.data.unwrap();
+        assert_eq!(renamed["state"], "saved");
+        assert_eq!(renamed["chain"]["name"], "Guardian");
+        let stored: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(stored["name"], "Guardian");
+        let read = registry.execute(
+            AGENT_PROFILE_READ_ACTION,
+            &json!({"scope":"personal", "profile_ref":"agent-profile:guardian"}),
+            &context,
+        );
+        assert!(read.data.unwrap().get("notes").is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -246,10 +246,35 @@ impl RelationRecordStore {
     /// - update: `expected_revision = Some(current)`, source must exist and match;
     /// - every update must advance the authored revision;
     /// - the stable ref never changes across revisions.
+    ///
+    /// The record is one a reader gives back: `central.world-relations.read` shows a kept place's label and reference without
+    /// the characters that draw nothing, and whoever read the record, changed something else and saves it gives those words as
+    /// they were shown. They are the kept words, and their bytes stay (be2j.c2 item 1, DLW build ruling 2026-11-10).
     pub fn save(
         &self,
         record: &serde_json::Value,
         expected_revision: Option<&str>,
+    ) -> Result<RelationRecordWriteReceipt, RelationRecordStoreError> {
+        self.save_words(record, expected_revision, true)
+    }
+
+    /// Save a record whose every word is as given: Central's own edit of the record it read from this store
+    /// (`central.world.place`, `central.world.chain-order`), where a word that differs from the kept one is a changed word,
+    /// whatever a read shows for the kept one. Declaring a place again as it is shown is how a person keeps it so, and it
+    /// replaces the kept bytes.
+    pub fn save_given(
+        &self,
+        record: &serde_json::Value,
+        expected_revision: Option<&str>,
+    ) -> Result<RelationRecordWriteReceipt, RelationRecordStoreError> {
+        self.save_words(record, expected_revision, false)
+    }
+
+    fn save_words(
+        &self,
+        record: &serde_json::Value,
+        expected_revision: Option<&str>,
+        read_back: bool,
     ) -> Result<RelationRecordWriteReceipt, RelationRecordStoreError> {
         self.validate_root()?;
         if record.get("schema").and_then(|value| value.as_str()) != Some(self.kind.schema()) {
@@ -277,15 +302,19 @@ impl RelationRecordStore {
         }
         self.validate_typed(record)?;
 
-        let mut bytes = serde_json::to_vec_pretty(record)
-            .map_err(|error| RelationRecordStoreError::InvalidRecord(error.to_string()))?;
-        bytes.push(b'\n');
-        if bytes.len() > RELATION_RECORD_METADATA_LIMIT {
-            return Err(RelationRecordStoreError::RecordBudget {
-                byte_len: bytes.len() as u64,
-                limit: RELATION_RECORD_METADATA_LIMIT as u64,
-            });
-        }
+        let encode = |record: &serde_json::Value| -> Result<Vec<u8>, RelationRecordStoreError> {
+            let mut bytes = serde_json::to_vec_pretty(record)
+                .map_err(|error| RelationRecordStoreError::InvalidRecord(error.to_string()))?;
+            bytes.push(b'\n');
+            if bytes.len() > RELATION_RECORD_METADATA_LIMIT {
+                return Err(RelationRecordStoreError::RecordBudget {
+                    byte_len: bytes.len() as u64,
+                    limit: RELATION_RECORD_METADATA_LIMIT as u64,
+                });
+            }
+            Ok(bytes)
+        };
+        let mut bytes = encode(record)?;
         let dir = self.source_dir();
         ensure_directory_path(&self.owner_root, &dir)?;
         let path = self.source_path(&ref_)?;
@@ -335,8 +364,9 @@ impl RelationRecordStore {
             }
         };
         // A world's place given here is refused with the whole set, as `central.world.place` refuses it (be2j item 13, DLW build
-        // ruling 2026-11-10). One kept as it was stays as kept, read under the rule it was kept under (`WorldRecord::validate`):
-        // `central.world.place` and `central.world.chain-order` save the record with its other fields untouched.
+        // ruling 2026-11-10), word by word (be2j.c2 item 1): a label or a reference kept as it was stays as kept, read under the
+        // rule it was kept under (`WorldRecord::validate`), and so does one a reader gives back as the read showed it, whose
+        // kept bytes are written in its place (`WorldPlace::saved_over`).
         if matches!(self.kind, RelationRecordKind::World) {
             let place_of = |record: &serde_json::Value| {
                 record
@@ -351,10 +381,15 @@ impl RelationRecordStore {
                 .transpose()
                 .map_err(|error| RelationRecordStoreError::InvalidRecord(error.to_string()))?
             {
-                if kept.as_ref() != Some(&given) {
-                    given.validate().map_err(|why| {
-                        RelationRecordStoreError::InvalidRecord(format!("the world's place: {why}"))
-                    })?;
+                let written = given.saved_over(kept.as_ref(), read_back).map_err(|why| {
+                    RelationRecordStoreError::InvalidRecord(format!("the world's place: {why}"))
+                })?;
+                if written != given {
+                    let mut kept_so = record.clone();
+                    let place = &mut kept_so["place"];
+                    place["reference"] = serde_json::Value::String(written.reference);
+                    place["label"] = serde_json::Value::String(written.label);
+                    bytes = encode(&kept_so)?;
                 }
             }
         }
@@ -2019,5 +2054,101 @@ mod tests {
         assert_eq!(fs::read(&child_path).unwrap(), child_bytes);
         assert_eq!(fs::metadata(&root_path).unwrap().ino(), root_inode);
         assert_eq!(fs::metadata(&child_path).unwrap().ino(), child_inode);
+    }
+
+    /// be2j.c2 item 1 (DLW build ruling 2026-11-10): O-I's Scope reads your world's record, spreads it, changes what it excludes
+    /// and saves it at the revision. The read shows a kept place's label and reference without the characters that draw
+    /// nothing, or as an unnamed place; the save keeps their bytes. Before, it wrote the shown words over them, "unnamed place
+    /// aiq2" over a reference among them. A place is changed word by word: another time zone beside words kept before be2i is
+    /// accepted, a changed label is checked with the whole set, and Central's own edit of the record takes every word as given.
+    #[test]
+    fn a_world_record_read_and_saved_keeps_the_bytes_of_the_place_words_the_read_showed_cleaned() {
+        let fixture = ReadFixture::new();
+        let store = RelationRecordStore::worlds_at_root(&fixture.0);
+        let mut record = native_world_record();
+        record["place"] = json!({"reference":"geonames:2647356","label":"Hastings","latitude_degrees":50.85,
+            "longitude_degrees":0.57,"altitude_metres":10.0,"timezone":"Europe/London"});
+        store.save(&record, None).unwrap();
+        let path = store.source_path("control:root").unwrap();
+        let stored = || -> Value { serde_json::from_slice(&fs::read(&path).unwrap()).unwrap() };
+        let read = || {
+            let read = native_read_action(
+                &fixture.0,
+                "central.world-relations.read",
+                &json!({"scope":"root","ref":"control:root"}),
+            );
+            assert!(read.ok, "{read:?}");
+            read.data.unwrap()["record"].clone()
+        };
+        let save = |record: &Value, expected: &str| {
+            native_read_action(
+                &fixture.0,
+                "central.world-relations.save",
+                &json!({"scope":"root","record":record,"expected_revision":expected}),
+            )
+        };
+        for (label, reference, shown_label, shown_reference) in [
+            (
+                "Hast\u{200D}ings",
+                "geonames:2647356",
+                "Hastings",
+                "geonames:2647356",
+            ),
+            (
+                "\u{3164}",
+                "geonames:2647356",
+                "unnamed place dbwp",
+                "geonames:2647356",
+            ),
+            ("Hastings", "\u{200B}", "Hastings", "unnamed place aiq2"),
+        ] {
+            let mut kept = stored();
+            kept["revision"] = json!("w1");
+            kept["place"]["label"] = json!(label);
+            kept["place"]["reference"] = json!(reference);
+            kept["place"]["timezone"] = json!("Europe/London");
+            fs::write(&path, serde_json::to_vec_pretty(&kept).unwrap()).unwrap();
+
+            // Scope's save: the record as read, with what it excludes changed.
+            let mut given = read();
+            assert_eq!(given["place"]["label"], shown_label);
+            assert_eq!(given["place"]["reference"], shown_reference);
+            given["revision"] = json!("w2");
+            given["excluded_sources"] = json!(["central:source:x"]);
+            let saved = save(&given, "w1");
+            assert!(saved.ok, "{label:?} {reference:?}: {saved:?}");
+            let after = stored();
+            assert_eq!(after["place"], kept["place"], "{label:?} {reference:?}");
+            assert_eq!(after["revision"], "w2");
+            assert_eq!(after["excluded_sources"], json!(["central:source:x"]));
+
+            // Another time zone, beside the words as they are kept: accepted, and the words stay.
+            let mut moved = after.clone();
+            moved["revision"] = json!("w3");
+            moved["place"]["timezone"] = json!("Europe/Paris");
+            let saved = save(&moved, "w2");
+            assert!(saved.ok, "{label:?} {reference:?}: {saved:?}");
+            assert_eq!(stored()["place"], moved["place"]);
+
+            // A label really changed to hold a character that draws nothing: refused, and nothing is kept.
+            let mut hidden = read();
+            hidden["revision"] = json!("w4");
+            hidden["place"]["label"] = json!("Hast\u{200B}ings");
+            let refused = save(&hidden, "w3");
+            assert!(
+                !refused.ok
+                    && format!("{refused:?}")
+                        .contains("label must hold no control character and no invisible one"),
+                "{label:?} {reference:?}: {refused:?}"
+            );
+            assert_eq!(stored(), moved);
+
+            // Central's own edit of the record: every word is as given, so the shown words replace the kept ones.
+            let mut declared = read();
+            declared["revision"] = json!("w4");
+            store.save_given(&declared, Some("w3")).unwrap();
+            assert_eq!(stored()["place"]["label"], shown_label);
+            assert_eq!(stored()["place"]["reference"], shown_reference);
+        }
     }
 }

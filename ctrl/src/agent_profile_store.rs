@@ -142,10 +142,34 @@ impl AgentProfileStore {
     /// - create: `expected_revision = None`, source must not already exist;
     /// - update: `expected_revision = Some(current)`, source must exist and match;
     /// - every update must advance the authored profile revision.
+    ///
+    /// The profile is one a reader gives back: `agent-profile.read` shows a kept name without the characters that draw nothing,
+    /// and whoever read the profile, changed something else and saves it gives the name as it was shown. That name is the kept
+    /// one, and its bytes stay (be2j.c2 item 1, DLW build ruling 2026-11-10).
     pub fn save(
         &self,
         profile: &AgentProfile,
         expected_revision: Option<&str>,
+    ) -> Result<AgentProfileWriteReceipt, AgentProfileStoreError> {
+        self.save_words(profile, expected_revision, true)
+    }
+
+    /// Save a profile whose every word is as given: Central's own edit of the profile it read from this store (a chain edit,
+    /// `agent-profile.rename`), where a word that differs from the kept one is a changed word, whatever a read shows for the
+    /// kept one. Renaming an agent to its name as shown is how a person keeps it so, and it replaces the kept bytes.
+    pub fn save_given(
+        &self,
+        profile: &AgentProfile,
+        expected_revision: Option<&str>,
+    ) -> Result<AgentProfileWriteReceipt, AgentProfileStoreError> {
+        self.save_words(profile, expected_revision, false)
+    }
+
+    fn save_words(
+        &self,
+        profile: &AgentProfile,
+        expected_revision: Option<&str>,
+        read_back: bool,
     ) -> Result<AgentProfileWriteReceipt, AgentProfileStoreError> {
         let _lock = self.mutation_lock(&profile.profile_ref)?;
         self.validate_loaded(&profile.profile_ref, profile)?;
@@ -218,6 +242,28 @@ impl AgentProfileStore {
                 }
                 (Some(current.revision.clone()), false)
             }
+        };
+        // A name given back as a read showed it is the kept name (be2j.c2 item 1): the read shows a kept name that holds a
+        // character that draws nothing without it, or as an unnamed agent when nothing else is left (`shown_agent_name`, the
+        // one source of both). The kept bytes are what is written, so reading a profile and saving it changes nothing; any
+        // other spelling is a changed name. The refs are read as they are kept, so a ref is unchanged only as the same bytes.
+        let read_back_name = existing.as_ref().filter(|_| read_back).and_then(|kept| {
+            match crate::agent_profile_actions::shown_agent_name(kept) {
+                (Some(shown), Some(_)) if profile.name.as_deref() == Some(shown.as_str()) => {
+                    kept.name.clone()
+                }
+                _ => None,
+            }
+        });
+        let written;
+        let profile = match read_back_name {
+            Some(name) => {
+                let mut kept_so = profile.clone();
+                kept_so.name = Some(name);
+                written = kept_so;
+                &written
+            }
+            None => profile,
         };
         // What a person gives now is refused with the whole set (be2i.1; be2j for the refs): the name, the expressive character
         // ref and every other ref, where it is new here or changed, holds no invisible character. One kept before be2i and kept as
@@ -741,6 +787,114 @@ mod tests {
         let mut agent = personal_profile("a1");
         agent.profile_ref = "agent-profile:\u{200B}ward".into();
         refused(&agent, None, "Agent Profile ref");
+    }
+
+    /// be2j.c2 item 1 (DLW build ruling 2026-11-10): a name given back as a read showed it is the kept name, and its bytes stay;
+    /// a name that really changed is checked as given; and Central's own edit (`save_given`) takes every word as given, so a
+    /// rename to the shown name replaces the kept bytes.
+    #[test]
+    fn a_name_given_back_as_a_read_showed_it_keeps_its_bytes_and_an_edit_of_the_record_replaces_them(
+    ) {
+        let root = crate::tempdir().unwrap();
+        let store = AgentProfileStore::personal(root.path());
+        store.save(&personal_profile("p1"), None).unwrap();
+        let path = store.source_path("agent-profile:guardian").unwrap();
+        let keep = |name: &str| {
+            let mut kept: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            kept["name"] = serde_json::json!(name);
+            std::fs::write(&path, serde_json::to_vec_pretty(&kept).unwrap()).unwrap();
+            store.read("agent-profile:guardian").unwrap().profile
+        };
+        let stored = || {
+            let kept: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            kept["name"].as_str().map(str::to_owned)
+        };
+        let mut revision = 1;
+        let mut next = |mut profile: AgentProfile, name: &str| {
+            revision += 1;
+            let expected = std::mem::replace(&mut profile.revision, format!("p{revision}"));
+            profile.name = Some(name.into());
+            (profile, expected)
+        };
+        // The name as a read shows it, with something else changed: the kept bytes stay.
+        for (kept, shown) in [
+            ("Guar\u{200D}dian", "Guardian"),
+            ("\u{200B}\u{3164}", "unnamed agent 8p9z"),
+        ] {
+            let (mut given, expected) = next(keep(kept), shown);
+            given.purpose = Some(format!("Keeps the ground, {}.", given.revision));
+            store.save(&given, Some(&expected)).unwrap();
+            assert_eq!(stored().as_deref(), Some(kept), "given back as {shown:?}");
+            let read = store.read("agent-profile:guardian").unwrap().profile;
+            assert_eq!(read.purpose, given.purpose, "the rest is saved");
+        }
+        // Any other spelling is a changed name: a plain one replaces the kept bytes, and one that holds an invisible character
+        // is refused.
+        let (given, expected) = next(keep("Guar\u{200D}dian"), "Warden");
+        store.save(&given, Some(&expected)).unwrap();
+        assert_eq!(stored().as_deref(), Some("Warden"));
+        let (given, expected) = next(keep("Guar\u{200D}dian"), "Guard\u{200D}ian");
+        assert!(matches!(
+            store.save(&given, Some(&expected)),
+            Err(AgentProfileStoreError::InvalidProfile(why))
+                if why == "Agent Profile name must hold no control character and no invisible one"
+        ));
+        assert_eq!(stored().as_deref(), Some("Guar\u{200D}dian"));
+        // A kept name that holds nothing invisible is read as it is kept, so its trimmed spelling is a changed name.
+        let (given, expected) = next(keep(" Guardian"), "Guardian");
+        store.save(&given, Some(&expected)).unwrap();
+        assert_eq!(stored().as_deref(), Some("Guardian"));
+        // Central's own edit of the record: every word is as given, so the shown name replaces the kept one.
+        let (given, expected) = next(keep("Guar\u{200D}dian"), "Guardian");
+        store.save_given(&given, Some(&expected)).unwrap();
+        assert_eq!(stored().as_deref(), Some("Guardian"));
+    }
+
+    /// be2j.c2 item 3 (DLW build ruling 2026-11-10): a Routine ref given with a character that draws nothing is refused, and one
+    /// kept so before be2i, kept as it was, stays.
+    #[test]
+    fn a_routine_ref_given_with_an_invisible_character_is_refused_and_a_kept_one_stays() {
+        ref_list_case("Routine refs", "routine_refs", |profile| {
+            &mut profile.routine_refs
+        });
+    }
+
+    /// be2j.c2 item 3: the same for a governance ref.
+    #[test]
+    fn a_governance_ref_given_with_an_invisible_character_is_refused_and_a_kept_one_stays() {
+        ref_list_case("governance refs", "governance_refs", |profile| {
+            &mut profile.governance_refs
+        });
+    }
+
+    fn ref_list_case(field: &str, key: &str, refs: fn(&mut AgentProfile) -> &mut Vec<String>) {
+        let root = crate::tempdir().unwrap();
+        let store = AgentProfileStore::personal(root.path());
+        store.save(&personal_profile("p1"), None).unwrap();
+        let mut given = personal_profile("p2");
+        refs(&mut given).push("central:gi\u{200B}ven".into());
+        assert!(
+            matches!(
+                store.save(&given, Some("p1")),
+                Err(AgentProfileStoreError::InvalidProfile(why))
+                    if why == format!("{field} must hold no control character and no invisible one")
+            ),
+            "{field}"
+        );
+        let path = store.source_path("agent-profile:guardian").unwrap();
+        let mut kept: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        kept[key] = serde_json::json!(["central:ke\u{200D}pt"]);
+        std::fs::write(&path, serde_json::to_vec_pretty(&kept).unwrap()).unwrap();
+        let mut carried = store.read("agent-profile:guardian").unwrap().profile;
+        assert_eq!(*refs(&mut carried), ["central:ke\u{200D}pt"]);
+        carried.revision = "p2".into();
+        carried.purpose = Some("Keeps the ground.".into());
+        store.save(&carried, Some("p1")).unwrap();
+        let mut read = store.read("agent-profile:guardian").unwrap().profile;
+        assert_eq!(*refs(&mut read), ["central:ke\u{200D}pt"]);
     }
 
     #[test]
