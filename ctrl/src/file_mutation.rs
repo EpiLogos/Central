@@ -3219,6 +3219,32 @@ mod record_publication_tests {
             b"neighbour retained"
         );
     }
+    /// The person's grant for adopting a bookmark database at the root, written into this disposable ground; the token it
+    /// authenticates.
+    fn grant_adoption(root: &Path) -> &'static str {
+        const TOKEN: &str = "file-mutation-adoption-controlled-test-not-a-live-secret";
+        let source = "Control/user/file-map-adoption-authority.json";
+        fs::write(root.join(source), serde_json::to_vec(&json!({"schema":"central.native-action-authority/v1",
+            "scope_ref":"control:root","grants":[{"principal_ref":"human:file-mutation-test","actor_kind":"human",
+                "token_sha256":crate::continuous_work::source::key(TOKEN),"scope_refs":["control:root"],
+                "actions":["central.file-map.adopt-db"],"expires_at_unix_seconds":u64::MAX}]})).unwrap()).unwrap();
+        let path = root.join(crate::source_horizon::CONTROL_GROUND_RELATIONS_SOURCE);
+        let mut relations: Value = fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_else(|| {
+                json!({"schema":crate::source_horizon::CONTROL_GROUND_RELATIONS_SCHEMA,
+                "project_id":"control:root","relations":[]})
+            });
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        relations["relations"].as_array_mut().unwrap().push(json!({
+            "ref":crate::source_horizon::source_ref("control:root", source),"path":source,
+            "roles":[crate::continuous_work::authority::AUTHORITY_ROLE],"provenance":"human-adopted",
+            "standing":"architecture-contract","treatment":"control-user","recognition":"controlled-test-only",
+            "recorded_at_unix_seconds":1}));
+        fs::write(path, serde_json::to_vec(&relations).unwrap()).unwrap();
+        TOKEN
+    }
     fn native_action(root: &Path, action: &str, input: Value) -> ActionResult {
         let mut registry = crate::action::create_core_action_registry();
         crate::projectcentral_ops::register_projectcentral_actions(&mut registry);
@@ -3479,6 +3505,7 @@ mod record_publication_tests {
         database.execute_batch("CREATE TABLE native_atomic_backup_proof(value TEXT); INSERT INTO native_atomic_backup_proof VALUES ('actual retained backup bytes');").unwrap();
         drop(database);
         let before = fs::read(backend.db()).unwrap();
+        let person = grant_adoption(&fixture.root);
         let inspected = native_action(&fixture.root, "central.file-map.inspect", json!({}));
         assert!(
             inspected.ok,
@@ -3500,13 +3527,28 @@ mod record_publication_tests {
             fs::set_permissions(target, fs::Permissions::from_mode(0o000)).unwrap();
             *slot.lock().unwrap() = Some(restore);
         });
-        let failure = native_action(
-            &fixture.root,
-            "central.file-map.adopt-db",
-            json!({
-                "database":backend.db(),"quiesced":true,"expected_revision":basis
-            }),
-        );
+        // Adoption is the person's own act (file_map.rs `the_persons_act`; DLW build ruling 2026-11-09, round 54's Central
+        // follow-up): it runs on their grant, given here as the host gives it.
+        let failure = {
+            let root_options = crate::root::RootOptions {
+                explicit_root: Some(fixture.root.clone()),
+                ..Default::default()
+            };
+            let connectors = central_connector_sdk::ConnectorRegistry::default();
+            let connector_context = central_connector_sdk::ConnectorContext {
+                platform: "native-record-fixture".into(),
+            };
+            crate::file_map::action_on(
+                "adopt-db",
+                &json!({"database":backend.db(),"quiesced":true,"expected_revision":basis}),
+                &ActionExecutionContext {
+                    root_options: &root_options,
+                    connectors: &connectors,
+                    connector_context: &connector_context,
+                },
+                Some(person),
+            )
+        };
         assert!(!failure.ok);
         assert_eq!(failure.status, ResultStatus::PartialCompletion);
         let details = failure.error.as_ref().unwrap().details.as_ref().unwrap();

@@ -698,8 +698,8 @@ fn the_owner_s_grant_shape_still_authorises_every_act_it_did() {
         }
     }
     // Every project Action the owner's grant lists is one it may still take at its projects: none was listed only at the root but
-    // `control.apply-proposal` and the file map's three moves, which are the root's to grant (DLW build ruling 2026-11-09, round 53
-    // item 2: a move can bring a folder into Work).
+    // `control.apply-proposal`, the file map's three moves and its scope-register, which are the root's to grant (DLW build ruling
+    // 2026-11-09: round 53 item 2, a move can bring a folder into Work; round 54's Central follow-up, the root registers every scope).
     assert!(actions
         .iter()
         .filter(|a| !PROJECT_AUTHENTICATED_ACTIONS.contains(a))
@@ -707,7 +707,8 @@ fn the_owner_s_grant_shape_still_authorises_every_act_it_did() {
             "control.apply-proposal",
             "central.file-map.move-plan",
             "central.file-map.move-apply",
-            "central.file-map.move-rollback"
+            "central.file-map.move-rollback",
+            "central.file-map.scope-register"
         ]
         .contains(a)));
 }
