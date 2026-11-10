@@ -3,7 +3,7 @@
 use super::source::{self, conflict, denied, invalid, Scope, SourceReading};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::io;
+use std::{io, path::Path};
 
 pub const AUTHORITY_ROLE: &str = "native-action-authority";
 /// Every Action Central authenticates against the native-action authority: the one list a person's grant is made of when their
@@ -183,9 +183,7 @@ impl Principal {
         if self.is_human() {
             Ok(())
         } else {
-            Err(denied(
-                "this mutation requires a human-scoped native credential, not an actor label",
-            ))
+            Err(denied(HUMAN_ONLY))
         }
     }
     // Part of the Principal authority surface: reports whether a specific
@@ -215,19 +213,76 @@ pub fn authenticate(
     expected: Option<&str>,
     now: u64,
 ) -> io::Result<Principal> {
-    if !AUTHENTICATED_ACTIONS.contains(&action) {
-        return Err(invalid(format!(
-            "{action} is not among Central's AUTHENTICATED_ACTIONS; an authenticated Action is listed there first, so the person's grant holds it"
-        )));
-    }
+    listed(action)?;
     if scope.project.is_some() && !PROJECT_AUTHENTICATED_ACTIONS.contains(&action) {
         return Err(invalid(format!(
             "{action} is not among Central's PROJECT_AUTHENTICATED_ACTIONS; an Action authenticated at a project is listed there first, so a grant extended to the project holds it"
         )));
     }
+    let (grant, authority_ref, authority_revision) =
+        held(&scope.central_root, token, action, expected, now)?;
+    if !grant.scope_refs.contains(&scope.world_ref) {
+        return Err(denied(LACKS));
+    }
+    Ok(Principal {
+        principal_ref: grant.principal_ref,
+        actor_kind: grant.actor_kind,
+        scope_ref: scope.world_ref.clone(),
+        authority_ref,
+        authority_revision,
+        expires_at_unix_seconds: grant.expires_at_unix_seconds,
+        permitted_actions: grant.actions,
+    })
+}
+
+/// [`authenticate`]'s questions that do not depend on the scope, asked before any scope is read: the credential is bounded, it
+/// matches one grant of the root's authority Source, and that grant names this exact Action, has not expired, and is a human's.
+/// The file map's acts of the person's own ask this first, then read where their grant must stand, so an act refused here reads
+/// no scope and makes none (file_map.rs `the_persons_act`; DLW build ruling 2026-11-09, round 54b item 1). [`authenticate`] at
+/// that scope then asks every question again.
+pub(crate) fn authenticate_before_scope(
+    central_root: &Path,
+    token: Option<&str>,
+    action: &str,
+    expected: Option<&str>,
+    now: u64,
+) -> io::Result<()> {
+    listed(action)?;
+    let (grant, _, _) = held(central_root, token, action, expected, now)?;
+    if grant.actor_kind != "human" {
+        return Err(denied(HUMAN_ONLY));
+    }
+    Ok(())
+}
+
+/// What a refusal says when a credential is not a human's.
+const HUMAN_ONLY: &str =
+    "this mutation requires a human-scoped native credential, not an actor label";
+/// What a refusal says when a grant does not hold this Action, here, now.
+const LACKS: &str = "native credential is expired or lacks this exact scope/action";
+
+/// Every Action authenticated here is listed in `AUTHENTICATED_ACTIONS` first.
+fn listed(action: &str) -> io::Result<()> {
+    if AUTHENTICATED_ACTIONS.contains(&action) {
+        return Ok(());
+    }
+    Err(invalid(format!(
+        "{action} is not among Central's AUTHENTICATED_ACTIONS; an authenticated Action is listed there first, so the person's grant holds it"
+    )))
+}
+
+/// The one grant of the root's authority Source that `token` matches, unexpired and naming `action`, with the Source's reference
+/// and revision. Where the grant holds is the caller's question.
+fn held(
+    central_root: &Path,
+    token: Option<&str>,
+    action: &str,
+    expected: Option<&str>,
+    now: u64,
+) -> io::Result<(Grant, String, String)> {
     let token = token.filter(|t| t.len() >= 32 && t.len() <= 4096)
         .ok_or_else(|| denied("missing bounded CENTRAL_NATIVE_TOKEN; declared H/human attribution is not authentication"))?;
-    let root = Scope::resolve(&scope.central_root, None)?;
+    let root = Scope::resolve(central_root, None)?;
     let (source, _, revision) = recognised_source(&root, AUTHORITY_ROLE)?;
     if expected.is_some_and(|basis| basis != revision) {
         return Err(conflict("native authority revision changed"));
@@ -263,21 +318,8 @@ pub fn authenticate(
         }
     }
     let grant = matched.ok_or_else(|| denied("native credential is not authorised"))?;
-    if now >= grant.expires_at_unix_seconds
-        || !grant.scope_refs.contains(&scope.world_ref)
-        || !grant.actions.iter().any(|a| a == action)
-    {
-        return Err(denied(
-            "native credential is expired or lacks this exact scope/action",
-        ));
+    if now >= grant.expires_at_unix_seconds || !grant.actions.iter().any(|a| a == action) {
+        return Err(denied(LACKS));
     }
-    Ok(Principal {
-        principal_ref: grant.principal_ref,
-        actor_kind: grant.actor_kind,
-        scope_ref: scope.world_ref.clone(),
-        authority_ref: source.source.source_ref,
-        authority_revision: revision,
-        expires_at_unix_seconds: grant.expires_at_unix_seconds,
-        permitted_actions: grant.actions,
-    })
+    Ok((grant, source.source.source_ref, revision))
 }

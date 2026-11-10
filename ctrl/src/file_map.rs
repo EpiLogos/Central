@@ -1150,24 +1150,28 @@ fn may_be_in(all: &[Scope], unreachable: &[UnreachableScope], location: &Path) -
     (!rootless.is_empty()).then(|| format!("it may be in {}", rootless.join("; or in ")))
 }
 
-/// The file map's acts that are the person's own, each with what a refusal of the credential that carried it opens with, before its
-/// cause, and what was not done then. Each changes the person's own ground, or what the person has adopted (DLW build ruling
-/// 2026-11-09: round 53 item 2 for the moves, round 54's Central follow-up for the rest):
-/// - `move-plan`, `move-apply`, `move-rollback`: a file of the ground moved, and back, by a journal that names where it goes.
-/// - `register`: a Source written into the scope's relations document (`Control/relations/source-relations.json` at the root,
-///   `ProjectCentral/relations/source-relations.json` at a project), the person's own ground.
-/// - `link`: a link made inside the scope's own folder, and kept in that relations document.
-/// - `scope-register`: which folders of the person's the map reads: a project scope kept in Control's relations document, or a folder
-///   scope's declaration kept in the ground (`.central/scopes/<name>/scope.json`). Nothing is written inside the folder.
-/// - `adopt-db`: the person's bookmark database adopted into the map: a copy, and its original untouched beside it, kept under
-///   `.central/bkmr`. The database itself is only read, but what the person has adopted changes.
-/// - `record-adopt`: one of the person's bookmarks bound to a Source, its description rewritten with the person's own words kept inside.
-/// - `pool`: whether the scope's whole readable tree is Source, kept in its relations document. Not in the ruling's list; the same
-///   class as `register` by its rule, so it is gated with it.
+/// The file map's acts that are the person's own. Each changes the person's ground or what they have adopted, so each needs the
+/// person's own credential (DLW build ruling 2026-11-09: round 53 item 2 for the moves, round 54's Central follow-up for the rest).
+/// Each entry is the act, the words its refusal opens with, and the word for what the refusal did not do.
+/// - `move-plan`, `move-apply`, `move-rollback`: moving a file of the ground, and moving it back. `move-plan` writes the journal
+///   that names where the file goes.
+/// - `register`: writes a Source into the scope's relations document: `Control/relations/source-relations.json` at the root,
+///   `ProjectCentral/relations/source-relations.json` at a project.
+/// - `link`: makes a link inside the scope's own folder, and keeps it in that relations document.
+/// - `scope-register`: chooses which of the person's folders the map reads. A project scope is kept in Control's relations
+///   document. A folder scope's declaration is kept in the ground (`.central/scopes/<name>/scope.json`), and nothing is written
+///   inside the folder.
+/// - `adopt-db`: adopts the person's bookmark database into the map, as a copy under `.central/bkmr` with the original untouched
+///   beside it. The database is only read, but what the person has adopted changes.
+/// - `record-adopt`: binds one of the person's bookmarks to a Source, and rewrites its description with the person's own words
+///   kept inside.
+/// - `pool`: keeps, in the scope's relations document, whether the scope's whole readable tree is Source. The ruling's list does
+///   not name it. It stays gated because it writes the person's Source relations (DLW build ruling 2026-11-09, round 54b item 4).
 ///
-/// The file map's other writes stay as they are, since each writes only Central's own index, made again from what the ground already
-/// declares: `refresh` rebuilds the bindings, the entry cache and the bkmr database under `.central/bkmr`, and `projection-record`
-/// keeps Central's own receipts of AIKit's copies (`.central/bkmr/projections.json`). Neither changes the ground or what is adopted.
+/// The file map's other writes need no credential: each writes only Central's own index, made again from what the ground already
+/// declares. `refresh` rebuilds the bindings, the entry cache and the bkmr database under `.central/bkmr`. `projection-record`
+/// keeps Central's own receipts of AIKit's copies (`.central/bkmr/projections.json`). Neither changes the ground or what is
+/// adopted.
 const PERSON_ACTS: [(&str, &str, &str); 9] = [
     (
         "move-plan",
@@ -1248,13 +1252,16 @@ fn person_act_writes(op: &str) -> &'static str {
     }
 }
 
-/// The file map's acts of the person's own (`PERSON_ACTS`): a move since round 53 item 2 (O-I 0G's review), and since round 54's Central
-/// follow-up each act that changes the person's ground or what they have adopted (DLW build ruling 2026-11-09). A plan is no read here:
-/// this Action is classed locally-mutating (`register`), and `move-plan` writes the durable journal under `.central/bkmr/moves` that
-/// names where the file goes, which `move-apply` and `move-rollback` then carry out by its id alone. So each authenticates on the
-/// host's native credential (`CENTRAL_NATIVE_TOKEN`, never a request field) for a human grant naming that exact Action where the act
-/// stands (`grant_scope`), as Central's other owner-authority acts do (`authority::authenticate`), before anything is locked or
-/// written. A refusal opens with whose act it is, then its cause, and nothing is done. Every other operation reads no credential.
+/// The gate of the file map's acts of the person's own (`PERSON_ACTS`). Each authenticates on the host's native credential
+/// (`CENTRAL_NATIVE_TOKEN`, never a request field) for a human grant that names that exact Action where the act stands
+/// (`grant_scope`), as Central's other owner-authority acts do (`authority::authenticate`). A move is no read here: `move-plan`
+/// writes the journal under `.central/bkmr/moves` that names where the file goes, which `move-apply` and `move-rollback` carry out
+/// by its id alone.
+///
+/// The credential is asked first, before any scope is read (`authority::authenticate_before_scope`). Then where the act stands is
+/// read, making nothing, and the grant is asked there (DLW build ruling 2026-11-09, round 54b item 1). So an act refused for its
+/// credential reads no scope, and no refused act makes anything. A refusal opens with whose act it is, then its cause. Every other
+/// operation reads no credential.
 fn the_persons_act(root: &Path, op: &str, input: &Value, token: Option<&str>) -> io::Result<()> {
     let Some((_, opening, nothing)) = PERSON_ACTS.iter().find(|(asked, _, _)| *asked == op) else {
         return Ok(());
@@ -1265,25 +1272,27 @@ fn the_persons_act(root: &Path, op: &str, input: &Value, token: Option<&str>) ->
             format!("{opening}: {error}; nothing was {nothing}"),
         )
     };
-    let scope = grant_scope(root, op, input).map_err(words)?;
-    crate::continuous_work::authority::authenticate(
-        &scope,
-        token,
-        &format!("central.file-map.{op}"),
-        input
-            .get("expected_authority_revision")
-            .and_then(Value::as_str),
-        crate::civil_time_adoption::now(),
+    let action = format!("central.file-map.{op}");
+    let expected = input
+        .get("expected_authority_revision")
+        .and_then(Value::as_str);
+    let now = crate::civil_time_adoption::now();
+    crate::continuous_work::authority::authenticate_before_scope(
+        root, token, &action, expected, now,
     )
-    .and_then(|principal| principal.require_human())
-    .map_err(words)
+    .map_err(words)?;
+    let scope = grant_scope(root, op, input).map_err(words)?;
+    crate::continuous_work::authority::authenticate(&scope, token, &action, expected, now)
+        .and_then(|principal| principal.require_human())
+        .map_err(words)
 }
 
 /// Where the grant for one of the person's acts must stand: at a project of Work the act names (`project`, by its name or its World),
 /// whose grant extended to it holds the act there, as Central's other acts that name a project are held
 /// (`authority::PROJECT_AUTHENTICATED_ACTIONS`); at the root for anything else: no project, the root, a project scope registered from
 /// outside Work or a folder scope, which the root registered. A move and `scope-register` stand at the root whatever they name: a move
-/// can bring a folder into Work, and the root registers every scope. Reading which scope is named reads the scopes' declarations only.
+/// can bring a folder into Work, and the root registers every scope. Which scope is named is read without making anything
+/// (`participating_unmade`), so a refusal here leaves no folder behind (round 54b item 1).
 fn grant_scope(
     root: &Path,
     op: &str,
@@ -1298,7 +1307,7 @@ fn grant_scope(
         return at_root();
     };
     let ground = root.canonicalize()?;
-    let (all, _) = participating(&ground)?;
+    let (all, _) = participating_unmade(&ground)?;
     let member = all
         .iter()
         .find(|scope| {
@@ -1386,9 +1395,14 @@ fn admitted(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
     } else {
         participating(&root)?
     };
-    // A scope asked for by name whose root did not open says so, rather than
-    // being an unknown map.
-    let scope = selected_or_unreachable(&all, &unreachable, input)?;
+    // A scope's register stands at the root, where its gate (`grant_scope`) and its write (`scope_register`) stand: a `project` it
+    // is given names none of its scopes and chooses none of its locks (DLW build ruling 2026-11-09, round 54b item 2). A scope
+    // asked for by name whose root did not open says so, rather than being an unknown map.
+    let scope = if op == "scope-register" {
+        all.first().ok_or_else(|| invalid("No scope"))?
+    } else {
+        selected_or_unreachable(&all, &unreachable, input)?
+    };
     // A Source of a folder scope that is unreachable now is named with the folder's own words, whatever act asks for it, and so is
     // a location in it.
     if let Some(reference) = input.get("source_ref").and_then(Value::as_str) {

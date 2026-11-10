@@ -41,6 +41,9 @@ const GROUND_ACTS: [&str; 6] = [
 const PERSON: &str = "file-map-moves-person-controlled-test-not-a-live-secret";
 const AGENT: &str = "file-map-moves-agent-controlled-test-not-a-live-secret";
 const UNKNOWN: &str = "file-map-moves-unknown-controlled-test-not-a-live-secret";
+/// The root's registrar: a human grant for `scope-register` alone, at the root, so a world can declare a folder scope and a project
+/// outside the ground before the person's acts are probed there (round 54b item 3).
+const OWNER: &str = "file-map-moves-owner-controlled-test-not-a-live-secret";
 
 struct World(PathBuf);
 impl Drop for World {
@@ -91,7 +94,8 @@ fn world() -> World {
     granting(&MOVES, "control:root")
 }
 
-/// [`world`] whose person's grant names `actions` at `scope` (the agent's names them at the root), with a project `alpha` in Work.
+/// [`world`] whose person's grant names `actions` at `scope` (the agent's names them at the root, and the registrar's names only
+/// `scope-register` there), with a project `alpha` in Work.
 fn granting(actions: &[&str], scope: &str) -> World {
     let world = World(
         std::env::temp_dir().join(format!("central-file-map-moves-{}", uuid::Uuid::new_v4())),
@@ -100,16 +104,9 @@ fn granting(actions: &[&str], scope: &str) -> World {
     let root = world.root();
     central_ctrl::initialize_central(&root).unwrap();
     fs::write(root.join("Control/user/note.md"), "the person's page\n").unwrap();
-    fs::create_dir_all(root.join("Work/alpha/ProjectCentral/user")).unwrap();
-    fs::write(
-        root.join("Work/alpha/ProjectCentral/project.json"),
-        json!({"schema":"central.project/v1","project_id":"alpha","human_source":"ProjectCentral/user",
-            "wiki":{"profile":"okf-wiki/v1","source":"ProjectCentral/agents/wiki/wiki.json"}})
-        .to_string(),
-    )
-    .unwrap();
+    project(&root.join("Work/alpha"), "alpha");
     fs::write(root.join("Work/alpha/plan.md"), "alpha's plan\n").unwrap();
-    let grant = |token: &str, kind: &str, scope: &str| {
+    let grant = |token: &str, kind: &str, scope: &str, actions: &[&str]| {
         json!({"principal_ref":format!("{kind}:file-map-moves-test"),"actor_kind":kind,
             "token_sha256":format!("{:x}",Sha256::digest(token.as_bytes())),"scope_refs":[scope],
             "actions":actions,"expires_at_unix_seconds":u64::MAX})
@@ -119,7 +116,8 @@ fn granting(actions: &[&str], scope: &str) -> World {
         root.join(authority),
         serde_json::to_vec(
             &json!({"schema":"central.native-action-authority/v1","scope_ref":"control:root",
-            "grants":[grant(PERSON, "human", scope), grant(AGENT, "agent", "control:root")]}),
+            "grants":[grant(PERSON, "human", scope, actions), grant(AGENT, "agent", "control:root", actions),
+                grant(OWNER, "human", "control:root", &["central.file-map.scope-register"])]}),
         )
         .unwrap(),
     )
@@ -137,6 +135,83 @@ fn granting(actions: &[&str], scope: &str) -> World {
         "recognition":"controlled-test-only-not-personal-adoption","recorded_at_unix_seconds":1}));
     fs::write(&relations, serde_json::to_vec(&document).unwrap()).unwrap();
     world
+}
+
+/// A project's manifest at `folder`, whose World is `project:<id>`.
+fn project(folder: &Path, id: &str) {
+    fs::create_dir_all(folder.join("ProjectCentral/user")).unwrap();
+    fs::write(
+        folder.join("ProjectCentral/project.json"),
+        json!({"schema":"central.project/v1","project_id":id,"human_source":"ProjectCentral/user",
+            "wiki":{"profile":"okf-wiki/v1","source":"ProjectCentral/agents/wiki/wiki.json"}})
+        .to_string(),
+    )
+    .unwrap();
+}
+
+/// A folder `Music` and a project `far`, both outside the ground, each declared at the root by its registrar ([`OWNER`]): scopes
+/// that stand at the root grant whatever an act names (file_map.rs `grant_scope`). No scope is read after `far` is declared, so
+/// its state folder (`.central/scopes/far`) is not made yet.
+fn declare_outside_scopes(world: &World) {
+    let music = world.0.join("Music");
+    fs::create_dir_all(&music).unwrap();
+    fs::write(music.join("voice.wav"), b"RIFF").unwrap();
+    let far = world.0.join("far");
+    project(&far, "far");
+    fs::write(far.join("far.md"), "far's page\n").unwrap();
+    for declared in [
+        json!({"name":"Music","path":fs::canonicalize(&music).unwrap(),"kind":"folder","allow_external":true,"media":["wav"]}),
+        json!({"name":"far","path":fs::canonicalize(&far).unwrap(),"kind":"project","allow_external":true}),
+    ] {
+        let mut declared = declared;
+        declared["expected_revision"] = revision(world, None).into();
+        let registered = ctrl(
+            world,
+            "central.file-map.scope-register",
+            &declared,
+            Some(OWNER),
+        );
+        assert_eq!(registered["ok"], true, "{registered}");
+    }
+}
+
+/// What a refusal of each of the person's acts on the ground opens with (file_map.rs `PERSON_ACTS`).
+fn opening(action: &str) -> &'static str {
+    match action {
+        "central.file-map.register" => "Registering a Source is the person's own press: ",
+        "central.file-map.link" => "Linking a Source into a folder is the person's own press: ",
+        "central.file-map.pool" => "Making a scope's whole tree Source is the person's own press: ",
+        "central.file-map.adopt-db" => "Adopting a bookmark database is the person's own press: ",
+        "central.file-map.record-adopt" => "Adopting a bookmark is the person's own press: ",
+        other => panic!("{other} is not one of the acts probed here"),
+    }
+}
+
+/// An input for one of the person's acts on the ground (no move, no scope's register), at `project` or at the root.
+fn act_input(
+    action: &str,
+    project: Option<&str>,
+    revision: &str,
+    source: &str,
+    bookmarks: &Path,
+) -> Value {
+    let mut input = match action {
+        "central.file-map.register" => json!({"path":"plan.md"}),
+        "central.file-map.link" => {
+            json!({"source_ref":source,"path":"links/note","owner":"person"})
+        }
+        "central.file-map.pool" => json!({"enable":false}),
+        "central.file-map.adopt-db" => json!({"database":bookmarks,"quiesced":true}),
+        "central.file-map.record-adopt" => {
+            json!({"source_ref":source,"record_id":1,"record_revision":"r"})
+        }
+        other => panic!("{other} is not one of the acts probed here"),
+    };
+    input["expected_revision"] = revision.into();
+    if let Some(project) = project {
+        input["project"] = project.into();
+    }
+    input
 }
 
 /// The journals Central keeps for its moves (file_map_moves.rs `save`): none is written by a refused plan.
@@ -634,4 +709,228 @@ fn the_file_maps_acts_on_the_persons_ground_are_theirs_and_anything_else_that_ru
         kept, "the person's bookmarks",
         "the database adopted is only read"
     );
+}
+
+/// Round 54b item 1 (DLW build ruling 2026-11-09; review B of #339, finding 1): the gate asks for the credential before it reads any
+/// scope. Here a project's manifest is a folder, so no scope of this ground can be built; an act that names a project is still refused
+/// for its credential, in those words, and nothing is written.
+#[test]
+fn the_gate_asks_for_the_credential_before_it_reads_any_scope() {
+    let acts: Vec<&str> = MOVES.iter().chain(GROUND_ACTS.iter()).copied().collect();
+    let world = granting(&acts, "project:alpha");
+    let root = world.root();
+    fs::create_dir_all(root.join("Work/broken/ProjectCentral/project.json")).unwrap();
+    let bookmarks = world.0.join("bookmarks.db");
+    let before = ground(&world);
+    for action in [
+        "central.file-map.register",
+        "central.file-map.link",
+        "central.file-map.pool",
+        "central.file-map.adopt-db",
+        "central.file-map.record-adopt",
+    ] {
+        let input = act_input(action, Some("alpha"), "unread", "unread", &bookmarks);
+        refused_without_the_person(&world, action, &input, opening(action));
+    }
+    assert_eq!(ground(&world), before, "a refused act writes nothing");
+}
+
+/// The same item: where an act stands is read without making anything. A project outside the ground keeps its state in
+/// `.central/scopes/<name>`, which the map's first read of it makes; an act refused at the gate never does, whatever credential it
+/// carried, the person's included where their grant does not stand.
+#[test]
+fn an_act_refused_at_the_gate_makes_no_scope_folder() {
+    let acts: Vec<&str> = MOVES.iter().chain(GROUND_ACTS.iter()).copied().collect();
+    let world = granting(&acts, "project:alpha");
+    let root = world.root();
+    declare_outside_scopes(&world);
+    let state = root.join(".central/scopes/far");
+    assert!(!state.exists(), "no read of far has been made yet");
+    let bookmarks = world.0.join("bookmarks.db");
+    let before = ground(&world);
+    for action in [
+        "central.file-map.register",
+        "central.file-map.link",
+        "central.file-map.pool",
+    ] {
+        let input = act_input(action, Some("far"), "unread", "unread", &bookmarks);
+        refused_without_the_person(&world, action, &input, opening(action));
+        refused_in_words(
+            &world,
+            action,
+            &input,
+            Some(PERSON),
+            opening(action),
+            "lacks this exact scope/action",
+        );
+    }
+    assert!(!state.exists(), "a refused act makes no scope folder");
+    assert_eq!(ground(&world), before, "a refused act writes nothing");
+    revision(&world, Some("far"));
+    assert!(state.is_dir(), "the map's first read of far makes it");
+}
+
+/// Round 54b item 2 (review B of #339, finding 2): a scope's register stands at the root, where its gate and its write stand, and it
+/// locks there: a `project` it is given chooses none of its locks. Each lock Central takes is a file in the `.central` folder of the
+/// scope it serialises.
+#[test]
+fn a_scopes_register_locks_at_the_root_whatever_project_it_names() {
+    let world = granting(&GROUND_ACTS, "control:root");
+    let root = world.root();
+    let music = world.0.join("Music");
+    fs::create_dir_all(&music).unwrap();
+    fs::write(music.join("voice.wav"), b"RIFF").unwrap();
+    let alpha = root.join("Work/alpha/.central");
+    assert!(!alpha.exists());
+    let scoped = ctrl(
+        &world,
+        "central.file-map.scope-register",
+        &json!({"project":"alpha","name":"Music","path":fs::canonicalize(&music).unwrap(),"kind":"folder",
+            "allow_external":true,"media":["wav"],"expected_revision":revision(&world, None)}),
+        Some(PERSON),
+    );
+    assert_eq!(scoped["ok"], true, "{scoped}");
+    assert_eq!(scoped["data"]["result"]["world_ref"], "folder:Music");
+    assert!(
+        !alpha.exists(),
+        "alpha holds no lock of the root's register"
+    );
+    assert!(root.join(".central/source-mutation.lock").is_file());
+}
+
+/// Round 54b item 3 (review B of #339, finding 3): the person's acts reach every scope rule. The person's grant stands at one of two
+/// projects of Work (alpha, not beta). Their register, link, pool, adopt-db and record-adopt at alpha go past the gate, by its name or
+/// its World. At beta they are refused, and at the root (no project named). A project spelled with `..` or as a path, a folder scope
+/// and a project outside the ground all stand at the root, and are refused there. A grant at the root is refused at alpha's acts.
+/// Nothing refused is written.
+#[test]
+fn the_persons_acts_reach_every_scope_rule() {
+    let acts: Vec<&str> = MOVES.iter().chain(GROUND_ACTS.iter()).copied().collect();
+    let probed = [
+        "central.file-map.register",
+        "central.file-map.link",
+        "central.file-map.pool",
+        "central.file-map.adopt-db",
+        "central.file-map.record-adopt",
+    ];
+    let lacks = "lacks this exact scope/action";
+    let world = granting(&acts, "project:alpha");
+    let root = world.root();
+    project(&root.join("Work/beta"), "beta");
+    fs::write(root.join("Work/beta/plan.md"), "beta's plan\n").unwrap();
+    declare_outside_scopes(&world);
+    // The map's first read of far makes its state folder; the refusals below are asked of a ground that has it.
+    revision(&world, Some("far"));
+    let bookmarks = world.0.join("bookmarks.db");
+    rusqlite::Connection::open(&bookmarks)
+        .unwrap()
+        .execute_batch("CREATE TABLE kept(value TEXT);")
+        .unwrap();
+    let source = page_source(&world);
+    let before = ground(&world);
+    for named in [
+        Some("beta"),
+        Some("project:beta"),
+        None,
+        Some("../alpha"),
+        Some("Work/alpha"),
+        Some("alpha/../alpha"),
+        Some("folder:Music"),
+        Some("Music"),
+        Some("far"),
+        Some("project:far"),
+    ] {
+        for action in probed {
+            let input = act_input(action, named, "unread", &source, &bookmarks);
+            refused_in_words(&world, action, &input, Some(PERSON), opening(action), lacks);
+        }
+    }
+    assert_eq!(ground(&world), before, "nothing refused is written");
+    // At alpha, by its name or its World, each goes past the gate to what it does.
+    let registered = ctrl(
+        &world,
+        "central.file-map.register",
+        &act_input(
+            "central.file-map.register",
+            Some("alpha"),
+            &revision(&world, Some("alpha")),
+            &source,
+            &bookmarks,
+        ),
+        Some(PERSON),
+    );
+    assert_eq!(registered["ok"], true, "{registered}");
+    let located = ctrl(
+        &world,
+        "central.file-map.locate",
+        &json!({"path":"Work/alpha/plan.md"}),
+        None,
+    );
+    assert_eq!(located["ok"], true, "{located}");
+    let plan = located["data"]["result"]["source"]["ref"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let linked = ctrl(
+        &world,
+        "central.file-map.link",
+        &act_input(
+            "central.file-map.link",
+            Some("project:alpha"),
+            &revision(&world, Some("alpha")),
+            &plan,
+            &bookmarks,
+        ),
+        Some(PERSON),
+    );
+    assert_eq!(linked["ok"], true, "{linked}");
+    assert!(fs::symlink_metadata(root.join("Work/alpha/links/note"))
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    let pooled = ctrl(
+        &world,
+        "central.file-map.pool",
+        &act_input(
+            "central.file-map.pool",
+            Some("alpha"),
+            &revision(&world, Some("alpha")),
+            &plan,
+            &bookmarks,
+        ),
+        Some(PERSON),
+    );
+    assert_eq!(pooled["ok"], true, "{pooled}");
+    for action in ["central.file-map.adopt-db", "central.file-map.record-adopt"] {
+        let pressed = ctrl(
+            &world,
+            action,
+            &act_input(
+                action,
+                Some("alpha"),
+                &revision(&world, Some("alpha")),
+                &plan,
+                &bookmarks,
+            ),
+            Some(PERSON),
+        );
+        let words = pressed["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            pressed["ok"] == true
+                || pressed["error"]["code"] != "central.file_map_denied"
+                    && !words.starts_with(opening(action)),
+            "{action} at alpha goes past the gate: {pressed}"
+        );
+    }
+    // A grant at the root is refused at alpha's acts.
+    let world = granting(&acts, "control:root");
+    let source = page_source(&world);
+    let before = ground(&world);
+    for named in [Some("alpha"), Some("project:alpha")] {
+        for action in probed {
+            let input = act_input(action, named, "unread", &source, &bookmarks);
+            refused_in_words(&world, action, &input, Some(PERSON), opening(action), lacks);
+        }
+    }
+    assert_eq!(ground(&world), before, "nothing is written at the project");
 }
