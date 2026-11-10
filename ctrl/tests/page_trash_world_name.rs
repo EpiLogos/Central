@@ -501,6 +501,133 @@ fn a_world_missing_the_ground_of_the_person_s_authority_says_which_in_words_and_
     assert_eq!(trashed["data"]["outcome"], "trashed", "{trashed}");
 }
 
+/// A token's own refusal is said as the token's in a world missing the ground of the person's authority too (O-I #747 round 896 1T, N1):
+/// `authenticate` refuses a missing or unbounded token before it reads either source, so the missing-place words are only for a bounded
+/// token. In the same broken world a bounded token is still told which file is missing (F7), and nothing moves either way.
+#[test]
+fn a_bad_token_reads_as_a_bad_token_in_a_world_missing_the_ground_of_the_person_s_authority() {
+    let home = made(&["central.files.trash"]);
+    let path = format!("{FLOWS}/flow-2026-11-09-1300.html");
+    home.put(&path, PAGE);
+    let (location, revision) = located(&home, FLOWS, "flow-2026-11-09-1300.html");
+    let request = json!({"location":location,"expected_revision":revision,"project":Value::Null});
+    for place in [
+        "Control/user/native-action-authority.json",
+        "Control/relations/source-relations.json",
+    ] {
+        let away = format!("{place}.away");
+        fs::rename(home.ground().join(place), home.ground().join(&away)).unwrap();
+        let unbounded =
+            [("no token", None), ("a short token", Some("too-short"))].map(|(name, token)| {
+                (
+                    name,
+                    cli(&home, "central.files.trash", request.clone(), token),
+                )
+            });
+        let bounded = cli(&home, "central.files.trash", request.clone(), Some(TOKEN));
+        fs::rename(home.ground().join(&away), home.ground().join(place)).unwrap();
+        for (name, refused) in unbounded {
+            assert_eq!(refused["ok"], false, "{place}, {name}: {refused}");
+            let words = refused.to_string();
+            assert!(
+                words.contains("missing bounded CENTRAL_NATIVE_TOKEN")
+                    && !words.contains("file is missing"),
+                "{place}, {name}: {refused}"
+            );
+        }
+        assert!(
+            bounded
+                .to_string()
+                .contains(&format!("This world's {place} file is missing")),
+            "{place}: {bounded}"
+        );
+        assert!(home.exists(&path), "{place}: nothing moved");
+    }
+}
+
+/// The missing-place words read the world's relations as every source is read, bounded and refusing a symlink (O-I #747 round 896 1T, N2):
+/// a relations file that is a link names nothing through it, and one past the bound is not read to build an error. Each refusal passes as
+/// it came, and nothing moves. Here both relations name an authority source the world does not have.
+#[test]
+fn the_missing_place_words_read_no_relations_through_a_link_or_past_the_bound() {
+    let home = made(&["central.files.trash"]);
+    let path = format!("{FLOWS}/flow-2026-11-09-1330.html");
+    home.put(&path, PAGE);
+    let (location, revision) = located(&home, FLOWS, "flow-2026-11-09-1330.html");
+    let request = json!({"location":location,"expected_revision":revision,"project":Value::Null});
+    let relations = home
+        .ground()
+        .join("Control/relations/source-relations.json");
+    let kept = fs::read(&relations).unwrap();
+    let mut elsewhere: Value = serde_json::from_slice(&kept).unwrap();
+    let absent = "Control/user/not-this-world-s-authority.json";
+    for relation in elsewhere["relations"].as_array_mut().unwrap() {
+        if relation["roles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|role| role == "native-action-authority")
+        {
+            relation["path"] = json!(absent);
+            relation["ref"] = json!(format!("central:source:control:root:{absent}"));
+        }
+    }
+    let outside = home.0.join("relations-elsewhere.json");
+    fs::write(&outside, serde_json::to_vec(&elsewhere).unwrap()).unwrap();
+    fs::remove_file(&relations).unwrap();
+    std::os::unix::fs::symlink(&outside, &relations).unwrap();
+    let linked = cli(&home, "central.files.trash", request.clone(), Some(TOKEN));
+    fs::remove_file(&relations).unwrap();
+    elsewhere["padding"] = json!("x".repeat(5 * 1024 * 1024));
+    fs::write(&relations, serde_json::to_vec(&elsewhere).unwrap()).unwrap();
+    let large = cli(&home, "central.files.trash", request.clone(), Some(TOKEN));
+    fs::write(&relations, &kept).unwrap();
+    for (name, refused) in [("a link", linked), ("past the bound", large)] {
+        assert_eq!(refused["ok"], false, "{name}: {refused}");
+        assert!(
+            !refused
+                .to_string()
+                .contains(&format!("This world's {absent} file is missing")),
+            "{name}: {refused}"
+        );
+        assert!(home.exists(&path), "{name}: nothing moved");
+    }
+    let trashed = cli(&home, "central.files.trash", request, Some(TOKEN));
+    assert_eq!(trashed["data"]["outcome"], "trashed", "{trashed}");
+}
+
+/// F7 on a project page (O-I #747 round 896 1T, N2): the trash reads the person's authority at the root for every page, so a project page
+/// in a world missing either source says which, in the same words, and nothing moves. Its ground whole again, the same page leaves.
+#[test]
+fn a_project_page_in_a_world_missing_the_ground_of_the_person_s_authority_says_which_in_words() {
+    let home = made(&["central.files.trash"]);
+    let path = format!("{HUMAN}/flow-2026-11-09-1400.html");
+    home.put(&path, PAGE);
+    let (location, revision) = located(&home, HUMAN, "flow-2026-11-09-1400.html");
+    let request = json!({"location":location,"expected_revision":revision,"project":PROJECT});
+    for place in [
+        "Control/user/native-action-authority.json",
+        "Control/relations/source-relations.json",
+    ] {
+        let away = format!("{place}.away");
+        fs::rename(home.ground().join(place), home.ground().join(&away)).unwrap();
+        let refused = cli(&home, "central.files.trash", request.clone(), Some(TOKEN));
+        fs::rename(home.ground().join(&away), home.ground().join(place)).unwrap();
+        assert_eq!(refused["ok"], false, "{place}: {refused}");
+        let words = refused.to_string();
+        assert!(!words.contains("os error"), "{place}: {refused}");
+        assert!(
+            words.contains(&format!(
+                "This world's {place} file is missing, and Central's trash reads the person's authority from it: nothing was moved."
+            )),
+            "{place}: {refused}"
+        );
+        assert!(home.exists(&path), "{place}: nothing moved");
+    }
+    let trashed = cli(&home, "central.files.trash", request, Some(TOKEN));
+    assert_eq!(trashed["data"]["outcome"], "trashed", "{trashed}");
+}
+
 /// A trash keeps who the caller says acted and, beside it, the person the token authenticated (O-I #747 round 896, F8): the claim is
 /// the caller's, as a save's is, and the principal is the grant's. The event carries both, and so does its history; the project's source
 /// horizon is attributed to the claimed actor, read back here.

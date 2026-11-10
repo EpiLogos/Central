@@ -2025,8 +2025,14 @@ fn missing_ground(root: &Path, project: Option<&str>, error: io::Error) -> io::E
 /// The trash reads the person's authority (`continuous_work::authority::authenticate`) from the world's source relations and the authority
 /// source they recognise, at the root for every page. Where the authority is refused and one of those two is missing, the missing one is
 /// named in words, as `missing_ground` names the scope's places, never handed on as the system's raw error or as the authority's refusal
-/// of a relation it could not read (O-I #747 round 896, F7). Any other refusal passes as it came.
-fn missing_authority(root: &Path, error: io::Error) -> io::Error {
+/// of a relation it could not read (O-I #747 round 896, F7). Any other refusal passes as it came: the token's own refusal among them,
+/// which `authenticate` gives before it reads either, so a bad token reads as a bad token in a broken world too (1T, N1). The relations
+/// are read here as every source is, bounded and refusing a symlink (`source_safety::read`), so a relations file that is a link, or
+/// too large, names nothing and its refusal passes as it came (1T, N2).
+fn missing_authority(root: &Path, token: Option<&str>, error: io::Error) -> io::Error {
+    if crate::continuous_work::authority::bounded_token(token).is_none() {
+        return error;
+    }
     let absent = |place: &Path| {
         fs::symlink_metadata(root.join(place))
             .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
@@ -2035,9 +2041,9 @@ fn missing_authority(root: &Path, error: io::Error) -> io::Error {
     let place = if absent(relations) {
         Some(relations.to_path_buf())
     } else {
-        fs::read(root.join(relations))
+        crate::source_safety::read(root, crate::source_horizon::CONTROL_GROUND_RELATIONS_SOURCE)
             .ok()
-            .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
+            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
             .and_then(|value| {
                 value["relations"].as_array()?.iter().find_map(|relation| {
                     relation["roles"]
@@ -2127,7 +2133,7 @@ pub fn trash(root: &Path, input: &Value, token: Option<&str>, now: u64) -> io::R
         expected_authority,
         now,
     )
-    .map_err(|error| missing_authority(&root, error))?;
+    .map_err(|error| missing_authority(&root, token, error))?;
     principal.require_human()?;
     let relative = Path::new(&loc.path);
     reject_symlink_components(&root, relative)?;
