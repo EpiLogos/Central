@@ -1484,7 +1484,7 @@ fn participating_as(
             scope.state = if make_state {
                 external_state(root, &name)?
             } else {
-                root.join(external_member(&name)?)
+                external_state_unmade(root, &name)?
             };
         }
         if !seen.insert(scope.world.clone()) {
@@ -1560,6 +1560,10 @@ pub(crate) fn external_state(root: &Path, name: &str) -> io::Result<PathBuf> {
     let member = external_member(name)?;
     safe_directory(root, &member)?;
     Ok(root.join(member))
+}
+/// [`external_state`] named, and not made: where the state folder stands, for a read that makes nothing.
+pub(crate) fn external_state_unmade(root: &Path, name: &str) -> io::Result<PathBuf> {
+    Ok(root.join(external_member(name)?))
 }
 /// Where an external scope's state stands in the ground, relative to it: `.central/scopes/<name>`.
 fn external_member(name: &str) -> io::Result<PathBuf> {

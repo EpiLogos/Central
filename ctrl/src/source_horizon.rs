@@ -894,8 +894,10 @@ pub(crate) fn insert_pool_bindings(
         !Path::new(relative).ancestors().skip(1).any(|folder| {
             !folder.as_os_str().is_empty()
                 && *projects.entry(folder.to_path_buf()).or_insert_with(|| {
-                    fs::symlink_metadata(world_root.join(folder).join("ProjectCentral/project.json"))
-                        .is_ok_and(|manifest| manifest.is_file())
+                    fs::symlink_metadata(
+                        world_root.join(folder).join("ProjectCentral/project.json"),
+                    )
+                    .is_ok_and(|manifest| manifest.is_file())
                 })
         })
     };
@@ -2204,9 +2206,18 @@ mod retrieval_tests {
         let mut pooled = BTreeMap::new();
         insert_pool_bindings(root, "control:root", &[], &mut pooled).unwrap();
         let kept = paths(&pooled);
-        assert!(kept.iter().any(|path| path == "Control/user/note.md"), "{kept:?}");
-        assert!(kept.iter().any(|path| path == "Work/loose/readme.md"), "{kept:?}");
-        assert!(!kept.iter().any(|path| path.starts_with("Work/alpha/")), "{kept:?}");
+        assert!(
+            kept.iter().any(|path| path == "Control/user/note.md"),
+            "{kept:?}"
+        );
+        assert!(
+            kept.iter().any(|path| path == "Work/loose/readme.md"),
+            "{kept:?}"
+        );
+        assert!(
+            !kept.iter().any(|path| path.starts_with("Work/alpha/")),
+            "{kept:?}"
+        );
     }
 
     #[test]

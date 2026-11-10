@@ -1298,11 +1298,20 @@ fn the_persons_act(
     let held = |scope: &crate::continuous_work::source::Scope| {
         crate::continuous_work::authority::authenticate(scope, token, &action, expected, now)
             .and_then(|principal| principal.require_human().map(|()| principal.scope_ref))
-            .map_err(words)
     };
-    let at = held(&standing.scope)?;
+    let at = held(&standing.scope).map_err(words)?;
+    // A refusal at another project the act reaches names that project (round 54f item 1).
     for member in &standing.also {
-        held(&crate::continuous_work::source::Scope::resolve(root, Some(member)).map_err(words)?)?;
+        let scope =
+            crate::continuous_work::source::Scope::resolve(root, Some(member)).map_err(words)?;
+        held(&scope)
+            .map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!("it reaches the Work project {member}, whose grant does not hold it: {error}"),
+                )
+            })
+            .map_err(words)?;
     }
     Ok(Some(at))
 }
@@ -1328,10 +1337,20 @@ struct Standing {
 ///   is judged (`resolved`, `within`): `..`, an absolute path, a link, its case and a trailing slash.
 ///
 /// What is named is read without making anything (`participating_unmade`), so a refusal here leaves no folder behind (round 54b
-/// item 1).
+/// item 1). A move's apply and rollback read the scopes its journal runs from instead (`resume_scopes_unmade`; round 54f item 1).
 fn grant_scope(root: &Path, op: &str, input: &Value) -> io::Result<Standing> {
     let ground = root.canonicalize()?;
-    let (all, _) = participating_unmade(&ground)?;
+    // A move carried out from its journal stands on the scopes it runs from (`resume_scopes`), as `admitted_as` runs it: after the
+    // rename and before the move is finished or undone, a scope inside the moved folder is declared where it no longer stands, so
+    // the live map does not read (round 54f item 1).
+    let (all, _) = if matches!(op, "move-apply" | "move-rollback") {
+        (
+            super::file_map_moves::resume_scopes_unmade(&ground, input)?,
+            Vec::new(),
+        )
+    } else {
+        participating_unmade(&ground)?
+    };
     let moves = op.starts_with("move-");
     let named = if moves || op == "scope-register" {
         all.first()

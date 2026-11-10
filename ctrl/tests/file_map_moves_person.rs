@@ -63,7 +63,19 @@ impl World {
 
 /// One `ctrl action run` as a separate process, with the credential (or none) in its environment only.
 fn ctrl(world: &World, action: &str, input: &Value, token: Option<&str>) -> Value {
+    ctrl_with(world, action, input, token, &[])
+}
+
+/// [`ctrl`] with `variables` in the process's environment as well.
+fn ctrl_with(
+    world: &World,
+    action: &str,
+    input: &Value,
+    token: Option<&str>,
+    variables: &[(&str, &str)],
+) -> Value {
     let mut command = Command::new(env!("CARGO_BIN_EXE_ctrl"));
+    command.envs(variables.iter().copied());
     command
         .args([
             "--json",
@@ -1392,4 +1404,254 @@ fn a_project_nested_in_a_work_project_stands_on_the_roots_grant_in_its_own_tree_
         "is in the Work project alpha, but the act names project sub: an act on alpha's tree names project alpha",
     );
     assert_eq!(ground(&world), before, "nothing refused is written");
+}
+
+/// A folder `Control/user/pdir` holding a project scope `proj` the root registered, registered itself as the root's Source, and its
+/// move to `destination` planned and applied on the person's grant, the apply interrupted after its rename (round 54f item 1, the
+/// review of #343's P10). `proj` is then declared where it no longer stands, so the live scope map does not read until the move is
+/// finished or undone. Answers the move's carried input.
+fn interrupted_move(world: &World, destination: &str) -> Value {
+    let root = world.root();
+    project(&root.join("Control/user/pdir/proj"), "proj");
+    fs::write(root.join("Control/user/pdir/proj/p.md"), "proj's page\n").unwrap();
+    let declared = ctrl(
+        world,
+        "central.file-map.scope-register",
+        &json!({"name":"proj","path":"Control/user/pdir/proj","kind":"project","expected_revision":revision(world, None)}),
+        Some(OWNER),
+    );
+    assert_eq!(declared["ok"], true, "{declared}");
+    let registered = ctrl(
+        world,
+        "central.file-map.register",
+        &json!({"path":"Control/user/pdir","expected_revision":revision(world, None)}),
+        Some(PERSON),
+    );
+    assert_eq!(registered["ok"], true, "{registered}");
+    let planned = ctrl(
+        world,
+        "central.file-map.move-plan",
+        &json!({"source_ref":registered["data"]["result"]["source_ref"],"destination":destination}),
+        Some(PERSON),
+    );
+    assert_eq!(planned["ok"], true, "{planned}");
+    let carried = json!({"plan_id":planned["data"]["result"]["plan_id"],"quiesced":true});
+    let interrupted = ctrl_with(
+        world,
+        "central.file-map.move-apply",
+        &carried,
+        Some(PERSON),
+        &[("CENTRAL_FILE_MAP_TEST_INTERRUPT_AFTER_RENAME", "1")],
+    );
+    assert_eq!(interrupted["ok"], false, "{interrupted}");
+    assert!(!root.join("Control/user/pdir").exists());
+    assert!(root.join(destination).join("proj/p.md").is_file());
+    let stale = ctrl(
+        world,
+        "central.file-map.inspect",
+        &json!({"resources":false}),
+        None,
+    );
+    assert_eq!(
+        stale["ok"], false,
+        "the live map does not read mid-move: {stale}"
+    );
+    carried
+}
+
+/// Round 54f item 1 (review of #343, finding 1): an interrupted move is finished through the person's gate. Its apply stands on the
+/// scopes its journal runs from, not the live map, which does not read until the move is done.
+#[test]
+fn an_interrupted_move_whose_scope_is_stale_is_replayed_through_the_gate() {
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    let carried = interrupted_move(&world, "Control/user/pdir2");
+    let replayed = ctrl(
+        &world,
+        "central.file-map.move-apply",
+        &carried,
+        Some(PERSON),
+    );
+    assert_eq!(replayed["ok"], true, "{replayed}");
+    assert!(!root.join("Control/user/pdir").exists());
+    assert!(root.join("Control/user/pdir2/proj/p.md").is_file());
+    assert_eq!(
+        ctrl(
+            &world,
+            "central.file-map.inspect",
+            &json!({"project":"proj","resources":false}),
+            None
+        )["ok"],
+        true,
+        "the live map reads again, with proj where it now stands"
+    );
+}
+
+/// The same finding: an interrupted move is undone through the person's gate, on the scopes its journal runs from.
+#[test]
+fn an_interrupted_move_whose_scope_is_stale_is_rolled_back_through_the_gate() {
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    let carried = interrupted_move(&world, "Control/user/pdir2");
+    let undone = ctrl(
+        &world,
+        "central.file-map.move-rollback",
+        &carried,
+        Some(PERSON),
+    );
+    assert_eq!(undone["ok"], true, "{undone}");
+    assert!(root.join("Control/user/pdir/proj/p.md").is_file());
+    assert!(!root.join("Control/user/pdir2").exists());
+    assert_eq!(
+        ctrl(
+            &world,
+            "central.file-map.inspect",
+            &json!({"project":"proj","resources":false}),
+            None
+        )["ok"],
+        true,
+        "the live map reads again, with proj back where it stood"
+    );
+}
+
+/// The same finding: an interrupted move into alpha, finished or undone on a grant that no longer holds alpha, is refused in words
+/// that name alpha, the journal's project the grant is missing at, never the live map's failure to read. Nothing is moved; on the
+/// root's grant and alpha's it is finished.
+#[test]
+fn an_interrupted_move_refused_where_its_grant_is_missing_names_the_journals_project() {
+    let acts = every_act();
+    let world = granting(&acts, "control:root");
+    authority(
+        &world,
+        vec![
+            grant(
+                PERSON,
+                "human",
+                &["control:root", "project:alpha"],
+                &acts,
+                u64::MAX,
+            ),
+            grant(
+                OWNER,
+                "human",
+                &["control:root"],
+                &["central.file-map.scope-register"],
+                u64::MAX,
+            ),
+        ],
+    );
+    let root = world.root();
+    let carried = interrupted_move(&world, "Work/alpha/pdir");
+    authority(
+        &world,
+        vec![
+            grant(PERSON, "human", &["control:root"], &acts, u64::MAX),
+            grant(
+                OWNER,
+                "human",
+                &["control:root"],
+                &["central.file-map.scope-register"],
+                u64::MAX,
+            ),
+        ],
+    );
+    let before = ground(&world);
+    for (action, opening) in [
+        (
+            "central.file-map.move-apply",
+            "Moving a file is the person's own press: ",
+        ),
+        (
+            "central.file-map.move-rollback",
+            "Moving a file back is the person's own press: ",
+        ),
+    ] {
+        refused_in_words(
+            &world,
+            action,
+            &carried,
+            Some(PERSON),
+            opening,
+            "it reaches the Work project alpha, whose grant does not hold it: native credential is expired or lacks this exact scope/action",
+        );
+        let words = ctrl(&world, action, &carried, Some(PERSON))["error"]["message"].to_string();
+        assert!(!words.contains("os error"), "{action}: {words}");
+    }
+    assert_eq!(
+        ground(&world),
+        before,
+        "a refused replay or rollback moves nothing"
+    );
+    authority(
+        &world,
+        vec![grant(
+            PERSON,
+            "human",
+            &["control:root", "project:alpha"],
+            &acts,
+            u64::MAX,
+        )],
+    );
+    let replayed = ctrl(
+        &world,
+        "central.file-map.move-apply",
+        &carried,
+        Some(PERSON),
+    );
+    assert_eq!(replayed["ok"], true, "{replayed}");
+    assert!(root.join("Work/alpha/pdir/proj/p.md").is_file());
+}
+
+/// The same item: a move's apply and rollback read the scopes its journal runs from without making anything. A project outside the
+/// ground in the journal keeps its state in `.central/scopes/<name>`; a replay or a rollback refused where the grant does not stand
+/// never makes it.
+#[test]
+fn a_move_refused_at_the_gate_makes_no_scope_folder_of_its_journal() {
+    let acts = every_act();
+    let world = granting(&acts, "control:root");
+    let root = world.root();
+    declare_outside_scopes(&world);
+    let planned = ctrl(
+        &world,
+        "central.file-map.move-plan",
+        &json!({"source_ref":page_source(&world),"destination":"Control/user/note2.md"}),
+        Some(PERSON),
+    );
+    assert_eq!(planned["ok"], true, "{planned}");
+    let carried = json!({"plan_id":planned["data"]["result"]["plan_id"],"quiesced":true});
+    let state = root.join(".central/scopes/far");
+    fs::remove_dir_all(&state).unwrap();
+    authority(
+        &world,
+        vec![grant(PERSON, "human", &["project:alpha"], &acts, u64::MAX)],
+    );
+    let before = ground(&world);
+    for (action, opening) in [
+        (
+            "central.file-map.move-apply",
+            "Moving a file is the person's own press: ",
+        ),
+        (
+            "central.file-map.move-rollback",
+            "Moving a file back is the person's own press: ",
+        ),
+    ] {
+        refused_in_words(
+            &world,
+            action,
+            &carried,
+            Some(PERSON),
+            opening,
+            "lacks this exact scope/action",
+        );
+    }
+    assert!(
+        !state.exists(),
+        "a refused replay or rollback makes no scope folder"
+    );
+    assert_eq!(
+        ground(&world),
+        before,
+        "a refused replay or rollback writes nothing"
+    );
 }

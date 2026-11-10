@@ -101,7 +101,14 @@ Each act that changes the person's ground, or what the person has adopted, is
 theirs: it authenticates on the host's native credential (`CENTRAL_NATIVE_TOKEN`)
 for a human grant naming that exact Action, and without one is refused in words,
 with nothing written. The grant stands where the act does: at the Work project
-an act names, else at the root; moves and `scope-register` always at the root.
+an act names, else at the root, and `scope-register` always at the root.
+
+An act also stands where it writes. A place inside a Work project's tree, however
+it is spelled, is that project's: an act that writes there names that project and
+stands on its grant, and one that names another scope, or none, is refused in
+words that say both. A Source the act binds from a Work project needs that
+project's grant as well. A move stands at the root and at each Work project it
+touches; see below.
 
 | Act | What it writes |
 | --- | --- |
@@ -123,7 +130,12 @@ recovery journal and stages owned link replacements, without moving source bytes
 `move-apply` and `move-rollback` take the returned `plan_id` and `quiesced:true`.
 Each move is the person's own act: it authenticates on the host's native
 credential (`CENTRAL_NATIVE_TOKEN`) for a human grant naming that exact Action
-at the root, and without one is refused in words, with nothing planned or moved.
+at the root, and at each Work project the move touches: where its Source stands
+and where it goes. Without one it is refused in words that name the project whose
+grant is missing, with nothing planned or moved. Apply and rollback read the move
+from its journal, and stand on the scopes the journal runs from. So an
+interrupted move can be finished or undone while a scope inside the moved folder
+is still declared where it stood.
 `move-plan` is no read: its journal names where the file goes, and apply and
 rollback carry that out by the plan's id alone.
 The caller must have stopped affected sessions; the operation refuses its own
