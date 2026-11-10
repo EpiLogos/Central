@@ -890,10 +890,14 @@ mod tests {
     }
 
     fn root() -> PathBuf {
+        // Two tests started together can read the same clock, and then one folder served both: one test
+        // removed it under the other. The count makes each test's folder its own.
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let root = std::env::temp_dir().join(format!(
-            "central-personal-test-{}-{}",
+            "central-personal-test-{}-{}-{}",
             std::process::id(),
-            new_proposal_id().unwrap()
+            new_proposal_id().unwrap(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         initialize_central(&root).unwrap();
         root
