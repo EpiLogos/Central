@@ -95,6 +95,27 @@ These are routed owner-operation checks, not OS confinement or caller identity
 attestation. Existing AIKit/Actuation/Workcell authority and material boundaries
 remain necessary where arbitrary same-user filesystem access must be restricted.
 
+## The person's own acts
+
+Each act that changes the person's ground, or what the person has adopted, is
+theirs: it authenticates on the host's native credential (`CENTRAL_NATIVE_TOKEN`)
+for a human grant naming that exact Action, and without one is refused in words,
+with nothing written. The grant stands where the act does: at the Work project
+an act names, else at the root; moves and `scope-register` always at the root.
+
+| Act | What it writes |
+| --- | --- |
+| `register` | the Source, in the scope's relations document |
+| `link` | a link inside the scope's folder, kept in that document |
+| `pool` | whether the scope's whole readable tree is Source, in that document |
+| `scope-register` | a project scope in Control's relations document, or a folder scope's declaration in the ground |
+| `adopt-db` | a copy of the person's bookmark database and its untouched original, under `.central/bkmr` |
+| `record-adopt` | a bookmark bound to a Source, its description rewritten with the person's words kept inside |
+| `move-plan`, `move-apply`, `move-rollback` | a move's journal, then the move and its links |
+
+`refresh` and `projection-record` write only Central's own index, rebuilt from
+what the ground already declares, and read no credential.
+
 ## Moves, replay and rollback
 
 `move-plan` takes a `source_ref` and scope-relative `destination`; it records a

@@ -1150,35 +1150,114 @@ fn may_be_in(all: &[Scope], unreachable: &[UnreachableScope], location: &Path) -
     (!rootless.is_empty()).then(|| format!("it may be in {}", rootless.join("; or in ")))
 }
 
-/// The file map's moves, each the person's own act, and what a refusal of the credential that carried it opens with, before its cause.
-const PERSON_MOVES: [(&str, &str); 3] = [
-    ("move-plan", "Planning a move is the person's own press"),
-    ("move-apply", "Moving a file is the person's own press"),
+/// The file map's acts that are the person's own, each with what a refusal of the credential that carried it opens with, before its
+/// cause, and what was not done then. Each changes the person's own ground, or what the person has adopted (DLW build ruling
+/// 2026-11-09: round 53 item 2 for the moves, round 54's Central follow-up for the rest):
+/// - `move-plan`, `move-apply`, `move-rollback`: a file of the ground moved, and back, by a journal that names where it goes.
+/// - `register`: a Source written into the scope's relations document (`Control/relations/source-relations.json` at the root,
+///   `ProjectCentral/relations/source-relations.json` at a project), the person's own ground.
+/// - `link`: a link made inside the scope's own folder, and kept in that relations document.
+/// - `scope-register`: which folders of the person's the map reads: a project scope kept in Control's relations document, or a folder
+///   scope's declaration kept in the ground (`.central/scopes/<name>/scope.json`). Nothing is written inside the folder.
+/// - `adopt-db`: the person's bookmark database adopted into the map: a copy, and its original untouched beside it, kept under
+///   `.central/bkmr`. The database itself is only read, but what the person has adopted changes.
+/// - `record-adopt`: one of the person's bookmarks bound to a Source, its description rewritten with the person's own words kept inside.
+/// - `pool`: whether the scope's whole readable tree is Source, kept in its relations document. Not in the ruling's list; the same
+///   class as `register` by its rule, so it is gated with it.
+///
+/// The file map's other writes stay as they are, since each writes only Central's own index, made again from what the ground already
+/// declares: `refresh` rebuilds the bindings, the entry cache and the bkmr database under `.central/bkmr`, and `projection-record`
+/// keeps Central's own receipts of AIKit's copies (`.central/bkmr/projections.json`). Neither changes the ground or what is adopted.
+const PERSON_ACTS: [(&str, &str, &str); 9] = [
+    (
+        "move-plan",
+        "Planning a move is the person's own press",
+        "planned",
+    ),
+    (
+        "move-apply",
+        "Moving a file is the person's own press",
+        "moved",
+    ),
     (
         "move-rollback",
         "Moving a file back is the person's own press",
+        "moved",
+    ),
+    (
+        "register",
+        "Registering a Source is the person's own press",
+        "registered",
+    ),
+    (
+        "link",
+        "Linking a Source into a folder is the person's own press",
+        "linked",
+    ),
+    (
+        "scope-register",
+        "Registering a scope is the person's own press",
+        "registered",
+    ),
+    (
+        "adopt-db",
+        "Adopting a bookmark database is the person's own press",
+        "adopted",
+    ),
+    (
+        "record-adopt",
+        "Adopting a bookmark is the person's own press",
+        "adopted",
+    ),
+    (
+        "pool",
+        "Making a scope's whole tree Source is the person's own press",
+        "changed",
     ),
 ];
 /// What a move's Action says of its authority, in its description.
 const PERSON_MOVE_WORDS: &str = " A move is the person's own act: it authenticates on their native authority \
     (CENTRAL_NATIVE_TOKEN) at the root, and without it is refused in words, and nothing is planned or moved. move-plan writes the \
     move's journal, which names where the file goes; move-apply and move-rollback carry it out by its plan_id alone.";
+/// What the file map's other person acts say of their authority, in their descriptions, before what each writes.
+const PERSON_GROUND_WORDS: &str = " It is the person's own act, since it changes their ground or what they have adopted: it \
+    authenticates on their native authority (CENTRAL_NATIVE_TOKEN) where it stands (at the Work project it names, else at the root), \
+    and without it is refused in words, and nothing is written.";
+/// What `scope-register` says of its authority, in its description: it stands at the root.
+const PERSON_SCOPE_WORDS: &str = " It is the person's own act, since it changes which of their folders the map reads: it \
+    authenticates on their native authority (CENTRAL_NATIVE_TOKEN) at the root, and without it is refused in words, and nothing is \
+    written.";
+/// What each of those writes, in its description.
+fn person_act_writes(op: &str) -> &'static str {
+    match op {
+        "register" => " It writes the Source into the scope's relations document.",
+        "link" => " It makes the link inside the scope's folder and keeps it in the scope's relations document.",
+        "scope-register" => {
+            " It keeps a project scope in Control's relations document, or a folder scope's declaration in the ground; nothing is \
+            written inside the folder."
+        }
+        "adopt-db" => {
+            " It adopts the bookmark database into the map: a copy, and the untouched original beside it, under .central/bkmr; the \
+            database named is only read."
+        }
+        "record-adopt" => {
+            " It binds the bookmark to the Source and rewrites its description, keeping the bookmark's own words inside it."
+        }
+        "pool" => " It keeps in the scope's relations document whether the scope's whole readable tree is Source.",
+        _ => "",
+    }
+}
 
-/// A move is the person's own act (DLW build ruling 2026-11-09, round 53 item 2; O-I 0G's review). A plan is no read here: this
-/// Action is classed locally-mutating (`register`), and `move-plan` writes the durable journal under `.central/bkmr/moves` that names
-/// where the file goes, which `move-apply` and `move-rollback` then carry out by its id alone. A move can bring a project-shaped folder
-/// into Work, where Central counts it a scope by its place. So each authenticates on the host's native credential
-/// (`CENTRAL_NATIVE_TOKEN`, never a request field) for a human grant naming that exact Action at the root, as Central's other
-/// owner-authority acts do (`authority::authenticate`), before anything is read, locked or written. A refusal opens with whose act it
-/// is, then its cause, and nothing is planned or moved. Every other operation reads no credential.
-fn the_persons_move(root: &Path, op: &str, input: &Value, token: Option<&str>) -> io::Result<()> {
-    let Some((_, opening)) = PERSON_MOVES.iter().find(|(asked, _)| *asked == op) else {
+/// The file map's acts of the person's own (`PERSON_ACTS`): a move since round 53 item 2 (O-I 0G's review), and since round 54's Central
+/// follow-up each act that changes the person's ground or what they have adopted (DLW build ruling 2026-11-09). A plan is no read here:
+/// this Action is classed locally-mutating (`register`), and `move-plan` writes the durable journal under `.central/bkmr/moves` that
+/// names where the file goes, which `move-apply` and `move-rollback` then carry out by its id alone. So each authenticates on the
+/// host's native credential (`CENTRAL_NATIVE_TOKEN`, never a request field) for a human grant naming that exact Action where the act
+/// stands (`grant_scope`), as Central's other owner-authority acts do (`authority::authenticate`), before anything is locked or
+/// written. A refusal opens with whose act it is, then its cause, and nothing is done. Every other operation reads no credential.
+fn the_persons_act(root: &Path, op: &str, input: &Value, token: Option<&str>) -> io::Result<()> {
+    let Some((_, opening, nothing)) = PERSON_ACTS.iter().find(|(asked, _, _)| *asked == op) else {
         return Ok(());
-    };
-    let nothing = if op == "move-plan" {
-        "planned"
-    } else {
-        "moved"
     };
     let words = |error: io::Error| {
         io::Error::new(
@@ -1186,7 +1265,7 @@ fn the_persons_move(root: &Path, op: &str, input: &Value, token: Option<&str>) -
             format!("{opening}: {error}; nothing was {nothing}"),
         )
     };
-    let scope = crate::continuous_work::source::Scope::resolve(root, None).map_err(words)?;
+    let scope = grant_scope(root, op, input).map_err(words)?;
     crate::continuous_work::authority::authenticate(
         &scope,
         token,
@@ -1200,18 +1279,60 @@ fn the_persons_move(root: &Path, op: &str, input: &Value, token: Option<&str>) -
     .map_err(words)
 }
 
+/// Where the grant for one of the person's acts must stand: at a project of Work the act names (`project`, by its name or its World),
+/// whose grant extended to it holds the act there, as Central's other acts that name a project are held
+/// (`authority::PROJECT_AUTHENTICATED_ACTIONS`); at the root for anything else: no project, the root, a project scope registered from
+/// outside Work or a folder scope, which the root registered. A move and `scope-register` stand at the root whatever they name: a move
+/// can bring a folder into Work, and the root registers every scope. Reading which scope is named reads the scopes' declarations only.
+fn grant_scope(
+    root: &Path,
+    op: &str,
+    input: &Value,
+) -> io::Result<crate::continuous_work::source::Scope> {
+    let at_root = || crate::continuous_work::source::Scope::resolve(root, None);
+    let Some(asked) = input
+        .get("project")
+        .and_then(Value::as_str)
+        .filter(|_| !op.starts_with("move-") && op != "scope-register")
+    else {
+        return at_root();
+    };
+    let ground = root.canonicalize()?;
+    let (all, _) = participating(&ground)?;
+    let member = all
+        .iter()
+        .find(|scope| {
+            scope.world == asked || !scope.is_folder() && scope.project.as_deref() == Some(asked)
+        })
+        .filter(|scope| !scope.is_external() && !scope.is_folder())
+        .and_then(|scope| scope.root.strip_prefix(ground.join("Work")).ok())
+        .filter(|member| member.components().count() == 1)
+        .and_then(Path::to_str);
+    match member {
+        Some(member) => crate::continuous_work::source::Scope::resolve(root, Some(member)),
+        None => at_root(),
+    }
+}
+
 pub fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
     execute_with_token(root, op, input, None)
 }
 
-/// [`execute`] with the host's native credential, which the three moves authenticate on (`the_persons_move`).
+/// [`execute`] with the host's native credential, which the person's acts authenticate on (`the_persons_act`).
 pub fn execute_with_token(
     root: &Path,
     op: &str,
     input: &Value,
     token: Option<&str>,
 ) -> io::Result<Value> {
-    the_persons_move(root, op, input, token)?;
+    the_persons_act(root, op, input, token)?;
+    admitted(root, op, input)
+}
+
+/// An operation once admitted: past the person's own gate for their acts (`the_persons_act`), and with nothing to admit for any other.
+/// The module's own tests of what an act does run it from here; the gate is pinned against the built `ctrl`
+/// (tests/file_map_moves_person.rs).
+fn admitted(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
     if op == "resolve-batch" {
         return execute_resolve_batch(root, input);
     }
@@ -1981,11 +2102,22 @@ fn failure_code(error: &io::Error) -> &'static str {
 }
 
 fn action(op: &str, input: &Value, context: &ActionExecutionContext<'_>) -> ActionResult {
-    let id = format!("central.file-map.{op}");
     let token = std::env::var("CENTRAL_NATIVE_TOKEN").ok();
+    action_on(op, input, context, token.as_deref())
+}
+
+/// [`action`] on the credential given, as the host's environment gives it there: for the crate's tests of an act of the person's own
+/// through its Action's answer, which give their own test credential and never set the process's environment.
+pub(crate) fn action_on(
+    op: &str,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+    token: Option<&str>,
+) -> ActionResult {
+    let id = format!("central.file-map.{op}");
     let result = crate::root::resolve_central_root(context.root_options)
         .map_err(io::Error::other)
-        .and_then(|r| execute_with_token(&r.path, op, input, token.as_deref()));
+        .and_then(|r| execute_with_token(&r.path, op, input, token));
     match result {
         Ok(data) => ActionResult::success(&id, data),
         Err(e) if crate::file_mutation::record_failure_result(&id, &e).is_some() => {
@@ -2088,8 +2220,11 @@ pub fn register(registry: &mut ActionRegistry) {
             "exclude",
         ]
         .iter()
-        // A move is the root's to grant (`the_persons_move`), and its scope is its Source's, so it names no project.
-        .filter(|name| !(op.starts_with("move-") && **name == "project"))
+        // A move is the root's to grant (`grant_scope`), and its scope is its Source's, so it names no project; nor does a scope's
+        // register, which the root makes.
+        .filter(|name| {
+            !((op.starts_with("move-") || op == "scope-register") && **name == "project")
+        })
         .map(|name| ActionInputDefinition {
             name: (*name).into(),
             input_type: match *name {
@@ -2146,7 +2281,7 @@ pub fn register(registry: &mut ActionRegistry) {
                 selection: None,
             });
         }
-        if op.starts_with("move-") {
+        if PERSON_ACTS.iter().any(|(act, _, _)| *act == op) {
             inputs.push(ActionInputDefinition {
                 name: "expected_authority_revision".into(),
                 input_type: "string".into(),
@@ -2161,6 +2296,12 @@ pub fn register(registry: &mut ActionRegistry) {
         }
         if op.starts_with("move-") {
             description.push_str(PERSON_MOVE_WORDS);
+        } else if op == "scope-register" {
+            description.push_str(PERSON_SCOPE_WORDS);
+            description.push_str(person_act_writes(op));
+        } else if PERSON_ACTS.iter().any(|(act, _, _)| *act == op) {
+            description.push_str(PERSON_GROUND_WORDS);
+            description.push_str(person_act_writes(op));
         }
         registry
             .register(
@@ -2776,7 +2917,7 @@ mod binding_read_tests {
             .into_iter()
             .find(|binding| binding.path == "Control/user/note.md")
             .unwrap();
-        let registered = execute(&fixture.root, "register", &json!({"path":"Control/user/note.md", "expected_revision":"absent", "title":"retained useful title"})).unwrap();
+        let registered = admitted(&fixture.root, "register", &json!({"path":"Control/user/note.md", "expected_revision":"absent", "title":"retained useful title"})).unwrap();
         assert_eq!(registered["result"]["source_ref"], native.source_ref);
         let declaration = fs::read(&fixture.relations).unwrap();
         for metadata_only in [true, false] {
@@ -2865,7 +3006,7 @@ mod binding_read_tests {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, bytes).unwrap();
         }
-        let pooled = execute(&fixture.root, "pool", &json!({"enable":true})).unwrap();
+        let pooled = admitted(&fixture.root, "pool", &json!({"enable":true})).unwrap();
         let paths: Vec<String> = execute(&fixture.root, "inspect", &json!({"resources":true}))
             .unwrap()["result"]["resources"]
             .as_array()
@@ -3133,7 +3274,7 @@ mod binding_read_tests {
             .unwrap();
         assert_eq!(native.provenance, "human-authored");
         assert_eq!(native.standing, "active");
-        execute(
+        admitted(
             &fixture.root,
             "register",
             &json!({"path":"Control/user/skills/actual/SKILL.md","expected_revision":"absent"}),
@@ -3404,7 +3545,7 @@ mod external_scope_tests {
     fn writes_for_an_external_scope_never_touch_its_tree() {
         let world = World::new();
         let before = world.external_listing();
-        execute(
+        admitted(
             &world.root,
             "pool",
             &json!({"project":"epi","enable":false}),
@@ -3714,8 +3855,10 @@ mod folder_scope_tests {
 
     static NEXT: AtomicU64 = AtomicU64::new(0);
     /// An act's answer: its envelope's `result`.
+    /// What an operation does once admitted (`admitted`): the person's acts among these are theirs, whose gate
+    /// tests/file_map_moves_person.rs pins against the built `ctrl`, so these tests of what they do run past it.
     fn run(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
-        execute(root, op, input).map(|envelope| envelope["result"].clone())
+        admitted(root, op, input).map(|envelope| envelope["result"].clone())
     }
     /// A ground with one Work project, and beside it a plain Music folder: sound files, a text note,
     /// a set, an AppleDouble companion and a nested folder. No ProjectCentral anywhere in it.
@@ -3822,9 +3965,9 @@ mod folder_scope_tests {
         fn person_moves(&self) -> &'static str {
             const TOKEN: &str = "file-map-folder-moves-controlled-test-not-a-live-secret";
             let source = "Control/user/file-map-moves-authority.json";
-            let actions: Vec<_> = PERSON_MOVES
+            let actions: Vec<_> = PERSON_ACTS
                 .iter()
-                .map(|(op, _)| format!("central.file-map.{op}"))
+                .map(|(op, _, _)| format!("central.file-map.{op}"))
                 .collect();
             fs::write(self.root.join(source), serde_json::to_vec(&json!({"schema":"central.native-action-authority/v1",
                 "scope_ref":"control:root","grants":[{"principal_ref":"human:file-map-folder-test","actor_kind":"human",
@@ -5831,7 +5974,7 @@ mod folder_scope_tests {
             .register("Music", &world.music(), json!(["wav", "aiff", "mp3"]))
             .unwrap();
         let voice = source_horizon::source_ref("folder:Music", "voice.mp3");
-        // A move is the person's own act (`the_persons_move`): it is their press that meets the folder's words.
+        // A move is the person's own act (`the_persons_act`): it is their press that meets the folder's words.
         let person = world.person_moves();
         let moved = refused(execute_with_token(
             &world.root,

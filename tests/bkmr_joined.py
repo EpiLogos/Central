@@ -20,10 +20,12 @@ import tomllib
 import unittest
 
 
-# A move is the person's own act (Central file_map.rs `the_persons_move`): each World's moves carry this disposable test credential,
-# which the person's grant written into that World on its first move names (Joined.person_moves).
+# The file map's acts of the person's own (Central file_map.rs `the_persons_act`): a move, and since round 54's Central follow-up each
+# act that changes the person's ground or what they have adopted. Each World's carry this disposable test credential, which the
+# person's grant written into that World on its first such act names (Joined.person_moves).
 PERSON_TOKEN = "bkmr-joined-moves-person-controlled-test-not-a-live-secret"
-MOVES = ("move-plan", "move-apply", "move-rollback")
+PERSON_ACTS = ("move-plan", "move-apply", "move-rollback", "register", "link", "scope-register", "adopt-db",
+               "record-adopt", "pool")
 
 
 def fnv(data: bytes) -> str:
@@ -62,34 +64,62 @@ class Joined(unittest.TestCase):
                                 env=env or self.env, capture_output=True, text=True, timeout=90)
         if success:
             self.assertEqual(result.returncode, 0, (args, result.stdout, result.stderr))
-        else:
+        elif success is not None:
             self.assertNotEqual(result.returncode, 0, (args, result.stdout, result.stderr))
         return result
 
-    def person_moves(self):
-        """The person's grant for the three moves at the root, written into this disposable World before its first move."""
+    def person_moves(self, project=None):
+        """The person's grant for the file map's acts of theirs, written into this disposable World before its first such act: at
+        the root, and at a project of Work once an act names it, as the person's grant is extended to a project they bring in.
+        Whether the relations document was written now."""
         source = "Control/user/file-map-moves-authority.json"
+        scopes = ["control:root"]
+        if project is not None and (self.root / "Work" / project / "ProjectCentral/project.json").exists():
+            scopes.append(f"project:{project}")
+        grant = self.root / source
+        if grant.exists():
+            scopes = sorted(set(scopes) | set(json.loads(grant.read_text())["grants"][0]["scope_refs"]))
+        text = json.dumps({"schema": "central.native-action-authority/v1", "scope_ref": "control:root", "grants": [{
+            "principal_ref": "human:bkmr-joined", "actor_kind": "human",
+            "token_sha256": hashlib.sha256(PERSON_TOKEN.encode()).hexdigest(), "scope_refs": scopes,
+            "actions": [f"central.file-map.{op}" for op in PERSON_ACTS], "expires_at_unix_seconds": 4_000_000_000}]})
+        if not grant.exists() or grant.read_text() != text:
+            self.write(source, text)
         path = self.root / "Control/relations/source-relations.json"
         doc = json.loads(path.read_text()) if path.exists() else {
             "schema": "central.control.ground-relations/v1", "project_id": "control:root", "relations": []}
         if any(row.get("path") == source for row in doc["relations"]):
-            return
-        self.write(source, json.dumps({"schema": "central.native-action-authority/v1", "scope_ref": "control:root", "grants": [{
-            "principal_ref": "human:bkmr-joined", "actor_kind": "human",
-            "token_sha256": hashlib.sha256(PERSON_TOKEN.encode()).hexdigest(), "scope_refs": ["control:root"],
-            "actions": [f"central.file-map.{op}" for op in MOVES], "expires_at_unix_seconds": 4_000_000_000}]}))
+            return False
         doc["relations"].append({"ref": "central:source:control:root:" + source, "path": source,
                                  "roles": ["native-action-authority"], "provenance": "human-adopted",
                                  "standing": "architecture-contract", "treatment": "control-user",
                                  "recognition": "controlled-test-only", "recorded_at_unix_seconds": 1})
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(doc))
+        return True
+
+    def revision(self, project=None):
+        """The scope's revision, read without a credential."""
+        args = {"resources": False} if project is None else {"resources": False, "project": project}
+        result = self.run_cmd([self.ctrl, "--json", "--root", self.root, "action", "run", "central.file-map.inspect",
+                               json.dumps(args)], success=None)
+        return json.loads(result.stdout).get("data", {}).get("result", {}).get("revision")
 
     def action(self, op, project=None, *, success=True, env=None, **values):
         if project is not None:
             values["project"] = project
-        if op in MOVES:
-            self.person_moves()
+        if op in PERSON_ACTS:
+            # The grant is written at the person's first act in this World; a revision read just before it is carried to the one the
+            # grant leaves, as it would stand in a World whose person holds their grant. Any other revision is passed as it was.
+            # An act at the root that names no revision is made on an absent relations document: the grant's own relation then stands
+            # in it, and the act is made on the revision it leaves.
+            read = self.revision(values.get("project")) if "expected_revision" in values else None
+            absent = values.get("project") is None and not (self.root / "Control/relations/source-relations.json").exists()
+            if self.person_moves(values.get("project")):
+                if read is not None and values.get("expected_revision") == read:
+                    values["expected_revision"] = self.revision(values.get("project"))
+                elif "expected_revision" not in values and absent:
+                    values["expected_revision"] = self.revision()
             env = dict(env or self.env, CENTRAL_NATIVE_TOKEN=PERSON_TOKEN)
         result = self.run_cmd([self.ctrl, "--json", "--root", self.root, "action", "run",
                                f"central.file-map.{op}", json.dumps(values)], success=success, env=env)
@@ -374,7 +404,11 @@ class Joined(unittest.TestCase):
         self.write("Control/user/note.md"); self.action("refresh")
         self.assertEqual(source.read_bytes(), before)
         self.assertEqual(backup.read_bytes(), saved)
-        self.assertEqual(len(json.loads(self.native("search","--json","--np").stdout)), 2)
+        # The adopted bookmark, the note, and the person's grant written at their first act in this World (Joined.person_moves),
+        # which refresh maps as a Source like any other file of Control/user.
+        records = json.loads(self.native("search","--json","--np").stdout)
+        self.assertEqual(sorted(r["title"] for r in records),
+                         ["Control/user/file-map-moves-authority.json", "Control/user/note.md", "Retained"])
         self.action("adopt-db", database=str(source), quiesced=True, success=False)
 
     def test_21_bkmr_absence_and_semantic_mode_are_explicit_without_creating_database(self):
