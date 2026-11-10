@@ -65,6 +65,32 @@ fn path(root: &Path, id: &str) -> io::Result<PathBuf> {
     }
     Ok(root.join(".central/bkmr/moves").join(format!("{id}.json")))
 }
+/// The places a move's journal moves its Source between (its `from` and its `to`, each under its owner's root), read without
+/// changing anything, for the person's gate (file_map.rs `act_places`; round 54d F1). A journal that does not read names none: the
+/// act itself then refuses it.
+pub(crate) fn journal_places(root: &Path, input: &Value) -> Vec<(String, PathBuf)> {
+    let Some(plan) = input
+        .get("plan_id")
+        .and_then(Value::as_str)
+        .and_then(|id| path(root, id).ok())
+        .and_then(|journal| fs::read(journal).ok())
+        .and_then(|bytes| serde_json::from_slice::<Plan>(&bytes).ok())
+    else {
+        return Vec::new();
+    };
+    let Some(owner) = plan.worlds.iter().find(|world| world.world == plan.world) else {
+        return Vec::new();
+    };
+    let base = if owner.external {
+        PathBuf::from(&owner.path)
+    } else {
+        root.join(&owner.path)
+    };
+    vec![
+        (plan.from.clone(), base.join(&plan.from)),
+        (plan.to.clone(), base.join(&plan.to)),
+    ]
+}
 fn save(
     root: &Path,
     plan: &Plan,
