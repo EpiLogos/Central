@@ -13,6 +13,10 @@
 //! act at the root by the root's. A grant that names only some is refused at the others, and a grant is refused wherever it does not
 //! stand. In process, `file_map::execute` carries no credential and is refused alike.
 //!
+//! Since round 54d (DLW build ruling 2026-11-09, F1), an act also stands where it writes: a root grant does not cover a Work tree, so a
+//! place inside a Work project, however it is spelled, names that project, and a Source or a move's journal target there needs that
+//! project's grant as well as the one the act stands on.
+//!
 //! Test credentials and authority fixtures exist only in this disposable world. bkmr never runs: the world names a bkmr that is not
 //! there, so a call to it could only fail.
 use central_ctrl::continuous_work::source::Scope;
@@ -59,7 +63,19 @@ impl World {
 
 /// One `ctrl action run` as a separate process, with the credential (or none) in its environment only.
 fn ctrl(world: &World, action: &str, input: &Value, token: Option<&str>) -> Value {
+    ctrl_with(world, action, input, token, &[])
+}
+
+/// [`ctrl`] with `variables` in the process's environment as well.
+fn ctrl_with(
+    world: &World,
+    action: &str,
+    input: &Value,
+    token: Option<&str>,
+    variables: &[(&str, &str)],
+) -> Value {
     let mut command = Command::new(env!("CARGO_BIN_EXE_ctrl"));
+    command.envs(variables.iter().copied());
     command
         .args([
             "--json",
@@ -249,13 +265,31 @@ fn refused_in_words(
     opening: &str,
     cause: &str,
 ) {
+    refused_as(
+        world,
+        action,
+        input,
+        token,
+        "central.file_map_denied",
+        opening,
+        cause,
+    );
+}
+
+/// [`refused_in_words`] with the refusal's `code`: a conflict or a Source that does not read is no denial.
+fn refused_as(
+    world: &World,
+    action: &str,
+    input: &Value,
+    token: Option<&str>,
+    code: &str,
+    opening: &str,
+    cause: &str,
+) {
     let refused = ctrl(world, action, input, token);
     let case = format!("{action} with {}", token.unwrap_or("no credential"));
     assert_eq!(refused["ok"], false, "{case}: {refused}");
-    assert_eq!(
-        refused["error"]["code"], "central.file_map_denied",
-        "{case}: {refused}"
-    );
+    assert_eq!(refused["error"]["code"], code, "{case}: {refused}");
     let words = refused["error"]["message"].as_str().unwrap_or_default();
     assert!(words.starts_with(opening), "{case}: {words}");
     assert!(words.contains(cause), "{case}: {words}");
@@ -933,4 +967,865 @@ fn the_persons_acts_reach_every_scope_rule() {
         }
     }
     assert_eq!(ground(&world), before, "nothing is written at the project");
+}
+
+/// One grant of the authority Source: `token`'s digest, its actor, the scopes it stands at, its acts and when it expires.
+fn grant(token: &str, kind: &str, scopes: &[&str], actions: &[&str], expires: u64) -> Value {
+    json!({"principal_ref":format!("{kind}:file-map-moves-test"),"actor_kind":kind,
+        "token_sha256":format!("{:x}",Sha256::digest(token.as_bytes())),"scope_refs":scopes,
+        "actions":actions,"expires_at_unix_seconds":expires})
+}
+
+/// The world's authority Source rewritten to hold `grants` (its relation is unchanged, so it stays the Source the gate reads).
+fn authority(world: &World, grants: Vec<Value>) {
+    fs::write(
+        world.root().join("Control/user/file-map-moves-authority.json"),
+        serde_json::to_vec(&json!({"schema":"central.native-action-authority/v1","scope_ref":"control:root","grants":grants}))
+            .unwrap(),
+    )
+    .unwrap();
+}
+
+/// Every one of the person's acts.
+fn every_act() -> Vec<&'static str> {
+    MOVES.iter().chain(GROUND_ACTS.iter()).copied().collect()
+}
+
+/// Round 54d F1 (review of #340): an act stands where it writes, not only where it names. A root grant does not cover a Work tree,
+/// so with the person's grant at the root alone, a link made inside alpha's tree and a register of alpha's file are refused in words
+/// that say both: where the act names (no project, so the root) and the Work project its path is in. The path is resolved on the
+/// disk first, so no spelling of it reaches alpha unseen: `..`, `./`, a trailing slash, an absolute path, a link in Work to alpha,
+/// and on a disk that folds case, another case. Nothing refused is written.
+#[test]
+fn a_root_grant_writes_into_no_work_project_by_any_spelling_of_the_path() {
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    std::os::unix::fs::symlink(root.join("Work/alpha"), root.join("Work/alias")).unwrap();
+    let source = page_source(&world);
+    let plan = fs::canonicalize(root.join("Work/alpha/plan.md")).unwrap();
+    let before = ground(&world);
+    let link = |path: &str| json!({"source_ref":source,"path":path,"owner":"person"});
+    let register = |path: &str| json!({"path":path});
+    let mut probes = vec![
+        ("central.file-map.link", link("Work/alpha/links/note")),
+        (
+            "central.file-map.link",
+            link("Control/../Work/alpha/links/note"),
+        ),
+        ("central.file-map.link", link("./Work/alpha/links/note")),
+        ("central.file-map.link", link("Work/alias/links/note")),
+        ("central.file-map.link", link("Work/alpha/links/note/")),
+        ("central.file-map.register", register("Work/alpha/plan.md")),
+        (
+            "central.file-map.register",
+            register("Control/user/../../Work/alpha/plan.md"),
+        ),
+        ("central.file-map.register", register("Work/alias/plan.md")),
+        ("central.file-map.register", register("Work/alpha/")),
+        (
+            "central.file-map.register",
+            json!({"path":plan,"allow_external":true}),
+        ),
+    ];
+    // A disk that folds case reads `work/ALPHA` as alpha's own folder; on one that does not, it is no folder at all.
+    let folds = root.join("work/ALPHA").exists();
+    if folds {
+        probes.push(("central.file-map.link", link("work/ALPHA/links/note")));
+        probes.push(("central.file-map.register", register("work/ALPHA/plan.md")));
+    }
+    for (action, mut input) in probes {
+        input["expected_revision"] = revision(&world, None).into();
+        refused_in_words(
+            &world,
+            action,
+            &input,
+            Some(PERSON),
+            opening(action),
+            "is in the Work project alpha, but the act names no project, so it stands at the root: an act on alpha's tree names project alpha and stands on its grant",
+        );
+    }
+    assert_eq!(ground(&world), before, "nothing refused is written");
+}
+
+/// The same finding: the same acts on the project's grant pass, and a Source or a move that reaches into a Work project needs that
+/// project's grant as well as the root's. A link at the root of alpha's Source, a move of the root's page into alpha, and the move's
+/// apply, each refused on a grant at the root alone and passing on a grant at the root and alpha. Alpha's own register and link pass
+/// on alpha's grant alone.
+#[test]
+fn an_act_that_reaches_a_work_project_stands_on_that_projects_grant() {
+    let acts = every_act();
+    let lacks = "lacks this exact scope/action";
+    let world = granting(&acts, "project:alpha");
+    let root = world.root();
+    let bookmarks = world.0.join("bookmarks.db");
+    // Alpha's own acts, on alpha's grant: its register, then its link.
+    let registered = ctrl(
+        &world,
+        "central.file-map.register",
+        &act_input(
+            "central.file-map.register",
+            Some("alpha"),
+            &revision(&world, Some("alpha")),
+            "",
+            &bookmarks,
+        ),
+        Some(PERSON),
+    );
+    assert_eq!(registered["ok"], true, "{registered}");
+    let located = ctrl(
+        &world,
+        "central.file-map.locate",
+        &json!({"path":"Work/alpha/plan.md"}),
+        None,
+    );
+    assert_eq!(located["ok"], true, "{located}");
+    let alpha_plan = located["data"]["result"]["source"]["ref"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let linked = ctrl(
+        &world,
+        "central.file-map.link",
+        &act_input(
+            "central.file-map.link",
+            Some("alpha"),
+            &revision(&world, Some("alpha")),
+            &alpha_plan,
+            &bookmarks,
+        ),
+        Some(PERSON),
+    );
+    assert_eq!(linked["ok"], true, "{linked}");
+    // The root's acts that reach alpha, on the root's grant alone: refused, and nothing written.
+    authority(
+        &world,
+        vec![grant(PERSON, "human", &["control:root"], &acts, u64::MAX)],
+    );
+    let source = page_source(&world);
+    let mut at_root = json!({"source_ref":alpha_plan,"path":"links/alpha-plan","owner":"person","expected_revision":revision(&world, None)});
+    let into_alpha = json!({"source_ref":source,"destination":"Work/alpha/note.md"});
+    let before = ground(&world);
+    refused_in_words(
+        &world,
+        "central.file-map.link",
+        &at_root,
+        Some(PERSON),
+        opening("central.file-map.link"),
+        lacks,
+    );
+    refused_in_words(
+        &world,
+        "central.file-map.move-plan",
+        &into_alpha,
+        Some(PERSON),
+        "Planning a move is the person's own press: ",
+        lacks,
+    );
+    assert_eq!(ground(&world), before, "nothing refused is written");
+    assert_eq!(journals(&root), 0);
+    // On the root's grant and alpha's, they pass.
+    authority(
+        &world,
+        vec![grant(
+            PERSON,
+            "human",
+            &["control:root", "project:alpha"],
+            &acts,
+            u64::MAX,
+        )],
+    );
+    at_root["expected_revision"] = revision(&world, None).into();
+    let linked = ctrl(&world, "central.file-map.link", &at_root, Some(PERSON));
+    assert_eq!(linked["ok"], true, "{linked}");
+    let planned = ctrl(
+        &world,
+        "central.file-map.move-plan",
+        &into_alpha,
+        Some(PERSON),
+    );
+    assert_eq!(planned["ok"], true, "{planned}");
+    let carried = json!({"plan_id":planned["data"]["result"]["plan_id"],"quiesced":true});
+    // The journal's move into alpha is carried out on the same grants: the root's alone is refused.
+    authority(
+        &world,
+        vec![grant(PERSON, "human", &["control:root"], &acts, u64::MAX)],
+    );
+    let before = ground(&world);
+    refused_in_words(
+        &world,
+        "central.file-map.move-apply",
+        &carried,
+        Some(PERSON),
+        "Moving a file is the person's own press: ",
+        lacks,
+    );
+    assert_eq!(ground(&world), before, "a refused apply moves nothing");
+    authority(
+        &world,
+        vec![grant(
+            PERSON,
+            "human",
+            &["control:root", "project:alpha"],
+            &acts,
+            u64::MAX,
+        )],
+    );
+    let applied = ctrl(
+        &world,
+        "central.file-map.move-apply",
+        &carried,
+        Some(PERSON),
+    );
+    assert_eq!(applied["ok"], true, "{applied}");
+    assert!(root.join("Work/alpha/note.md").is_file());
+}
+
+/// The same finding: where the project an act names and the place it writes disagree, it is refused in words saying both, on a
+/// grant that holds both projects. Nothing refused is written.
+#[test]
+fn a_project_and_a_path_that_disagree_are_refused_saying_both() {
+    let acts = every_act();
+    let world = granting(&acts, "project:alpha");
+    let root = world.root();
+    project(&root.join("Work/beta"), "beta");
+    fs::write(root.join("Work/beta/plan.md"), "beta's plan\n").unwrap();
+    authority(
+        &world,
+        vec![grant(
+            PERSON,
+            "human",
+            &["project:alpha", "project:beta"],
+            &acts,
+            u64::MAX,
+        )],
+    );
+    let source = page_source(&world);
+    let beta_plan = fs::canonicalize(root.join("Work/beta/plan.md")).unwrap();
+    let before = ground(&world);
+    for (action, named, input, reached) in [
+        (
+            "central.file-map.register",
+            "alpha",
+            json!({"path":beta_plan,"allow_external":true}),
+            "beta",
+        ),
+        (
+            "central.file-map.register",
+            "alpha",
+            json!({"path":"../beta/plan.md"}),
+            "beta",
+        ),
+        (
+            "central.file-map.link",
+            "alpha",
+            json!({"source_ref":source,"path":"../beta/links/note","owner":"person"}),
+            "beta",
+        ),
+        (
+            "central.file-map.link",
+            "beta",
+            json!({"source_ref":source,"path":"../alpha/links/note","owner":"person"}),
+            "alpha",
+        ),
+    ] {
+        let mut input = input;
+        input["project"] = named.into();
+        input["expected_revision"] = revision(&world, Some(named)).into();
+        refused_in_words(
+            &world,
+            action,
+            &input,
+            Some(PERSON),
+            opening(action),
+            &format!("is in the Work project {reached}, but the act names project {named}: an act on {reached}'s tree names project {reached}"),
+        );
+    }
+    assert_eq!(ground(&world), before, "nothing refused is written");
+}
+
+/// Round 54d F3 (review of #340): what the reviewer probed by hand. A grant that has expired, a grant of a native service's, and two
+/// grants that share one token's digest are each refused, and so is every other spelling of a project the grant stands at: its
+/// absolute path, another case, a trailing slash or space, a combining mark, and a link in Work to it. Nothing refused is written.
+#[test]
+fn an_expired_a_services_and_a_shared_grant_and_every_other_spelling_are_refused() {
+    let acts = every_act();
+    let world = granting(&acts, "control:root");
+    let root = world.root();
+    std::os::unix::fs::symlink(root.join("Work/alpha"), root.join("Work/alias")).unwrap();
+    let register =
+        json!({"path":"Control/user/note.md","expected_revision":revision(&world, None)});
+    let opening = opening("central.file-map.register");
+    for (grants, cause) in [
+        (
+            vec![grant(PERSON, "human", &["control:root"], &acts, 1)],
+            "native credential is expired or lacks this exact scope/action",
+        ),
+        (
+            vec![grant(
+                PERSON,
+                "native-service",
+                &["control:root"],
+                &acts,
+                u64::MAX,
+            )],
+            "requires a human-scoped native credential",
+        ),
+        (
+            vec![
+                grant(PERSON, "human", &["control:root"], &acts, u64::MAX),
+                grant(PERSON, "human", &["project:alpha"], &acts, u64::MAX),
+            ],
+            "ambiguous credential grants require source reconciliation",
+        ),
+    ] {
+        authority(&world, grants);
+        let before = ground(&world);
+        refused_in_words(
+            &world,
+            "central.file-map.register",
+            &register,
+            Some(PERSON),
+            opening,
+            cause,
+        );
+        assert_eq!(ground(&world), before, "nothing refused is written");
+    }
+    authority(
+        &world,
+        vec![grant(PERSON, "human", &["project:alpha"], &acts, u64::MAX)],
+    );
+    let before = ground(&world);
+    let absolute = root.join("Work/alpha");
+    let canonical = fs::canonicalize(&absolute).unwrap();
+    for spelled in [
+        absolute.to_str().unwrap(),
+        canonical.to_str().unwrap(),
+        "ALPHA",
+        "Alpha",
+        "alpha/",
+        "alpha ",
+        " alpha",
+        "alpha\u{0301}",
+        "alias",
+        "project:Alpha",
+    ] {
+        let input = json!({"project":spelled,"path":"plan.md","expected_revision":"unread"});
+        refused_in_words(
+            &world,
+            "central.file-map.register",
+            &input,
+            Some(PERSON),
+            opening,
+            "lacks this exact scope/action",
+        );
+    }
+    assert_eq!(ground(&world), before, "nothing refused is written");
+}
+
+/// Round 54d F5 (review of #340): an authority Source that does not read is refused in Central's own words, never the parser's,
+/// which would echo a value of the Source to a caller with no grant; and the token is matched before the Source's revision, so a
+/// caller without a valid token learns nothing of it.
+#[test]
+fn the_authority_source_says_nothing_of_itself_to_a_caller_without_a_grant() {
+    let world = granting(&every_act(), "control:root");
+    let register = json!({"path":"Control/user/note.md","expected_revision":revision(&world, None),
+        "expected_authority_revision":"a-revision-the-source-does-not-have"});
+    let opening = opening("central.file-map.register");
+    refused_in_words(
+        &world,
+        "central.file-map.register",
+        &register,
+        Some(UNKNOWN),
+        opening,
+        "native credential is not authorised",
+    );
+    refused_as(
+        &world,
+        "central.file-map.register",
+        &register,
+        Some(PERSON),
+        "central.file_map_conflict",
+        opening,
+        "native authority revision changed",
+    );
+    fs::write(
+        world.root().join("Control/user/file-map-moves-authority.json"),
+        br#"{"schema":"central.native-action-authority/v1","scope_ref":"control:root","grants":[{"principal_ref":"human:x","actor_kind":"human","token_sha256":"00","scope_refs":["control:root"],"actions":[],"expires_at_unix_seconds":"a-value-of-the-source-canary"}]}"#,
+    )
+    .unwrap();
+    let plain = json!({"path":"Control/user/note.md","expected_revision":revision(&world, None)});
+    for token in [UNKNOWN, PERSON] {
+        let refused = ctrl(&world, "central.file-map.register", &plain, Some(token));
+        let words = refused["error"]["message"].as_str().unwrap_or_default();
+        assert_eq!(refused["ok"], false, "{refused}");
+        assert!(words.starts_with(opening), "{words}");
+        assert!(
+            words.contains("invalid native-action-authority source"),
+            "{words}"
+        );
+        assert!(
+            !words.contains("canary") && !words.contains("invalid type"),
+            "the parser's words: {words}"
+        );
+    }
+}
+
+/// Round 54d F9 (review of #340): a project scope nested inside a Work project, registered at the root, stands on the root's grant, as
+/// the root registered it, and so does an act in its own tree. A place outside its tree, in the Work project around it, is that
+/// project's.
+#[test]
+fn a_project_nested_in_a_work_project_stands_on_the_roots_grant_in_its_own_tree_alone() {
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    project(&root.join("Work/alpha/sub"), "sub");
+    fs::write(root.join("Work/alpha/sub/sub.md"), "sub's page\n").unwrap();
+    let declared = ctrl(
+        &world,
+        "central.file-map.scope-register",
+        &json!({"name":"sub","path":"Work/alpha/sub","kind":"project","expected_revision":revision(&world, None)}),
+        Some(OWNER),
+    );
+    assert_eq!(declared["ok"], true, "{declared}");
+    let own = ctrl(
+        &world,
+        "central.file-map.register",
+        &json!({"project":"sub","path":"sub.md","expected_revision":revision(&world, Some("sub"))}),
+        Some(PERSON),
+    );
+    assert_eq!(own["ok"], true, "{own}");
+    let around = json!({"project":"sub","path":"../plan.md","expected_revision":revision(&world, Some("sub"))});
+    let before = ground(&world);
+    refused_in_words(
+        &world,
+        "central.file-map.register",
+        &around,
+        Some(PERSON),
+        opening("central.file-map.register"),
+        "is in the Work project alpha, but the act names project sub: an act on alpha's tree names project alpha",
+    );
+    assert_eq!(ground(&world), before, "nothing refused is written");
+}
+
+/// A folder `Control/user/pdir` holding a project scope `proj` the root registered, registered itself as the root's Source, and its
+/// move to `destination` planned and applied on the person's grant, the apply interrupted after its rename (round 54f item 1, the
+/// review of #343's P10). `proj` is then declared where it no longer stands, so the live scope map does not read until the move is
+/// finished or undone. Answers the move's carried input.
+fn interrupted_move(world: &World, destination: &str) -> Value {
+    let root = world.root();
+    project(&root.join("Control/user/pdir/proj"), "proj");
+    fs::write(root.join("Control/user/pdir/proj/p.md"), "proj's page\n").unwrap();
+    let declared = ctrl(
+        world,
+        "central.file-map.scope-register",
+        &json!({"name":"proj","path":"Control/user/pdir/proj","kind":"project","expected_revision":revision(world, None)}),
+        Some(OWNER),
+    );
+    assert_eq!(declared["ok"], true, "{declared}");
+    let registered = ctrl(
+        world,
+        "central.file-map.register",
+        &json!({"path":"Control/user/pdir","expected_revision":revision(world, None)}),
+        Some(PERSON),
+    );
+    assert_eq!(registered["ok"], true, "{registered}");
+    let planned = ctrl(
+        world,
+        "central.file-map.move-plan",
+        &json!({"source_ref":registered["data"]["result"]["source_ref"],"destination":destination}),
+        Some(PERSON),
+    );
+    assert_eq!(planned["ok"], true, "{planned}");
+    let carried = json!({"plan_id":planned["data"]["result"]["plan_id"],"quiesced":true});
+    let interrupted = ctrl_with(
+        world,
+        "central.file-map.move-apply",
+        &carried,
+        Some(PERSON),
+        &[("CENTRAL_FILE_MAP_TEST_INTERRUPT_AFTER_RENAME", "1")],
+    );
+    assert_eq!(interrupted["ok"], false, "{interrupted}");
+    assert!(!root.join("Control/user/pdir").exists());
+    assert!(root.join(destination).join("proj/p.md").is_file());
+    let stale = ctrl(
+        world,
+        "central.file-map.inspect",
+        &json!({"resources":false}),
+        None,
+    );
+    assert_eq!(
+        stale["ok"], false,
+        "the live map does not read mid-move: {stale}"
+    );
+    carried
+}
+
+/// Round 54f item 1 (review of #343, finding 1): an interrupted move is finished through the person's gate. Its apply stands on the
+/// scopes its journal runs from, not the live map, which does not read until the move is done.
+#[test]
+fn an_interrupted_move_whose_scope_is_stale_is_replayed_through_the_gate() {
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    let carried = interrupted_move(&world, "Control/user/pdir2");
+    let replayed = ctrl(
+        &world,
+        "central.file-map.move-apply",
+        &carried,
+        Some(PERSON),
+    );
+    assert_eq!(replayed["ok"], true, "{replayed}");
+    assert!(!root.join("Control/user/pdir").exists());
+    assert!(root.join("Control/user/pdir2/proj/p.md").is_file());
+    assert_eq!(
+        ctrl(
+            &world,
+            "central.file-map.inspect",
+            &json!({"project":"proj","resources":false}),
+            None
+        )["ok"],
+        true,
+        "the live map reads again, with proj where it now stands"
+    );
+}
+
+/// The same finding: an interrupted move is undone through the person's gate, on the scopes its journal runs from.
+#[test]
+fn an_interrupted_move_whose_scope_is_stale_is_rolled_back_through_the_gate() {
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    let carried = interrupted_move(&world, "Control/user/pdir2");
+    let undone = ctrl(
+        &world,
+        "central.file-map.move-rollback",
+        &carried,
+        Some(PERSON),
+    );
+    assert_eq!(undone["ok"], true, "{undone}");
+    assert!(root.join("Control/user/pdir/proj/p.md").is_file());
+    assert!(!root.join("Control/user/pdir2").exists());
+    assert_eq!(
+        ctrl(
+            &world,
+            "central.file-map.inspect",
+            &json!({"project":"proj","resources":false}),
+            None
+        )["ok"],
+        true,
+        "the live map reads again, with proj back where it stood"
+    );
+}
+
+/// The same finding: an interrupted move into alpha, finished or undone on a grant that no longer holds alpha, is refused in words
+/// that name alpha, the journal's project the grant is missing at, never the live map's failure to read. Nothing is moved; on the
+/// root's grant and alpha's it is finished.
+#[test]
+fn an_interrupted_move_refused_where_its_grant_is_missing_names_the_journals_project() {
+    let acts = every_act();
+    let world = granting(&acts, "control:root");
+    authority(
+        &world,
+        vec![
+            grant(
+                PERSON,
+                "human",
+                &["control:root", "project:alpha"],
+                &acts,
+                u64::MAX,
+            ),
+            grant(
+                OWNER,
+                "human",
+                &["control:root"],
+                &["central.file-map.scope-register"],
+                u64::MAX,
+            ),
+        ],
+    );
+    let root = world.root();
+    let carried = interrupted_move(&world, "Work/alpha/pdir");
+    authority(
+        &world,
+        vec![
+            grant(PERSON, "human", &["control:root"], &acts, u64::MAX),
+            grant(
+                OWNER,
+                "human",
+                &["control:root"],
+                &["central.file-map.scope-register"],
+                u64::MAX,
+            ),
+        ],
+    );
+    let before = ground(&world);
+    for (action, opening) in [
+        (
+            "central.file-map.move-apply",
+            "Moving a file is the person's own press: ",
+        ),
+        (
+            "central.file-map.move-rollback",
+            "Moving a file back is the person's own press: ",
+        ),
+    ] {
+        refused_in_words(
+            &world,
+            action,
+            &carried,
+            Some(PERSON),
+            opening,
+            "it reaches the Work project alpha, whose grant does not hold it: native credential is expired or lacks this exact scope/action",
+        );
+        let words = ctrl(&world, action, &carried, Some(PERSON))["error"]["message"].to_string();
+        assert!(!words.contains("os error"), "{action}: {words}");
+    }
+    assert_eq!(
+        ground(&world),
+        before,
+        "a refused replay or rollback moves nothing"
+    );
+    authority(
+        &world,
+        vec![grant(
+            PERSON,
+            "human",
+            &["control:root", "project:alpha"],
+            &acts,
+            u64::MAX,
+        )],
+    );
+    let replayed = ctrl(
+        &world,
+        "central.file-map.move-apply",
+        &carried,
+        Some(PERSON),
+    );
+    assert_eq!(replayed["ok"], true, "{replayed}");
+    assert!(root.join("Work/alpha/pdir/proj/p.md").is_file());
+}
+
+/// The same item: a move's apply and rollback read the scopes its journal runs from without making anything. A project outside the
+/// ground in the journal keeps its state in `.central/scopes/<name>`; a replay or a rollback refused where the grant does not stand
+/// never makes it.
+#[test]
+fn a_move_refused_at_the_gate_makes_no_scope_folder_of_its_journal() {
+    let acts = every_act();
+    let world = granting(&acts, "control:root");
+    let root = world.root();
+    declare_outside_scopes(&world);
+    let planned = ctrl(
+        &world,
+        "central.file-map.move-plan",
+        &json!({"source_ref":page_source(&world),"destination":"Control/user/note2.md"}),
+        Some(PERSON),
+    );
+    assert_eq!(planned["ok"], true, "{planned}");
+    let carried = json!({"plan_id":planned["data"]["result"]["plan_id"],"quiesced":true});
+    let state = root.join(".central/scopes/far");
+    fs::remove_dir_all(&state).unwrap();
+    authority(
+        &world,
+        vec![grant(PERSON, "human", &["project:alpha"], &acts, u64::MAX)],
+    );
+    let before = ground(&world);
+    for (action, opening) in [
+        (
+            "central.file-map.move-apply",
+            "Moving a file is the person's own press: ",
+        ),
+        (
+            "central.file-map.move-rollback",
+            "Moving a file back is the person's own press: ",
+        ),
+    ] {
+        refused_in_words(
+            &world,
+            action,
+            &carried,
+            Some(PERSON),
+            opening,
+            "lacks this exact scope/action",
+        );
+    }
+    assert!(
+        !state.exists(),
+        "a refused replay or rollback makes no scope folder"
+    );
+    assert_eq!(
+        ground(&world),
+        before,
+        "a refused replay or rollback writes nothing"
+    );
+}
+
+/// The root's move of `Control/user/note.md` to `Control/user/note2.md`, planned on the person's grant, its journal then edited by
+/// `edit` as any agent that can write a file in the ground could edit it (round 54f.2, the re-check of #343's N1). Answers the move's
+/// carried input.
+fn edited_journal(world: &World, edit: impl FnOnce(&mut Value)) -> Value {
+    let planned = ctrl(
+        world,
+        "central.file-map.move-plan",
+        &json!({"source_ref":page_source(world),"destination":"Control/user/note2.md"}),
+        Some(PERSON),
+    );
+    assert_eq!(planned["ok"], true, "{planned}");
+    let id = planned["data"]["result"]["plan_id"].as_str().unwrap();
+    let journal = world.root().join(format!(".central/bkmr/moves/{id}.json"));
+    let mut plan: Value = serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
+    edit(&mut plan);
+    fs::write(&journal, serde_json::to_vec_pretty(&plan).unwrap()).unwrap();
+    json!({"plan_id":id,"quiesced":true})
+}
+
+/// Round 54f.2 (R1): a move stands at the root, the journal's own root scope, wherever the journal lists it. A journal whose scopes
+/// are reordered so alpha comes first is refused on a grant at alpha alone, and nothing moves; on the root's grant it is carried out
+/// there.
+#[test]
+fn a_journal_whose_scopes_are_reordered_still_stands_at_the_root() {
+    let acts = every_act();
+    let world = granting(&acts, "control:root");
+    let root = world.root();
+    let carried = edited_journal(&world, |plan| {
+        plan["worlds"].as_array_mut().unwrap().reverse();
+        assert_eq!(plan["worlds"][0]["world"], "project:alpha");
+    });
+    authority(
+        &world,
+        vec![grant(PERSON, "human", &["project:alpha"], &acts, u64::MAX)],
+    );
+    let before = ground(&world);
+    for (action, opening) in [
+        (
+            "central.file-map.move-apply",
+            "Moving a file is the person's own press: ",
+        ),
+        (
+            "central.file-map.move-rollback",
+            "Moving a file back is the person's own press: ",
+        ),
+    ] {
+        refused_in_words(
+            &world,
+            action,
+            &carried,
+            Some(PERSON),
+            opening,
+            "lacks this exact scope/action",
+        );
+    }
+    assert_eq!(
+        ground(&world),
+        before,
+        "a grant at alpha alone moves nothing at the root"
+    );
+    authority(
+        &world,
+        vec![grant(PERSON, "human", &["control:root"], &acts, u64::MAX)],
+    );
+    let applied = ctrl(
+        &world,
+        "central.file-map.move-apply",
+        &carried,
+        Some(PERSON),
+    );
+    assert_eq!(applied["ok"], true, "{applied}");
+    assert!(root.join("Control/user/note2.md").is_file());
+}
+
+/// Round 54f.2 (R2): the Work project a move reaches is found on the disk, and its journal is read where the act reads it, at the
+/// ground. A journal that sends the file into alpha and leaves alpha out of its scopes, or lists alpha first, is refused on the
+/// root's grant alone, in words that name alpha, and nothing moves.
+#[test]
+fn a_journal_that_hides_the_project_its_move_goes_into_is_refused_naming_it() {
+    for edit in ["left out", "listed first"] {
+        let acts = every_act();
+        let world = granting(&acts, "control:root");
+        let root = world.root();
+        let carried = edited_journal(&world, |plan| {
+            let scopes = plan["worlds"].as_array_mut().unwrap();
+            match edit {
+                "left out" => scopes.retain(|scope| scope["world"] == "control:root"),
+                _ => scopes.reverse(),
+            }
+            plan["to"] = json!("Work/alpha/note2.md");
+        });
+        let before = ground(&world);
+        for (action, opening) in [
+            (
+                "central.file-map.move-apply",
+                "Moving a file is the person's own press: ",
+            ),
+            (
+                "central.file-map.move-rollback",
+                "Moving a file back is the person's own press: ",
+            ),
+        ] {
+            refused_in_words(
+                &world,
+                action,
+                &carried,
+                Some(PERSON),
+                opening,
+                "it reaches the Work project alpha, whose grant does not hold it",
+            );
+        }
+        assert_eq!(
+            ground(&world),
+            before,
+            "alpha {edit}: the root's grant alone writes nothing into alpha"
+        );
+        assert!(!root.join("Work/alpha/note2.md").exists(), "alpha {edit}");
+    }
+}
+
+/// Round 54f.2: the journal's root scope is the ground itself, as `move-plan` writes it. A journal that sets it inside a Work project
+/// would carry the move out in alpha's tree on the root's grant; it is refused as no journal of the ground, and nothing moves.
+#[test]
+fn a_journal_that_sets_the_roots_scope_inside_a_work_project_is_refused() {
+    use std::os::unix::fs::MetadataExt;
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    fs::create_dir_all(root.join("Work/alpha/deep")).unwrap();
+    let page = root.join("Work/alpha/deep/page.md");
+    fs::write(&page, "the person's page\n").unwrap();
+    let held = fs::metadata(&page).unwrap();
+    let carried = edited_journal(&world, |plan| {
+        for scope in plan["worlds"].as_array_mut().unwrap() {
+            if scope["world"] == "control:root" {
+                scope["path"] = json!("Work/alpha/deep");
+            }
+        }
+        plan["from"] = json!("page.md");
+        plan["to"] = json!("page2.md");
+        plan["device"] = json!(held.dev());
+        plan["inode"] = json!(held.ino());
+        plan["documents"] = json!([]);
+        plan["links"] = json!([]);
+        plan["refresh_worlds"] = json!([]);
+    });
+    let before = ground(&world);
+    for (action, opening) in [
+        (
+            "central.file-map.move-apply",
+            "Moving a file is the person's own press: ",
+        ),
+        (
+            "central.file-map.move-rollback",
+            "Moving a file back is the person's own press: ",
+        ),
+    ] {
+        refused_as(
+            &world,
+            action,
+            &carried,
+            Some(PERSON),
+            "central.file_map_failure",
+            opening,
+            "Invalid move journal: it sets the root's scope away from the ground",
+        );
+    }
+    assert_eq!(
+        ground(&world),
+        before,
+        "nothing in alpha moves on the root's grant"
+    );
+    assert!(page.is_file());
 }

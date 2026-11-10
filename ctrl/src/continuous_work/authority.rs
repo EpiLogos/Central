@@ -51,10 +51,11 @@ pub const AUTHENTICATED_ACTIONS: &[&str] = &[
     "projectcentral.source.return_accept",
     "projectcentral.source.return_reject",
 ];
-/// The authenticated Actions that take a project scope: every one of `AUTHENTICATED_ACTIONS` whose Action names a `project`
-/// (those left out, `central.flow.append`, `control.apply-proposal`, the file map's three moves and its `scope-register`, always
-/// resolve the root: a move can bring a folder into Work, and the root registers every scope; file_map.rs `grant_scope`).
-/// `authenticate` refuses any other
+/// The authenticated Actions that take a project scope: every one of `AUTHENTICATED_ACTIONS` whose Action names a `project`, and the
+/// file map's three moves, which reach a project by the Source they move and where they move it. A move stands at the root, since it
+/// can bring a folder into Work, and at each Work project its Source or destination is in (DLW build ruling 2026-11-09, round 54d F1;
+/// file_map.rs `grant_scope`). Those left out, `central.flow.append`, `control.apply-proposal` and the file map's `scope-register`,
+/// always resolve the root: the root registers every scope. `authenticate` refuses any other
 /// Action at a project, so this list is exactly what a grant covering `project:<id>` lets its holder do there; extending a person's
 /// grant to a project they bring in (crate::ground_projects) grants these.
 pub const PROJECT_AUTHENTICATED_ACTIONS: &[&str] = &[
@@ -71,6 +72,9 @@ pub const PROJECT_AUTHENTICATED_ACTIONS: &[&str] = &[
     "central.document.mutate",
     "central.file-map.adopt-db",
     "central.file-map.link",
+    "central.file-map.move-apply",
+    "central.file-map.move-plan",
+    "central.file-map.move-rollback",
     "central.file-map.pool",
     "central.file-map.record-adopt",
     "central.file-map.register",
@@ -277,8 +281,15 @@ fn listed(action: &str) -> io::Result<()> {
     )))
 }
 
+/// What a refusal says of an authority Source that does not read as one: Central's own words, never the parser's, which can echo a
+/// value of the Source to a caller who holds no grant (round 54d F5).
+const INVALID_AUTHORITY: &str = "invalid native-action-authority source";
+
 /// The one grant of the root's authority Source that `token` matches, unexpired and naming `action`, with the Source's reference
 /// and revision. Where the grant holds is the caller's question.
+///
+/// The token is matched before the Source's revision is compared with the one the caller expects, so a caller without a valid token
+/// learns nothing of the revision: it is refused as not authorised whatever revision it names (round 54d F5).
 fn held(
     central_root: &Path,
     token: Option<&str>,
@@ -290,15 +301,13 @@ fn held(
         .ok_or_else(|| denied("missing bounded CENTRAL_NATIVE_TOKEN; declared H/human attribution is not authentication"))?;
     let root = Scope::resolve(central_root, None)?;
     let (source, _, revision) = recognised_source(&root, AUTHORITY_ROLE)?;
-    if expected.is_some_and(|basis| basis != revision) {
-        return Err(conflict("native authority revision changed"));
-    }
-    let authority: Authority = serde_json::from_str(&source.content)?;
+    let authority: Authority =
+        serde_json::from_str(&source.content).map_err(|_| invalid(INVALID_AUTHORITY))?;
     if authority.schema != "central.native-action-authority/v1"
         || authority.scope_ref != root.world_ref
         || authority.grants.len() > 1024
     {
-        return Err(invalid("invalid native-action-authority source"));
+        return Err(invalid(INVALID_AUTHORITY));
     }
     let digest = source::key(token);
     let mut matched = None;
@@ -324,6 +333,9 @@ fn held(
         }
     }
     let grant = matched.ok_or_else(|| denied("native credential is not authorised"))?;
+    if expected.is_some_and(|basis| basis != revision) {
+        return Err(conflict("native authority revision changed"));
+    }
     if now >= grant.expires_at_unix_seconds || !grant.actions.iter().any(|a| a == action) {
         return Err(denied(LACKS));
     }

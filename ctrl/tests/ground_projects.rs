@@ -206,20 +206,27 @@ fn day_in(home: &Home, project: &str, token: &str) -> Result<Value, String> {
 #[test]
 fn a_project_grant_holds_exactly_the_authenticated_actions_that_name_a_project_and_the_host_checked(
 ) {
-    // Derived from the code: the authenticated Actions whose registered descriptor takes a `project`.
+    // Derived from the code: the authenticated Actions whose registered descriptor takes a `project`, and the file map's three
+    // moves, which reach a project by their Source and destination (DLW build ruling 2026-11-09, round 54d F1).
     let registry = central_ctrl::cli::create_runtime_action_registry();
     let listed = registry.list();
+    let moves = [
+        "central.file-map.move-apply",
+        "central.file-map.move-plan",
+        "central.file-map.move-rollback",
+    ];
     let derived: Vec<&str> = AUTHENTICATED_ACTIONS
         .iter()
         .copied()
         .filter(|action| {
-            listed
-                .iter()
-                .find(|row| row.id == *action)
-                .unwrap_or_else(|| panic!("{action} is no registered Action"))
-                .inputs
-                .iter()
-                .any(|input| input.name == "project")
+            moves.contains(action)
+                || listed
+                    .iter()
+                    .find(|row| row.id == *action)
+                    .unwrap_or_else(|| panic!("{action} is no registered Action"))
+                    .inputs
+                    .iter()
+                    .any(|input| input.name == "project")
         })
         .collect();
     assert_eq!(
@@ -698,17 +705,11 @@ fn the_owner_s_grant_shape_still_authorises_every_act_it_did() {
         }
     }
     // Every project Action the owner's grant lists is one it may still take at its projects: none was listed only at the root but
-    // `control.apply-proposal`, the file map's three moves and its scope-register, which are the root's to grant (DLW build ruling
-    // 2026-11-09: round 53 item 2, a move can bring a folder into Work; round 54's Central follow-up, the root registers every scope).
+    // `control.apply-proposal` and the file map's scope-register, which are the root's to grant (DLW build ruling 2026-11-09: round
+    // 54's Central follow-up, the root registers every scope). The file map's three moves stand at the root and at each project
+    // their Source or destination is in (round 54d F1), so a move into one of these projects is held here too.
     assert!(actions
         .iter()
         .filter(|a| !PROJECT_AUTHENTICATED_ACTIONS.contains(a))
-        .all(|a| [
-            "control.apply-proposal",
-            "central.file-map.move-plan",
-            "central.file-map.move-apply",
-            "central.file-map.move-rollback",
-            "central.file-map.scope-register"
-        ]
-        .contains(a)));
+        .all(|a| ["control.apply-proposal", "central.file-map.scope-register"].contains(a)));
 }

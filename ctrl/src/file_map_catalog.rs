@@ -1309,6 +1309,10 @@ pub(crate) fn participating(root: &Path) -> io::Result<(Vec<Scope>, Vec<Unreacha
 /// [`participating`] that makes nothing: an external scope's state folder (`.central/scopes/<name>`) is named, and not made. The
 /// person's acts of the file map read where their grant stands on this (file_map.rs `grant_scope`), so an act refused there
 /// leaves no folder behind (DLW build ruling 2026-11-09, round 54b item 1).
+///
+/// A folder scope's state is still taken through `external_state`, which makes a missing folder, and it makes nothing here: a folder
+/// scope is read from its declaration, `.central/scopes/<name>/scope.json`, which is in that same folder, so the folder stands
+/// whenever the scope does. "Makes nothing" holds for a folder scope by that, not by this function (round 54d F7).
 pub(crate) fn participating_unmade(root: &Path) -> io::Result<(Vec<Scope>, Vec<UnreachableScope>)> {
     participating_as(root, false)
 }
@@ -1480,7 +1484,7 @@ fn participating_as(
             scope.state = if make_state {
                 external_state(root, &name)?
             } else {
-                root.join(external_member(&name)?)
+                external_state_unmade(root, &name)?
             };
         }
         if !seen.insert(scope.world.clone()) {
@@ -1556,6 +1560,10 @@ pub(crate) fn external_state(root: &Path, name: &str) -> io::Result<PathBuf> {
     let member = external_member(name)?;
     safe_directory(root, &member)?;
     Ok(root.join(member))
+}
+/// [`external_state`] named, and not made: where the state folder stands, for a read that makes nothing.
+pub(crate) fn external_state_unmade(root: &Path, name: &str) -> io::Result<PathBuf> {
+    Ok(root.join(external_member(name)?))
 }
 /// Where an external scope's state stands in the ground, relative to it: `.central/scopes/<name>`.
 fn external_member(name: &str) -> io::Result<PathBuf> {

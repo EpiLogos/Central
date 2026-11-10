@@ -65,6 +65,32 @@ fn path(root: &Path, id: &str) -> io::Result<PathBuf> {
     }
     Ok(root.join(".central/bkmr/moves").join(format!("{id}.json")))
 }
+/// The places a move's journal moves its Source between (its `from` and its `to`, each under its owner's root), read without
+/// changing anything, for the person's gate (file_map.rs `act_places`; round 54d F1). A journal that does not read names none: the
+/// act itself then refuses it.
+pub(crate) fn journal_places(root: &Path, input: &Value) -> Vec<(String, PathBuf)> {
+    let Some(plan) = input
+        .get("plan_id")
+        .and_then(Value::as_str)
+        .and_then(|id| path(root, id).ok())
+        .and_then(|journal| fs::read(journal).ok())
+        .and_then(|bytes| serde_json::from_slice::<Plan>(&bytes).ok())
+    else {
+        return Vec::new();
+    };
+    let Some(owner) = plan.worlds.iter().find(|world| world.world == plan.world) else {
+        return Vec::new();
+    };
+    let base = if owner.external {
+        PathBuf::from(&owner.path)
+    } else {
+        root.join(&owner.path)
+    };
+    vec![
+        (plan.from.clone(), base.join(&plan.from)),
+        (plan.to.clone(), base.join(&plan.to)),
+    ]
+}
 fn save(
     root: &Path,
     plan: &Plan,
@@ -356,7 +382,18 @@ pub(crate) fn plan(root: &Path, all: &[Scope], input: &Value) -> io::Result<Valu
         json!({"plan_id":id,"source_ref":entry.source.source_ref,"from":from,"destination":to,"state":"prepared","links":plan.links.len(),"requires_quiesced":true,"source_bytes_changed":false}),
     )
 }
+/// The scopes a move carried out from its journal runs from: the journal's own, each where the move has left it, so a scope inside
+/// the moved folder is read where it now stands though its declaration still names where it stood. An external scope's state folder
+/// is made where missing.
 pub(crate) fn resume_scopes(root: &Path, input: &Value) -> io::Result<Vec<Scope>> {
+    resume_scopes_as(root, input, true)
+}
+/// [`resume_scopes`] that makes nothing, for the person's gate, which stands a replay or a rollback on the scopes it runs from
+/// (file_map.rs `grant_scope`; DLW build ruling 2026-11-09, round 54f item 1).
+pub(crate) fn resume_scopes_unmade(root: &Path, input: &Value) -> io::Result<Vec<Scope>> {
+    resume_scopes_as(root, input, false)
+}
+fn resume_scopes_as(root: &Path, input: &Value, make_state: bool) -> io::Result<Vec<Scope>> {
     let id = text(input, "plan_id")?;
     safe_member(root, ".central/bkmr/moves", true)?;
     let plan: Plan =
@@ -379,6 +416,13 @@ pub(crate) fn resume_scopes(root: &Path, input: &Value) -> io::Result<Vec<Scope>
     let moved = identity(&to, plan.device, plan.inode);
     let mut result = Vec::new();
     for world in &plan.worlds {
+        // The root's scope is the ground itself, as `plan` writes it: a journal that sets it anywhere else would carry the move out
+        // in another tree than the one its gate stands on (round 54f.2).
+        if world.world == "control:root" && (world.external || !world.path.is_empty()) {
+            return Err(invalid(
+                "Invalid move journal: it sets the root's scope away from the ground",
+            ));
+        }
         let mut current = if world.external {
             PathBuf::from(&world.path)
         } else {
@@ -406,13 +450,15 @@ pub(crate) fn resume_scopes(root: &Path, input: &Value) -> io::Result<Vec<Scope>
         }
         result.push(Scope {
             state: if world.external {
-                super::file_map_catalog::external_state(
-                    root,
-                    world
-                        .project
-                        .as_deref()
-                        .ok_or_else(|| invalid("External scope without a name"))?,
-                )?
+                let name = world
+                    .project
+                    .as_deref()
+                    .ok_or_else(|| invalid("External scope without a name"))?;
+                if make_state {
+                    super::file_map_catalog::external_state(root, name)?
+                } else {
+                    super::file_map_catalog::external_state_unmade(root, name)?
+                }
             } else {
                 current.clone()
             },

@@ -885,6 +885,22 @@ pub(crate) fn insert_pool_bindings(
     exclude: &[String],
     bindings: &mut BTreeMap<String, SourceBinding>,
 ) -> io::Result<usize> {
+    // A scope's pool is its own tree. A folder below it that is a project's own (it holds `ProjectCentral/project.json`, as each
+    // project of Work does) is that project's, pooled there on its grant, so the pool stops at it: the root's pool makes no Source
+    // of a Work project's file (DLW build ruling 2026-11-09, round 54d F1: a root grant does not cover a Work tree).
+    let projects = std::cell::RefCell::new(BTreeMap::<PathBuf, bool>::new());
+    let own = |relative: &str| {
+        let mut projects = projects.borrow_mut();
+        !Path::new(relative).ancestors().skip(1).any(|folder| {
+            !folder.as_os_str().is_empty()
+                && *projects.entry(folder.to_path_buf()).or_insert_with(|| {
+                    fs::symlink_metadata(
+                        world_root.join(folder).join("ProjectCentral/project.json"),
+                    )
+                    .is_ok_and(|manifest| manifest.is_file())
+                })
+        })
+    };
     insert_admitted_bindings(
         world_root,
         world_root,
@@ -895,7 +911,7 @@ pub(crate) fn insert_pool_bindings(
         "pooled-content",
         exclude,
         bindings,
-        holds_text,
+        |relative| holds_text(relative) && own(relative),
     )
 }
 
@@ -2167,6 +2183,41 @@ mod retrieval_tests {
         let mut pooled = BTreeMap::new();
         insert_pool_bindings(root, "project:p", &["b".to_owned()], &mut pooled).unwrap();
         assert_eq!(paths(&pooled), vec!["a/one.md"]);
+    }
+
+    /// Round 54d F1 (review of #340): a scope's pool is its own tree. A folder below it that holds a project's manifest is that
+    /// project's, pooled there on its own grant, so the root's pool makes no Source of a Work project's file, at any depth, while the
+    /// root's own files and a plain folder in Work stay in it.
+    #[test]
+    fn the_root_s_pool_stops_at_each_project_s_folder() {
+        let ground = Ground::new();
+        let root = &ground.0;
+        for (relative, bytes) in [
+            ("Control/user/note.md", &b"x"[..]),
+            ("Work/alpha/ProjectCentral/project.json", b"{}"),
+            ("Work/alpha/plan.md", b"x"),
+            ("Work/alpha/deep/more.md", b"x"),
+            ("Work/loose/readme.md", b"x"),
+        ] {
+            let path = root.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        }
+        let mut pooled = BTreeMap::new();
+        insert_pool_bindings(root, "control:root", &[], &mut pooled).unwrap();
+        let kept = paths(&pooled);
+        assert!(
+            kept.iter().any(|path| path == "Control/user/note.md"),
+            "{kept:?}"
+        );
+        assert!(
+            kept.iter().any(|path| path == "Work/loose/readme.md"),
+            "{kept:?}"
+        );
+        assert!(
+            !kept.iter().any(|path| path.starts_with("Work/alpha/")),
+            "{kept:?}"
+        );
     }
 
     #[test]
