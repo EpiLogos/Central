@@ -416,6 +416,13 @@ fn resume_scopes_as(root: &Path, input: &Value, make_state: bool) -> io::Result<
     let moved = identity(&to, plan.device, plan.inode);
     let mut result = Vec::new();
     for world in &plan.worlds {
+        // The root's scope is the ground itself, as `plan` writes it: a journal that sets it anywhere else would carry the move out
+        // in another tree than the one its gate stands on (round 54f.2).
+        if world.world == "control:root" && (world.external || !world.path.is_empty()) {
+            return Err(invalid(
+                "Invalid move journal: it sets the root's scope away from the ground",
+            ));
+        }
         let mut current = if world.external {
             PathBuf::from(&world.path)
         } else {

@@ -1337,7 +1337,10 @@ struct Standing {
 ///   is judged (`resolved`, `within`): `..`, an absolute path, a link, its case and a trailing slash.
 ///
 /// What is named is read without making anything (`participating_unmade`), so a refusal here leaves no folder behind (round 54b
-/// item 1). A move's apply and rollback read the scopes its journal runs from instead (`resume_scopes_unmade`; round 54f item 1).
+/// item 1). A move's apply and rollback read the scopes its journal runs from instead (`resume_scopes_unmade`; round 54f item 1),
+/// and take nothing else from that list (round 54f.2): the move stands at the journal's root scope wherever the list puts it
+/// (`root_scope`), its journal is read where the act reads it, at the ground, and the Work project a place lies in is found on the
+/// disk (`work_project_of`).
 fn grant_scope(root: &Path, op: &str, input: &Value) -> io::Result<Standing> {
     let ground = root.canonicalize()?;
     // A move carried out from its journal stands on the scopes it runs from (`resume_scopes`), as `admitted_as` runs it: after the
@@ -1352,7 +1355,9 @@ fn grant_scope(root: &Path, op: &str, input: &Value) -> io::Result<Standing> {
         participating_unmade(&ground)?
     };
     let moves = op.starts_with("move-");
-    let named = if moves || op == "scope-register" {
+    let named = if moves {
+        root_scope(&all)
+    } else if op == "scope-register" {
         all.first()
     } else {
         input
@@ -1362,18 +1367,17 @@ fn grant_scope(root: &Path, op: &str, input: &Value) -> io::Result<Standing> {
     };
     let member = named.and_then(|scope| grant_member(&ground, scope));
     let mut also: Vec<String> = Vec::new();
-    for place in act_places(&all, named, op, input) {
-        let Some(project) = work_project_of(&ground, &all, &place.path) else {
+    for place in act_places(&ground, &all, named, op, input) {
+        let Some((reached, project)) = work_project_of(&ground, &place.path) else {
             continue;
         };
-        let reached = grant_member(&ground, project);
         // A project scope nested in a Work project stands on the root's grant (round 54d F9), and so does a place in its own tree.
         let nested = named.is_some_and(|named| {
-            named.root != project.root
-                && within(&named.root, &project.root)
+            named.root != project
+                && within(&named.root, &project)
                 && within(&place.path, &named.root)
         });
-        if reached == member || nested {
+        if member == Some(reached.as_str()) || nested {
             continue;
         }
         if place.writes && !moves {
@@ -1381,7 +1385,6 @@ fn grant_scope(root: &Path, op: &str, input: &Value) -> io::Result<Standing> {
                 Some(asked) => format!("project {asked}"),
                 None => "no project, so it stands at the root".to_owned(),
             };
-            let reached = reached.unwrap_or_default();
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 format!(
@@ -1390,8 +1393,8 @@ fn grant_scope(root: &Path, op: &str, input: &Value) -> io::Result<Standing> {
                 ),
             ));
         }
-        if let Some(reached) = reached.filter(|reached| !also.iter().any(|held| held == reached)) {
-            also.push(reached.to_owned());
+        if !also.contains(&reached) {
+            also.push(reached);
         }
     }
     Ok(Standing {
@@ -1415,6 +1418,12 @@ fn grant_member<'a>(ground: &Path, scope: &'a Scope) -> Option<&'a str> {
         .and_then(Path::to_str)
 }
 
+/// The root's own scope among `all`, where a move stands (round 53 item 2). For a move's apply and rollback `all` is its journal's
+/// list, read in the journal's order, so the root is found by its World, not by where the list puts it (round 54f.2).
+fn root_scope(all: &[Scope]) -> Option<&Scope> {
+    all.iter().find(|scope| scope.world == "control:root")
+}
+
 /// One place an act of the person's reaches: where it stands on the disk (`resolved`), how the act named it, and whether the act
 /// writes there or only binds a Source standing there.
 struct Place {
@@ -1427,8 +1436,15 @@ struct Place {
 /// Source it links, `record-adopt` the Source it binds a bookmark to, a move the Source it moves and where its journal moves it.
 /// `pool`, `adopt-db` and `scope-register` name no place: a pool is its scope's own tree (`source_horizon::insert_pool_bindings` stops
 /// at another project's), a bookmark database is only read, and the root registers every scope. A Source that cannot be found, or a
-/// journal that cannot be read, names no place here: the act itself refuses it.
-fn act_places(all: &[Scope], named: Option<&Scope>, op: &str, input: &Value) -> Vec<Place> {
+/// journal that cannot be read, names no place here: the act itself refuses it. A move's journal is read at the ground, where its
+/// apply and rollback read it (`file_map_moves::apply`), whatever the journal says of where its scopes stand (round 54f.2).
+fn act_places(
+    ground: &Path,
+    all: &[Scope],
+    named: Option<&Scope>,
+    op: &str,
+    input: &Value,
+) -> Vec<Place> {
     let raw = |field: &str| input.get(field).and_then(Value::as_str);
     let at = |base: &Path, spelled: &str, writes: bool| Place {
         path: resolved(&base.join(spelled)),
@@ -1476,11 +1492,7 @@ fn act_places(all: &[Scope], named: Option<&Scope>, op: &str, input: &Value) -> 
             }
         }
         "move-apply" | "move-rollback" => {
-            let ground = all
-                .first()
-                .map(|root| root.root.clone())
-                .unwrap_or_default();
-            for (spelled, path) in super::file_map_moves::journal_places(&ground, input) {
+            for (spelled, path) in super::file_map_moves::journal_places(ground, input) {
                 places.push(Place {
                     path: resolved(&path),
                     named: spelled,
@@ -1541,11 +1553,21 @@ fn within(path: &Path, root: &Path) -> bool {
     })
 }
 
-/// The project of Work whose tree `path` lies in (`grant_member`), if any.
-fn work_project_of<'a>(ground: &Path, all: &'a [Scope], path: &Path) -> Option<&'a Scope> {
-    all.iter()
-        .filter(|scope| grant_member(ground, scope).is_some())
-        .find(|scope| within(path, &scope.root))
+/// The project of Work whose tree `path` lies in, if any: its folder's name (`grant_member`) and that folder. It is found on the disk,
+/// as the live map finds a Work project (`participating`: a folder under `Work`, not a link, that holds `ProjectCentral/project.json`),
+/// and not among the scopes the act reads, so no list the act is handed leaves one out: a move's journal lists its own (round 54f.2).
+fn work_project_of(ground: &Path, path: &Path) -> Option<(String, PathBuf)> {
+    fs::read_dir(ground.join("Work"))
+        .ok()?
+        .flatten()
+        .find_map(|child| {
+            let folder = child.file_type().is_ok_and(|kind| kind.is_dir());
+            let project = child.path();
+            let declared =
+                fs::symlink_metadata(project.join("ProjectCentral/project.json")).is_ok();
+            let member = child.file_name().into_string().ok()?;
+            (folder && declared && within(path, &project)).then_some((member, project))
+        })
 }
 
 pub fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
@@ -1642,8 +1664,11 @@ fn admitted_as(
         selected_or_unreachable(&all, &unreachable, input)?
     };
     if let Some(at) = authenticated {
+        // A move stands at the root as its gate stands it (`root_scope`): its journal's list, in the journal's order, names no other
+        // scope for it (round 54f.2).
         let stands = match grant_member(&root, scope) {
-            Some(_) if !op.starts_with("move-") && op != "scope-register" => scope,
+            _ if op.starts_with("move-") => root_scope(&all).ok_or_else(|| invalid("No scope"))?,
+            Some(_) if op != "scope-register" => scope,
             _ => all.first().ok_or_else(|| invalid("No scope"))?,
         };
         if stands.world != at {

@@ -1655,3 +1655,177 @@ fn a_move_refused_at_the_gate_makes_no_scope_folder_of_its_journal() {
         "a refused replay or rollback writes nothing"
     );
 }
+
+/// The root's move of `Control/user/note.md` to `Control/user/note2.md`, planned on the person's grant, its journal then edited by
+/// `edit` as any agent that can write a file in the ground could edit it (round 54f.2, the re-check of #343's N1). Answers the move's
+/// carried input.
+fn edited_journal(world: &World, edit: impl FnOnce(&mut Value)) -> Value {
+    let planned = ctrl(
+        world,
+        "central.file-map.move-plan",
+        &json!({"source_ref":page_source(world),"destination":"Control/user/note2.md"}),
+        Some(PERSON),
+    );
+    assert_eq!(planned["ok"], true, "{planned}");
+    let id = planned["data"]["result"]["plan_id"].as_str().unwrap();
+    let journal = world.root().join(format!(".central/bkmr/moves/{id}.json"));
+    let mut plan: Value = serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
+    edit(&mut plan);
+    fs::write(&journal, serde_json::to_vec_pretty(&plan).unwrap()).unwrap();
+    json!({"plan_id":id,"quiesced":true})
+}
+
+/// Round 54f.2 (R1): a move stands at the root, the journal's own root scope, wherever the journal lists it. A journal whose scopes
+/// are reordered so alpha comes first is refused on a grant at alpha alone, and nothing moves; on the root's grant it is carried out
+/// there.
+#[test]
+fn a_journal_whose_scopes_are_reordered_still_stands_at_the_root() {
+    let acts = every_act();
+    let world = granting(&acts, "control:root");
+    let root = world.root();
+    let carried = edited_journal(&world, |plan| {
+        plan["worlds"].as_array_mut().unwrap().reverse();
+        assert_eq!(plan["worlds"][0]["world"], "project:alpha");
+    });
+    authority(
+        &world,
+        vec![grant(PERSON, "human", &["project:alpha"], &acts, u64::MAX)],
+    );
+    let before = ground(&world);
+    for (action, opening) in [
+        (
+            "central.file-map.move-apply",
+            "Moving a file is the person's own press: ",
+        ),
+        (
+            "central.file-map.move-rollback",
+            "Moving a file back is the person's own press: ",
+        ),
+    ] {
+        refused_in_words(
+            &world,
+            action,
+            &carried,
+            Some(PERSON),
+            opening,
+            "lacks this exact scope/action",
+        );
+    }
+    assert_eq!(
+        ground(&world),
+        before,
+        "a grant at alpha alone moves nothing at the root"
+    );
+    authority(
+        &world,
+        vec![grant(PERSON, "human", &["control:root"], &acts, u64::MAX)],
+    );
+    let applied = ctrl(
+        &world,
+        "central.file-map.move-apply",
+        &carried,
+        Some(PERSON),
+    );
+    assert_eq!(applied["ok"], true, "{applied}");
+    assert!(root.join("Control/user/note2.md").is_file());
+}
+
+/// Round 54f.2 (R2): the Work project a move reaches is found on the disk, and its journal is read where the act reads it, at the
+/// ground. A journal that sends the file into alpha and leaves alpha out of its scopes, or lists alpha first, is refused on the
+/// root's grant alone, in words that name alpha, and nothing moves.
+#[test]
+fn a_journal_that_hides_the_project_its_move_goes_into_is_refused_naming_it() {
+    for edit in ["left out", "listed first"] {
+        let acts = every_act();
+        let world = granting(&acts, "control:root");
+        let root = world.root();
+        let carried = edited_journal(&world, |plan| {
+            let scopes = plan["worlds"].as_array_mut().unwrap();
+            match edit {
+                "left out" => scopes.retain(|scope| scope["world"] == "control:root"),
+                _ => scopes.reverse(),
+            }
+            plan["to"] = json!("Work/alpha/note2.md");
+        });
+        let before = ground(&world);
+        for (action, opening) in [
+            (
+                "central.file-map.move-apply",
+                "Moving a file is the person's own press: ",
+            ),
+            (
+                "central.file-map.move-rollback",
+                "Moving a file back is the person's own press: ",
+            ),
+        ] {
+            refused_in_words(
+                &world,
+                action,
+                &carried,
+                Some(PERSON),
+                opening,
+                "it reaches the Work project alpha, whose grant does not hold it",
+            );
+        }
+        assert_eq!(
+            ground(&world),
+            before,
+            "alpha {edit}: the root's grant alone writes nothing into alpha"
+        );
+        assert!(!root.join("Work/alpha/note2.md").exists(), "alpha {edit}");
+    }
+}
+
+/// Round 54f.2: the journal's root scope is the ground itself, as `move-plan` writes it. A journal that sets it inside a Work project
+/// would carry the move out in alpha's tree on the root's grant; it is refused as no journal of the ground, and nothing moves.
+#[test]
+fn a_journal_that_sets_the_roots_scope_inside_a_work_project_is_refused() {
+    use std::os::unix::fs::MetadataExt;
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    fs::create_dir_all(root.join("Work/alpha/deep")).unwrap();
+    let page = root.join("Work/alpha/deep/page.md");
+    fs::write(&page, "the person's page\n").unwrap();
+    let held = fs::metadata(&page).unwrap();
+    let carried = edited_journal(&world, |plan| {
+        for scope in plan["worlds"].as_array_mut().unwrap() {
+            if scope["world"] == "control:root" {
+                scope["path"] = json!("Work/alpha/deep");
+            }
+        }
+        plan["from"] = json!("page.md");
+        plan["to"] = json!("page2.md");
+        plan["device"] = json!(held.dev());
+        plan["inode"] = json!(held.ino());
+        plan["documents"] = json!([]);
+        plan["links"] = json!([]);
+        plan["refresh_worlds"] = json!([]);
+    });
+    let before = ground(&world);
+    for (action, opening) in [
+        (
+            "central.file-map.move-apply",
+            "Moving a file is the person's own press: ",
+        ),
+        (
+            "central.file-map.move-rollback",
+            "Moving a file back is the person's own press: ",
+        ),
+    ] {
+        refused_as(
+            &world,
+            action,
+            &carried,
+            Some(PERSON),
+            "central.file_map_failure",
+            opening,
+            "Invalid move journal: it sets the root's scope away from the ground",
+        );
+    }
+    assert_eq!(
+        ground(&world),
+        before,
+        "nothing in alpha moves on the root's grant"
+    );
+    assert!(page.is_file());
+}
