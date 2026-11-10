@@ -53,6 +53,37 @@ pub fn unplain(c: char) -> bool {
     c.is_control() || invisible(c)
 }
 
+/// Not text as Central keeps it, read back: a control character, the rule
+/// every name and label was kept under before be2i. Kept text that holds an
+/// invisible character reads as it stands (be2i.1): only what is given now,
+/// at create, rename or adopt, is refused with the whole set (`unplain`).
+/// Where kept text is shown it is shown without the invisible characters
+/// (`shown`), and the reading says so once (`kept_note`).
+pub fn unkept(c: char) -> bool {
+    c.is_control()
+}
+
+/// Kept text as it is shown: without the characters that draw nothing, and
+/// without the whitespace that taking them out leaves at either end.
+pub fn shown(text: &str) -> String {
+    text.chars()
+        .filter(|c| !invisible(*c))
+        .collect::<String>()
+        .trim()
+        .to_owned()
+}
+
+/// What a reading says, once, of kept text that holds a character the set now
+/// refuses: what it is, that it is shown without them, and how to give it
+/// again. None when it holds none.
+pub fn kept_note(text: &str, what: &str, again: &str) -> Option<String> {
+    text.chars().any(invisible).then(|| {
+        format!(
+            "{what} holds characters Central now refuses, which draw nothing; it is shown without them. {again}"
+        )
+    })
+}
+
 /// Reduce free text to a filesystem-safe kebab-case slug.
 ///
 /// Up to `max_words` words contribute; each word keeps its ASCII alphanumerics
@@ -133,6 +164,28 @@ pub fn descriptive_id(slug: &str, fallback: &str, taken: &dyn Fn(&str) -> bool) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// be2i.1: kept text reads under the rule it was kept under, a control
+    /// character; it is shown without the characters that draw nothing, and the
+    /// reading says so once.
+    #[test]
+    fn kept_text_reads_under_its_own_rule_and_is_shown_without_what_draws_nothing() {
+        for c in ['\u{200D}', '\u{202E}', '\u{3164}', '\u{E0041}'] {
+            assert!(unplain(c) && !unkept(c), "{c:?}");
+        }
+        assert!(unkept('\u{7}') && unkept('\n'));
+        assert_eq!(shown("\u{200B} Rosa\u{200D}rium\u{2060}"), "Rosarium");
+        assert_eq!(shown("\u{3164}"), "");
+        assert_eq!(shown("Rosarium"), "Rosarium");
+        assert_eq!(
+            kept_note("Rosarium", "This world's name", "Rename it."),
+            None
+        );
+        assert_eq!(
+            kept_note("Rosa\u{200D}rium", "This world's name", "Rename it.").as_deref(),
+            Some("This world's name holds characters Central now refuses, which draw nothing; it is shown without them. Rename it.")
+        );
+    }
 
     #[test]
     fn slugify_kebab_cases_and_limits_words() {

@@ -219,6 +219,31 @@ impl AgentProfileStore {
                 (Some(current.revision.clone()), false)
             }
         };
+        // What a person gives now is refused with the whole set (be2i.1): a name or an expressive character ref that is new
+        // here, or changed, holds no invisible character. One kept before be2i and kept as it was stays as it stands.
+        for (field, given, kept) in [
+            (
+                "Agent Profile name",
+                profile.name.as_deref(),
+                existing
+                    .as_ref()
+                    .and_then(|current| current.name.as_deref()),
+            ),
+            (
+                "Agent Profile expressive character ref",
+                profile.expressive_character_ref.as_deref(),
+                existing
+                    .as_ref()
+                    .and_then(|current| current.expressive_character_ref.as_deref()),
+            ),
+        ] {
+            if given != kept && given.is_some_and(|given| given.chars().any(crate::names::unplain))
+            {
+                return Err(AgentProfileStoreError::InvalidProfile(format!(
+                    "{field} must hold no control character and no invisible one"
+                )));
+            }
+        }
 
         let mut bytes = serde_json::to_vec_pretty(profile)
             .map_err(|error| AgentProfileStoreError::InvalidProfile(error.to_string()))?;
@@ -579,6 +604,67 @@ mod tests {
             store.save(&next, Some("p2")),
             Err(AgentProfileStoreError::RevisionNotAdvanced { .. })
         ));
+    }
+
+    /// be2i.1: a profile kept before be2i whose name holds a character that draws nothing still reads and lists, and a save that
+    /// keeps that name as it was kept is admitted. A name or an expressive character ref given now with one is refused, new or
+    /// changed.
+    #[test]
+    fn a_profile_kept_before_be2i_with_an_invisible_name_reads_and_saves_and_a_given_one_is_refused(
+    ) {
+        let root = crate::tempdir().unwrap();
+        let store = AgentProfileStore::personal(root.path());
+        store.save(&personal_profile("p1"), None).unwrap();
+        let path = store.source_path("agent-profile:guardian").unwrap();
+        let mut kept: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        kept["name"] = serde_json::json!("Guar\u{200D}dian");
+        std::fs::write(&path, serde_json::to_vec_pretty(&kept).unwrap()).unwrap();
+        let reading = store.read("agent-profile:guardian").unwrap();
+        assert_eq!(reading.profile.name.as_deref(), Some("Guar\u{200D}dian"));
+        assert_eq!(store.list().unwrap().len(), 1);
+        let mut next = reading.profile.clone();
+        next.revision = "p2".into();
+        next.method_refs.push("method:return-review".into());
+        store.save(&next, Some("p1")).unwrap();
+
+        let refused = |profile: &AgentProfile, expected: Option<&str>, field: &str| {
+            let why = match store.save(profile, expected) {
+                Err(AgentProfileStoreError::InvalidProfile(why)) => why,
+                other => panic!("{field}: {other:?}"),
+            };
+            assert_eq!(
+                why,
+                format!("{field} must hold no control character and no invisible one")
+            );
+        };
+        let mut renamed = next.clone();
+        renamed.revision = "p3".into();
+        renamed.name = Some("Keep\u{200D}er".into());
+        refused(&renamed, Some("p2"), "Agent Profile name");
+        let mut expressive = next.clone();
+        expressive.revision = "p3".into();
+        expressive.expressive_character_ref = Some(
+            "central:Control/agents/expressive-material/character/guardian\u{2066}.expression.json"
+                .into(),
+        );
+        refused(
+            &expressive,
+            Some("p2"),
+            "Agent Profile expressive character ref",
+        );
+        let mut fresh = AgentProfile::new(
+            "agent-profile:keeper",
+            "k1",
+            "agent:keeper",
+            AgentProfileScope::Personal,
+            WorldRef::new("world:personal").unwrap(),
+        )
+        .unwrap();
+        fresh.name = Some("Keep\u{200D}er".into());
+        refused(&fresh, None, "Agent Profile name");
+        fresh.name = Some("Keeper".into());
+        store.save(&fresh, None).unwrap();
     }
 
     #[test]

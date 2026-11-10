@@ -178,9 +178,11 @@ impl WorldRecord {
     /// Colon-form is the pasu grammar, not a set id, so it is refused here —
     /// the same drift rule the agent-set record applies to agent refs.
     pub(crate) fn validate(&self) -> Result<(), WorldError> {
+        // The place as the record keeps it, under the rule it was kept under (be2i.1); a place given now is refused with the whole
+        // set where it is given (`central.world.place`).
         if let Some(place) = self.place.as_ref() {
             place
-                .validate()
+                .validate_kept()
                 .map_err(|why| WorldError::InvalidRef(format!("the world's place: {why}")))?;
         }
         if let Some(order) = self.chain_order.as_ref() {
@@ -863,6 +865,26 @@ mod tests {
 
     fn set_ref(value: &str) -> AgentSetRef {
         AgentSetRef::new(value).unwrap()
+    }
+
+    /// be2i.1: your own world's place, kept on its root record before be2i with a character that draws nothing, still reads;
+    /// one with a control character does not. A place given now is refused with the whole set (`central.world.place`).
+    #[test]
+    fn a_place_kept_on_the_root_record_reads_under_the_rule_it_was_kept_under() {
+        let mut record = WorldRecord::new(world("world:personal"), "r1", None);
+        let place = |label: &str| crate::world_place::WorldPlace {
+            reference: "geo:hastings".into(),
+            label: label.into(),
+            latitude_degrees: 50.85,
+            longitude_degrees: 0.57,
+            altitude_metres: 10.0,
+            timezone: "Europe/London".into(),
+        };
+        record.place = Some(place("Hast\u{200C}ings"));
+        record.validate().unwrap();
+        assert!(place("Hast\u{200C}ings").validate().is_err());
+        record.place = Some(place("Hast\u{7}ings"));
+        assert!(record.validate().is_err());
     }
 
     #[test]

@@ -674,6 +674,95 @@ pub fn register_file_actions(registry: &mut ActionRegistry) {
 mod tests {
     use super::*;
 
+    /// A project River whose manifest keeps, as it was kept before be2i, a name and a place that each hold a character that draws
+    /// nothing (U+200D, U+200C): base accepted them.
+    fn kept_before_be2i(root: &Path) -> PathBuf {
+        crate::root::initialize_central(root).unwrap();
+        let project = root.join("Work/River");
+        fs::create_dir_all(project.join("src")).unwrap();
+        crate::projectcentral_ops::initialize_projectcentral(root, &project, "river-project")
+            .unwrap();
+        let path = project.join("ProjectCentral/project.json");
+        let mut manifest: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        manifest["name"] = json!("Rosa\u{200D}rium");
+        manifest["place"] = json!({"reference": "geo:hastings", "label": "Hast\u{200C}ings",
+            "latitude_degrees": 50.85, "longitude_degrees": 0.57, "altitude_metres": 10.0, "timezone": "Europe/London"});
+        fs::write(&path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+        project
+    }
+
+    /// be2i.1: a name and a place kept before be2i that hold a character that draws nothing still read. The manifest validates,
+    /// an ordinary write under its project is admitted, and the file map keeps the project's ref. The same name given now is
+    /// refused at rename, and the same place when it is declared.
+    #[test]
+    fn a_manifest_kept_before_be2i_with_an_invisible_character_still_reads_and_admits_writes() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let project = kept_before_be2i(&root);
+        let kept = crate::projectcentral::read_project_manifest(&project).unwrap();
+        let validation = kept.validate();
+        assert!(validation.valid, "{:?}", validation.errors);
+        fs::write(project.join("src/notes.md"), "notes\n").unwrap();
+        let note = CentralPathRef::new(&root, "Work/River/src/notes.md".into()).unwrap();
+        crate::file_mutation::ordinary_address(&root, &note).unwrap();
+        assert_eq!(
+            file_project(&root, "Work/River/src/notes.md")
+                .unwrap()
+                .project_ref
+                .as_deref(),
+            Some("river-project")
+        );
+        let renamed = crate::world_name::name_world(
+            &root,
+            &json!({"project": "River", "name": "Rosa\u{200D}rium", "expected_revision": "r"}),
+            None,
+            1,
+        )
+        .unwrap_err();
+        assert!(
+            renamed.to_string().contains("no invisible one"),
+            "{renamed}"
+        );
+        let placed = crate::world_place::place_world(
+            &root,
+            &json!({"project": "River", "expected_revision": "r", "place": kept.place}),
+            None,
+            1,
+        )
+        .unwrap_err();
+        assert!(placed.to_string().contains("no invisible one"), "{placed}");
+
+        // Reprojection stamps with the manifest's own id, and the world map shows the name and the place without the
+        // characters that draw nothing, saying so once each.
+        let plan = crate::world_map::plan_reproject(&root, "River").unwrap();
+        assert_eq!(
+            (
+                plan.project_id.as_deref(),
+                plan.project_id_source.as_deref()
+            ),
+            (Some("river-project"), Some("manifest"))
+        );
+        let map = crate::world_map::map_project_world(&root, "River").unwrap();
+        let shown = serde_json::to_value(&map.project).unwrap();
+        assert_eq!(shown["world_name"], "Rosarium");
+        assert_eq!(shown["world_place"]["label"], "Hastings");
+        let notes = shown["world_notes"].as_array().cloned().unwrap_or_default();
+        assert_eq!(notes.len(), 2, "{shown}");
+        assert!(
+            notes[0].as_str().unwrap().contains("central.world.name")
+                && notes[1].as_str().unwrap().contains("central.world.place"),
+            "{notes:?}"
+        );
+        // The manifest itself is as it was kept.
+        assert_eq!(
+            crate::projectcentral::read_project_manifest(&project)
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("Rosa\u{200D}rium")
+        );
+    }
+
     #[test]
     fn a_batch_derives_the_control_table_once_where_single_reads_derive_it_each_time() {
         let temp = tempfile::tempdir().unwrap();

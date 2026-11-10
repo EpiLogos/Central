@@ -6,7 +6,7 @@ use crate::agent_profile::{
     AgentProfile, AgentProfileError, AgentProfileScope, AgentSelfDefinition,
     AGENT_PROFILE_PROVENANCE_SCHEMA, AGENT_PROFILE_SCHEMA,
 };
-use crate::agent_profile_store::{AgentProfileStore, AgentProfileStoreError};
+use crate::agent_profile_store::{AgentProfileReading, AgentProfileStore, AgentProfileStoreError};
 use crate::projectcentral::read_project_manifest;
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
@@ -305,7 +305,7 @@ fn list_action(
                         AgentProfileScope::Personal => "personal",
                         AgentProfileScope::Project => "project",
                     },
-                    "profiles": profiles,
+                    "profiles": profiles.iter().map(shown_reading).collect::<Vec<_>>(),
                     "source_payloads_disclosed": false,
                 }),
             )
@@ -328,13 +328,31 @@ fn read_action(
     };
     store
         .read(&profile_ref)
-        .map(|reading| {
-            ActionResult::success(
-                AGENT_PROFILE_READ_ACTION,
-                to_value(reading).expect("AgentProfile reading serializes"),
-            )
-        })
+        .map(|reading| ActionResult::success(AGENT_PROFILE_READ_ACTION, shown_reading(&reading)))
         .unwrap_or_else(|error| store_failure(AGENT_PROFILE_READ_ACTION, error))
+}
+
+/// A kept profile's reading as it is shown (be2i.1): its name without the characters that draw nothing (none, when nothing else is
+/// left), and what the reading says of it once, when it held any. The record itself stays as it is kept.
+fn shown_reading(reading: &AgentProfileReading) -> Value {
+    let mut value = to_value(reading).expect("AgentProfile reading serializes");
+    let Some(name) = reading.profile.name.as_deref() else {
+        return value;
+    };
+    if let Some(note) = crate::names::kept_note(
+        name,
+        "This agent's name",
+        "Rename the agent (agent-profile.rename) to keep it so.",
+    ) {
+        let shown = crate::names::shown(name);
+        value["profile"]["name"] = if shown.is_empty() {
+            Value::Null
+        } else {
+            json!(shown)
+        };
+        value["notes"] = json!([note]);
+    }
+    value
 }
 
 fn save_action(
@@ -1429,6 +1447,69 @@ mod tests {
             connectors: connectors.as_ref().unwrap(),
             connector_context: connector_context.as_ref().unwrap(),
         }
+    }
+
+    /// be2i.1: a profile kept before be2i whose name holds a character that draws nothing is read and listed with its name
+    /// shown without it, and the reading says so once; the record stays as it was kept, and the same name given now is refused.
+    #[test]
+    fn a_name_kept_before_be2i_is_shown_without_its_invisible_character_and_said_once() {
+        let root = fixture_root();
+        let registry = registry();
+        let mut options = None;
+        let mut connectors = None;
+        let mut connector_context = None;
+        let context = context(&root, &mut options, &mut connectors, &mut connector_context);
+        let created = registry.execute(
+            AGENT_PROFILE_SAVE_ACTION,
+            &json!({"scope":"personal", "profile": personal_profile("p1")}),
+            &context,
+        );
+        assert!(created.ok, "{created:?}");
+        let path = AgentProfileStore::personal(&root)
+            .source_path("agent-profile:guardian")
+            .unwrap();
+        let mut kept: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        kept["name"] = json!("Guar\u{200D}dian");
+        std::fs::write(&path, serde_json::to_vec_pretty(&kept).unwrap()).unwrap();
+        let read = registry.execute(
+            AGENT_PROFILE_READ_ACTION,
+            &json!({"scope":"personal", "profile_ref":"agent-profile:guardian"}),
+            &context,
+        );
+        assert!(read.ok, "{read:?}");
+        let read = read.data.unwrap();
+        assert_eq!(read["profile"]["name"], "Guardian");
+        assert_eq!(read["profile"]["revision"], "p1");
+        let notes = read["notes"].as_array().unwrap();
+        assert_eq!(notes.len(), 1);
+        assert!(
+            notes[0]
+                .as_str()
+                .unwrap()
+                .contains(AGENT_PROFILE_RENAME_ACTION),
+            "{notes:?}"
+        );
+        let listed = registry.execute(
+            AGENT_PROFILE_LIST_ACTION,
+            &json!({"scope":"personal"}),
+            &context,
+        );
+        assert!(listed.ok, "{listed:?}");
+        let listed = listed.data.unwrap();
+        assert_eq!(listed["profiles"][0]["profile"]["name"], "Guardian");
+        assert_eq!(listed["profiles"][0]["notes"], json!(notes));
+        let stored: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(stored["name"], "Guar\u{200D}dian");
+        // A plain name reads with no note.
+        kept["name"] = json!("Guardian");
+        std::fs::write(&path, serde_json::to_vec_pretty(&kept).unwrap()).unwrap();
+        let plain = registry.execute(
+            AGENT_PROFILE_READ_ACTION,
+            &json!({"scope":"personal", "profile_ref":"agent-profile:guardian"}),
+            &context,
+        );
+        assert!(plain.data.unwrap().get("notes").is_none());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -593,10 +593,12 @@ impl AgentProfile {
         }
         validate_world_refs(&self.ratified_world_refs)?;
         validate_optional_text(&self.name, "Agent Profile name")?;
+        // A kept profile is read under the rule its words were kept under (be2i.1): the name and the expressive character ref a
+        // person gives now are refused with the whole set where they are given (`AgentProfileStore::save`, `agent-profile.rename`).
         if self
             .name
             .as_ref()
-            .is_some_and(|name| name.len() > 256 || name.chars().any(crate::names::unplain))
+            .is_some_and(|name| name.len() > 256 || name.chars().any(crate::names::unkept))
         {
             return Err(AgentProfileError::InvalidText("Agent Profile name".into()));
         }
@@ -622,7 +624,7 @@ impl AgentProfile {
             "Agent Profile expressive character ref",
         )?;
         if self.expressive_character_ref.as_ref().is_some_and(|value| {
-            value != value.trim() || value.len() > 1024 || value.chars().any(crate::names::unplain)
+            value != value.trim() || value.len() > 1024 || value.chars().any(crate::names::unkept)
         }) {
             return Err(AgentProfileError::InvalidText(
                 "Agent Profile expressive character ref".into(),
@@ -1524,10 +1526,13 @@ mod tests {
             .is_none());
     }
 
-    /// be2i ruling 7: a profile's name and its expressive character ref hold
-    /// no invisible character, as no control character.
+    /// be2i.1: a kept profile reads under the rule its words were kept under. A
+    /// name or expressive character ref that holds an invisible character reads
+    /// as it stands (`AgentProfileStore::save` refuses one given now); one that
+    /// holds a control character does not.
     #[test]
-    fn a_profiles_name_and_expressive_character_ref_hold_no_invisible_character() {
+    fn a_kept_profiles_name_and_expressive_character_ref_read_under_the_rule_they_were_kept_under()
+    {
         let (_, personal, _, _) = fixture();
         let profile = AgentProfile::new(
             "agent-profile:nous",
@@ -1538,19 +1543,19 @@ mod tests {
         )
         .unwrap();
         let mut named = profile.clone();
-        named.name = Some("No\u{202E}us".into());
+        for name in ["No\u{202E}us", "No\u{200D}us", "No\u{3164}us", "Nous"] {
+            named.name = Some(name.into());
+            named.validate_shape().unwrap();
+        }
+        named.name = Some("No\u{7}us".into());
         assert!(
             matches!(named.validate_shape(), Err(AgentProfileError::InvalidText(field)) if field == "Agent Profile name")
         );
-        named.name = Some("No\u{3164}us".into());
-        assert!(named.validate_shape().is_err());
-        named.name = Some("Nous".into());
-        named.validate_shape().unwrap();
         let mut expressive = profile.clone();
-        expressive.expressive_character_ref = Some(
-            "central:Control/agents/expressive-material/character/nous\u{2066}.expression.json"
-                .into(),
-        );
+        let character = "central:Control/agents/expressive-material/character/nous";
+        expressive.expressive_character_ref = Some(format!("{character}\u{2066}.expression.json"));
+        expressive.validate_shape().unwrap();
+        expressive.expressive_character_ref = Some(format!("{character}\u{7}.expression.json"));
         assert!(
             matches!(expressive.validate_shape(), Err(AgentProfileError::InvalidText(field)) if field == "Agent Profile expressive character ref")
         );

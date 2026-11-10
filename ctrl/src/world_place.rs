@@ -64,17 +64,22 @@ pub struct WorldPlace {
 // A kept place's numbers are finite (`validate`), so equality is total on every place a record holds.
 impl Eq for WorldPlace {}
 
-fn words(value: &str, field: &str, most: usize) -> Result<(), String> {
+/// Whether `value` is words of a place: as a person gives them (`given`), with no control character and no invisible one; as a
+/// record keeps them, read back, with no control character, the rule they were kept under (be2i.1).
+fn words(value: &str, field: &str, most: usize, given: bool) -> Result<(), String> {
     let count = value.chars().count();
     if value.trim() != value || count == 0 || count > most {
         return Err(format!(
             "{field} must be 1 to {most} characters without surrounding whitespace"
         ));
     }
-    if value.chars().any(crate::names::unplain) {
+    if given && value.chars().any(crate::names::unplain) {
         return Err(format!(
             "{field} must hold no control character and no invisible one"
         ));
+    }
+    if value.chars().any(crate::names::unkept) {
+        return Err(format!("{field} must hold no control characters"));
     }
     Ok(())
 }
@@ -88,10 +93,35 @@ fn within(value: f64, (low, high): (f64, f64), field: &str) -> Result<(), String
 }
 
 impl WorldPlace {
-    /// Whether this is a place the Sky can count a day at: answers why not, in words.
+    /// Whether this is a place the Sky can count a day at, as a person declares it (`central.world.place`): answers why not, in
+    /// words.
     pub fn validate(&self) -> Result<(), String> {
-        words(&self.reference, "reference", PLACE_REFERENCE_MAX_CHARS)?;
-        words(&self.label, "label", PLACE_LABEL_MAX_CHARS)?;
+        self.checked(true)
+    }
+
+    /// Whether this is a place the Sky can count a day at, as a record keeps it, read back: its words under the rule they were
+    /// kept under (be2i.1), so a place kept before be2i that holds an invisible character still reads.
+    pub fn validate_kept(&self) -> Result<(), String> {
+        self.checked(false)
+    }
+
+    /// This place as it is shown: its words without the characters that draw nothing (be2i.1).
+    pub fn shown(&self) -> Self {
+        Self {
+            reference: crate::names::shown(&self.reference),
+            label: crate::names::shown(&self.label),
+            ..self.clone()
+        }
+    }
+
+    fn checked(&self, given: bool) -> Result<(), String> {
+        words(
+            &self.reference,
+            "reference",
+            PLACE_REFERENCE_MAX_CHARS,
+            given,
+        )?;
+        words(&self.label, "label", PLACE_LABEL_MAX_CHARS, given)?;
         within(self.latitude_degrees, (-90.0, 90.0), "latitude_degrees")?;
         within(self.longitude_degrees, (-180.0, 180.0), "longitude_degrees")?;
         within(
@@ -699,11 +729,11 @@ mod tests {
     fn a_places_words_hold_no_invisible_character() {
         for label in ["Hast\u{202E}ings", "Hast\u{200B}ings"] {
             assert_eq!(
-                words(label, "label", 80),
+                words(label, "label", 80, true),
                 Err("label must hold no control character and no invisible one".to_owned()),
                 "{label:?}"
             );
         }
-        assert_eq!(words("Hastings", "label", 80), Ok(()));
+        assert_eq!(words("Hastings", "label", 80, true), Ok(()));
     }
 }

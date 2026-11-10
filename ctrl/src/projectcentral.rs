@@ -103,13 +103,15 @@ impl ProjectCentralManifest {
                 "wiki.source must be the canonical Agent Wiki source {WIKI_SOURCE}"
             ));
         }
+        // What the manifest keeps is read under the rule it was kept under (be2i.1): a name or place given now is refused with the
+        // whole set where it is given (`central.world.name`, `central.world.place`), never here.
         if let Some(name) = &self.name {
-            if let Err(error) = world_name_words(name) {
+            if let Err(error) = kept_world_name_words(name) {
                 errors.push(format!("name {error}"));
             }
         }
         if let Some(place) = &self.place {
-            if let Err(error) = place.validate() {
+            if let Err(error) = place.validate_kept() {
                 errors.push(format!("place: {error}"));
             }
         }
@@ -131,6 +133,26 @@ impl ProjectCentralManifest {
             valid: errors.is_empty(),
             errors,
         }
+    }
+
+    /// What a reading says, once each, of the name and place this manifest keeps when they hold characters Central now refuses
+    /// (be2i.1): they are shown without them, and how to give them again.
+    pub fn kept_notes(&self) -> Vec<String> {
+        let name = self.name.as_deref().and_then(|name| {
+            crate::names::kept_note(
+                name,
+                "This world's name",
+                "Rename the world (central.world.name) to keep it so.",
+            )
+        });
+        let place = self.place.as_ref().and_then(|place| {
+            crate::names::kept_note(
+                &format!("{}{}", place.reference, place.label),
+                "This world's place",
+                "Declare the place again (central.world.place) to keep it so.",
+            )
+        });
+        name.into_iter().chain(place).collect()
     }
 }
 
@@ -175,17 +197,33 @@ pub(crate) fn parse_project_manifest(
 /// The most characters a world's name keeps.
 pub const WORLD_NAME_MAX_CHARS: usize = 120;
 
-/// Whether `name` is a world's name as the manifest keeps it: words without surrounding whitespace, control or invisible characters, 1 to
-/// `WORLD_NAME_MAX_CHARS` characters. Answers why not, in words.
+/// Whether `name` is a world's name as a person gives it (`central.world.name`): words without surrounding whitespace, control or
+/// invisible characters, 1 to `WORLD_NAME_MAX_CHARS` characters. Answers why not, in words.
 pub fn world_name_words(name: &str) -> Result<(), String> {
+    name_words(name)?;
+    if name.chars().any(crate::names::unplain) {
+        return Err("must hold no control character and no invisible one".to_owned());
+    }
+    Ok(())
+}
+
+/// Whether `name` is a world's name as the manifest keeps it, read back: the rule it was kept under, no control characters. A name
+/// kept before be2i that holds an invisible character reads as it stands (be2i.1); the world map shows it without them and says so
+/// once (`kept_notes`).
+pub fn kept_world_name_words(name: &str) -> Result<(), String> {
+    name_words(name)?;
+    if name.chars().any(crate::names::unkept) {
+        return Err("must hold no control characters".to_owned());
+    }
+    Ok(())
+}
+
+fn name_words(name: &str) -> Result<(), String> {
     let count = name.chars().count();
     if name.trim() != name || count == 0 || count > WORLD_NAME_MAX_CHARS {
         return Err(format!(
             "must be 1 to {WORLD_NAME_MAX_CHARS} characters without surrounding whitespace"
         ));
-    }
-    if name.chars().any(crate::names::unplain) {
-        return Err("must hold no control character and no invisible one".to_owned());
     }
     Ok(())
 }
@@ -277,5 +315,18 @@ mod tests {
             );
         }
         assert_eq!(world_name_words("Rosarium"), Ok(()));
+        // be2i.1: the manifest keeps one as it was kept, read back under the rule it was kept under.
+        for name in [
+            "Rosa\u{202E}rium",
+            "Rosa\u{200D}rium",
+            "\u{3164}",
+            "Rosarium",
+        ] {
+            assert_eq!(kept_world_name_words(name), Ok(()), "{name:?}");
+        }
+        assert_eq!(
+            kept_world_name_words("Rosa\u{7}rium"),
+            Err("must hold no control characters".to_owned())
+        );
     }
 }

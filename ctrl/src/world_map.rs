@@ -272,6 +272,10 @@ pub struct ProjectMap {
     /// `chain_order`); absent while it stands in the manual's order.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub world_chain_order: Option<Vec<String>>,
+    /// What the map says, once each, of a kept name or place that holds characters Central now refuses (be2i.1): it is shown
+    /// above without them, and how to give it again; absent while there is nothing to say.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub world_notes: Vec<String>,
     /// Ordinary Project files: everything except ProjectCentral, dot directories
     /// and build/output directories.
     pub source_files: usize,
@@ -1050,43 +1054,57 @@ fn map_projectcentral(
     }
 }
 
-/// The world's name, place and chain order its manifest keeps (only what the manifest's own rules admit) and the manifest's content
-/// revision: what `central.world.name`, `central.world.place` and `central.world.chain-order` are read against. A manifest that is
-/// no plain file, or cannot be read, discloses none of them.
+/// The world's name, place and chain order its manifest keeps (only what the manifest's own rules admit, read under the rule they
+/// were kept under) and the manifest's content revision: what `central.world.name`, `central.world.place` and
+/// `central.world.chain-order` are read against. The name and place are shown without the characters that draw nothing, and the map
+/// says so once each (be2i.1); a name that holds nothing else is no name, and the world is called by its folder's. A manifest that
+/// is no plain file, or cannot be read, discloses none of them.
 fn world_naming(project_root: &Path) -> WorldNaming {
     let manifest = project_root.join(PROJECTCENTRAL_DIR).join(PROJECT_MANIFEST);
     let plain =
         fs::symlink_metadata(&manifest).is_ok_and(|metadata| metadata.file_type().is_file());
     let Some(bytes) = plain.then(|| fs::read(&manifest).ok()).flatten() else {
-        return (None, None, None, None);
+        return WorldNaming::default();
     };
     let parsed = crate::projectcentral::parse_project_manifest(&bytes, &manifest).ok();
-    let name = parsed
+    let mut kept = parsed.clone().map(|mut kept| {
+        kept.name = kept
+            .name
+            .filter(|name| crate::projectcentral::kept_world_name_words(name).is_ok());
+        kept.place = kept.place.filter(|place| place.validate_kept().is_ok());
+        kept
+    });
+    let notes = kept
         .as_ref()
-        .and_then(|parsed| parsed.name.clone())
-        .filter(|name| crate::projectcentral::world_name_words(name).is_ok());
-    let place = parsed
-        .as_ref()
-        .and_then(|parsed| parsed.place.clone())
-        .filter(|place| place.validate().is_ok());
+        .map(crate::projectcentral::ProjectCentralManifest::kept_notes)
+        .unwrap_or_default();
+    let name = kept
+        .as_mut()
+        .and_then(|kept| kept.name.take())
+        .map(|name| crate::names::shown(&name))
+        .filter(|name| !name.is_empty());
+    let place = kept.and_then(|kept| kept.place).map(|place| place.shown());
     let chain_order = parsed
         .and_then(|parsed| parsed.chain_order)
         .filter(|order| crate::world_place::chain_order_words(order).is_ok());
-    (
+    WorldNaming {
         name,
-        Some(crate::source_safety::content_revision_bytes(&bytes)),
+        revision: Some(crate::source_safety::content_revision_bytes(&bytes)),
         place,
         chain_order,
-    )
+        notes,
+    }
 }
 
-/// A world's name, its manifest's revision, its place and its chain order.
-type WorldNaming = (
-    Option<String>,
-    Option<String>,
-    Option<crate::world_place::WorldPlace>,
-    Option<Vec<String>>,
-);
+/// A world's name and place as they are shown, its manifest's revision, its chain order, and what the map says of them.
+#[derive(Default)]
+struct WorldNaming {
+    name: Option<String>,
+    revision: Option<String>,
+    place: Option<crate::world_place::WorldPlace>,
+    chain_order: Option<Vec<String>>,
+    notes: Vec<String>,
+}
 
 fn map_project(central_root: &Path, work_root: &Path, name: &str, across: bool) -> ProjectMap {
     let project_root = work_root.join(name);
@@ -1108,15 +1126,15 @@ fn map_project(central_root: &Path, work_root: &Path, name: &str, across: bool) 
         source_files
     };
     let projectcentral = map_projectcentral(central_root, &project_root, &relative);
-    let (world_name, manifest_revision, world_place, world_chain_order) =
-        world_naming(&project_root);
+    let naming = world_naming(&project_root);
     ProjectMap {
         name: name.to_owned(),
         path: relative,
-        world_name,
-        manifest_revision,
-        world_place,
-        world_chain_order,
+        world_name: naming.name,
+        manifest_revision: naming.revision,
+        world_place: naming.place,
+        world_chain_order: naming.chain_order,
+        world_notes: naming.notes,
         source_files,
         projectcentral,
     }
