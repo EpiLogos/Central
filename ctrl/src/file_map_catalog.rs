@@ -1303,6 +1303,20 @@ pub(crate) fn scopes(root: &Path) -> io::Result<Vec<Scope>> {
 /// others stand. Each external root opens on its own helper thread, all under
 /// one deadline.
 pub(crate) fn participating(root: &Path) -> io::Result<(Vec<Scope>, Vec<UnreachableScope>)> {
+    participating_as(root, true)
+}
+
+/// [`participating`] that makes nothing: an external scope's state folder (`.central/scopes/<name>`) is named, and not made. The
+/// person's acts of the file map read where their grant stands on this (file_map.rs `grant_scope`), so an act refused there
+/// leaves no folder behind (DLW build ruling 2026-11-09, round 54b item 1).
+pub(crate) fn participating_unmade(root: &Path) -> io::Result<(Vec<Scope>, Vec<UnreachableScope>)> {
+    participating_as(root, false)
+}
+
+fn participating_as(
+    root: &Path,
+    make_state: bool,
+) -> io::Result<(Vec<Scope>, Vec<UnreachableScope>)> {
     let manifest = match fs::symlink_metadata(root.join("ProjectCentral/project.json")) {
         Ok(metadata) if metadata.is_file() => true,
         Ok(_) => return Err(invalid("Project manifest is not an ordinary file")),
@@ -1463,7 +1477,11 @@ pub(crate) fn participating(root: &Path) -> io::Result<(Vec<Scope>, Vec<Unreacha
         let external = !target.starts_with(root);
         let mut scope = scope;
         if external {
-            scope.state = external_state(root, &name)?;
+            scope.state = if make_state {
+                external_state(root, &name)?
+            } else {
+                root.join(external_member(&name)?)
+            };
         }
         if !seen.insert(scope.world.clone()) {
             return Err(invalid("Duplicate participating Project World identity"));
@@ -1535,13 +1553,17 @@ pub(crate) fn participating(root: &Path) -> io::Result<(Vec<Scope>, Vec<Unreacha
 /// The ground-side home of an external scope's derived state, created on
 /// first sight so locks and indexes never fall back into the external tree.
 pub(crate) fn external_state(root: &Path, name: &str) -> io::Result<PathBuf> {
+    let member = external_member(name)?;
+    safe_directory(root, &member)?;
+    Ok(root.join(member))
+}
+/// Where an external scope's state stands in the ground, relative to it: `.central/scopes/<name>`.
+fn external_member(name: &str) -> io::Result<PathBuf> {
     let relative = relative(name)?;
     if relative.components().count() != 1 {
         return Err(invalid("External scope name must be one path component"));
     }
-    let member = Path::new(".central/scopes").join(relative);
-    safe_directory(root, &member)?;
-    Ok(root.join(member))
+    Ok(Path::new(".central/scopes").join(relative))
 }
 pub(crate) fn selected<'a>(scopes: &'a [Scope], input: &Value) -> io::Result<&'a Scope> {
     match input.get("project").and_then(Value::as_str) {
