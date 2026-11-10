@@ -202,6 +202,12 @@ fn equal_digest(a: &[u8], b: &[u8]) -> bool {
             .fold(0u8, |difference, (a, b)| difference | (a ^ b))
             == 0
 }
+/// The host's credential as `authenticate` takes it: present, and within its bounds. A token outside them is refused by
+/// `authenticate` before any source is read, in the token's own words, so a caller that words a missing source (the trash's
+/// `missing_authority`) leaves that refusal as it came (O-I #747 round 896 1T, N1).
+pub(crate) fn bounded_token(token: Option<&str>) -> Option<&str> {
+    token.filter(|t| t.len() >= 32 && t.len() <= 4096)
+}
 /// The host supplies CENTRAL_NATIVE_TOKEN through its protected process channel.
 /// The JSON document/proposal cannot inject this credential. A bearer credential
 /// authenticates its source-declared principal, not physical human presence.
@@ -280,7 +286,7 @@ fn held(
     expected: Option<&str>,
     now: u64,
 ) -> io::Result<(Grant, String, String)> {
-    let token = token.filter(|t| t.len() >= 32 && t.len() <= 4096)
+    let token = bounded_token(token)
         .ok_or_else(|| denied("missing bounded CENTRAL_NATIVE_TOKEN; declared H/human attribution is not authentication"))?;
     let root = Scope::resolve(central_root, None)?;
     let (source, _, revision) = recognised_source(&root, AUTHORITY_ROLE)?;
