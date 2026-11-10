@@ -596,7 +596,7 @@ impl AgentProfile {
         if self
             .name
             .as_ref()
-            .is_some_and(|name| name.len() > 256 || name.chars().any(char::is_control))
+            .is_some_and(|name| name.len() > 256 || name.chars().any(crate::names::unplain))
         {
             return Err(AgentProfileError::InvalidText("Agent Profile name".into()));
         }
@@ -622,7 +622,7 @@ impl AgentProfile {
             "Agent Profile expressive character ref",
         )?;
         if self.expressive_character_ref.as_ref().is_some_and(|value| {
-            value != value.trim() || value.len() > 1024 || value.chars().any(char::is_control)
+            value != value.trim() || value.len() > 1024 || value.chars().any(crate::names::unplain)
         }) {
             return Err(AgentProfileError::InvalidText(
                 "Agent Profile expressive character ref".into(),
@@ -1522,5 +1522,37 @@ mod tests {
             .unwrap()
             .get("self_definition")
             .is_none());
+    }
+
+    /// be2i ruling 7: a profile's name and its expressive character ref hold
+    /// no invisible character, as no control character.
+    #[test]
+    fn a_profiles_name_and_expressive_character_ref_hold_no_invisible_character() {
+        let (_, personal, _, _) = fixture();
+        let profile = AgentProfile::new(
+            "agent-profile:nous",
+            "n1",
+            "agent:nous",
+            AgentProfileScope::Personal,
+            personal,
+        )
+        .unwrap();
+        let mut named = profile.clone();
+        named.name = Some("No\u{202E}us".into());
+        assert!(
+            matches!(named.validate_shape(), Err(AgentProfileError::InvalidText(field)) if field == "Agent Profile name")
+        );
+        named.name = Some("No\u{3164}us".into());
+        assert!(named.validate_shape().is_err());
+        named.name = Some("Nous".into());
+        named.validate_shape().unwrap();
+        let mut expressive = profile.clone();
+        expressive.expressive_character_ref = Some(
+            "central:Control/agents/expressive-material/character/nous\u{2066}.expression.json"
+                .into(),
+        );
+        assert!(
+            matches!(expressive.validate_shape(), Err(AgentProfileError::InvalidText(field)) if field == "Agent Profile expressive character ref")
+        );
     }
 }

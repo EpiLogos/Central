@@ -132,10 +132,10 @@ fn source_of(input: &Value) -> io::Result<FiledSource> {
     let title = source.title.trim();
     if title.is_empty()
         || title.chars().count() > TITLE_MAX_CHARS
-        || title.chars().any(char::is_control)
+        || title.chars().any(crate::names::unplain)
     {
         return Err(invalid(format!(
-            "Where a passage came from is 1 to {TITLE_MAX_CHARS} characters of one line"
+            "Where a passage came from is 1 to {TITLE_MAX_CHARS} characters of one line, with no control character and no invisible one"
         )));
     }
     if let Some(path) = &source.path {
@@ -422,5 +422,17 @@ mod tests {
         assert!(file_passage(&root, &long, 1).is_err());
         assert!(!root.join(ROOT_FILED_DIR).exists(), "nothing was filed");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// be2i ruling 7: where a passage came from is named in plain text.
+    #[test]
+    fn where_a_passage_came_from_holds_no_invisible_character() {
+        for title in ["Flow \u{2066}Completion", "Flow\u{200B} Completion"] {
+            let refused = source_of(&json!({"source": {"title": title}}))
+                .unwrap_err()
+                .to_string();
+            assert!(refused.contains("no invisible one"), "{title:?}: {refused}");
+        }
+        assert!(source_of(&json!({"source": {"title": "Flow — Completion"}})).is_ok());
     }
 }

@@ -308,10 +308,10 @@ fn item_of(input: &Value, now: u64) -> io::Result<CollectedItem> {
         .unwrap_or_default();
     if label.is_empty()
         || label.chars().count() > LABEL_MAX_CHARS
-        || label.chars().any(char::is_control)
+        || label.chars().any(crate::names::unplain)
     {
         return Err(invalid(format!(
-            "A thing's words are 1 to {LABEL_MAX_CHARS} characters of one line"
+            "A thing's words are 1 to {LABEL_MAX_CHARS} characters of one line, with no control character and no invisible one"
         )));
     }
     let kind = match item.get("kind") {
@@ -342,9 +342,9 @@ fn item_of(input: &Value, now: u64) -> io::Result<CollectedItem> {
 /// A collection's name as you give it: trimmed, at most one line of NAME_MAX_CHARS characters. None: no name, so Live's.
 fn name_of(raw: &str) -> io::Result<Option<String>> {
     let name = raw.trim();
-    if name.chars().count() > NAME_MAX_CHARS || name.chars().any(char::is_control) {
+    if name.chars().count() > NAME_MAX_CHARS || name.chars().any(crate::names::unplain) {
         return Err(invalid(format!(
-            "A collection's name is one line of at most {NAME_MAX_CHARS} characters"
+            "A collection's name is one line of at most {NAME_MAX_CHARS} characters, with no control character and no invisible one"
         )));
     }
     Ok((!name.is_empty()).then(|| name.to_owned()))
@@ -681,5 +681,36 @@ mod tests {
             b"{\"schema\":\"other/v1\"}"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// be2i ruling 7: a thing's words and a collection's name hold no
+    /// invisible character, as no control character.
+    #[test]
+    fn a_things_words_and_a_collections_name_hold_no_invisible_character() {
+        for words in [
+            "The \u{202E}plate",
+            "The\u{200B} plate",
+            "The \u{3164} plate",
+        ] {
+            let refused = item_of(
+                &json!({"item": {"ref": "central:thing:1", "label": words}}),
+                1,
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(refused.contains("no invisible one"), "{words:?}: {refused}");
+            let named = name_of(words).unwrap_err().to_string();
+            assert!(named.contains("no invisible one"), "{words:?}: {named}");
+        }
+        assert_eq!(
+            item_of(
+                &json!({"item": {"ref": "central:thing:1", "label": "The plate"}}),
+                1
+            )
+            .unwrap()
+            .label,
+            "The plate"
+        );
+        assert_eq!(name_of("Plates").unwrap().as_deref(), Some("Plates"));
     }
 }

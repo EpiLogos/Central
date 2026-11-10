@@ -175,7 +175,7 @@ pub(crate) fn parse_project_manifest(
 /// The most characters a world's name keeps.
 pub const WORLD_NAME_MAX_CHARS: usize = 120;
 
-/// Whether `name` is a world's name as the manifest keeps it: words without surrounding whitespace or control characters, 1 to
+/// Whether `name` is a world's name as the manifest keeps it: words without surrounding whitespace, control or invisible characters, 1 to
 /// `WORLD_NAME_MAX_CHARS` characters. Answers why not, in words.
 pub fn world_name_words(name: &str) -> Result<(), String> {
     let count = name.chars().count();
@@ -184,8 +184,8 @@ pub fn world_name_words(name: &str) -> Result<(), String> {
             "must be 1 to {WORLD_NAME_MAX_CHARS} characters without surrounding whitespace"
         ));
     }
-    if name.chars().any(char::is_control) {
-        return Err("must hold no control characters".to_owned());
+    if name.chars().any(crate::names::unplain) {
+        return Err("must hold no control character and no invisible one".to_owned());
     }
     Ok(())
 }
@@ -264,5 +264,18 @@ mod tests {
             Path::new("/central/Work/example/ProjectCentral/agents/wiki/wiki.json")
         );
         assert_eq!(ROOT_WIKI_SOURCE, "Control/agents/wiki/wiki.json");
+    }
+
+    /// be2i ruling 7: a world's name holds no invisible character.
+    #[test]
+    fn a_worlds_name_holds_no_invisible_character() {
+        for name in ["Rosa\u{202E}rium", "Rosa\u{200D}rium", "\u{3164}"] {
+            assert_eq!(
+                world_name_words(name),
+                Err("must hold no control character and no invisible one".to_owned()),
+                "{name:?}"
+            );
+        }
+        assert_eq!(world_name_words("Rosarium"), Ok(()));
     }
 }

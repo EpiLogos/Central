@@ -71,8 +71,10 @@ fn words(value: &str, field: &str, most: usize) -> Result<(), String> {
             "{field} must be 1 to {most} characters without surrounding whitespace"
         ));
     }
-    if value.chars().any(char::is_control) {
-        return Err(format!("{field} must hold no control characters"));
+    if value.chars().any(crate::names::unplain) {
+        return Err(format!(
+            "{field} must hold no control character and no invisible one"
+        ));
     }
     Ok(())
 }
@@ -690,5 +692,18 @@ mod tests {
         assert_eq!(next_record_revision("r9"), "r10");
         assert_eq!(next_record_revision("convention"), "convention.1");
         assert_eq!(next_record_revision("1"), "2");
+    }
+
+    /// be2i ruling 7: a place's words hold no invisible character.
+    #[test]
+    fn a_places_words_hold_no_invisible_character() {
+        for label in ["Hast\u{202E}ings", "Hast\u{200B}ings"] {
+            assert_eq!(
+                words(label, "label", 80),
+                Err("label must hold no control character and no invisible one".to_owned()),
+                "{label:?}"
+            );
+        }
+        assert_eq!(words("Hastings", "label", 80), Ok(()));
     }
 }

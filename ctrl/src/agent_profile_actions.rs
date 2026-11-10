@@ -618,10 +618,10 @@ fn rename_action(
         Ok(value) => value,
         Err(result) => return result,
     };
-    if name.chars().count() > MAX_AGENT_NAME_CHARS || name.chars().any(char::is_control) {
+    if name.chars().count() > MAX_AGENT_NAME_CHARS || name.chars().any(crate::names::unplain) {
         return invalid_input(
             action,
-            format!("A name is one line of at most {MAX_AGENT_NAME_CHARS} characters."),
+            format!("A name is one line of at most {MAX_AGENT_NAME_CHARS} characters, with no control character and no invisible one."),
         );
     }
     chain_edit(action, input, context, |profile| {
@@ -1906,6 +1906,14 @@ mod tests {
             )
             .ok
         );
+        // ...and plain: no invisible character either (be2i ruling 7)
+        for name in ["Kee\u{202E}per", "Kee\u{200B}per", "\u{3164}"] {
+            let refused = act(AGENT_PROFILE_RENAME_ACTION, "r4", json!({"name": name}));
+            assert!(
+                !refused.ok && said(&refused).contains("no invisible one"),
+                "{name:?}: {refused:?}"
+            );
+        }
         assert_eq!(next_profile_revision("p9"), "p10");
         assert_eq!(next_profile_revision("draft"), "draft-1");
         fs::remove_dir_all(root).ok();

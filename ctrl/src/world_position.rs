@@ -105,10 +105,10 @@ fn check_ref_text(field: &str, value: &Option<String>) -> Result<(), String> {
         if value.trim().is_empty()
             || value != value.trim()
             || value.len() > 4096
-            || value.chars().any(char::is_control)
+            || value.chars().any(crate::names::unplain)
         {
             return Err(format!(
-                "{field} must be a non-empty trimmed single-line string or null"
+                "{field} must be a non-empty trimmed single-line string with no control character and no invisible one, or null"
             ));
         }
     }
@@ -147,8 +147,8 @@ fn validate(position: &WorldPosition, file_name: &str, world_ref: &str) -> Resul
         ));
     }
     for (field, value) in [("revision", &position.revision), ("label", &position.label)] {
-        if value.trim().is_empty() || value.chars().any(char::is_control) {
-            return Err(format!("{field} must be non-empty single-line text"));
+        if value.trim().is_empty() || value.chars().any(crate::names::unplain) {
+            return Err(format!("{field} must be non-empty single-line text with no control character and no invisible one"));
         }
     }
     for (field, value) in [
@@ -823,4 +823,48 @@ pub fn register_world_position_actions(registry: &mut ActionRegistry) {
             read_action,
         )
         .expect("central.position.read is registered once");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn position(label: &str, role_ref: &str) -> WorldPosition {
+        serde_json::from_value(json!({"schema": POSITION_SCHEMA, "ref": "central:position:control:root:keeper",
+            "revision": "r1", "slug": "keeper", "label": label, "enclosing_world_ref": "control:root",
+            "role_ref": role_ref}))
+        .unwrap()
+    }
+
+    /// be2i ruling 7: a position's label and the refs it names hold no
+    /// invisible character, as no control character.
+    #[test]
+    fn a_positions_label_and_its_refs_hold_no_invisible_character() {
+        validate(
+            &position("Keeper", "central:role:keeper"),
+            "keeper.json",
+            "control:root",
+        )
+        .unwrap();
+        let label = validate(
+            &position("Kee\u{202E}per", "central:role:keeper"),
+            "keeper.json",
+            "control:root",
+        )
+        .unwrap_err();
+        assert_eq!(
+            label,
+            "label must be non-empty single-line text with no control character and no invisible one"
+        );
+        let role = validate(
+            &position("Keeper", "central:role:\u{2066}keeper"),
+            "keeper.json",
+            "control:root",
+        )
+        .unwrap_err();
+        assert_eq!(
+            role,
+            "role_ref must be a non-empty trimmed single-line string with no control character and no invisible one, or null"
+        );
+    }
 }
