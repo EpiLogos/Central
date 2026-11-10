@@ -215,6 +215,18 @@ fn with_keeping(mut data: Value, keeping: Value) -> Value {
     data
 }
 
+/// The request as the provider is handed it to show: its title and body are a
+/// caller's words, and the operating system draws them as given, so they go
+/// without the characters that draw nothing (`names::shown`; be2j ruling 2).
+/// The ledger keeps the request as it was asked.
+fn shown_request(request: &NotificationRequest) -> NotificationRequest {
+    NotificationRequest {
+        title: crate::names::shown(&request.title),
+        body: crate::names::shown(&request.body),
+        ..request.clone()
+    }
+}
+
 fn personal_notify_action(
     _registry: &ActionRegistry,
     input: &Value,
@@ -242,8 +254,12 @@ fn personal_notify_action(
         caller_ref,
         provenance_refs,
     };
-    // A request the Port would not accept is refused before anything is kept.
-    if let Err(error) = request.validate() {
+    // A request the Port would not accept is refused before anything is kept;
+    // so is one whose words show nothing once cleaned (`shown_request`).
+    if let Err(error) = request
+        .validate()
+        .and_then(|()| shown_request(&request).validate())
+    {
         return notification_failure(ACTION, error, json!({}), None);
     }
     let root = resolve_central_root(context.root_options).map(|root| root.path);
@@ -319,7 +335,7 @@ fn personal_notify_action(
         );
         return refused(record, failed);
     };
-    match notification.deliver(&record.request) {
+    match notification.deliver(&shown_request(&record.request)) {
         Ok(delivery) => {
             record.delivery = Some(delivery.clone());
             let keeping = keep_into(&root, &record);
@@ -479,6 +495,8 @@ mod tests {
     struct Provider {
         manifest: ConnectorManifest,
         refuse: bool,
+        /// The title and body of each request the provider was handed to show.
+        delivered: std::sync::Mutex<Vec<(String, String)>>,
     }
 
     impl Provider {
@@ -502,6 +520,7 @@ mod tests {
                     known_limitations: Vec::new(),
                 },
                 refuse,
+                delivered: std::sync::Mutex::new(Vec::new()),
             }
         }
     }
@@ -523,6 +542,10 @@ mod tests {
         }
 
         fn deliver(&self, input: &NotificationRequest) -> Result<NotificationDelivery, PortError> {
+            self.delivered
+                .lock()
+                .unwrap()
+                .push((input.title.clone(), input.body.clone()));
             if self.refuse {
                 return Err(PortError::provider(
                     "The fixture's notification centre rejected the request.",
@@ -656,6 +679,64 @@ mod tests {
         assert_eq!(
             limited.data.unwrap()["requests"].as_array().unwrap().len(),
             1
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// be2j ruling 2 (DLW build ruling 2026-11-09): what the operating system
+    /// shows of a request is its words without the characters that draw nothing;
+    /// the ledger keeps them as asked, and a request that would show nothing is
+    /// refused before anything is kept.
+    #[test]
+    fn a_requests_words_are_shown_without_what_draws_nothing_and_kept_as_asked() {
+        let root = root();
+        let provider = std::sync::Arc::new(Provider::new(false));
+        struct Shared(std::sync::Arc<Provider>);
+        impl Connector for Shared {
+            fn manifest(&self) -> &ConnectorManifest {
+                self.0.manifest()
+            }
+            fn probe(&self, port: &PortContract, context: &ConnectorContext) -> CapabilityProbe {
+                self.0.probe(port, context)
+            }
+            fn user_notification(&self) -> Option<&dyn UserNotification> {
+                Some(self.0.as_ref())
+            }
+        }
+        let mut connectors = ConnectorRegistry::default();
+        connectors.register(Shared(provider.clone())).unwrap();
+        let title = "Checks \u{202E}deliaf\u{202C}\u{200B}";
+        let asked = run(
+            &root,
+            &connectors,
+            "personal.notify",
+            json!({"title": title, "body": "2\u{2066} of\u{2069} 14\u{3164}", "caller_ref": "routine:checks"}),
+        );
+        assert!(asked.ok, "{asked:?}");
+        assert_eq!(
+            *provider.delivered.lock().unwrap(),
+            vec![("Checks deliaf".to_owned(), "2 of 14".to_owned())]
+        );
+        let listed = run(&root, &connectors, "personal.notifications.list", json!({}));
+        let kept = listed.data.unwrap()["requests"][0]["request"].clone();
+        assert_eq!(kept["title"], title, "the ledger keeps the words as asked");
+        let blank = run(
+            &root,
+            &connectors,
+            "personal.notify",
+            json!({"title": "\u{200B}\u{2066}", "body": "\u{3164}", "caller_ref": "routine:checks"}),
+        );
+        assert!(!blank.ok, "words that show nothing are refused");
+        assert_eq!(
+            provider.delivered.lock().unwrap().len(),
+            1,
+            "and nothing is shown"
+        );
+        let listed = run(&root, &connectors, "personal.notifications.list", json!({}));
+        assert_eq!(
+            listed.data.unwrap()["requests"].as_array().unwrap().len(),
+            1,
+            "nor kept"
         );
         let _ = fs::remove_dir_all(root);
     }

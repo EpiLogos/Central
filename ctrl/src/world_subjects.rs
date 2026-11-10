@@ -89,18 +89,26 @@ fn world_subjects(
         Ok(readings) => {
             let mut agents: std::collections::BTreeMap<String, Vec<Value>> =
                 std::collections::BTreeMap::new();
-            let mut titles: std::collections::BTreeMap<String, String> =
+            let mut titles: std::collections::BTreeMap<String, (String, Option<String>)> =
                 std::collections::BTreeMap::new();
             for reading in readings {
                 let profile = &reading.profile;
-                let title = profile
-                    .name
-                    .clone()
-                    .or_else(|| profile.role.clone())
-                    .or_else(|| profile.purpose.clone())
+                // A title is words a person reads: the agent's kept name shown cleaned, with its note, or "unnamed agent" and its
+                // ref's short form when nothing else is left (be2j item 14); else its role or purpose, shown cleaned.
+                let (name, note) = crate::agent_profile_actions::shown_agent_name(profile);
+                let shown = |text: &Option<String>| {
+                    text.as_deref()
+                        .map(crate::names::shown)
+                        .filter(|text| !text.is_empty())
+                };
+                let title = name
+                    .or_else(|| shown(&profile.role))
+                    .or_else(|| shown(&profile.purpose))
                     .map(|text| text.chars().take(80).collect::<String>())
                     .unwrap_or_else(|| profile.agent_ref.clone());
-                titles.entry(profile.agent_ref.clone()).or_insert(title);
+                titles
+                    .entry(profile.agent_ref.clone())
+                    .or_insert((title, note));
                 agents
                     .entry(profile.agent_ref.clone())
                     .or_default()
@@ -110,15 +118,24 @@ fn world_subjects(
                     }));
             }
             for (agent_ref, profiles) in agents {
+                let (title, note) = titles
+                    .remove(&agent_ref)
+                    .unwrap_or_else(|| (agent_ref.clone(), None));
                 match PasuRef::for_agent(&agent_ref) {
-                    Ok(pasu) => subjects.push(json!({
-                        "ref": pasu.as_str(),
-                        "form": "agent",
-                        "title": titles.get(&agent_ref).cloned().unwrap_or_else(|| agent_ref.clone()),
-                        "kind": "agent",
-                        "agent_ref": agent_ref,
-                        "source": {"record": "agent-profile", "profiles": profiles},
-                    })),
+                    Ok(pasu) => {
+                        let mut subject = json!({
+                            "ref": pasu.as_str(),
+                            "form": "agent",
+                            "title": title,
+                            "kind": "agent",
+                            "agent_ref": agent_ref,
+                            "source": {"record": "agent-profile", "profiles": profiles},
+                        });
+                        if let Some(note) = note {
+                            subject["notes"] = json!([note]);
+                        }
+                        subjects.push(subject);
+                    }
                     Err(error) => absences.push(format!("{agent_ref}: {error}")),
                 }
             }
@@ -301,6 +318,66 @@ mod tests {
         // An unknown register is refused in the profiles' own words.
         let refused = run(&root, json!({"scope": "elsewhere"}));
         assert!(!refused.ok);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// be2j item 14 (DLW build ruling 2026-11-10): an agent's kept name is its subject's title shown cleaned, with its note; one with
+    /// nothing visible left is an unnamed agent and its ref's short form, never a blank title. The record keeps the name as kept.
+    #[test]
+    fn an_agents_kept_name_titles_its_subject_cleaned_with_its_note_and_never_blank() {
+        let root =
+            std::env::temp_dir().join(format!("central-world-subjects-{}", uuid::Uuid::new_v4()));
+        initialize_central(&root).unwrap();
+        let store = crate::agent_profile_store::AgentProfileStore::personal(&root);
+        for (agent, name) in [
+            ("reader", "Read\u{200D}er"),
+            ("blank", "\u{200B}\u{3164}"),
+            ("plain", "Plain"),
+        ] {
+            let profile_ref = format!("agent-profile:{agent}");
+            let mut profile = crate::agent_profile::AgentProfile::propose_from_intent(
+                &profile_ref,
+                "r1",
+                format!("agent:{agent}"),
+                crate::agent_profile::AgentProfileScope::Personal,
+                crate::world::WorldRef::new("world:personal").unwrap(),
+                "Read the selected sources and return what they say.",
+                "agent-profile.express",
+            )
+            .unwrap();
+            profile.name = Some("Kept".into());
+            store.save(&profile, None).unwrap();
+            // Kept as base kept it: the name written to the record, not given through the store.
+            let path = store.source_path(&profile_ref).unwrap();
+            let mut kept: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            kept["name"] = json!(name);
+            fs::write(&path, serde_json::to_vec_pretty(&kept).unwrap()).unwrap();
+        }
+        let listed = run(&root, json!({"scope": "root"}));
+        assert!(listed.ok, "{listed:?}");
+        let data = listed.data.unwrap();
+        let agent = |name: &str| {
+            data["subjects"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["agent_ref"] == format!("agent:{name}"))
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(agent("reader")["title"], "Reader");
+        let notes = agent("reader")["notes"].as_array().unwrap().clone();
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].as_str().unwrap().contains("agent-profile.rename"));
+        assert_eq!(agent("blank")["title"], "unnamed agent mfci");
+        assert_eq!(agent("blank")["notes"].as_array().unwrap().len(), 1);
+        assert_eq!(agent("plain")["title"], "Plain");
+        assert!(agent("plain").get("notes").is_none());
+        let kept: Value = serde_json::from_slice(
+            &fs::read(store.source_path("agent-profile:reader").unwrap()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(kept["name"], "Read\u{200D}er");
         let _ = fs::remove_dir_all(root);
     }
 }

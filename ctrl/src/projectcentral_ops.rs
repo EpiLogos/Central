@@ -1232,11 +1232,22 @@ fn inspect_action(
         Err(result) => return result,
     };
     inspect_projectcentral(&project_root)
-        .map(|value| {
-            ActionResult::success(
-                action,
-                serde_json::to_value(value).expect("inspection serializes"),
-            )
+        .map(|mut inspection| {
+            // The manifest as it is shown, with what the reading says of it (be2j item 16); the record keeps its bytes.
+            let notes = inspection
+                .manifest
+                .as_ref()
+                .map(ProjectCentralManifest::kept_notes)
+                .unwrap_or_default();
+            inspection.manifest = inspection
+                .manifest
+                .as_ref()
+                .map(ProjectCentralManifest::shown);
+            let mut value = serde_json::to_value(inspection).expect("inspection serializes");
+            if !notes.is_empty() {
+                value["notes"] = json!(notes);
+            }
+            ActionResult::success(action, value)
         })
         .unwrap_or_else(|error| io_failure(action, error))
 }

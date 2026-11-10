@@ -334,6 +334,30 @@ impl RelationRecordStore {
                 (Some(current_revision.to_owned()), false)
             }
         };
+        // A world's place given here is refused with the whole set, as `central.world.place` refuses it (be2j item 13, DLW build
+        // ruling 2026-11-10). One kept as it was stays as kept, read under the rule it was kept under (`WorldRecord::validate`):
+        // `central.world.place` and `central.world.chain-order` save the record with its other fields untouched.
+        if matches!(self.kind, RelationRecordKind::World) {
+            let place_of = |record: &serde_json::Value| {
+                record
+                    .get("place")
+                    .filter(|place| !place.is_null())
+                    .map(|place| {
+                        serde_json::from_value::<crate::world_place::WorldPlace>(place.clone())
+                    })
+            };
+            let kept = existing.as_ref().and_then(place_of).and_then(Result::ok);
+            if let Some(given) = place_of(record)
+                .transpose()
+                .map_err(|error| RelationRecordStoreError::InvalidRecord(error.to_string()))?
+            {
+                if kept.as_ref() != Some(&given) {
+                    given.validate().map_err(|why| {
+                        RelationRecordStoreError::InvalidRecord(format!("the world's place: {why}"))
+                    })?;
+                }
+            }
+        }
 
         atomic_write(&path, &bytes)?;
 

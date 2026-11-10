@@ -105,13 +105,24 @@ impl WorldPlace {
         self.checked(false)
     }
 
-    /// This place as it is shown: its words without the characters that draw nothing (be2i.1).
+    /// This place as it is shown: its words without the characters that draw nothing (be2i.1), and a label or reference with
+    /// nothing visible left called an unnamed place and its reference's short form, never "" (be2j item 15, ruling 5).
     pub fn shown(&self) -> Self {
         Self {
-            reference: crate::names::shown(&self.reference),
-            label: crate::names::shown(&self.label),
+            reference: crate::names::shown_or_unnamed(&self.reference, "place", &self.reference),
+            label: crate::names::shown_or_unnamed(&self.label, "place", &self.reference),
             ..self.clone()
         }
+    }
+
+    /// What a reading says, once, of a kept place whose words hold a character that draws nothing (be2i.1): that it is shown
+    /// without them, and how to declare it again.
+    pub fn kept_note(&self) -> Option<String> {
+        crate::names::kept_note(
+            &format!("{}{}", self.reference, self.label),
+            "This world's place",
+            "Declare the place again (central.world.place) to keep it so.",
+        )
     }
 
     fn checked(&self, given: bool) -> Result<(), String> {
@@ -226,7 +237,7 @@ impl Receipt<'_> {
         revision: &str,
     ) -> Value {
         json!({"schema":WORLD_PLACE_SCHEMA,"outcome":outcome,"world_ref":self.world_ref,"project":self.project,"source":self.source,
-            "place":self.place,"previous_place":previous,"previous_revision":previous_revision,"revision":revision,
+            "place":self.place,"previous_place":previous.map(WorldPlace::shown),"previous_revision":previous_revision,"revision":revision,
             "principal_ref":self.principal_ref,"automatic_agent_or_model_invocation":false})
     }
 }
@@ -735,5 +746,31 @@ mod tests {
             );
         }
         assert_eq!(words("Hastings", "label", 80, true), Ok(()));
+    }
+
+    /// be2j item 15 (DLW build ruling 2026-11-10): a kept place's label or reference with nothing visible left is shown as an
+    /// unnamed place and its reference's short form, never ""; one with words left is shown cleaned, and says so once.
+    #[test]
+    fn a_kept_place_with_nothing_visible_left_is_shown_as_an_unnamed_place_never_blank() {
+        let blank = WorldPlace {
+            label: "\u{3164}".into(),
+            ..hastings()
+        };
+        assert_eq!(blank.validate_kept(), Ok(()), "it reads as it was kept");
+        assert_eq!(blank.shown().label, "unnamed place dbwp");
+        assert_eq!(blank.shown().reference, "geonames:2647356");
+        let unreferenced = WorldPlace {
+            reference: "\u{200B}".into(),
+            ..hastings()
+        };
+        assert_eq!(unreferenced.shown().reference, "unnamed place aiq2");
+        assert_eq!(unreferenced.shown().label, "Hastings");
+        let hidden = WorldPlace {
+            label: "Hast\u{200D}ings".into(),
+            ..hastings()
+        };
+        assert_eq!(hidden.shown(), hastings());
+        assert!(hidden.kept_note().unwrap().contains("central.world.place"));
+        assert_eq!(hastings().kept_note(), None);
     }
 }

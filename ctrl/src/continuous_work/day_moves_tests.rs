@@ -518,6 +518,97 @@ fn a_move_runs_summary_is_plain_text_as_a_records_words_are() {
     );
 }
 
+/// Why a run stopped and the refs it gave are kept as plain as a record's
+/// words (be2j ruling 3, DLW build ruling 2026-11-09): the Day shows them as
+/// they are kept, so a `reason` that holds a control or invisible character is
+/// refused, as is a ref in `gave.proposals` or `gave.writes`, or a
+/// `gave.points_at`, that holds one. A refused end leaves its run open.
+#[test]
+fn a_move_runs_reason_and_the_refs_it_gave_are_plain_as_a_records_words_are() {
+    let w = world("Europe/London", 0);
+    ensure(w.path(), at(T));
+    let at_ms = ms("2026-10-20T09:00:05Z");
+    let run_ref = begin(w.path(), "tasks", at_ms, HOST, at(T)).unwrap()["run"]["run_ref"].clone();
+    let end = |state: &str, reason: Option<&str>, gave: Value| {
+        let mut input = json!({"event":"end","run_ref":run_ref,"at_unix_ms":at_ms + 60_000,"state":state,
+            "gave":gave});
+        if let Some(reason) = reason {
+            input["reason"] = json!(reason);
+        }
+        run(w.path(), "day_move_record", input, Some(AGENT), at(T))
+    };
+    let plain = json!({"summary":"Three tasks."});
+    for reason in [
+        "Waiting on the \u{202E}gate.",
+        "Waiting\u{200B} on the gate.",
+        "Waiting on \u{3164} the gate.",
+        "Waiting\u{7} on the gate.",
+        "Waiting.\rOn the gate.",
+    ] {
+        let refused = words_of(end("stalled", Some(reason), plain.clone()));
+        assert!(
+            refused.contains("reason holds no control character")
+                && refused.contains("no invisible one"),
+            "{reason:?}: {refused}"
+        );
+    }
+    for (key, wrong) in [
+        ("proposals", "central:proposal:\u{200B}7"),
+        ("proposals", "central:proposal:7\ncentral:proposal:8"),
+        ("proposals", "central:proposal:\u{E0041}"),
+        ("writes", "central:write:\u{2066}7"),
+        ("writes", "central:write:\u{2028}7"),
+    ] {
+        let refused = words_of(end(
+            "done",
+            None,
+            json!({"summary":"Three tasks.", key: [wrong]}),
+        ));
+        assert!(
+            refused.contains(&format!("gave.{key} is a list of refs, each on one line"))
+                && refused.contains("no invisible one"),
+            "{key} {wrong:?}: {refused}"
+        );
+    }
+    let ended = end(
+        "stopped",
+        Some("Stopped.\nThe gate was shut."),
+        json!({"summary":"Three tasks.","proposals":["central:proposal:7"]}),
+    )
+    .unwrap();
+    assert_eq!(
+        ended["run"]["end"]["reason"],
+        "Stopped.\nThe gate was shut."
+    );
+    assert_eq!(
+        ended["run"]["end"]["gave"]["proposals"],
+        json!(["central:proposal:7"])
+    );
+
+    // The Patterns move's one ref is plain too.
+    let second = ms("2026-10-20T09:10:00Z");
+    let patterns =
+        begin(w.path(), "patterns", second, HOST, at(T)).unwrap()["run"]["run_ref"].clone();
+    for wrong in [
+        "skill/\u{200B}alpha",
+        "skill/alpha\u{E0041}",
+        "skill/\u{3164}",
+    ] {
+        let said = words_of(run(
+            w.path(),
+            "day_move_record",
+            json!({"event":"end","run_ref":patterns,"at_unix_ms":second + 60_000,"state":"done",
+                "gave":{"summary":"Three closes pull against one skill.","points_at":wrong}}),
+            Some(AGENT),
+            at(T),
+        ));
+        assert!(
+            said.contains("names one skill or method by its ref"),
+            "{wrong:?}: {said}"
+        );
+    }
+}
+
 /// The Patterns move names the one skill or method its pattern's items point
 /// at (O-I manual §18.2: "A pattern whose items point at one skill or method
 /// can open a refinement of it (§19.7)"): `gave.points_at`, its ref. No other

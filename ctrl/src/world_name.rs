@@ -60,7 +60,11 @@ pub fn name_world(
     }
     let revision = content_revision_bytes(&held);
     let world_ref = format!("project:{project}");
+    // The kept old name as it is shown: without the characters that draw nothing, or an unnamed world and its ref's short form
+    // (be2j item 16). The manifest keeps its bytes.
     let receipt = |outcome: &str, previous: Option<&str>, after: &str| {
+        let previous =
+            previous.map(|kept| crate::names::shown_or_unnamed(kept, "world", &world_ref));
         json!({"schema":WORLD_NAME_SCHEMA,"outcome":outcome,"project":project,"world_ref":world_ref,"name":name,
             "previous_name":previous,"previous_revision":revision,"revision":after,"principal_ref":principal.principal_ref,
             "automatic_agent_or_model_invocation":false})

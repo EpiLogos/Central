@@ -246,6 +246,24 @@ fn reading(world: &str, kept: &Kept, record: Option<&(CollectionsRecord, String)
                 .and_then(|record| record.collections.get(*id))
                 .cloned()
                 .unwrap_or_default();
+            // A thing's label is shown without the characters that draw nothing, and the reading says so once for its
+            // collection (be2j ruling 3); a label that holds nothing else is an unnamed thing and its ref's short form (be2j items
+            // 14-15, ruling 5), never blank and never the ref. The record keeps it.
+            notes.extend(items.iter().find_map(|item| {
+                crate::names::kept_note(
+                    &item.label,
+                    &format!("A thing's label in the {name} collection"),
+                    &format!("Take it out and put it in again ({COLLECTIONS_REMOVE_ACTION}, then {COLLECTIONS_ADD_ACTION}) to keep it so."),
+                )
+            }));
+            let items: Vec<CollectedItem> = items
+                .into_iter()
+                .map(|mut item| {
+                    item.label =
+                        crate::names::shown_or_unnamed(&item.label, "thing", &item.reference);
+                    item
+                })
+                .collect();
             // A kept name is shown without the characters that draw nothing, and the reading says so once (be2i.1); one that
             // holds nothing else is no name, so Live's.
             let kept_name = record.and_then(|record| record.names.get(*id));
@@ -732,6 +750,53 @@ mod tests {
         assert!(refused.contains("no invisible one"), "{refused}");
         let plain = read_collections(&root, &json!({"world": "control:root"})).unwrap();
         assert_eq!(plain["collections"][5]["name"], "Plates");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// be2j ruling 3 (DLW build ruling 2026-11-09): a thing's label kept before be2i that holds a character that draws nothing is shown
+    /// without it, once said for its collection; one that holds nothing else is an unnamed thing and its ref's short form (be2j
+    /// items 14-15), never blank. The record keeps both.
+    #[test]
+    fn a_things_label_is_shown_without_what_draws_nothing_and_kept_as_it_was() {
+        let root = ground("kept-label");
+        for (reference, label) in [
+            ("central:thing:1", "The plate"),
+            ("central:thing:2", "Blank"),
+        ] {
+            let input = json!({"world": "control:root", "collection": "blue", "item": {"ref": reference, "label": label}});
+            add_to_collection(&root, &input, 3).unwrap();
+        }
+        let path = root.join("Control").join(COLLECTIONS_FILE);
+        let kept = std::fs::read_to_string(&path)
+            .unwrap()
+            .replace("\"The plate\"", "\"The \\u202eplate\\u202c\\u200b\"")
+            .replace("\"Blank\"", "\"\\u200b\\u3164\"");
+        std::fs::write(&path, &kept).unwrap();
+        let read = read_collections(&root, &json!({"world": "control:root"})).unwrap();
+        let items = read["collections"][4]["items"].as_array().unwrap();
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item["label"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["The plate", "unnamed thing o5j4"]
+        );
+        let notes = read["notes"].as_array().unwrap();
+        assert_eq!(notes.len(), 1, "said once for the collection: {notes:?}");
+        assert!(
+            notes[0].as_str().unwrap().contains("Blue")
+                && notes[0]
+                    .as_str()
+                    .unwrap()
+                    .contains(COLLECTIONS_REMOVE_ACTION),
+            "{notes:?}"
+        );
+        let record: CollectionsRecord =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            record.collections["blue"][0].label, "The \u{202E}plate\u{202C}\u{200B}",
+            "the record keeps it as it was kept"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

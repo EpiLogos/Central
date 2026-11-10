@@ -135,6 +135,23 @@ impl ProjectCentralManifest {
         }
     }
 
+    /// This manifest as it is shown (be2j item 16): its name and place without the characters that draw nothing, as the world map
+    /// shows them (a name with nothing else left is no name, and the world is called by its folder). The record keeps its bytes.
+    pub fn shown(&self) -> Self {
+        Self {
+            name: self
+                .name
+                .as_deref()
+                .map(crate::names::shown)
+                .filter(|name| !name.is_empty()),
+            place: self
+                .place
+                .as_ref()
+                .map(crate::world_place::WorldPlace::shown),
+            ..self.clone()
+        }
+    }
+
     /// What a reading says, once each, of the name and place this manifest keeps when they hold characters Central now refuses
     /// (be2i.1): they are shown without them, and how to give them again.
     pub fn kept_notes(&self) -> Vec<String> {
@@ -145,13 +162,10 @@ impl ProjectCentralManifest {
                 "Rename the world (central.world.name) to keep it so.",
             )
         });
-        let place = self.place.as_ref().and_then(|place| {
-            crate::names::kept_note(
-                &format!("{}{}", place.reference, place.label),
-                "This world's place",
-                "Declare the place again (central.world.place) to keep it so.",
-            )
-        });
+        let place = self
+            .place
+            .as_ref()
+            .and_then(crate::world_place::WorldPlace::kept_note);
         name.into_iter().chain(place).collect()
     }
 }

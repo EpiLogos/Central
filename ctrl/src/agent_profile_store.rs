@@ -219,25 +219,15 @@ impl AgentProfileStore {
                 (Some(current.revision.clone()), false)
             }
         };
-        // What a person gives now is refused with the whole set (be2i.1): a name or an expressive character ref that is new
-        // here, or changed, holds no invisible character. One kept before be2i and kept as it was stays as it stands.
-        for (field, given, kept) in [
-            (
-                "Agent Profile name",
-                profile.name.as_deref(),
-                existing
-                    .as_ref()
-                    .and_then(|current| current.name.as_deref()),
-            ),
-            (
-                "Agent Profile expressive character ref",
-                profile.expressive_character_ref.as_deref(),
-                existing
-                    .as_ref()
-                    .and_then(|current| current.expressive_character_ref.as_deref()),
-            ),
-        ] {
-            if given != kept && given.is_some_and(|given| given.chars().any(crate::names::unplain))
+        // What a person gives now is refused with the whole set (be2i.1; be2j for the refs): the name, the expressive character
+        // ref and every other ref, where it is new here or changed, holds no invisible character. One kept before be2i and kept as
+        // it was stays as it stands.
+        let kept = existing.as_ref().map(given_words);
+        for (at, (field, given)) in given_words(profile).into_iter().enumerate() {
+            let before = kept.as_ref().map_or(&[][..], |kept| kept[at].1.as_slice());
+            if given
+                .iter()
+                .any(|value| !before.contains(value) && value.chars().any(crate::names::unplain))
             {
                 return Err(AgentProfileStoreError::InvalidProfile(format!(
                     "{field} must hold no control character and no invisible one"
@@ -317,6 +307,45 @@ impl AgentProfileStore {
             .map_err(|e| AgentProfileStoreError::InvalidProfile(e.to_string()))?;
         Ok(())
     }
+}
+
+/// The words a profile gives, field by field in one order: its name, its expressive character ref and each of its refs, as
+/// `AgentProfile::validate_shape` names them. `AgentProfileStore::save` refuses the set (`names::unplain`) in what is new.
+fn given_words(profile: &AgentProfile) -> [(&'static str, Vec<&str>); 14] {
+    fn one(value: &Option<String>) -> Vec<&str> {
+        value.as_deref().into_iter().collect()
+    }
+    fn many(values: &[String]) -> Vec<&str> {
+        values.iter().map(String::as_str).collect()
+    }
+    [
+        ("Agent Profile name", one(&profile.name)),
+        (
+            "Agent Profile expressive character ref",
+            one(&profile.expressive_character_ref),
+        ),
+        ("Agent Profile ref", vec![profile.profile_ref.as_str()]),
+        ("Agent ref", vec![profile.agent_ref.as_str()]),
+        ("source Agent Profile ref", one(&profile.source_profile_ref)),
+        ("governance refs", many(&profile.governance_refs)),
+        ("Skill refs", many(&profile.skill_refs)),
+        ("SkillSet refs", many(&profile.skill_set_refs)),
+        ("Method refs", many(&profile.method_refs)),
+        ("Routine refs", many(&profile.routine_refs)),
+        (
+            "Knowledge source refs",
+            many(&profile.knowledge_source_refs),
+        ),
+        (
+            "Central Computer access intent refs",
+            many(&profile.computer_access_intent_refs),
+        ),
+        (
+            "placement intent refs",
+            many(&profile.placement_intent_refs),
+        ),
+        ("provenance refs", many(&profile.provenance_refs)),
+    ]
 }
 
 fn read_profile_file(path: &Path) -> Result<AgentProfile, AgentProfileStoreError> {
@@ -665,6 +694,53 @@ mod tests {
         refused(&fresh, None, "Agent Profile name");
         fresh.name = Some("Keeper".into());
         store.save(&fresh, None).unwrap();
+
+        // A name changed only in what draws nothing is a changed name, and refused (be2j item 17).
+        let mut respelt = next.clone();
+        respelt.revision = "p3".into();
+        respelt.name = Some("Guar\u{200B}dian".into());
+        refused(&respelt, Some("p2"), "Agent Profile name");
+
+        // be2j items 11 and 17 (DLW build ruling 2026-11-10): every other ref is checked with the set where it is given, too. A ref
+        // or an expressive character ref kept before be2i, and kept as it was, stays.
+        let mut kept: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        kept["skill_refs"] = serde_json::json!(["skill:wayf\u{200B}inder"]);
+        kept["expressive_character_ref"] = serde_json::json!(
+            "central:Control/agents/expressive-material/character/guar\u{200D}dian.expression.json"
+        );
+        std::fs::write(&path, serde_json::to_vec_pretty(&kept).unwrap()).unwrap();
+        let mut carried = store.read("agent-profile:guardian").unwrap().profile;
+        carried.revision = "p4".into();
+        carried.purpose = Some("Keeps the ground.".into());
+        store.save(&carried, Some("p2")).unwrap();
+        type Change = (&'static str, fn(&mut AgentProfile));
+        let changes: [Change; 5] = [
+            ("Skill refs", |p| {
+                p.skill_refs.push("skill:re\u{202E}view".into())
+            }),
+            ("Method refs", |p| {
+                p.method_refs.push("method:\u{2066}close".into())
+            }),
+            ("provenance refs", |p| {
+                p.provenance_refs.push("central:\u{3164}".into())
+            }),
+            ("source Agent Profile ref", |p| {
+                p.source_profile_ref = Some("agent-profile:\u{200D}source".into())
+            }),
+            ("Knowledge source refs", |p| {
+                p.knowledge_source_refs.push("wiki:\u{E0041}".into())
+            }),
+        ];
+        for (field, change) in changes {
+            let mut given = carried.clone();
+            given.revision = "p5".into();
+            change(&mut given);
+            refused(&given, Some("p4"), field);
+        }
+        let mut agent = personal_profile("a1");
+        agent.profile_ref = "agent-profile:\u{200B}ward".into();
+        refused(&agent, None, "Agent Profile ref");
     }
 
     #[test]

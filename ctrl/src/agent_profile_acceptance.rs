@@ -190,11 +190,21 @@ fn review(store: &AgentProfileStore, scope: &Scope, profile_ref: &str) -> io::Re
             ));
         }
     }
-    let mut payload = json!({"schema":"central.agent-profile-review/v1", "profile":reading.profile,
+    // The profile as it reaches the reviewer: its kept name shown without the characters that draw nothing, with its note (be2j
+    // item 14). The content digest and an acceptance stay bound to the kept bytes.
+    let (name, note) = crate::agent_profile_actions::shown_agent_name(&reading.profile);
+    let mut profile = serde_json::to_value(&reading.profile)?;
+    if note.is_some() {
+        profile["name"] = json!(name);
+    }
+    let mut payload = json!({"schema":"central.agent-profile-review/v1", "profile":profile,
         "source_path":reading.source_path, "content_digest":content_digest,
         "accepted":acceptance.is_some(), "acceptance":acceptance,
         "scope_ref":scope.world_ref, "execution_authority_granted":false,
         "standing_note":"Acceptance recognises this exact reusable Agent definition; source editing invalidates it. Original generated provenance is retained. Agency, model selection, task role and AgentSession remain separate."});
+    if let Some(note) = note {
+        payload["notes"] = json!([note]);
+    }
     // A bound Agent self is resolved for the reviewer: exact pinned bytes when
     // they verify, and the named reason when they do not. An unresolved pin
     // keeps the review readable but can never be accepted below.

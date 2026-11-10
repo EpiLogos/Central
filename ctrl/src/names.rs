@@ -73,6 +73,40 @@ pub fn shown(text: &str) -> String {
         .to_owned()
 }
 
+/// A short form of a ref, for a name that shows nothing else (be2j ruling 5): four base-36 digits of its FNV-1a hash (32 bits, over
+/// its UTF-16 code units), the same digits O-I's field gives the same ref (`refMark`,
+/// `packages/live-shell/ui/src/projections/atlas/system/fieldModel.ts`), so one thing is called alike on both sides. It is a mark,
+/// not a key: two refs may share one.
+pub fn ref_mark(ref_: &str) -> String {
+    let mut hash: u32 = 0x811c_9dc5;
+    for unit in ref_.encode_utf16() {
+        hash = (hash ^ u32::from(unit)).wrapping_mul(0x0100_0193);
+    }
+    let mut digits = Vec::new();
+    loop {
+        digits.push(char::from_digit(hash % 36, 36).expect("a base-36 digit"));
+        hash /= 36;
+        if hash == 0 {
+            break;
+        }
+    }
+    digits.resize(digits.len().max(4), '0');
+    digits[..4].iter().rev().collect()
+}
+
+/// What a thing is called when its name shows nothing (be2j ruling 5): "unnamed", what it is, and its ref's short form
+/// (`ref_mark`). Never blank, never the ref itself.
+pub fn unnamed(what: &str, ref_: &str) -> String {
+    format!("unnamed {what} {}", ref_mark(ref_))
+}
+
+/// Kept text as it is shown (`shown`), or what the thing is called when nothing else is left (`unnamed`).
+pub fn shown_or_unnamed(text: &str, what: &str, ref_: &str) -> String {
+    Some(shown(text))
+        .filter(|shown| !shown.is_empty())
+        .unwrap_or_else(|| unnamed(what, ref_))
+}
+
 /// What a reading says, once, of kept text that holds a character the set now
 /// refuses: what it is, that it is shown without them, and how to give it
 /// again. None when it holds none.
@@ -185,6 +219,105 @@ mod tests {
             kept_note("Rosa\u{200D}rium", "This world's name", "Rename it.").as_deref(),
             Some("This world's name holds characters Central now refuses, which draw nothing; it is shown without them. Rename it.")
         );
+    }
+
+    /// be2j ruling 5 and items 14-16: a name that shows nothing is called "unnamed", what it is, and its ref's short form, the same
+    /// digits O-I's field gives the same ref (its `refMark`, run on these refs).
+    #[test]
+    fn a_name_that_shows_nothing_is_called_unnamed_with_its_refs_short_form_as_o_i_calls_it() {
+        for (ref_, mark) in [
+            ("agent:guardian", "8p9z"),
+            ("world:mw69sc3s:.200b..3164.", "3sl2"),
+            ("project:garden", "iwz9"),
+            ("geo:\u{3164}", "ad5w"),
+            ("\u{1F339}", "rjvq"),
+            ("", "ntfp"),
+        ] {
+            assert_eq!(ref_mark(ref_), mark, "{ref_:?}");
+        }
+        assert_eq!(unnamed("agent", "agent:guardian"), "unnamed agent 8p9z");
+        assert_eq!(
+            shown_or_unnamed("\u{200B}\u{3164}", "agent", "agent:guardian"),
+            "unnamed agent 8p9z"
+        );
+        assert_eq!(
+            shown_or_unnamed(" Guar\u{200D}dian", "agent", "agent:guardian"),
+            "Guardian"
+        );
+    }
+
+    /// be2j ruling 7 (DLW build ruling 2026-11-09): the raw-bidi guard in Central's verify job, run as CI runs it, refuses a raw
+    /// override or isolate in tracked text, passes a tree that writes one as its escape, and passes nothing outside a checkout.
+    #[test]
+    fn the_raw_bidi_guard_refuses_a_raw_override_passes_a_clean_tree_and_nothing_outside_a_checkout(
+    ) {
+        let workflow = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../.github/workflows/verify.yml"
+        ))
+        .unwrap();
+        let step = workflow
+            .split("- name: Guard tracked source — no raw bidi override or isolate\n")
+            .nth(1)
+            .expect("verify.yml carries the guard step");
+        let block: String = step
+            .lines()
+            .skip_while(|line| line.trim() != "run: |")
+            .skip(1)
+            .take_while(|line| line.starts_with("          "))
+            .map(|line| format!("{}\n", &line[10..]))
+            .collect();
+        assert!(block.contains("git grep -lIF"), "{block}");
+        let temp = tempfile::tempdir().unwrap();
+        let top = temp.path().canonicalize().unwrap();
+        let shell = |dir: &std::path::Path, program: &str, args: &[&str]| {
+            std::process::Command::new(program)
+                .args(args)
+                .current_dir(dir)
+                .env_clear()
+                .envs(std::env::vars().filter(|(key, _)| !key.starts_with("GIT_")))
+                .env("HOME", &top)
+                .env("GIT_CEILING_DIRECTORIES", &top)
+                .output()
+                .unwrap()
+        };
+        let tree = |name: &str, text: &str, checkout: bool| {
+            let dir = top.join(name);
+            std::fs::create_dir(&dir).unwrap();
+            std::fs::write(dir.join("notes.md"), text).unwrap();
+            if checkout {
+                assert!(shell(&dir, "git", &["init", "-q"]).status.success());
+                assert!(shell(&dir, "git", &["add", "notes.md"]).status.success());
+            }
+            dir
+        };
+        let raw = tree("raw", "Hast\u{202E}ings\n", true);
+        let isolate = tree("isolate", "Hast\u{2068}ings\n", true);
+        let clean = tree("clean", "Hast\\u{202E}ings\n", true);
+        let none = tree("none", "Hast\u{202E}ings\n", false);
+        let guard = |dir: &std::path::Path| {
+            let ran = shell(
+                dir,
+                "bash",
+                &["--noprofile", "--norc", "-eo", "pipefail", "-c", &block],
+            );
+            (
+                ran.status.code(),
+                String::from_utf8_lossy(&ran.stdout).into_owned(),
+            )
+        };
+        for dir in [&raw, &isolate] {
+            let (code, said) = guard(dir);
+            assert_eq!(code, Some(1), "{said}");
+            assert!(
+                said.contains("a raw bidi override or isolate in tracked source"),
+                "{said}"
+            );
+        }
+        assert_eq!(guard(&clean).0, Some(0));
+        let (code, said) = guard(&none);
+        assert_eq!(code, Some(1), "{said}");
+        assert!(said.contains("could not read the tracked source"), "{said}");
     }
 
     #[test]
