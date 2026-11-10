@@ -61,6 +61,8 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 chrono-tz = "0.10"
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
+# The general category of a character, so the invisible set Central and O-I hold is derived, not hand-kept.
+unicode-general-category = "1.1"
 rusqlite = { version = "0.37", features = ["bundled", "backup"] }
 # git-sync backs the GitState/SourceHistory read models (central.git.census);
 # composed by the shipped CLI via the cli-git-sync feature, optional for

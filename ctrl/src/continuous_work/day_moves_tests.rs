@@ -3176,6 +3176,51 @@ fn a_list_whose_items_repeat_an_id_is_refused_naming_the_id() {
     }
 }
 
+/// The sha256 of `invisible-code-points.txt`, the list O-I keeps beside its own
+/// tests too (`packages/live-shell/ui/tests/fixtures/`), byte for byte: a list
+/// that moves on one side without the other's sha256 changing fails here or
+/// there (DLW build ruling 2026-11-09).
+const INVISIBLE_LIST_SHA256: &str =
+    "99bad420cf102bf7c469b4deaa06f93832348a73b3fd5922c9fac1964b9fb3d8";
+
+#[test]
+fn the_invisible_set_is_every_format_character_the_separators_and_the_controls_as_the_shared_list_names_them(
+) {
+    let list = include_str!("invisible-code-points.txt");
+    assert_eq!(
+        format!("{:x}", Sha256::digest(list.as_bytes())),
+        INVISIBLE_LIST_SHA256,
+        "the list is the one O-I holds"
+    );
+    let listed: Vec<u32> = list
+        .lines()
+        .map(|line| u32::from_str_radix(line, 16).unwrap())
+        .collect();
+    let derived: Vec<u32> = (0..=0x10FFFF)
+        .filter_map(char::from_u32)
+        .filter(|&c| c.is_control() || super::day_moves::invisible(c))
+        .map(u32::from)
+        .collect();
+    assert_eq!(
+        derived, listed,
+        "the controls, the line and paragraph separators and every format character, derived from the general category"
+    );
+    for c in [
+        '\u{FE0E}',
+        '\u{FE0F}',
+        '\u{E0100}',
+        '\u{E01EF}',
+        '\u{180B}',
+        '\u{180D}',
+    ] {
+        assert!(
+            !super::day_moves::invisible(c),
+            "a variation selector chooses how a character is drawn, and stays: {:X}",
+            u32::from(c)
+        );
+    }
+}
+
 #[test]
 fn invisible_characters_and_a_lone_carriage_return_are_refused_once_the_kept_records_are_looked_up()
 {
@@ -3196,9 +3241,21 @@ fn invisible_characters_and_a_lone_carriage_return_are_refused_once_the_kept_rec
         '\u{200E}',
         '\u{200F}',
         '\u{061C}',
-        '\u{E0000}',
+        '\u{E0001}',
         '\u{E0041}',
         '\u{E007F}',
+        // every format character, not only those named by hand (DLW build ruling 2026-11-09)
+        '\u{00AD}',
+        '\u{0600}',
+        '\u{180E}',
+        '\u{2061}',
+        '\u{2064}',
+        '\u{206A}',
+        '\u{206F}',
+        '\u{FFF9}',
+        '\u{FFFB}',
+        '\u{110BD}',
+        '\u{1D173}',
     ];
     let mut list = Vec::new();
     for (index, c) in invisible.iter().enumerate() {
@@ -3230,6 +3287,7 @@ fn invisible_characters_and_a_lone_carriage_return_are_refused_once_the_kept_rec
     let answers = records(w.path(), list, at(T)).unwrap();
     let results = answers["results"].as_array().unwrap();
     let (refused, made) = results.split_at(results.len() - 1);
+    assert_eq!(refused.len(), 2 * invisible.len() + 2);
     for result in refused {
         let words = result["refused"].as_str().unwrap_or_default();
         assert!(
@@ -3506,7 +3564,8 @@ fn a_day_closed_before_the_first_press_is_refused_never_touched_and_no_salt_is_w
 }
 
 #[test]
-fn a_close_that_lands_after_the_press_looks_its_day_up_is_seen_on_the_reading_it_shows_from() {
+fn a_close_pressed_while_the_press_reads_its_day_waits_under_the_source_lock_and_the_next_press_sees_it(
+) {
     let w = world("Europe/London", 0);
     ensure(w.path(), at(T));
     make_document(w.path(), TODAY, "day:c1-today", PROPOSAL, at(T));
@@ -3520,44 +3579,64 @@ fn a_close_that_lands_after_the_press_looks_its_day_up_is_seen_on_the_reading_it
     );
     let day = read(w.path(), "day_read", json!({"day_ref":TODAY}), at(T));
     let offered = day["revision"]["revision"].clone();
-    // Another hand closes the Day while the press is between its lookup and
-    // the Day's reading. The close moves the relation only, so the revision
-    // the entry was offered from still stands.
+    // Another hand closes the Day through Central's own dispatch while the
+    // press is between its lookup and the Day's reading. Every operation runs
+    // under the source lock, the press and the close alike (DLW build ruling
+    // 2026-11-09), so the close waits for the press: it cannot land between.
     let root = w.path().to_path_buf();
-    let (revision, relations) = (
-        offered.as_str().unwrap().to_owned(),
-        day["relations_revision"].as_str().unwrap().to_owned(),
-    );
+    let close = json!({"day_ref":TODAY,"expected_revision":offered,
+        "expected_relations_revision":day["relations_revision"],"lifecycle":"closed"});
+    let closer = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let started = closer.clone();
     super::day_moves::BETWEEN_PART_READS.with(|slot| {
         *slot.borrow_mut() = Some(Box::new(move || {
-            let scope = Scope::resolve(&root, None).unwrap();
-            temporal::change_lifecycle(
-                &scope,
-                TODAY,
-                &revision,
-                &relations,
-                "closed",
-                "test:closer",
-                at(T),
-            )
-            .unwrap();
+            assert!(
+                crate::source_safety::lock_within(
+                    &root,
+                    "source-mutation.lock",
+                    std::time::Duration::ZERO
+                )
+                .unwrap()
+                .is_none(),
+                "the press holds the source lock between its lookup and its reading"
+            );
+            let handle = std::thread::spawn(move || {
+                execute_with_token_at(&root, "day_lifecycle", &close, Some(HUMAN), at(T))
+            });
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            assert!(!handle.is_finished(), "the close waits for the press");
+            *started.borrow_mut() = Some(handle);
         }));
     });
-    let refused = part(
+    let shown = part(
         w.path(),
         json!({"day_ref":TODAY,"field_id":"p0_quick_thoughts","expected_revision":offered}),
         at(T),
-    );
-    let words = words_of(refused);
-    assert!(
-        words.contains("is closed"),
-        "the press reads lifecycle, date and revision from the one reading its words come from (DLW build ruling 2026-11-09): {words}"
-    );
+    )
+    .expect("the press reads the Day it looked up, still open");
+    assert_eq!(shown["part"]["label"], "Bring this.");
+    let handle = closer
+        .borrow_mut()
+        .take()
+        .expect("the close was pressed during the press");
+    handle
+        .join()
+        .unwrap()
+        .expect("the close lands once the press is done");
     let after = read(w.path(), "day_read", json!({"day_ref":TODAY}), at(T));
     assert_eq!(after["temporal"]["lifecycle"], "closed");
     assert_eq!(
         after["revision"]["revision"], offered,
         "a close moves no revision, so expected_revision alone never sees it"
+    );
+    let words = words_of(part(
+        w.path(),
+        json!({"day_ref":TODAY,"field_id":"p0_quick_thoughts","expected_revision":offered}),
+        at(T),
+    ));
+    assert!(
+        words.contains("is closed"),
+        "the next press reads the lifecycle from the reading its words come from, not from the revision: {words}"
     );
 }
 
@@ -3730,7 +3809,7 @@ fn a_label_reads_as_it_is_and_a_field_that_holds_no_text_offers_none() {
         w.path(),
         TODAY,
         "p0_quick_thoughts",
-        json!("Read\u{7}the\u{200B} plate\u{2028}now\u{202E}, \u{2066}he\u{200E}r\u{200F}e\u{061C}\u{2069}.\u{FEFF}\u{E0001}\u{E0067}\u{E007F}"),
+        json!("Read\u{7}the\u{200B} pla\u{AD}te\u{2028}now\u{202E}, \u{2066}he\u{200E}r\u{200F}e\u{061C}\u{2069}.\u{FEFF}\u{E0001}\u{E0067}\u{E007F}\u{2061}\u{180E}\u{FFF9}"),
         "set:p0",
         at(T),
     );
@@ -3738,7 +3817,7 @@ fn a_label_reads_as_it_is_and_a_field_that_holds_no_text_offers_none() {
         w.path(),
         TODAY,
         "p1_must",
-        json!([{"text":"Call\u{200D} the\u{1B} harbour"}, {"text":"An item as an object"}]),
+        json!([{"text":"Call\u{200D} the\u{1B} harbour \u{2764}\u{FE0F}"}, {"text":"An item as an object"}]),
         "set:p1",
         at(T),
     );
@@ -3754,11 +3833,12 @@ fn a_label_reads_as_it_is_and_a_field_that_holds_no_text_offers_none() {
     assert_eq!(
         label(json!({"field_id":"p0_quick_thoughts"})),
         "Read the plate now, here.",
-        "a control character or a separator stands as a space; a bidi control or a zero-width character is left out"
+        "a control character or a separator stands as a space; a format character is left out"
     );
     assert_eq!(
         label(json!({"field_id":"p1_must","index":0})),
-        "Call the harbour"
+        "Call the harbour \u{2764}\u{FE0F}",
+        "a variation selector is no format character: the emoji keeps its presentation"
     );
     assert_eq!(
         label(json!({"field_id":"p1_must","index":1})),
