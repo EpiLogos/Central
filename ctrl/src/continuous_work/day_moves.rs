@@ -26,7 +26,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     io,
 };
-use unicode_general_category::{get_general_category, GeneralCategory};
 
 pub(crate) const MOVES: [&str; 5] = ["tasks", "patterns", "context", "synthesis", "close"];
 /// What sends entries to the Day (manual 18.2 Sources): each mode, and the shared
@@ -1164,7 +1163,13 @@ pub(crate) fn move_record(
                             ))
                         }
                     }
-                    text(gave, "summary")?;
+                    // An agent's words, as the Day's moves give them back: plain
+                    // text, as a record's words are (be2i ruling 7).
+                    if !plain_characters(text(gave, "summary")?, true) {
+                        return Err(invalid(
+                            "gave.summary holds no control character but line breaks and tabs (a \\r only before a \\n), and no invisible one (a line or paragraph separator, a format character or a blank filler)",
+                        ));
+                    }
                     let proposals = bounded_text_list(gave, "proposals")?;
                     let writes = bounded_text_list(gave, "writes")?;
                     match run["agent_writes"].as_str().unwrap_or("propose") {
@@ -1722,20 +1727,11 @@ fn bounded_words<'a>(value: &'a Value, what: &str, max: usize) -> io::Result<&'a
         })
 }
 
-/// The characters that make text read other than it is (DLW build ruling
-/// 2026-11-09): the line and paragraph separators U+2028/U+2029 and every
-/// format character (general category Cf): the bidi controls and marks, the
-/// zero-width characters, the soft hyphen, the invisible operators, the
-/// interlinear annotation marks, the Mongolian vowel separator and the tag
-/// characters among them. The set is derived from the category, never kept by
-/// hand; O-I's pre-checks, labels and outbound check derive the same set, and
-/// both sides pin it to one list (`invisible-code-points.txt`, with the
-/// controls). A variation selector is no format character (it is a mark), so
-/// an emoji keeps its presentation; U+200D (the zero-width joiner) is one on
-/// purpose: a label drops it, though that splits an emoji sequence it joined.
-pub(super) fn invisible(c: char) -> bool {
-    matches!(c, '\u{2028}' | '\u{2029}') || get_general_category(c) == GeneralCategory::Format
-}
+/// The characters that make text read other than it is, the one set every
+/// check in ctrl reads (`crate::names::invisible`; DLW build ruling
+/// 2026-11-09, be2i). U+200D (the zero-width joiner) is in it on purpose: a
+/// label drops it, though that splits an emoji sequence it joined.
+pub(super) use crate::names::invisible;
 
 /// Text that reads as it is: no control or invisible character, save, where it
 /// may run to `lines` (a record's words; a name stands on one line), a line
@@ -2291,8 +2287,9 @@ fn plain_words(html: &str) -> String {
 /// nothing is unescaped ("5 < 6", "R&D"); only its whitespace is collapsed.
 /// Words read as they are, in the field too (DLW build ruling 2026-11-09): a
 /// control character, or a line or paragraph separator, stands as a space, and
-/// every format character (a bidi control or mark, a zero-width character, a
-/// soft hyphen, a tag character) is left out.
+/// every other invisible character (`invisible`: a bidi control or mark, a
+/// zero-width character, a soft hyphen, a tag character, a blank filler) is
+/// left out.
 fn plain_text_words(text: &str) -> String {
     let readable: String = text
         .chars()

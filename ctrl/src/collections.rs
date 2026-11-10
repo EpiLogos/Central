@@ -208,11 +208,7 @@ fn read_kept(kept: &Kept, world: &str) -> io::Result<Option<(CollectionsRecord, 
                     ),
                 ));
             }
-            if let Some((id, _)) = record
-                .names
-                .iter()
-                .find(|(_, name)| name_of(name).ok().flatten().as_deref() != Some(name.as_str()))
-            {
+            if let Some((id, _)) = record.names.iter().find(|(_, name)| !kept_name(name)) {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!(
@@ -241,6 +237,7 @@ fn collection_of(id: &str) -> Option<(&'static str, &'static str, &'static str)>
 
 /// The reading: Live's seven collections in order, each with its name, what it holds, and whether you chose to show it (null: unchosen).
 fn reading(world: &str, kept: &Kept, record: Option<&(CollectionsRecord, String)>) -> Value {
+    let mut notes = Vec::new();
     let collections: Vec<Value> = PALETTE
         .iter()
         .map(|(id, name, colour)| {
@@ -249,16 +246,31 @@ fn reading(world: &str, kept: &Kept, record: Option<&(CollectionsRecord, String)
                 .and_then(|record| record.collections.get(*id))
                 .cloned()
                 .unwrap_or_default();
-            let name = record
-                .and_then(|record| record.names.get(*id))
-                .map_or(*name, String::as_str);
+            // A kept name is shown without the characters that draw nothing, and the reading says so once (be2i.1); one that
+            // holds nothing else is no name, so Live's.
+            let kept_name = record.and_then(|record| record.names.get(*id));
+            notes.extend(kept_name.and_then(|kept| {
+                crate::names::kept_note(
+                    kept,
+                    &format!("The name of the {name} collection"),
+                    &format!("Rename it ({COLLECTIONS_RENAME_ACTION}) to keep it so."),
+                )
+            }));
+            let name = kept_name
+                .map(|kept| crate::names::shown(kept))
+                .filter(|kept| !kept.is_empty())
+                .unwrap_or_else(|| (*name).to_owned());
             let shown = record.and_then(|record| record.shown.get(*id)).copied();
             json!({"id": id, "name": name, "colour": colour, "items": items, "shown": shown})
         })
         .collect();
-    json!({"schema": COLLECTIONS_SCHEMA, "world": world, "kept": record.is_some(),
+    let mut reading = json!({"schema": COLLECTIONS_SCHEMA, "world": world, "kept": record.is_some(),
         "revision": record.map(|(_, revision)| revision.clone()), "source_path": kept.central_path,
-        "collections": collections})
+        "collections": collections});
+    if !notes.is_empty() {
+        reading["notes"] = json!(notes);
+    }
+    reading
 }
 
 fn collection_input(input: &Value, action: &str) -> io::Result<&'static str> {
@@ -308,10 +320,10 @@ fn item_of(input: &Value, now: u64) -> io::Result<CollectedItem> {
         .unwrap_or_default();
     if label.is_empty()
         || label.chars().count() > LABEL_MAX_CHARS
-        || label.chars().any(char::is_control)
+        || label.chars().any(crate::names::unplain)
     {
         return Err(invalid(format!(
-            "A thing's words are 1 to {LABEL_MAX_CHARS} characters of one line"
+            "A thing's words are 1 to {LABEL_MAX_CHARS} characters of one line, with no control character and no invisible one"
         )));
     }
     let kind = match item.get("kind") {
@@ -339,12 +351,22 @@ fn item_of(input: &Value, now: u64) -> io::Result<CollectedItem> {
     })
 }
 
+/// Whether `name` is a collection's name as the record keeps it, read back: trimmed, one line of 1 to NAME_MAX_CHARS characters,
+/// under the rule it was kept under (be2i.1). One kept before be2i that holds an invisible character reads as it stands; the
+/// reading shows it without them and says so once.
+fn kept_name(name: &str) -> bool {
+    name == name.trim()
+        && !name.is_empty()
+        && name.chars().count() <= NAME_MAX_CHARS
+        && !name.chars().any(crate::names::unkept)
+}
+
 /// A collection's name as you give it: trimmed, at most one line of NAME_MAX_CHARS characters. None: no name, so Live's.
 fn name_of(raw: &str) -> io::Result<Option<String>> {
     let name = raw.trim();
-    if name.chars().count() > NAME_MAX_CHARS || name.chars().any(char::is_control) {
+    if name.chars().count() > NAME_MAX_CHARS || name.chars().any(crate::names::unplain) {
         return Err(invalid(format!(
-            "A collection's name is one line of at most {NAME_MAX_CHARS} characters"
+            "A collection's name is one line of at most {NAME_MAX_CHARS} characters, with no control character and no invisible one"
         )));
     }
     Ok((!name.is_empty()).then(|| name.to_owned()))
@@ -667,6 +689,52 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// be2i.1: a collection's name kept before be2i that holds a character that draws nothing still reads. The record reads, a
+    /// thing is still added to it, and the reading shows the name without the character and says so once; the record keeps it as
+    /// it was kept. The same name given now is refused.
+    #[test]
+    fn a_collections_name_kept_before_be2i_still_reads_shown_without_its_invisible_character() {
+        let root = ground("kept-name");
+        let purple = json!({"world": "control:root", "collection": "purple", "name": "Plates"});
+        rename_collection(&root, &purple).unwrap();
+        let path = root.join("Control").join(COLLECTIONS_FILE);
+        let kept = std::fs::read_to_string(&path)
+            .unwrap()
+            .replace("\"Plates\"", "\"Pla\\u200dtes\"");
+        std::fs::write(&path, &kept).unwrap();
+        let read = read_collections(&root, &json!({"world": "control:root"})).unwrap();
+        assert_eq!(read["collections"][5]["name"], "Plates");
+        let notes = read["notes"].as_array().unwrap();
+        assert_eq!(notes.len(), 1);
+        assert!(
+            notes[0].as_str().unwrap().contains("Purple")
+                && notes[0]
+                    .as_str()
+                    .unwrap()
+                    .contains(COLLECTIONS_RENAME_ACTION),
+            "{notes:?}"
+        );
+        let input = json!({"world": "control:root", "collection": "favourites",
+            "item": {"ref": "workcell:mac", "label": "This Mac"}});
+        assert_eq!(
+            add_to_collection(&root, &input, 3).unwrap()["outcome"],
+            "added"
+        );
+        let record: CollectionsRecord =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(record.names["purple"], "Pla\u{200D}tes");
+        let refused = rename_collection(
+            &root,
+            &json!({"world": "control:root", "collection": "purple", "name": "Pla\u{200D}tes"}),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(refused.contains("no invisible one"), "{refused}");
+        let plain = read_collections(&root, &json!({"world": "control:root"})).unwrap();
+        assert_eq!(plain["collections"][5]["name"], "Plates");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn a_record_that_is_not_the_world_s_collections_is_refused_not_overwritten() {
         let root = ground("foreign");
@@ -681,5 +749,36 @@ mod tests {
             b"{\"schema\":\"other/v1\"}"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// be2i ruling 7: a thing's words and a collection's name hold no
+    /// invisible character, as no control character.
+    #[test]
+    fn a_things_words_and_a_collections_name_hold_no_invisible_character() {
+        for words in [
+            "The \u{202E}plate",
+            "The\u{200B} plate",
+            "The \u{3164} plate",
+        ] {
+            let refused = item_of(
+                &json!({"item": {"ref": "central:thing:1", "label": words}}),
+                1,
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(refused.contains("no invisible one"), "{words:?}: {refused}");
+            let named = name_of(words).unwrap_err().to_string();
+            assert!(named.contains("no invisible one"), "{words:?}: {named}");
+        }
+        assert_eq!(
+            item_of(
+                &json!({"item": {"ref": "central:thing:1", "label": "The plate"}}),
+                1
+            )
+            .unwrap()
+            .label,
+            "The plate"
+        );
+        assert_eq!(name_of("Plates").unwrap().as_deref(), Some("Plates"));
     }
 }

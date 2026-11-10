@@ -105,7 +105,7 @@ fn check_ref_text(field: &str, value: &Option<String>) -> Result<(), String> {
         if value.trim().is_empty()
             || value != value.trim()
             || value.len() > 4096
-            || value.chars().any(char::is_control)
+            || value.chars().any(crate::names::unkept)
         {
             return Err(format!(
                 "{field} must be a non-empty trimmed single-line string or null"
@@ -116,7 +116,11 @@ fn check_ref_text(field: &str, value: &Option<String>) -> Result<(), String> {
 }
 
 /// Every rule that a single file can be checked against on its own. Handle
-/// uniqueness and profile resolution need the listing and the stores.
+/// uniqueness and profile resolution need the listing and the stores. A
+/// Position is authored, and Central only reads it: its words are read under
+/// the rule they were kept under (be2i.1), so a label that holds an invisible
+/// character reads as it stands, and its reading shows it without them and
+/// says so once (`Entry::reading`).
 fn validate(position: &WorldPosition, file_name: &str, world_ref: &str) -> Result<(), String> {
     if position.schema != POSITION_SCHEMA {
         return Err(format!("schema must be {POSITION_SCHEMA}"));
@@ -147,7 +151,7 @@ fn validate(position: &WorldPosition, file_name: &str, world_ref: &str) -> Resul
         ));
     }
     for (field, value) in [("revision", &position.revision), ("label", &position.label)] {
-        if value.trim().is_empty() || value.chars().any(char::is_control) {
+        if value.trim().is_empty() || value.chars().any(crate::names::unkept) {
             return Err(format!("{field} must be non-empty single-line text"));
         }
     }
@@ -240,10 +244,26 @@ struct Entry {
 
 impl Entry {
     fn reading(&self) -> Value {
-        json!({
+        let mut reading = json!({
             "record": self.record,
             "source": {"ref": self.source_ref, "revision": self.revision, "path": self.path},
-        })
+        });
+        // Its label is shown without the characters that draw nothing, and the reading says so once (be2i.1); the file stays as
+        // it was authored, and the source revision is its own.
+        if let Some(note) = crate::names::kept_note(
+            &self.position.label,
+            "This Position's label",
+            &format!("Write it again in {} to keep it so.", self.path),
+        ) {
+            let shown = crate::names::shown(&self.position.label);
+            reading["record"]["label"] = json!(if shown.is_empty() {
+                self.position.slug.clone()
+            } else {
+                shown
+            });
+            reading["notes"] = json!([note]);
+        }
+        reading
     }
 }
 
@@ -823,4 +843,74 @@ pub fn register_world_position_actions(registry: &mut ActionRegistry) {
             read_action,
         )
         .expect("central.position.read is registered once");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn position(label: &str, role_ref: &str) -> WorldPosition {
+        serde_json::from_value(json!({"schema": POSITION_SCHEMA, "ref": "central:position:control:root:keeper",
+            "revision": "r1", "slug": "keeper", "label": label, "enclosing_world_ref": "control:root",
+            "role_ref": role_ref}))
+        .unwrap()
+    }
+
+    /// be2i.1: an authored Position's label and the refs it names are read
+    /// under the rule they were kept under. One that holds an invisible
+    /// character reads as it stands; one that holds a control character does
+    /// not. Its reading shows the label without them and says so once.
+    #[test]
+    fn a_positions_label_and_its_refs_read_under_the_rule_they_were_kept_under() {
+        for (label, role_ref) in [
+            ("Keeper", "central:role:keeper"),
+            ("Kee\u{202E}per", "central:role:\u{2066}keeper"),
+            ("Kee\u{200D}per", "central:role:keeper"),
+        ] {
+            validate(&position(label, role_ref), "keeper.json", "control:root").unwrap();
+        }
+        let label = validate(
+            &position("Kee\u{7}per", "central:role:keeper"),
+            "keeper.json",
+            "control:root",
+        )
+        .unwrap_err();
+        assert_eq!(label, "label must be non-empty single-line text");
+        let role = validate(
+            &position("Keeper", "central:role:\u{7}keeper"),
+            "keeper.json",
+            "control:root",
+        )
+        .unwrap_err();
+        assert_eq!(
+            role,
+            "role_ref must be a non-empty trimmed single-line string or null"
+        );
+
+        let entry = |label: &str| {
+            let position = position(label, "central:role:keeper");
+            Entry {
+                source_ref: "central:source:keeper".into(),
+                revision: "r1".into(),
+                path: "Control/positions/keeper.json".into(),
+                record: json!({"slug": "keeper", "label": label}),
+                position,
+            }
+        };
+        let plain = entry("Keeper").reading();
+        assert_eq!(plain["record"]["label"], "Keeper");
+        assert!(plain.get("notes").is_none(), "{plain}");
+        let joined = entry("Kee\u{200D}per").reading();
+        assert_eq!(joined["record"]["label"], "Keeper");
+        let notes = joined["notes"].as_array().unwrap();
+        assert_eq!(notes.len(), 1);
+        assert!(
+            notes[0]
+                .as_str()
+                .unwrap()
+                .contains("Control/positions/keeper.json"),
+            "{notes:?}"
+        );
+        assert_eq!(entry("\u{3164}").reading()["record"]["label"], "keeper");
+    }
 }

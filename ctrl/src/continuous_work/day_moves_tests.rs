@@ -477,6 +477,47 @@ fn record_begin_and_end_round_trip_and_a_run_keeps_the_prompt_it_ran_with() {
     }
 }
 
+/// What an agent gives back from a move run is plain text, as a record's words
+/// are (be2i ruling 7): the Day's moves give `gave.summary` back as what the run
+/// gave, so a summary that holds a control or invisible character is refused,
+/// and one on two lines stands.
+#[test]
+fn a_move_runs_summary_is_plain_text_as_a_records_words_are() {
+    let w = world("Europe/London", 0);
+    ensure(w.path(), at(T));
+    let at_ms = ms("2026-10-20T09:00:05Z");
+    let run_ref = begin(w.path(), "tasks", at_ms, HOST, at(T)).unwrap()["run"]["run_ref"].clone();
+    let end_saying = |summary: &str| {
+        run(
+            w.path(),
+            "day_move_record",
+            json!({"event":"end","run_ref":run_ref,"at_unix_ms":at_ms + 60_000,"state":"done",
+                "gave":{"summary":summary}}),
+            Some(AGENT),
+            at(T),
+        )
+    };
+    for summary in [
+        "Three \u{202E}tasks.",
+        "Three\u{200B} tasks.",
+        "Three \u{3164} tasks.",
+        "Three\u{7} tasks.",
+        "Three tasks.\rOne a must.",
+    ] {
+        let refused = end_saying(summary).unwrap_err().to_string();
+        assert!(
+            refused.contains("gave.summary holds no control character")
+                && refused.contains("no invisible one"),
+            "{summary:?}: {refused}"
+        );
+    }
+    let ended = end_saying("Three tasks.\nOne of them a must.").unwrap();
+    assert_eq!(
+        ended["run"]["end"]["gave"]["summary"],
+        "Three tasks.\nOne of them a must."
+    );
+}
+
 /// The Patterns move names the one skill or method its pattern's items point
 /// at (O-I manual §18.2: "A pattern whose items point at one skill or method
 /// can open a refinement of it (§19.7)"): `gave.points_at`, its ref. No other
@@ -3181,11 +3222,13 @@ fn a_list_whose_items_repeat_an_id_is_refused_naming_the_id() {
 /// that moves on one side without the other's sha256 changing fails here or
 /// there (DLW build ruling 2026-11-09).
 const INVISIBLE_LIST_SHA256: &str =
-    "99bad420cf102bf7c469b4deaa06f93832348a73b3fd5922c9fac1964b9fb3d8";
+    "cac89ddc2b2ce933f7bf2763663a4e94703da3cb501ef34484cc85ee4000e491";
 
 #[test]
 fn the_invisible_set_is_every_format_character_the_separators_and_the_controls_as_the_shared_list_names_them(
 ) {
+    // A golden file on its own: it means something because O-I derives the
+    // same list from another engine (ICU), and Python's unicodedata agrees.
     let list = include_str!("invisible-code-points.txt");
     assert_eq!(
         format!("{:x}", Sha256::digest(list.as_bytes())),
@@ -3219,6 +3262,50 @@ fn the_invisible_set_is_every_format_character_the_separators_and_the_controls_a
             u32::from(c)
         );
     }
+    // be2i ruling 2: what draws as blank is invisible too, and the whole tag
+    // block, assigned or not
+    for c in [
+        '\u{3164}',
+        '\u{FFA0}',
+        '\u{115F}',
+        '\u{1160}',
+        '\u{2800}',
+        '\u{034F}',
+        '\u{E0000}',
+        '\u{E0002}',
+        '\u{E001F}',
+        '\u{E0001}',
+        '\u{E007F}',
+    ] {
+        assert!(
+            super::day_moves::invisible(c),
+            "it draws nothing: {:X}",
+            u32::from(c)
+        );
+    }
+    // be2i ruling 4: a format character that draws a sign is not invisible;
+    // the joiners stay in the set, as ruled
+    for c in [
+        '\u{0600}',
+        '\u{0601}',
+        '\u{0602}',
+        '\u{0603}',
+        '\u{0604}',
+        '\u{0605}',
+        '\u{06DD}',
+        '\u{0890}',
+        '\u{0891}',
+        '\u{08E2}',
+        '\u{110BD}',
+        '\u{110CD}',
+    ] {
+        assert!(
+            !super::day_moves::invisible(c),
+            "it draws a sign, so text keeps it: {:X}",
+            u32::from(c)
+        );
+    }
+    assert!(super::day_moves::invisible('\u{200C}') && super::day_moves::invisible('\u{200D}'));
 }
 
 #[test]
@@ -3246,7 +3333,6 @@ fn invisible_characters_and_a_lone_carriage_return_are_refused_once_the_kept_rec
         '\u{E007F}',
         // every format character, not only those named by hand (DLW build ruling 2026-11-09)
         '\u{00AD}',
-        '\u{0600}',
         '\u{180E}',
         '\u{2061}',
         '\u{2064}',
@@ -3254,8 +3340,16 @@ fn invisible_characters_and_a_lone_carriage_return_are_refused_once_the_kept_rec
         '\u{206F}',
         '\u{FFF9}',
         '\u{FFFB}',
-        '\u{110BD}',
         '\u{1D173}',
+        // what draws as blank, and the tag block's unassigned points (be2i ruling 2)
+        '\u{3164}',
+        '\u{FFA0}',
+        '\u{115F}',
+        '\u{1160}',
+        '\u{2800}',
+        '\u{034F}',
+        '\u{E0000}',
+        '\u{E001F}',
     ];
     let mut list = Vec::new();
     for (index, c) in invisible.iter().enumerate() {
@@ -3284,8 +3378,12 @@ fn invisible_characters_and_a_lone_carriage_return_are_refused_once_the_kept_rec
         at_ms,
         "Which plate?\r\nThe second.\r\n",
     ));
-    let answers = records(w.path(), list, at(T)).unwrap();
-    let results = answers["results"].as_array().unwrap();
+    // A records call names at most 64 things, so the list goes in turns of 32.
+    let mut results = Vec::new();
+    for turn in list.chunks(32) {
+        let answers = records(w.path(), turn.to_vec(), at(T)).unwrap();
+        results.extend(answers["results"].as_array().unwrap().iter().cloned());
+    }
     let (refused, made) = results.split_at(results.len() - 1);
     assert_eq!(refused.len(), 2 * invisible.len() + 2);
     for result in refused {
@@ -3563,6 +3661,67 @@ fn a_day_closed_before_the_first_press_is_refused_never_touched_and_no_salt_is_w
     assert_eq!(listing(&day_dir), closed, "and nothing into the closed Day");
 }
 
+/// No writer in ctrl closes a Day outside the source lock (the test below
+/// proves the press holds it). This one does, through
+/// `temporal::change_lifecycle` directly, between the press's lookup and its
+/// reading: the press reads lifecycle, date and revision from the one reading
+/// its words come from, so it sees the close (be2i ruling 5; the review's
+/// mutant M5, a lifecycle read before the lookup, is red here).
+#[test]
+fn a_close_written_outside_the_source_lock_between_the_press_lookup_and_its_reading_is_seen_on_the_one_reading(
+) {
+    let w = world("Europe/London", 0);
+    ensure(w.path(), at(T));
+    make_document(w.path(), TODAY, "day:c1-today", PROPOSAL, at(T));
+    set_field(
+        w.path(),
+        TODAY,
+        "p0_quick_thoughts",
+        json!("Bring this."),
+        "set:p0",
+        at(T),
+    );
+    let day = read(w.path(), "day_read", json!({"day_ref":TODAY}), at(T));
+    let offered = day["revision"]["revision"].clone();
+    // The close moves the relation only, so the revision the entry was
+    // offered from still stands.
+    let root = w.path().to_path_buf();
+    let (revision, relations) = (
+        offered.as_str().unwrap().to_owned(),
+        day["relations_revision"].as_str().unwrap().to_owned(),
+    );
+    super::day_moves::BETWEEN_PART_READS.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move || {
+            let scope = Scope::resolve(&root, None).unwrap();
+            temporal::change_lifecycle(
+                &scope,
+                TODAY,
+                &revision,
+                &relations,
+                "closed",
+                "test:closer",
+                at(T),
+            )
+            .unwrap();
+        }));
+    });
+    let words = words_of(part(
+        w.path(),
+        json!({"day_ref":TODAY,"field_id":"p0_quick_thoughts","expected_revision":offered}),
+        at(T),
+    ));
+    assert!(
+        words.contains("is closed"),
+        "the press reads lifecycle, date and revision from the one reading its words come from (DLW build ruling 2026-11-09): {words}"
+    );
+    let after = read(w.path(), "day_read", json!({"day_ref":TODAY}), at(T));
+    assert_eq!(after["temporal"]["lifecycle"], "closed");
+    assert_eq!(
+        after["revision"]["revision"], offered,
+        "a close moves no revision, so expected_revision alone never sees it"
+    );
+}
+
 #[test]
 fn a_close_pressed_while_the_press_reads_its_day_waits_under_the_source_lock_and_the_next_press_sees_it(
 ) {
@@ -3600,6 +3759,11 @@ fn a_close_pressed_while_the_press_reads_its_day_waits_under_the_source_lock_and
                 .is_none(),
                 "the press holds the source lock between its lookup and its reading"
             );
+            // That `lock_within` is the deterministic proof (be2i ruling 8):
+            // the mutant that skips the lock for the press is red there. The
+            // wait below is a timing check that can only go green: it never
+            // fails by chance, and on a slow enough runner it would pass with
+            // no lock at all.
             let handle = std::thread::spawn(move || {
                 execute_with_token_at(&root, "day_lifecycle", &close, Some(HUMAN), at(T))
             });
