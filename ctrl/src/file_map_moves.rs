@@ -560,12 +560,78 @@ fn checked(plan: &Plan) -> io::Result<()> {
 /// the moved folder is read where it now stands though its declaration still names where it stood. An external scope's state folder
 /// is made where missing.
 pub(crate) fn resume_scopes(root: &Path, input: &Value) -> io::Result<Vec<Scope>> {
-    resume_scopes_as(root, input, true)
+    resume_scopes_as(root, input, true, false)
 }
-/// [`resume_scopes`] that makes nothing, for the person's gate, which stands a replay or a rollback on the scopes it runs from
-/// (file_map.rs `grant_scope`; DLW build ruling 2026-11-09, round 54f item 1).
-pub(crate) fn resume_scopes_unmade(root: &Path, input: &Value) -> io::Result<Vec<Scope>> {
-    resume_scopes_as(root, input, false)
+/// The scopes a move's apply (`rollback` false) or rollback runs from, for the act and for the person's gate, which stands a replay
+/// or a rollback on the scopes it runs from and makes nothing (`make_state` false; file_map.rs `grant_scope`; DLW build ruling
+/// 2026-11-09, round 54f item 1). They are [`resume_scopes`], but for one journal (DLW build ruling 2026-11-11, round 54j item 2; the review of #346's third commit, C2).
+/// A journal whose rename was carried and nothing after it (`rename_stands_alone`), and whose scopes do not read while its Source
+/// stands where the rename put it, can be rolled back so far as the rename: the rollback then runs from the journal's scopes that
+/// do read, its owner among them, and makes the rename back and nothing else (`apply`). The gate judges that rename's two places as
+/// it judges any move's. Every other journal whose scopes do not read is refused, as before.
+pub(crate) fn carried_scopes(
+    root: &Path,
+    input: &Value,
+    rollback: bool,
+    make_state: bool,
+) -> io::Result<Vec<Scope>> {
+    let unread = match resume_scopes_as(root, input, make_state, false) {
+        Ok(all) => return Ok(all),
+        Err(unread) => unread,
+    };
+    let alone = rollback
+        && text(input, "plan_id")
+            .and_then(|id| path(root, id))
+            .and_then(|journal| read_json(&journal))
+            .and_then(|journal| serde_json::from_value::<Plan>(journal).map_err(io::Error::other))
+            .is_ok_and(|plan| rename_stands_alone(root, &plan));
+    if !alone {
+        return Err(unread);
+    }
+    resume_scopes_as(root, input, make_state, true).map_err(|_| unread)
+}
+/// Whether a journal's rename was carried and stands alone to be made back: its state says "renamed", as apply saves it once the
+/// Source has moved, and the Source stands at its `to`. Where its owner is spelled is the journal's word, as in `resume_scopes_as`;
+/// the rename itself is made only by `apply`, under the owner's root as the scopes give it.
+fn rename_stands_alone(root: &Path, plan: &Plan) -> bool {
+    plan.state == "renamed"
+        && plan
+            .worlds
+            .iter()
+            .find(|world| world.world == plan.world)
+            .is_some_and(|owner| {
+                let owner_root = if owner.external {
+                    PathBuf::from(&owner.path)
+                } else {
+                    root.join(&owner.path)
+                };
+                identity(&owner_root.join(&plan.to), plan.device, plan.inode)
+            })
+}
+/// An in-ground scope of a journal stands at the folder its spelling names, in the disk's own spelling of it (DLW build ruling
+/// 2026-11-11, round 54j item 1; the review of #346's third commit, C1): no link in any name of it, and each name in the case and
+/// form the disk keeps, as `plan` writes it (a scope is opened that way, `safe_member`) and as an external scope is already held
+/// (`plain_world_path`). So no link step can lead a scope elsewhere by replacing a link its spelling runs through. `current` is
+/// where the scope stands now, shifted with the moved folder. A project that does not stand there is named by its own refusal; any
+/// other scope that does not is refused here.
+fn in_ground_spelling(root: &Path, current: &Path, world: &PlanWorld) -> io::Result<()> {
+    let refused = || {
+        invalid(format!(
+            "Invalid move journal: it spells the scope {} as {}, which is not that folder's own spelling on the disk: a link, or \
+             another case or form of a name, stands in it",
+            world.world, world.path
+        ))
+    };
+    let expected = match current.strip_prefix(root) {
+        Ok(below) => root.canonicalize()?.join(below),
+        Err(_) => current.to_path_buf(),
+    };
+    match fs::canonicalize(current) {
+        Ok(canonical) if canonical == expected => Ok(()),
+        Ok(_) => Err(refused()),
+        Err(_) if world.world.starts_with("project:") => Ok(()),
+        Err(_) => Err(refused()),
+    }
 }
 /// A journal's scope is spelled as `plan` writes it (round 54h item 2): in the ground, plain names below it (none for the ground
 /// itself), so no `..` or `.` reads one folder before the rename and another after it; outside the ground, the folder's own
@@ -616,7 +682,14 @@ fn folders_of(all: &[Scope]) -> Vec<(String, Option<(u64, u64)>)> {
         })
         .collect()
 }
-fn resume_scopes_as(root: &Path, input: &Value, make_state: bool) -> io::Result<Vec<Scope>> {
+/// `alone` leaves out a project whose declaration does not read, for a rollback that makes the rename back and nothing else
+/// (`carried_scopes`); every other refusal stands.
+fn resume_scopes_as(
+    root: &Path,
+    input: &Value,
+    make_state: bool,
+    alone: bool,
+) -> io::Result<Vec<Scope>> {
     let id = text(input, "plan_id")?;
     safe_member(root, ".central/bkmr/moves", true)?;
     let plan: Plan =
@@ -663,6 +736,9 @@ fn resume_scopes_as(root: &Path, input: &Value, make_state: bool) -> io::Result<
                 };
             }
         }
+        if !world.external {
+            in_ground_spelling(root, &current, world)?;
+        }
         // A folder scope has no Project declaration to check: its own is the ground's.
         if world.world != "control:root"
             && !world
@@ -671,16 +747,19 @@ fn resume_scopes_as(root: &Path, input: &Value, make_state: bool) -> io::Result<
         {
             // A project the journal runs from whose declaration does not read is named, as the gate names one the move reaches
             // (round 54g item 12): the error keeps its kind, so a link loop is a failure and no permission is a denial.
-            let checked =
-                Scope::project(current.clone(), world.project.clone()).map_err(|error| {
-                    io::Error::new(
+            let checked = match Scope::project(current.clone(), world.project.clone()) {
+                Ok(checked) => checked,
+                Err(_) if alone && world.world != plan.world => continue,
+                Err(error) => {
+                    return Err(io::Error::new(
                         error.kind(),
                         format!(
                             "its journal runs from the project {}, which does not read: {error}",
                             world.project.as_deref().unwrap_or(&world.world)
                         ),
-                    )
-                })?;
+                    ))
+                }
+            };
             if checked.world != world.world {
                 return Err(conflict("Project identity changed during move"));
             }
@@ -705,6 +784,40 @@ fn resume_scopes_as(root: &Path, input: &Value, make_state: bool) -> io::Result<
         });
     }
     Ok(result)
+}
+/// One link step carried at its scope's root, or taken back (`back`): the staged link put in the link's place with the old link kept
+/// aside, or the old link put back. The link's place is its path before the move for a rollback and after it for an apply
+/// (`rollback`), whichever way the step then goes. Answers whether anything was changed: a step already as asked is left.
+fn carry_link(scope_root: &Path, step: &LinkStep, rollback: bool, back: bool) -> io::Result<bool> {
+    let link = step_member(
+        scope_root,
+        if rollback {
+            &step.path
+        } else {
+            &step.after_path
+        },
+    )?;
+    let backup = step_member(scope_root, &step.backup)?;
+    if back {
+        if identity(&link, step.before.device, step.before.inode) {
+            return Ok(false);
+        }
+        if identity(&link, step.new_device, step.new_inode) {
+            fs::remove_file(&link)?;
+        }
+        move_exclusive(&backup, &link)?;
+    } else {
+        if identity(&link, step.new_device, step.new_inode) {
+            return Ok(false);
+        }
+        if identity(&link, step.before.device, step.before.inode) {
+            move_exclusive(&link, &backup)?;
+        }
+        // link(2) with a symlink source retains its inode and creates the
+        // destination exclusively. The staged inode is already journalled.
+        fs::hard_link(step_member(scope_root, &step.staged)?, &link)?;
+    }
+    Ok(true)
 }
 pub(crate) fn apply(
     root: &Path,
@@ -742,6 +855,36 @@ pub(crate) fn apply(
             "Cannot relocate a live invoking working directory",
         ));
     }
+    // A journal whose rename was carried and whose scopes do not read while the Source stands there is rolled back so far as the
+    // rename, and says so (round 54j item 2; C2). Its link steps and documents need scopes that read: once the Source is back
+    // they may, and a second rollback then undoes whatever the move had carried of them.
+    if rollback && at_to && rename_stands_alone(root, &plan) {
+        if let Err(unread) = resume_scopes_as(root, input, false, false) {
+            return match move_exclusive(&to, &from) {
+                Ok(()) => {
+                    plan.state = "rolling-back".into();
+                    save(
+                        root,
+                        &plan,
+                        crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+                    )?;
+                    Ok(json!({"plan_id":id,"source_ref":plan.source_ref,"state":plan.state,"indexes":[],
+                        "source_bytes_changed":false,
+                        "note":format!(
+                            "the Source is back at {}, and nothing else was written: this journal's scopes did not read while it \
+                             stood at {} ({unread}). Roll back again to undo any link or relations step the move had carried",
+                            plan.from, plan.to
+                        )}))
+                }
+                Err(error) => Err(conflict(format!(
+                    "Move journal's scopes do not read ({unread}) while its Source stands at {}, and it could not be moved back \
+                     ({error}): move it back to {} by hand, then roll back again; nothing was written",
+                    to.display(),
+                    from.display()
+                ))),
+            };
+        }
+    }
     for doc in &plan.documents {
         let world = scope(all, &doc.world)?;
         let current = document_at(world, doc.path.as_deref().unwrap_or(world.relations_path()))?;
@@ -764,7 +907,8 @@ pub(crate) fn apply(
         let staged = step_member(&world.root, &link.staged)?;
         // A link step replaces a link and nothing else (DLW build ruling 2026-11-11, round 54i item 1; the review of #346's second
         // commit, B1): whatever stands at its path, before or after, at its kept name or its staged one, is a symbolic link, or
-        // the journal stops here, before anything is moved. And its path is no scope's own folder, nor a folder above one.
+        // the journal stops here, before anything is moved. And its path is no scope's own folder, nor a folder above one, which
+        // the refusal says in its own words (round 54j item 1).
         for (spelled, place) in [
             (&link.path, step_member(&world.root, &link.path)?),
             (
@@ -774,10 +918,17 @@ pub(crate) fn apply(
             (&link.backup, kept.clone()),
             (&link.staged, staged.clone()),
         ] {
+            // A scope's folder is spelled as the disk spells it (`in_ground_spelling`, `plain_world_path`), so this reading of the
+            // spellings finds every step at one, or above one.
+            if all.iter().any(|scope| scope.root.starts_with(&place)) {
+                return Err(invalid(format!(
+                    "Invalid move journal: its link step at {} names {spelled}, which is a scope's own folder or a folder above \
+                     one: a link step replaces a link and nothing else",
+                    link.path
+                )));
+            }
             let standing = fs::symlink_metadata(&place);
-            if standing.is_ok_and(|entry| !entry.file_type().is_symlink())
-                || all.iter().any(|scope| scope.root.starts_with(&place))
-            {
+            if standing.is_ok_and(|entry| !entry.file_type().is_symlink()) {
                 return Err(invalid(format!(
                     "Invalid move journal: its link step at {} names {spelled}, which is not a link: a link step replaces a \
                      link and nothing else",
@@ -814,7 +965,10 @@ pub(crate) fn apply(
     // its documents and links would be written in a tree the gate never judged. So was one that does not read at all once the
     // Source has moved (round 54i item 2; B2). Either way the scopes are not the ones the gate saw: the rename this call made is
     // put back and nothing else is written. A call that made no rename (a journal already carried that far) goes on to its own
-    // refusal below.
+    // refusal below. Since round 54j a scope spelled through a link is refused before the rename (`in_ground_spelling`), so no
+    // journal reaches the another-folder half by itself: it is kept against a second writer that swaps a scope's folder while
+    // the move runs, and no test reaches it. The does-not-read half is reached by a journal that moves a scope's own declaration
+    // away.
     let strayed = match &moved_scopes {
         Ok(scopes) => folders_of(scopes)
             .into_iter()
@@ -826,8 +980,10 @@ pub(crate) fn apply(
     if let Some(strayed) = strayed {
         if let Some((now, before)) = renamed {
             if let Err(error) = move_exclusive(now, before) {
-                // The Source could not be put back: the journal says where it stands, in the state a carried rename has, which
-                // apply and rollback both read (`at_from`, `at_to` above).
+                // The Source could not be put back: the journal says where it stands, in the state a carried rename has. A
+                // rollback reads that state when the scopes still do not read, and makes the rename back alone
+                // (`rename_stands_alone`; round 54j item 2). A rollback's own failed put-back leaves the Source where the move
+                // took it from, and the refusal says what a hand must do.
                 plan.state = if rollback { "rolling-back" } else { "renamed" }.into();
                 save(
                     root,
@@ -836,8 +992,10 @@ pub(crate) fn apply(
                 )?;
                 return Err(conflict(format!(
                     "Move journal's {strayed} once its Source has moved, and the Source could not be put back ({error}): it \
-                     stands at {}; nothing else was written",
-                    now.display()
+                     stands at {}, and must be moved back to {} by hand, or with a rollback once that name is free; nothing else \
+                     was written",
+                    now.display(),
+                    before.display()
                 )));
             }
         }
@@ -845,6 +1003,7 @@ pub(crate) fn apply(
             "Move journal's {strayed} once its Source has moved; the Source is back where it stood and nothing else was written"
         )));
     }
+    let was = plan.state.clone();
     let completion = (|| {
         let moved_scopes = moved_scopes?;
         let all = moved_scopes.as_slice();
@@ -861,36 +1020,63 @@ pub(crate) fn apply(
                 "Injected interruption after durable rename",
             ));
         }
+        // The steps this call carried, to be taken back if a scope strays (round 54j item 1).
+        let mut carried: Vec<&LinkStep> = Vec::new();
         for step in &plan.links {
             let world = scope(all, &step.world)?;
-            let link = step_member(
-                &world.root,
-                if rollback {
-                    &step.path
-                } else {
-                    &step.after_path
-                },
-            )?;
-            let backup = step_member(&world.root, &step.backup)?;
-            if rollback {
-                if identity(&link, step.before.device, step.before.inode) {
-                    continue;
-                }
-                if identity(&link, step.new_device, step.new_inode) {
-                    fs::remove_file(&link)?;
-                }
-                move_exclusive(&backup, &link)?;
-            } else {
-                if identity(&link, step.new_device, step.new_inode) {
-                    continue;
-                }
-                if identity(&link, step.before.device, step.before.inode) {
-                    move_exclusive(&link, &backup)?;
-                }
-                // link(2) with a symlink source retains its inode and creates the
-                // destination exclusively. The staged inode is already journalled.
-                fs::hard_link(step_member(&world.root, &step.staged)?, &link)?;
+            if carry_link(&world.root, step, rollback, rollback)? {
+                carried.push(step);
             }
+            // Each scope is held to its folder again after every link step, so before the next one and before any document is
+            // written (DLW build ruling 2026-11-11, round 54j item 1; C1). The spelling rule leaves no link in a scope's path for a
+            // step to replace; this holds the scopes should one stray all the same, as a second writer could make one. What this
+            // call carried is then taken back, newest first, each step only while its own scope still stands where it stood, and
+            // the refusal says what could not be.
+            let Some((strayed, _)) = folders_of(all).into_iter().find(|now| !stood.contains(now))
+            else {
+                continue;
+            };
+            let mut left = Vec::new();
+            for taken in carried.iter().rev() {
+                let world = scope(all, &taken.world)?;
+                let holds = folders_of(std::slice::from_ref(world))
+                    .iter()
+                    .all(|now| stood.contains(now));
+                match holds.then(|| carry_link(&world.root, taken, rollback, !rollback)) {
+                    Some(Ok(_)) => {}
+                    Some(Err(error)) => left.push(format!("{} ({error})", taken.path)),
+                    None => left.push(format!("{} (its scope strayed)", taken.path)),
+                }
+            }
+            let source = match renamed {
+                _ if !left.is_empty() => None,
+                Some((now, before)) => move_exclusive(now, before).ok().map(|()| before),
+                None => None,
+            };
+            if source.is_some() {
+                plan.state = was.clone();
+                save(
+                    root,
+                    &plan,
+                    crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+                )?;
+            }
+            let steps = if left.is_empty() {
+                "the link steps this call carried are undone".to_owned()
+            } else {
+                format!(
+                    "these link steps could not be undone and stand as carried: {}",
+                    left.join(", ")
+                )
+            };
+            return Err(conflict(format!(
+                "Move journal's scope {strayed} is another folder once a link step has run; {steps}; the Source {}; no document \
+                 was written",
+                match source {
+                    Some(back) => format!("is back at {}", back.display()),
+                    None => "stands where this call found or left it".to_owned(),
+                }
+            )));
         }
         for doc in &plan.documents {
             let world = scope(all, &doc.world)?;

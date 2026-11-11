@@ -1348,7 +1348,7 @@ struct Standing {
 ///   among the scopes the act reads, so a scope registered under a project's name stands in for none (round 54g item 6).
 ///
 /// What is named is read without making anything (`participating_unmade`), so a refusal here leaves no folder behind (round 54b
-/// item 1). A move's apply and rollback read the scopes its journal runs from instead (`resume_scopes_unmade`; round 54f item 1),
+/// item 1). A move's apply and rollback read the scopes its journal runs from instead (`carried_scopes`; round 54f item 1),
 /// and take nothing else from that list (round 54f.2): the move stands at the journal's root scope wherever the list puts it
 /// (`root_scope`), its journal is read where the act reads it, at the ground, and the Work project a place lies in is found on the
 /// disk (`work_projects_of`).
@@ -1359,7 +1359,7 @@ fn grant_scope(root: &Path, op: &str, input: &Value) -> io::Result<Standing> {
     // the live map does not read (round 54f item 1).
     let (all, unreachable) = if matches!(op, "move-apply" | "move-rollback") {
         (
-            super::file_map_moves::resume_scopes_unmade(&ground, input)?,
+            super::file_map_moves::carried_scopes(&ground, input, op == "move-rollback", false)?,
             Vec::new(),
         )
     } else {
@@ -1766,7 +1766,7 @@ fn admitted_as(
     };
     let (all, unreachable) = if matches!(op, "move-apply" | "move-rollback") {
         (
-            super::file_map_moves::resume_scopes(&root, input)?,
+            super::file_map_moves::carried_scopes(&root, input, op == "move-rollback", true)?,
             Vec::new(),
         )
     } else {
@@ -1830,11 +1830,16 @@ fn admitted_as(
             return Err(error);
         }
         // A location in a Work project that does not read is that project's to say, by any spelling that reaches its folder
-        // (round 54i item 3; B3): not "unregistered".
+        // (round 54i item 3; B3): not "unregistered". Only a member of Work is asked: a registered project that does not stand, or
+        // an external one that did not open, is listed with its root as written and holds no place under `Work` (round 54j
+        // item 3; C3).
         if let Some(error) = input["path"].as_str().and_then(|asked| {
             let location = resolved(&root.join(asked));
+            let work = root.join("Work");
             unreachable.iter().find_map(|gone| {
-                let member = gone.root.as_deref().filter(|_| gone.world.is_none())?;
+                let member = gone.root.as_deref().filter(|member| {
+                    gone.world.is_none() && member.parent() == Some(work.as_path())
+                })?;
                 (location.starts_with(member) || within(&location, member)).then(|| {
                     io::Error::new(
                         gone.kind,
