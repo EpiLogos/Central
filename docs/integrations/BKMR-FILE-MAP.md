@@ -139,8 +139,8 @@ Two shapes are kept apart:
 
 While a project is unreachable, an act that does not touch it goes on, and the
 readers (`inspect`, `search`, `locate`) answer with it listed. An act on a place
-in its tree is refused in the project's words, and so is every move's plan, which
-has to read each project's links. A project that a move's apply or rollback
+in its tree is refused in the project's words, and so is a `locate` of a place in
+it, and so is every move's plan, which has to read each project's links. A project that a move's apply or rollback
 reaches or runs from whose declaration does not read is named in the refusal as
 well.
 A place is judged by the folder it names, its device and inode, whatever its
@@ -173,7 +173,7 @@ operating system's isolation, not a path check:
 | --- | --- |
 | `register` | the Source, in the scope's relations document |
 | `link` | a link inside the scope's folder, kept in that document |
-| `pool` | whether the scope's whole readable tree is Source, in that document; the root's pool stops at each folder holding a project's manifest; a project's keeps its whole tree, but every pool stops at a Work project's folder that is not the scope itself |
+| `pool` | whether the scope's whole readable tree is Source, in that document; the root's pool stops at each folder holding a project's manifest as an ordinary file; a project's keeps its whole tree; every pool stops at a Work project's folder that is not the scope itself, one whose declaration does not read among them (the map names it as unreachable) |
 | `scope-register` | a project scope in Control's relations document, or a folder scope's declaration in the ground |
 | `adopt-db` | a copy of the person's bookmark database and its untouched original, under `.central/bkmr` |
 | `record-adopt` | a bookmark bound to a Source, its description rewritten with the person's words kept inside |
@@ -206,6 +206,14 @@ move and after it, and never by what it points at. A link in a Work project's
 tree needs that project's grant, whichever scope keeps the link: at the plan, and
 at apply and rollback for each link step of the journal.
 
+A link step replaces a link and nothing else. Where a folder stands at a step's
+path, the gate judges that folder with all it holds, so a step at a Work
+project's own folder, or at `Work`, needs every such project's grant. And apply
+refuses, whatever the grants, a step where anything but a symbolic link stands:
+at its path before or after the move, at its kept name or at its staged name, or
+at a scope's own folder or a folder above one. A folder or a file is never moved
+aside as if it were a link.
+
 A journal is held to what `move-plan` writes:
 
 - a relations document only at the move's own scope or at one whose link it
@@ -217,9 +225,13 @@ A journal is held to what `move-plan` writes:
 
 A journal edited away from that is refused before anything is written. Apply
 makes two more checks of its own. It refuses a link in any folder above a link
-step's path. And it holds each scope to the folder it read before the rename: if
-a scope reads as another folder once the Source has moved, the rename is put
-back and nothing else is written.
+step's path, its staged link or its kept link. And it holds each scope to the
+folder it read before the rename: if a scope reads as another folder once the
+Source has moved, or the scopes do not read at all, the rename is put back and
+nothing else is written. The journal stays as planned, so the same apply answers
+the same way and a rollback has nothing to undo. If the put-back itself fails,
+the refusal says where the Source stands and the journal records the rename as
+carried, the state apply and rollback read.
 
 A link whose Source no longer reads stops every plan. The refusal names the link
 and the project it stands in, and says to remove the link or restore its Source:

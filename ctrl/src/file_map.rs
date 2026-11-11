@@ -1379,8 +1379,16 @@ fn grant_scope(root: &Path, op: &str, input: &Value) -> io::Result<Standing> {
     let member = named.and_then(|scope| grant_member(&ground, scope));
     let mut also: Vec<String> = Vec::new();
     for place in act_places(&ground, &all, named, op, input)? {
-        // A link lies where its folder lies, and holds nothing.
-        let reaches = match place.path.parent().filter(|_| place.link) {
+        // A link lies where its folder lies, and holds nothing. A link place where a folder stands is no link's: it is judged as
+        // that folder, with all it holds, so a journal's link step at a Work project's own folder, or at `Work`, asks every
+        // project it would move (round 54i item 1; B1). Apply refuses such a step whatever the grants.
+        let stands_a_folder =
+            fs::symlink_metadata(&place.path).is_ok_and(|entry| entry.file_type().is_dir());
+        let reaches = match place
+            .path
+            .parent()
+            .filter(|_| place.link && !stands_a_folder)
+        {
             Some(folder) => work_projects_of(&ground, folder)
                 .into_iter()
                 .filter(|(_, project)| within(folder, project))
@@ -1819,6 +1827,25 @@ fn admitted_as(
             .filter(|location| location.is_absolute())
             .and_then(|location| unreachable_location(&unreachable, location))
         {
+            return Err(error);
+        }
+        // A location in a Work project that does not read is that project's to say, by any spelling that reaches its folder
+        // (round 54i item 3; B3): not "unregistered".
+        if let Some(error) = input["path"].as_str().and_then(|asked| {
+            let location = resolved(&root.join(asked));
+            unreachable.iter().find_map(|gone| {
+                let member = gone.root.as_deref().filter(|_| gone.world.is_none())?;
+                (location.starts_with(member) || within(&location, member)).then(|| {
+                    io::Error::new(
+                        gone.kind,
+                        format!(
+                            "Location is in Work/{}, which is {}",
+                            gone.project, gone.message
+                        ),
+                    )
+                })
+            })
+        }) {
             return Err(error);
         }
     }
@@ -7539,6 +7566,29 @@ mod folder_scope_tests {
         );
     }
 
+    /// Round 54i item 6 (the reviewer's mutant M23): a folder scope's Source is found by its own reference alone. A reference that
+    /// spells the same file another way (a trailing slash) names a member that stands, and the Source standing there has another
+    /// reference, the file's own: no place is given for the spelling.
+    #[test]
+    fn a_folder_scopes_source_is_found_by_its_own_reference_alone() {
+        let world = World::new();
+        world
+            .register("Music", &world.music(), json!(["mp3"]))
+            .unwrap();
+        let (all, _) = participating(&world.root).unwrap();
+        let own = source_horizon::source_ref("folder:Music", "voice.mp3");
+        assert!(
+            source_place(&all, &own).is_some(),
+            "the file's own reference"
+        );
+        for spelled in [format!("{own}/"), format!("{own}//")] {
+            assert!(
+                source_place(&all, &spelled).is_none(),
+                "{spelled} is no Source's reference"
+            );
+        }
+    }
+
     /// Round 54h item 4 (review of #346, the reviewer's mutant M3): apply checks its journal on its own read, whoever hands it its
     /// scopes. The gate reads the journal first for every caller that comes through it, so this calls `apply` itself, with the
     /// live map's scopes: a journal edited after its plan to keep the replaced link at another name is refused, and nothing moves.
@@ -7586,8 +7636,9 @@ mod folder_scope_tests {
             false,
         )
         .unwrap_err();
+        // Refused before anything is moved: the words are the check's own, not those of a rename made and put back (round 54i).
         assert!(
-            refused.to_string().contains(
+            refused.to_string().starts_with(
                 "Invalid move journal: its link step at Control/user/page-link names a place its move does not write"
             ),
             "{refused}"

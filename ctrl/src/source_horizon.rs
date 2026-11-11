@@ -916,10 +916,16 @@ pub(crate) fn insert_pool_bindings(
     )
 }
 
-/// Whether the pool of the scope `world_ref` stops at `folder`, a folder below its root: the root's at any folder that declares a
-/// project, any other scope's at a member of Work (`insert_pool_bindings`).
+/// Whether the pool of the scope `world_ref` stops at `folder`, a folder below its root (`insert_pool_bindings`). Every pool stops
+/// at a member of Work that declares a project, one whose declaration does not read among them: the map names that one as
+/// unreachable. The root's pool also stops at any other folder that holds a project's manifest as an ordinary file, as it did
+/// before round 54h, and not at a folder whose `project.json` is something else, where no reader would say why (round 54i item 4;
+/// the review of #346's second commit, B4).
 fn stops_a_pool(folder: &Path, world_ref: &str) -> bool {
-    declares_a_project(folder) && (world_ref == CONTROL_WORLD_REF || is_work_member(folder))
+    (declares_a_project(folder) && is_work_member(folder))
+        || (world_ref == CONTROL_WORLD_REF
+            && fs::symlink_metadata(folder.join("ProjectCentral/project.json"))
+                .is_ok_and(|manifest| manifest.is_file()))
 }
 
 /// Whether the pool of the scope at `world_root` leaves `relative` out because a folder above it is where that pool stops

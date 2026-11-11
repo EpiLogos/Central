@@ -762,6 +762,29 @@ pub(crate) fn apply(
         )?;
         let kept = step_member(&world.root, &link.backup)?;
         let staged = step_member(&world.root, &link.staged)?;
+        // A link step replaces a link and nothing else (DLW build ruling 2026-11-11, round 54i item 1; the review of #346's second
+        // commit, B1): whatever stands at its path, before or after, at its kept name or its staged one, is a symbolic link, or
+        // the journal stops here, before anything is moved. And its path is no scope's own folder, nor a folder above one.
+        for (spelled, place) in [
+            (&link.path, step_member(&world.root, &link.path)?),
+            (
+                &link.after_path,
+                step_member(&world.root, &link.after_path)?,
+            ),
+            (&link.backup, kept.clone()),
+            (&link.staged, staged.clone()),
+        ] {
+            let standing = fs::symlink_metadata(&place);
+            if standing.is_ok_and(|entry| !entry.file_type().is_symlink())
+                || all.iter().any(|scope| scope.root.starts_with(&place))
+            {
+                return Err(invalid(format!(
+                    "Invalid move journal: its link step at {} names {spelled}, which is not a link: a link step replaces a \
+                     link and nothing else",
+                    link.path
+                )));
+            }
+        }
         let old = identity(&link_path, link.before.device, link.before.inode);
         let new = identity(&link_path, link.new_device, link.new_inode);
         let backed = identity(&kept, link.before.device, link.before.inode);
@@ -788,18 +811,38 @@ pub(crate) fn apply(
     };
     let moved_scopes = resume_scopes(root, input);
     // A scope that reads as another folder once the Source has moved was spelled through the moved folder (a link inside it, say):
-    // its documents and links would be written in a tree the gate never judged. The rename is put back and nothing else is written.
-    if let Some((world, _)) = moved_scopes.as_ref().ok().and_then(|scopes| {
-        folders_of(scopes)
+    // its documents and links would be written in a tree the gate never judged. So was one that does not read at all once the
+    // Source has moved (round 54i item 2; B2). Either way the scopes are not the ones the gate saw: the rename this call made is
+    // put back and nothing else is written. A call that made no rename (a journal already carried that far) goes on to its own
+    // refusal below.
+    let strayed = match &moved_scopes {
+        Ok(scopes) => folders_of(scopes)
             .into_iter()
             .find(|now| !stood.contains(now))
-    }) {
+            .map(|(world, _)| format!("scope {world} is another folder")),
+        Err(error) if renamed.is_some() => Some(format!("scopes do not read ({error})")),
+        Err(_) => None,
+    };
+    if let Some(strayed) = strayed {
         if let Some((now, before)) = renamed {
-            move_exclusive(now, before)?;
+            if let Err(error) = move_exclusive(now, before) {
+                // The Source could not be put back: the journal says where it stands, in the state a carried rename has, which
+                // apply and rollback both read (`at_from`, `at_to` above).
+                plan.state = if rollback { "rolling-back" } else { "renamed" }.into();
+                save(
+                    root,
+                    &plan,
+                    crate::file_mutation::RecordDisposition::ReplaceOrCreate,
+                )?;
+                return Err(conflict(format!(
+                    "Move journal's {strayed} once its Source has moved, and the Source could not be put back ({error}): it \
+                     stands at {}; nothing else was written",
+                    now.display()
+                )));
+            }
         }
         return Err(conflict(format!(
-            "Move journal's scope {world} is another folder once its Source has moved; the Source is back where it stood and \
-             nothing else was written"
+            "Move journal's {strayed} once its Source has moved; the Source is back where it stood and nothing else was written"
         )));
     }
     let completion = (|| {
