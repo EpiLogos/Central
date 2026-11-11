@@ -215,6 +215,9 @@ pub(crate) fn action_result(action: &str, result: io::Result<Value>) -> ActionRe
             if let Some(result) = crate::file_mutation::record_failure_result(action, &error) {
                 return result;
             }
+            if let Some(result) = day_moves::ended_already_result(action, &error) {
+                return result;
+            }
             let (status, code) = match error.kind() {
                 io::ErrorKind::AlreadyExists => (
                     ResultStatus::VerificationFailure,

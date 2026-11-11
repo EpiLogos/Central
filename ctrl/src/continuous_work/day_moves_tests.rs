@@ -4115,3 +4115,109 @@ fn a_label_reads_as_it_is_and_a_field_that_holds_no_text_offers_none() {
         "a field's own value is read only as text: the World offers no other"
     );
 }
+
+/// be2j.c3 (DLW build ruling 2026-11-11): an end given to a run that has ended
+/// already answers with a code of its own and the run as it ended, so a caller
+/// knows the run is finished without reading the Day again. Every other
+/// conflict keeps the code it had: a move still running, a closed Day, and a
+/// write on a Day whose record changed after it was read.
+#[test]
+fn an_end_for_an_ended_run_has_its_own_code_and_other_conflicts_keep_theirs() {
+    let w = world("Europe/London", 0);
+    let day = ensure(w.path(), at(T));
+    let first = begin(w.path(), "context", ms("2026-10-20T09:00:05Z"), HOST, at(T)).unwrap();
+    let run_ref = first["run"]["run_ref"].clone();
+    end(
+        w.path(),
+        &run_ref,
+        ms("2026-10-20T09:01:00Z"),
+        "stalled",
+        HOST,
+        at(T),
+    )
+    .unwrap();
+    let kept = fs::read_to_string(log_path(w.path(), "2026-10-20")).unwrap();
+    const ACTION: &str = "central.day.move.record";
+    const CONFLICT: &str = "stale_basis_or_identity_conflict";
+    let refused = |result: io::Result<Value>| {
+        let error = result.expect_err("the operation must refuse");
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        let result = action_result(ACTION, Err(error));
+        assert_eq!(result.status, ResultStatus::VerificationFailure);
+        assert_eq!(result.action.as_deref(), Some(ACTION));
+        *result.error.expect("a refusal")
+    };
+
+    let again = refused(end(
+        w.path(),
+        &run_ref,
+        ms("2026-10-20T09:02:00Z"),
+        "done",
+        HOST,
+        at(T),
+    ));
+    assert_eq!(again.code, "run_ended_already");
+    assert_eq!(
+        again.message,
+        format!("{} has ended already", run_ref.as_str().unwrap())
+    );
+    let details = again.details.unwrap();
+    assert_eq!(details["run_ref"], run_ref);
+    assert_eq!(details["run"]["run_ref"], run_ref);
+    assert_eq!(
+        details["run"]["state"], "stalled",
+        "as it ended, not as asked"
+    );
+    assert_eq!(
+        details["run"]["end"]["reason"],
+        "The agent could not start."
+    );
+    assert_eq!(details["retry_policy_action"], "central.work.policy");
+    assert_eq!(details["automatic_authority_widening"], false);
+    assert_eq!(
+        fs::read_to_string(log_path(w.path(), "2026-10-20")).unwrap(),
+        kept,
+        "nothing is recorded"
+    );
+
+    // A move still running refuses a second begin: a conflict, in the code it had.
+    begin(w.path(), "tasks", ms("2026-10-20T09:10:00Z"), HOST, at(T)).unwrap();
+    let running = refused(begin(
+        w.path(),
+        "tasks",
+        ms("2026-10-20T09:11:00Z"),
+        HOST,
+        at(T),
+    ));
+    assert_eq!(running.code, CONFLICT);
+    assert!(running.details.unwrap().get("run").is_none());
+
+    // The Day's record changed after it was read: the write an end makes on
+    // the revision it read is refused as a conflict, in the code it had.
+    let relative = "Control/user/day/2026-10-20/moves.jsonl";
+    let now = fs::read_to_string(log_path(w.path(), "2026-10-20")).unwrap();
+    let changed = refused(
+        crate::source_safety::replace(w.path(), relative, &source::revision(&kept), &now)
+            .map(|()| Value::Null),
+    );
+    assert_eq!(changed.code, CONFLICT);
+
+    // A closed Day refuses a begin: a conflict, in the code it had.
+    run(
+        w.path(),
+        "day_lifecycle",
+        json!({"day_ref":day["day_ref"],"expected_revision":day["revision"]["revision"],
+            "expected_relations_revision":day["relations_revision"],"lifecycle":"closed"}),
+        Some(HUMAN),
+        at(T),
+    )
+    .unwrap();
+    let closed = refused(begin(
+        w.path(),
+        "patterns",
+        ms("2026-10-20T20:05:00Z"),
+        HOST,
+        at(T),
+    ));
+    assert_eq!(closed.code, CONFLICT);
+}

@@ -306,18 +306,29 @@ impl RelationRecordStore {
             let mut bytes = serde_json::to_vec_pretty(record)
                 .map_err(|error| RelationRecordStoreError::InvalidRecord(error.to_string()))?;
             bytes.push(b'\n');
+            Ok(bytes)
+        };
+        // The size limit is asked once, of the bytes that are written (be2j.c3 item 1, DLW build ruling 2026-11-11): a kept
+        // word a reader gives back as the read showed it is written as it is kept (below), so the given record may be longer or
+        // shorter than the written one, and the refusal names the written size.
+        let within_limit = |bytes: &[u8]| {
             if bytes.len() > RELATION_RECORD_METADATA_LIMIT {
                 return Err(RelationRecordStoreError::RecordBudget {
                     byte_len: bytes.len() as u64,
                     limit: RELATION_RECORD_METADATA_LIMIT as u64,
                 });
             }
-            Ok(bytes)
+            Ok(())
         };
         let mut bytes = encode(record)?;
+        let path = self.source_path(&ref_)?;
+        // Where no record stands nothing is kept to put back: the given record is the written one, and one over the limit is
+        // refused here, before a directory is made for it.
+        if !path.exists() {
+            within_limit(&bytes)?;
+        }
         let dir = self.source_dir();
         ensure_directory_path(&self.owner_root, &dir)?;
-        let path = self.source_path(&ref_)?;
         let existing = if path.exists() {
             Some(self.parse_record(&path)?)
         } else {
@@ -394,6 +405,7 @@ impl RelationRecordStore {
             }
         }
 
+        within_limit(&bytes)?;
         atomic_write(&path, &bytes)?;
 
         Ok(RelationRecordWriteReceipt {
@@ -2150,5 +2162,99 @@ mod tests {
             assert_eq!(stored()["place"]["label"], shown_label);
             assert_eq!(stored()["place"]["reference"], shown_reference);
         }
+    }
+
+    /// be2j.c3 item 1 (DLW build ruling 2026-11-11): the size limit is asked of the record as it is written, kept words put
+    /// back. A kept record of exactly the limit whose reference shows longer than it is kept reads and saves back; before, the
+    /// record as given was measured first and the save was refused for bytes that are never written. A given record at the
+    /// limit whose written form is over it is refused, with the written size.
+    #[test]
+    fn the_size_limit_is_asked_of_the_record_as_it_is_written() {
+        let place = json!({"reference":"geonames:2647356","label":"Hastings","latitude_degrees":50.85,
+            "longitude_degrees":0.57,"altitude_metres":10.0,"timezone":"Europe/London"});
+        let read = |root: &Path| {
+            let read = native_read_action(
+                root,
+                "central.world-relations.read",
+                &json!({"scope":"root","ref":"control:root"}),
+            );
+            assert!(read.ok, "{read:?}");
+            read.data.unwrap()["record"].clone()
+        };
+        let save = |root: &Path, record: &Value| {
+            native_read_action(
+                root,
+                "central.world-relations.save",
+                &json!({"scope":"root","record":record,"expected_revision":"w1"}),
+            )
+        };
+        let len = |record: &Value| serde_json::to_vec_pretty(record).unwrap().len() + 1;
+        let padded = |record: &mut Value| {
+            record["retained_padding"] = json!("");
+            let pad = RELATION_RECORD_METADATA_LIMIT - len(record);
+            record["retained_padding"] = json!("x".repeat(pad));
+            assert_eq!(len(record), RELATION_RECORD_METADATA_LIMIT);
+        };
+        let kept_with = |edit: &dyn Fn(&mut Value)| {
+            let fixture = ReadFixture::new();
+            let store = RelationRecordStore::worlds_at_root(&fixture.0);
+            let mut record = native_world_record();
+            record["place"] = place.clone();
+            store.save(&record, None).unwrap();
+            let path = store.source_path("control:root").unwrap();
+            let mut kept: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            edit(&mut kept);
+            let mut bytes = serde_json::to_vec_pretty(&kept).unwrap();
+            bytes.push(b'\n');
+            fs::write(&path, &bytes).unwrap();
+            (fixture, path, kept, bytes)
+        };
+
+        // A: kept at exactly the limit, its reference a character that draws nothing. The read shows "unnamed place aiq2",
+        // which is longer; given back with only the revision advanced, what is written is the limit's size again.
+        let (fixture, path, kept, bytes) = kept_with(&|kept| {
+            kept["place"]["reference"] = json!("\u{200B}");
+            padded(kept);
+        });
+        assert_eq!(bytes.len(), RELATION_RECORD_METADATA_LIMIT);
+        let mut given = read(&fixture.0);
+        assert_eq!(given["place"]["reference"], "unnamed place aiq2");
+        given["revision"] = json!("w2");
+        assert!(len(&given) > RELATION_RECORD_METADATA_LIMIT);
+        let saved = save(&fixture.0, &given);
+        assert!(saved.ok, "{saved:?}");
+        let written = fs::read(&path).unwrap();
+        assert_eq!(written.len(), RELATION_RECORD_METADATA_LIMIT);
+        let after: Value = serde_json::from_slice(&written).unwrap();
+        assert_eq!(after["revision"], "w2");
+        assert_eq!(after["place"], kept["place"], "the kept words stay");
+
+        // B: a kept label of one letter and 80 joiners, shown as the letter. The given record is exactly the limit; the
+        // written one holds the joiners again and is over it: refused with the size that would be written, and nothing is.
+        let (fixture, path, _, bytes) = kept_with(&|kept| {
+            kept["place"]["label"] = json!(format!("x{}", "\u{200D}".repeat(80)));
+        });
+        let mut given = read(&fixture.0);
+        assert_eq!(given["place"]["label"], "x");
+        given["revision"] = json!("w2");
+        padded(&mut given);
+        let over = RELATION_RECORD_METADATA_LIMIT + 80 * '\u{200D}'.len_utf8();
+        let refused = save(&fixture.0, &given);
+        let error = refused
+            .error
+            .expect("a written record over the limit is refused");
+        assert!(
+            error.message.contains(&format!("is {over} bytes")),
+            "{}",
+            error.message
+        );
+        assert_eq!(fs::read(&path).unwrap(), bytes, "and nothing is written");
+        // The store says the same of the same record.
+        let store = RelationRecordStore::worlds_at_root(&fixture.0);
+        assert!(matches!(
+            store.save(&given, Some("w1")),
+            Err(RelationRecordStoreError::RecordBudget { byte_len, limit })
+                if byte_len == over as u64 && limit == RELATION_RECORD_METADATA_LIMIT as u64
+        ));
     }
 }
