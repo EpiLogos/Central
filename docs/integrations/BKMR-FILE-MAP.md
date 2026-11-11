@@ -107,14 +107,79 @@ An act also stands where it writes. A place inside a Work project's tree, howeve
 it is spelled, is that project's: an act that writes there names that project and
 stands on its grant, and one that names another scope, or none, is refused in
 words that say both. A Source the act binds from a Work project needs that
-project's grant as well. A move stands at the root, and where its Source stands
-and where it goes; see below.
+project's grant as well, and so does `adopt-db` of a database inside one. A move
+stands at the root, and at each Work project it writes in; see below, where the
+one limit of this rule is also stated: a move carried out from a journal that was
+edited by hand.
+
+One exception stands. A project nested inside a Work project's tree and
+registered at the root is a scope of the root's: an act in its own tree stands on
+the root's grant. A `link` there makes the link, the relations document and the
+lock files inside the Work project's tree on the root's grant alone. Outside such
+a nested scope's own tree, a root grant writes into no Work project, with the
+limit stated under [an edited journal](#the-limit-an-edited-journal).
+
+A place that holds a Work project's folder, `Work` itself or the ground, reaches
+that project's tree too. A write there is refused at the root, and a move of it
+needs the grant of every project it holds. Work's projects are found on the disk,
+from `Work`'s own entries: a Work project is a folder under `Work`, not a link,
+that holds `ProjectCentral/project.json`. A folder under `Work` without one, and a
+link under `Work` that leads out of it, stand on the root's grant; so does a Work
+folder whose `ProjectCentral` was deleted, which is no longer a project, so a move
+into it on the root's grant goes through. Work's projects are never taken from the
+scopes registered by name, so a scope registered under a project's name stands in
+for none, and `scope-register` refuses that name at another place.
+
+Two shapes are kept apart:
+
+- No declaration: the folder holds no `ProjectCentral/project.json`, or its
+  `ProjectCentral` is a file. It is no project, and stands on the root's grant.
+- A declaration that is there and does not read: its folder is closed by its
+  mode, something on the way is a link to itself, the file has no permissions,
+  it is not an ordinary file, or its bytes are no declaration. The folder is
+  still a project to the gate, and the map leaves it out as unreachable, in words
+  that name it and say what to mend.
+
+While a project is unreachable, an act that does not touch it goes on, and the
+readers (`inspect`, `search`, `locate`) answer with it listed. An act on a place
+in its tree is refused in the project's words, and so is a `locate` of a place in
+it, and so is every move's plan, which has to read each project's links. A project that a move's apply or rollback
+reaches or runs from whose declaration does not read is named in the refusal as
+well.
+A place is judged by the folder it names, its device and inode, whatever its
+spelling: `..`, a link, another case, and on macOS the firmlink
+`/System/Volumes/Data` spelling of the ground. A folder scope's registration asks
+"inside this ground" the same way.
+
+A refusal names the Work project whose grant is missing, by its folder's name, so
+the person knows which grant to add. The name is said to whoever holds a human
+credential for the act, and a human credential for these acts is only ever the
+person's own: this is a stated property of the words, not a leak.
+
+Two limits stand against a writer that runs as the same user, and they need the
+operating system's isolation, not a path check:
+
+- A hard link carries a project's file under another name. A root Source
+  registered at a hard link is the root's: no act writes through a file path, so
+  no file of the project's is written.
+- A move's plan, its apply and its rollback each take the locks of every scope
+  they run with. So each makes `.central/file-map.lock` and
+  `.central/source-mutation.lock`, two empty files, in a Work project where they
+  were not yet there, whatever the move reaches.
+- The gate reads the places before the act takes its lock and writes. A writer
+  that swaps a folder for a link between the two can defeat that reading. Each
+  writer then makes its own check and refuses a link in any folder of the path it
+  writes, below its scope's root: `register`, `link`, a move's rename, its
+  relations documents and its link steps. A move's scopes are themselves held to
+  their folders, by device and inode, before its rename, after it and after each
+  link step; a swap between one of those checks and the write after it is the
+  same limit.
 
 | Act | What it writes |
 | --- | --- |
 | `register` | the Source, in the scope's relations document |
 | `link` | a link inside the scope's folder, kept in that document |
-| `pool` | whether the scope's whole readable tree is Source, in that document |
+| `pool` | whether the scope's whole readable tree is Source, in that document; the root's pool stops at each folder holding a project's manifest as an ordinary file; a project's keeps its whole tree; every pool stops at a Work project's folder that is not the scope itself, one whose declaration does not read among them (the map names it as unreachable) |
 | `scope-register` | a project scope in Control's relations document, or a folder scope's declaration in the ground |
 | `adopt-db` | a copy of the person's bookmark database and its untouched original, under `.central/bkmr` |
 | `record-adopt` | a bookmark bound to a Source, its description rewritten with the person's words kept inside |
@@ -127,19 +192,133 @@ what the ground already declares, and read no credential.
 
 `move-plan` takes a `source_ref` and scope-relative `destination`; it records a
 recovery journal and stages owned link replacements, without moving source bytes.
+The journal, and the plan's answer, name the destination as the disk spells it:
+the folders above it in the disk's own case and form, whatever the person typed,
+and its own new name as asked.
 `move-apply` and `move-rollback` take the returned `plan_id` and `quiesced:true`.
 Each move is the person's own act: it authenticates on the host's native
 credential (`CENTRAL_NATIVE_TOKEN`) for a human grant naming that exact Action
-at the root, and at the Work project where its Source stands and where it goes.
-Without one it is refused in words that name the project whose grant is missing,
-with nothing planned or moved. Apply and rollback read the move from its journal,
+at the root, and at each Work project it writes in: where its Source stands, where
+it goes, and each one whose links it rewrites, with their relations. Without one
+it is refused in words that name the project whose grant is missing, with nothing
+planned or moved. Apply and rollback read the move from its journal,
 and stand on the scopes the journal runs from. So an interrupted move can be
 finished or undone while a scope inside the moved folder is still declared where
-it stood. They take nothing else from the journal's list of scopes: the move
-stands at the root wherever the list puts it, the Work project its Source or
-destination lies in is found on the disk, and a journal that sets the root's
-scope anywhere but the ground is refused. The links and relations a move rewrites
-in other Work projects are not yet held by those projects' grants.
+it stood. One journal is undone and not finished: one that an earlier `ctrl`
+planned with its destination's folders typed in another case or form than the
+disk keeps. Its relations name that spelling, which the map does not read, so
+apply refuses it, from any state, in words that say to roll it back and plan
+again, and a rollback goes through. They take nothing else from the journal's list of scopes: the move
+stands at the root wherever the list puts it, each Work project its Source or
+destination lies in is found on the disk, and a journal whose root scope's path
+is not empty, as `move-plan` writes it, is refused. Apply and rollback also stand at each
+Work project whose relations or links the journal rewrites.
+
+A link the move rewrites is judged by where it stands on the disk, before the
+move and after it, and never by what it points at. A link in a Work project's
+tree needs that project's grant, whichever scope keeps the link: at the plan, and
+at apply and rollback for each link step of the journal.
+
+A link step replaces a link and nothing else. Where a folder stands at a step's
+path, the gate judges that folder with all it holds, so a step at a Work
+project's own folder, or at `Work`, needs every such project's grant. And apply
+refuses, whatever the grants, a step where anything but a symbolic link stands:
+at its path before or after the move, at its kept name or at its staged name. It
+refuses a step whose path is spelled as a scope's own folder or a folder above
+one, in words that say so. A folder or a file is never moved aside as if it were
+a link.
+
+Apply and rollback check a journal against what `move-plan` writes, one rule at
+a time:
+
+- a relations document only at the move's own scope or at one whose link it
+  rewrites;
+- each link step at a path contained in its scope, with its staged and kept links
+  at their own names in that scope's moves folder;
+- each scope spelled as the disk spells the folder it stands at. In the ground
+  that is plain names below it, with no link in any of them and each in the
+  disk's own case and form, read where the scope stands now (with the moved
+  folder, once the Source has moved). Outside the ground it is the folder's own
+  absolute path. A scope in the ground that is no project and does not stand is
+  refused as well.
+
+A journal that fails one of these is refused at the gate, before anything is
+moved or written. A scope inside the moved folder is asked again where it went,
+once the Source has moved; the destination is read there as the disk spells it,
+so a plan's own journal reads. Apply then makes checks of its own, on its own
+read:
+
+- It refuses a link in any folder above a link step's path, its staged link or
+  its kept link.
+- It holds each scope to the folder it read before the rename, by device and
+  inode. If a scope reads as another folder once the Source has moved, or the
+  scopes do not read at all, the rename is put back and nothing else is written.
+  The journal stays as planned, so the same apply answers the same way and a
+  rollback has nothing to undo. A scope spelled through a link is refused by
+  the spelling rule before the rename, so "another folder" now stands only
+  against a second writer; "do not read" is still reached by a journal that
+  moves a scope's own declaration away.
+- It holds each scope again after every link step, before the next step and
+  before any relations document is written. If one has strayed, the link steps
+  this call carried are undone, newest first, the rename this call made is put
+  back, and no document is written; the refusal says which step could not be
+  undone, if any, and then the Source is left where it stands. With the spelling
+  rule above, no journal reaches this check on its own: it stands against a
+  second writer that swaps a folder while the move runs.
+
+A put-back can itself fail, when another writer takes the Source's old name in
+that moment or the system refuses the rename back. The refusal then says where
+the Source stands and that it must be moved back by hand, and the journal's state
+says "renamed". While the scopes do not read, an apply of that journal is
+refused. A rollback of it makes the rename back and nothing else, and says so in
+its answer (`state: "rolling-back"`, with a `note`); a second rollback, now that
+the scopes read, undoes whatever else the move had carried. Where the rollback
+cannot make the rename back either, its refusal says the same as apply's. This
+holds only for a journal whose state says "renamed": one still "prepared" whose
+Source another hand moved is refused as before, naming the project that does not
+read. A rollback whose own put-back fails leaves the Source where the move took
+it from, says so, and the journal reads again once its scopes do.
+
+### The limit: an edited journal
+
+An edited move journal is not yet a boundary this rule defends in full. A journal
+is a file in the root's `.central/bkmr/moves`. Apply, a resumed apply and
+rollback take the file they are handed and check its content rule by rule, as
+above; they do not yet know that it is the journal `move-plan` wrote. The
+routes below were found by review. Each but the fifth wrote in a Work project
+on the root's grant alone. Each is closed and held by a test:
+
+- a link step of the root's at a path inside a Work project;
+- a project scope spelled with `..` through the moved folder, read as a stand-in
+  before the rename and as the project after it;
+- a link the root keeps inside a Work project, rewritten by a move (no edit was
+  needed for this one);
+- a link step at a Work project's own folder, or at `Work`, which moved the whole
+  folder aside;
+- scopes that do not read after the rename, which left the Source moved and the
+  journal unreadable (nothing was written in a project);
+- a scope spelled through a link of the root's own, with a link step that
+  replaces that link, so the scope's relations document was written wherever the
+  new link led.
+
+One more is known and not closed. A journal edited to name a project outside
+the ground as the move's owner moves a folder inside that project, on the root's
+grant. No Work project is written and no grant is passed by, since a project
+outside the ground stands on the root's grant; but `move-plan` refuses every
+move in such a scope ("External scopes are read-only"), and apply does not ask.
+
+A journal edited by a hand that can write in the root's `.central` may find
+another such route. So every sentence here that says a root grant writes into no
+Work project, or that a move stands at each Work project it writes in, is true
+of a journal as `move-plan` wrote it and of the edits listed above, and is not
+claimed of every edit. Closing the class takes a different rule, which is not
+built yet: a scope is written by a move only on a plan that scope itself holds,
+so a journal edited in the root's `.central` no longer matches the copy in the
+project and writes nothing there.
+
+A link whose Source no longer reads stops every plan. The refusal names the link
+and the project it stands in, and says to remove the link or restore its Source:
+no grant mends it.
 `move-plan` is no read: its journal names where the file goes, and apply and
 rollback carry that out by the plan's id alone.
 The caller must have stopped affected sessions; the operation refuses its own

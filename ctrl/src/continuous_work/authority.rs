@@ -53,9 +53,10 @@ pub const AUTHENTICATED_ACTIONS: &[&str] = &[
 ];
 /// The authenticated Actions that take a project scope: every one of `AUTHENTICATED_ACTIONS` whose Action names a `project`, and the
 /// file map's three moves, which reach a project by the Source they move and where they move it. A move stands at the root, since it
-/// can bring a folder into Work, and at each Work project its Source or destination is in (DLW build ruling 2026-11-09, round 54d F1;
-/// file_map.rs `grant_scope`). Those left out, `central.flow.append`, `control.apply-proposal` and the file map's `scope-register`,
-/// always resolve the root: the root registers every scope. `authenticate` refuses any other
+/// can bring a folder into Work, and at each Work project it writes in: where its Source stands, where it goes, and each one whose
+/// links it rewrites (DLW build ruling 2026-11-09, round 54d F1 and round 54g item 4; file_map.rs `grant_scope`). Those left out,
+/// `central.flow.append`, `control.apply-proposal` and the file map's `scope-register`, always resolve the root: the root registers
+/// every scope. `authenticate` refuses any other
 /// Action at a project, so this list is exactly what a grant covering `project:<id>` lets its holder do there; extending a person's
 /// grant to a project they bring in (crate::ground_projects) grants these.
 pub const PROJECT_AUTHENTICATED_ACTIONS: &[&str] = &[

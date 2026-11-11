@@ -1254,11 +1254,13 @@ fn open_folder_root(raw: &str, ground: &Path) -> io::Result<PathBuf> {
         )));
     }
     // Said of the folder's own declared root alone: these words ride on every answer while the folder is unreachable, and the
-    // ground's own path is not theirs to show (DLW build ruling 2026-11-09, 47g item 5).
-    if canonical.starts_with(ground) {
+    // ground's own path is not theirs to show (DLW build ruling 2026-11-09, 47g item 5). Inside and around are asked of the folders
+    // themselves (their device and inode), as registration asks them, so no spelling of the ground stands for another place
+    // (round 54g item 7).
+    if crate::file_map::within(&canonical, ground) {
         return Err(invalid(format!("{raw} is inside this ground")));
     }
-    if ground.starts_with(&canonical) {
+    if crate::file_map::within(ground, &canonical) {
         return Err(invalid(format!("{raw} holds this ground")));
     }
     match fs::symlink_metadata(canonical.join("ProjectCentral/project.json")) {
@@ -1343,6 +1345,12 @@ fn participating_as(
         project: None,
     };
     let mut candidates = base.ground()?.scopes;
+    // Two shapes of a folder under Work are kept apart (DLW build ruling 2026-11-11, round 54h item 5). No declaration (no
+    // `ProjectCentral/project.json`, or a `ProjectCentral` that is a file): no project, as round 54g item 14 has it. A declaration
+    // that is there and does not read (its folder's mode, a link to itself, not an ordinary file; and below, a file with no
+    // permissions or one that is no declaration): unreachable, in words that name it and what to mend, and every other scope
+    // stands.
+    let mut unread_members = Vec::new();
     if optional_directory(&root.join("Work"))? {
         safe_member(root, "Work", true)?;
         for child in fs::read_dir(root.join("Work"))? {
@@ -1353,12 +1361,22 @@ fn participating_as(
             match fs::symlink_metadata(child.path().join("ProjectCentral/project.json")) {
                 Ok(metadata) if metadata.is_file() => {}
                 Ok(_) => {
-                    return Err(invalid(
-                        "Participating Project manifest is not an ordinary file",
-                    ))
+                    unread_members.push((
+                        child.file_name().to_string_lossy().into_owned(),
+                        invalid("Participating Project manifest is not an ordinary file"),
+                    ));
+                    continue;
                 }
-                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(error),
+                Err(error)
+                    if error.kind() == io::ErrorKind::NotFound
+                        || error.raw_os_error() == Some(libc::ENOTDIR) =>
+                {
+                    continue
+                }
+                Err(error) => {
+                    unread_members.push((child.file_name().to_string_lossy().into_owned(), error));
+                    continue;
+                }
             }
             let name = child
                 .file_name()
@@ -1372,6 +1390,9 @@ fn participating_as(
     // A folder scope's name is a scope name like any other: one namespace. A folder scope that cannot stand (its declaration does
     // not read, or a project holds its name) is unreachable, in words, and every other scope stands.
     let mut unreachable = Vec::new();
+    for (name, error) in unread_members {
+        unreachable.push(work_member_unread(root, name, &error));
+    }
     // `folder:` names a folder scope's World: a project spelled so (a folder under Work, or a hand-edited register) would shadow
     // one, so it does not stand, in words.
     let shadowing: Vec<String> = candidates
@@ -1474,7 +1495,15 @@ fn participating_as(
             None => {
                 let target = safe_member(root, &path, true)
                     .map_err(|error| read_failure(error, "known", "owner_root", "unavailable"))?;
-                let scope = Scope::project(target.clone(), Some(name.clone()))?;
+                let scope = match Scope::project(target.clone(), Some(name.clone())) {
+                    Ok(scope) => scope,
+                    // A member of Work whose declaration does not read is unreachable, and the others stand (round 54h item 5).
+                    Err(error) if path == format!("Work/{name}") => {
+                        unreachable.push(work_member_unread(root, name, &error));
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
                 (target, scope)
             }
         };
@@ -1553,6 +1582,20 @@ fn participating_as(
         result.push(scope);
     }
     Ok((result, unreachable))
+}
+/// A member of Work whose declaration does not read, as an unreachable scope: its words name it and say what to mend, and its root
+/// is its folder under `Work`, by which the person's gate and a move's plan know it (file_map.rs `grant_scope`, `admitted_as`).
+fn work_member_unread(root: &Path, name: String, error: &io::Error) -> UnreachableScope {
+    UnreachableScope {
+        kind: error.kind(),
+        world: None,
+        message: format!(
+            "unreachable: the Work project {name} does not read its declaration, Work/{name}/ProjectCentral/project.json: \
+             {error}; mend that file or its folder (a mode, or a link in its place) and the project stands again"
+        ),
+        root: Some(root.join("Work").join(&name)),
+        project: name,
+    }
 }
 /// The ground-side home of an external scope's derived state, created on
 /// first sight so locks and indexes never fall back into the external tree.
@@ -2049,6 +2092,11 @@ fn source_candidates(
                 }
                 let normal = crate::source_safety::normal_member_key(&member).ok()?;
                 let path = normal.to_str()?.to_owned();
+                // A file asked of the pool by its path is the pool's only where the pool's walk would take it: not past a folder
+                // the pool stops at, a Work project's above all (round 54h item 7).
+                if source_horizon::pool_stops_above(&scope.root, &scope.world, &path) {
+                    return None;
+                }
                 Some(SourceBinding {
                     source_ref: source_horizon::source_ref(&scope.world, &path),
                     path,
@@ -3050,7 +3098,7 @@ fn media_entry(
     }
 }
 /// The member a SourceRef names in `world`, when it is that world's spelling of one.
-fn member_of_ref(world: &str, reference: &str) -> Option<String> {
+pub(crate) fn member_of_ref(world: &str, reference: &str) -> Option<String> {
     let prefix = format!("central:source:{world}:");
     reference
         .strip_prefix(&prefix)

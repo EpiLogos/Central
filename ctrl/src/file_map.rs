@@ -1227,13 +1227,14 @@ const PERSON_ACTS: [(&str, &str, &str); 9] = [
 ];
 /// What a move's Action says of its authority, in its description.
 const PERSON_MOVE_WORDS: &str = " A move is the person's own act: it authenticates on their native authority \
-    (CENTRAL_NATIVE_TOKEN) at the root, and at each Work project its Source or destination is in, and without it is refused in \
-    words, and nothing is planned or moved. move-plan writes the \
+    (CENTRAL_NATIVE_TOKEN) at the root, and at each Work project it writes in: where its Source stands, where it goes, and each \
+    one whose links it rewrites. Without it the move is refused in words that name the project whose grant is missing, and \
+    nothing is planned or moved. move-plan writes the \
     move's journal, which names where the file goes; move-apply and move-rollback carry it out by its plan_id alone.";
 /// What the file map's other person acts say of their authority, in their descriptions, before what each writes.
 const PERSON_GROUND_WORDS: &str = " It is the person's own act, since it changes their ground or what they have adopted: it \
     authenticates on their native authority (CENTRAL_NATIVE_TOKEN) where it stands (at the Work project it names, and at each one whose \
-    tree it reaches, else at the root), and without it is refused in words, and nothing is written.";
+    tree it reaches or holds, else at the root), and without it is refused in words, and nothing is written.";
 /// What `scope-register` says of its authority, in its description: it stands at the root.
 const PERSON_SCOPE_WORDS: &str = " It is the person's own act, since it changes which of their folders the map reads: it \
     authenticates on their native authority (CENTRAL_NATIVE_TOKEN) at the root, and without it is refused in words, and nothing is \
@@ -1300,10 +1301,17 @@ fn the_persons_act(
             .and_then(|principal| principal.require_human().map(|()| principal.scope_ref))
     };
     let at = held(&standing.scope).map_err(words)?;
-    // A refusal at another project the act reaches names that project (round 54f item 1).
+    // A refusal at another project the act reaches names that project (round 54f item 1), and so does one for a project whose
+    // declaration does not read, as when it cannot be opened or is a link (round 54g item 12).
     for member in &standing.also {
-        let scope =
-            crate::continuous_work::source::Scope::resolve(root, Some(member)).map_err(words)?;
+        let scope = crate::continuous_work::source::Scope::resolve(root, Some(member))
+            .map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!("it reaches the Work project {member}, which does not read: {error}"),
+                )
+            })
+            .map_err(words)?;
         held(&scope)
             .map_err(|error| {
                 io::Error::new(
@@ -1334,21 +1342,24 @@ struct Standing {
 ///   writes (the Source it registers, the link it makes) inside a Work project's tree names that project, and an act that names
 ///   another scope, or none, is refused in words that say both. A Source the act binds or links from a Work project, and a move's
 ///   Source and destination in one, need that project's grant as well (`act_places`). Each place is resolved on the disk before it
-///   is judged (`resolved`, `within`): `..`, an absolute path, a link, its case and a trailing slash.
+///   is judged (`resolved`, `within`): `..`, an absolute path, a link, its case and a trailing slash. A place that holds a Work
+///   project's folder (`Work` itself, or the ground) reaches that project's tree too, so it needs every such project's grant, and a
+///   write there is refused at the root (round 54g item 5). The Work projects are found on the disk (`work_projects_of`), never
+///   among the scopes the act reads, so a scope registered under a project's name stands in for none (round 54g item 6).
 ///
 /// What is named is read without making anything (`participating_unmade`), so a refusal here leaves no folder behind (round 54b
-/// item 1). A move's apply and rollback read the scopes its journal runs from instead (`resume_scopes_unmade`; round 54f item 1),
+/// item 1). A move's apply and rollback read the scopes its journal runs from instead (`carried_scopes`; round 54f item 1),
 /// and take nothing else from that list (round 54f.2): the move stands at the journal's root scope wherever the list puts it
 /// (`root_scope`), its journal is read where the act reads it, at the ground, and the Work project a place lies in is found on the
-/// disk (`work_project_of`).
+/// disk (`work_projects_of`).
 fn grant_scope(root: &Path, op: &str, input: &Value) -> io::Result<Standing> {
     let ground = root.canonicalize()?;
     // A move carried out from its journal stands on the scopes it runs from (`resume_scopes`), as `admitted_as` runs it: after the
     // rename and before the move is finished or undone, a scope inside the moved folder is declared where it no longer stands, so
     // the live map does not read (round 54f item 1).
-    let (all, _) = if matches!(op, "move-apply" | "move-rollback") {
+    let (all, unreachable) = if matches!(op, "move-apply" | "move-rollback") {
         (
-            super::file_map_moves::resume_scopes_unmade(&ground, input)?,
+            super::file_map_moves::carried_scopes(&ground, input, op == "move-rollback", false)?,
             Vec::new(),
         )
     } else {
@@ -1367,34 +1378,68 @@ fn grant_scope(root: &Path, op: &str, input: &Value) -> io::Result<Standing> {
     };
     let member = named.and_then(|scope| grant_member(&ground, scope));
     let mut also: Vec<String> = Vec::new();
-    for place in act_places(&ground, &all, named, op, input) {
-        let Some((reached, project)) = work_project_of(&ground, &place.path) else {
-            continue;
+    for place in act_places(&ground, &all, named, op, input)? {
+        // A link lies where its folder lies, and holds nothing. A link place where a folder stands is no link's: it is judged as
+        // that folder, with all it holds, so a journal's link step at a Work project's own folder, or at `Work`, asks every
+        // project it would move (round 54i item 1; B1). Apply refuses such a step whatever the grants.
+        let stands_a_folder =
+            fs::symlink_metadata(&place.path).is_ok_and(|entry| entry.file_type().is_dir());
+        let reaches = match place
+            .path
+            .parent()
+            .filter(|_| place.link && !stands_a_folder)
+        {
+            Some(folder) => work_projects_of(&ground, folder)
+                .into_iter()
+                .filter(|(_, project)| within(folder, project))
+                .collect(),
+            None => work_projects_of(&ground, &place.path),
         };
-        // A project scope nested in a Work project stands on the root's grant (round 54d F9), and so does a place in its own tree.
-        let nested = named.is_some_and(|named| {
-            named.root != project
-                && within(&named.root, &project)
-                && within(&place.path, &named.root)
-        });
-        if member == Some(reached.as_str()) || nested {
-            continue;
-        }
-        if place.writes && !moves {
-            let names = match input.get("project").and_then(Value::as_str) {
-                Some(asked) => format!("project {asked}"),
-                None => "no project, so it stands at the root".to_owned(),
-            };
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!(
-                    "{} is in the Work project {reached}, but the act names {names}: an act on {reached}'s tree names project {reached} and stands on its grant",
-                    place.named
-                ),
-            ));
-        }
-        if !also.contains(&reached) {
-            also.push(reached);
+        for (reached, project) in reaches {
+            // A Work project whose declaration did not open is no scope the act could name: the refusal is that project's own
+            // words, which say what to mend (round 54h item 5).
+            if let Some(gone) = unreachable.iter().find(|gone| {
+                gone.world.is_none() && gone.root.as_deref() == Some(project.as_path())
+            }) {
+                return Err(io::Error::new(
+                    gone.kind,
+                    format!(
+                        "{} reaches Work/{reached}, which is {}",
+                        place.named, gone.message
+                    ),
+                ));
+            }
+            // A project scope nested in a Work project stands on the root's grant (round 54d F9), and so does a place in its own
+            // tree.
+            let nested = named.is_some_and(|named| {
+                named.root != project
+                    && within(&named.root, &project)
+                    && within(&place.path, &named.root)
+            });
+            if member == Some(reached.as_str()) || nested {
+                continue;
+            }
+            if place.writes && !moves {
+                let names = match input.get("project").and_then(Value::as_str) {
+                    Some(asked) => format!("project {asked}"),
+                    None => "no project, so it stands at the root".to_owned(),
+                };
+                let stands = if within(&place.path, &project) {
+                    "is in"
+                } else {
+                    "holds"
+                };
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!(
+                        "{} {stands} the Work project {reached}, but the act names {names}: an act on {reached}'s tree names project {reached} and stands on its grant",
+                        place.named
+                    ),
+                ));
+            }
+            if !also.contains(&reached) {
+                also.push(reached);
+            }
         }
     }
     Ok(Standing {
@@ -1425,31 +1470,36 @@ fn root_scope(all: &[Scope]) -> Option<&Scope> {
 }
 
 /// One place an act of the person's reaches: where it stands on the disk (`resolved`), how the act named it, and whether the act
-/// writes there or only binds a Source standing there.
+/// writes there or only binds a Source standing there. A managed link a move replaces is a place by its folder (`link`): it lies in
+/// the tree its folder lies in, and it is never read through to what it points at (round 54h items 1 and 3).
 struct Place {
     path: PathBuf,
     named: String,
     writes: bool,
+    link: bool,
 }
 
 /// The places each of the person's acts reaches (round 54d F1): `register` the Source it registers, `link` the link it makes and the
-/// Source it links, `record-adopt` the Source it binds a bookmark to, a move the Source it moves and where its journal moves it.
-/// `pool`, `adopt-db` and `scope-register` name no place: a pool is its scope's own tree (`source_horizon::insert_pool_bindings` stops
-/// at another project's), a bookmark database is only read, and the root registers every scope. A Source that cannot be found, or a
-/// journal that cannot be read, names no place here: the act itself refuses it. A move's journal is read at the ground, where its
-/// apply and rollback read it (`file_map_moves::apply`), whatever the journal says of where its scopes stand (round 54f.2).
+/// Source it links, `record-adopt` the Source it binds a bookmark to, `adopt-db` the database it copies (round 54g item 10), a move's
+/// plan the Source it moves, where it moves it and the relations of each scope whose links it rewrites, and a move's apply and
+/// rollback each place its journal writes (round 54g item 4). `pool` and `scope-register` name no place: a pool is its scope's own
+/// tree (`source_horizon::insert_pool_bindings` stops the root's at each project's), and the root registers every scope. A Source
+/// that cannot be found, or a journal that cannot be read, names no place here: the act itself refuses it. A move's journal is read
+/// at the ground, where its apply and rollback read it (`file_map_moves::apply`), whatever the journal says of where its scopes
+/// stand (round 54f.2).
 fn act_places(
     ground: &Path,
     all: &[Scope],
     named: Option<&Scope>,
     op: &str,
     input: &Value,
-) -> Vec<Place> {
+) -> io::Result<Vec<Place>> {
     let raw = |field: &str| input.get(field).and_then(Value::as_str);
     let at = |base: &Path, spelled: &str, writes: bool| Place {
         path: resolved(&base.join(spelled)),
         named: spelled.to_owned(),
         writes,
+        link: false,
     };
     let source = |scopes: &[Scope]| {
         raw("source_ref").and_then(|reference| {
@@ -1460,6 +1510,7 @@ fn act_places(
                         path: resolved(&path),
                         named: reference.to_owned(),
                         writes: false,
+                        link: false,
                     },
                 )
             })
@@ -1483,34 +1534,82 @@ fn act_places(
                 places.extend(source(std::slice::from_ref(scope)).map(|(_, place)| place));
             }
         }
+        // The database is only read, but a project's file is that project's to give (round 54g item 10).
+        "adopt-db" => {
+            if let (Some(scope), Some(database)) = (named, raw("database")) {
+                places.push(at(&scope.root, database, false));
+            }
+        }
         "move-plan" => {
-            if let Some((owner, from)) = source(all) {
+            if let Some((reference, (owner, moved))) = raw("source_ref")
+                .and_then(|reference| Some((reference, source_place(all, reference)?)))
+            {
                 if let Some(to) = raw("destination") {
                     places.push(at(&owner.root, to, true));
+                    // Each scope whose links the move rewrites: the plan stages the new link there and rewrites its relations. And
+                    // each of those links, where it stands before the move and after it: a link the root keeps inside a Work
+                    // project's tree is in that project's tree (round 54h item 3).
+                    for rewritten in
+                        super::file_map_moves::rewritten_scopes(all, &owner, &moved, to)?
+                    {
+                        let scope = rewritten.scope;
+                        places.push(Place {
+                            path: resolved(&scope.root.join(scope.relations_path())),
+                            named: format!("the links of {}", scope.world),
+                            writes: true,
+                            link: false,
+                        });
+                        for (named, link) in rewritten.links {
+                            places.push(Place {
+                                path: resolved_entry(&link),
+                                named,
+                                writes: true,
+                                link: true,
+                            });
+                        }
+                    }
                 }
-                places.push(from);
+                places.push(Place {
+                    path: resolved(&moved),
+                    named: reference.to_owned(),
+                    writes: false,
+                    link: false,
+                });
             }
         }
         "move-apply" | "move-rollback" => {
-            for (spelled, path) in super::file_map_moves::journal_places(ground, input) {
+            for place in super::file_map_moves::journal_places(ground, all, input) {
                 places.push(Place {
-                    path: resolved(&path),
-                    named: spelled,
+                    path: if place.link {
+                        resolved_entry(&place.path)
+                    } else {
+                        resolved(&place.path)
+                    },
+                    named: place.named,
                     writes: true,
+                    link: place.link,
                 });
             }
         }
         _ => {}
     }
-    places
+    Ok(places)
 }
 
-/// Where the Source `reference` stands, and the scope that holds it, among the ground's own scopes: the root and its Work projects,
-/// the only places a Work tree is reached from. Each is read as `lookup` reads it, making nothing; one that does not read is passed.
+/// Where the Source `reference` stands, and the scope that holds it, among the ground's own scopes and its folder scopes: the root,
+/// its Work projects, and a folder registered by a spelling that once hid it inside a Work project's tree (round 54g item 7). Each is
+/// read as `lookup` reads it, making nothing: a folder scope's Source where it stands, never by walking the folder. One that does
+/// not read is passed.
 fn source_place(all: &[Scope], reference: &str) -> Option<(Scope, PathBuf)> {
     all.iter()
-        .filter(|scope| !scope.is_external() && !scope.is_folder())
+        .filter(|scope| scope.is_folder() || !scope.is_external())
         .find_map(|scope| {
+            if scope.is_folder() {
+                return member_of_ref(&scope.world, reference)
+                    .and_then(|member| folder_member(scope, &member).ok().flatten())
+                    .filter(|entry| entry.source.source_ref == reference)
+                    .map(|entry| (scope.clone(), entry.path));
+            }
             entries(scope).ok()?.into_iter().find_map(|entry| {
                 (entry.source.source_ref == reference).then(|| (scope.clone(), entry.path))
             })
@@ -1542,9 +1641,18 @@ fn resolved(path: &Path) -> PathBuf {
     at
 }
 
+/// Where a link stands on the disk: its folder as `resolved` reads it, and its own name as written. The link is never followed: a
+/// move replaces the link itself, in its folder, wherever it points (round 54h items 1 and 3).
+fn resolved_entry(path: &Path) -> PathBuf {
+    match (path.parent(), path.file_name()) {
+        (Some(folder), Some(name)) => resolved(folder).join(name),
+        _ => resolved(path),
+    }
+}
+
 /// Whether `path` (as `resolved` gives it) lies in the tree at `root`: some folder above it, or the place itself, is that root's very
-/// folder (its device and inode), whatever its spelling.
-fn within(path: &Path, root: &Path) -> bool {
+/// folder (its device and inode), whatever its spelling: a link, another case, or on macOS the firmlink `/System/Volumes/Data`.
+pub(crate) fn within(path: &Path, root: &Path) -> bool {
     let Ok(root) = fs::metadata(root) else {
         return false;
     };
@@ -1553,21 +1661,30 @@ fn within(path: &Path, root: &Path) -> bool {
     })
 }
 
-/// The project of Work whose tree `path` lies in, if any: its folder's name (`grant_member`) and that folder. It is found on the disk,
-/// as the live map finds a Work project (`participating`: a folder under `Work`, not a link, that holds `ProjectCentral/project.json`),
-/// and not among the scopes the act reads, so no list the act is handed leaves one out: a move's journal lists its own (round 54f.2).
-fn work_project_of(ground: &Path, path: &Path) -> Option<(String, PathBuf)> {
-    fs::read_dir(ground.join("Work"))
-        .ok()?
+/// The projects of Work whose tree `path` reaches, each by its folder's name (`grant_member`) and that folder, in name order: the one
+/// it lies in, and each one it holds, as `Work` and the ground hold every one (round 54g item 5). They are found on the disk, from
+/// `Work`'s entries, as the live map finds a Work project (`participating`: a folder under `Work`, not a link, that holds
+/// `ProjectCentral/project.json`), and not among the scopes the act reads. So no list the act is handed leaves one out (a move's
+/// journal lists its own, round 54f.2), and no scope registered under a project's name stands in for it (round 54g item 6).
+fn work_projects_of(ground: &Path, path: &Path) -> Vec<(String, PathBuf)> {
+    let Ok(members) = fs::read_dir(ground.join("Work")) else {
+        return Vec::new();
+    };
+    let mut reached: Vec<_> = members
         .flatten()
-        .find_map(|child| {
+        .filter_map(|child| {
             let folder = child.file_type().is_ok_and(|kind| kind.is_dir());
             let project = child.path();
-            let declared =
-                fs::symlink_metadata(project.join("ProjectCentral/project.json")).is_ok();
+            // A declaration that is there and does not read still makes its folder a project: the gate asks no less for a
+            // project it cannot open (round 54h item 5).
+            let declared = source_horizon::declares_a_project(&project);
             let member = child.file_name().into_string().ok()?;
-            (folder && declared && within(path, &project)).then_some((member, project))
+            (folder && declared && (within(path, &project) || within(&project, path)))
+                .then_some((member, project))
         })
+        .collect();
+    reached.sort();
+    reached
 }
 
 pub fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
@@ -1649,12 +1766,27 @@ fn admitted_as(
     };
     let (all, unreachable) = if matches!(op, "move-apply" | "move-rollback") {
         (
-            super::file_map_moves::resume_scopes(&root, input)?,
+            super::file_map_moves::carried_scopes(&root, input, op == "move-rollback", true)?,
             Vec::new(),
         )
     } else {
         participating(&root)?
     };
+    // A move's plan reads every scope's links to its Source and rewrites them. A Work project that does not read keeps links the
+    // plan cannot see, so the plan is refused in that project's words; every other act goes on without it (round 54h item 5).
+    if op == "move-plan" {
+        if let Some(gone) = unreachable.iter().find(|gone| {
+            gone.root.as_deref().and_then(Path::parent) == Some(root.join("Work").as_path())
+        }) {
+            return Err(io::Error::new(
+                gone.kind,
+                format!(
+                    "a move's plan reads every project's links, and one does not read: {}; nothing was planned",
+                    gone.message.trim_start_matches("unreachable: ")
+                ),
+            ));
+        }
+    }
     // A scope's register stands at the root, where its gate (`grant_scope`) and its write (`scope_register`) stand: a `project` it
     // is given names none of its scopes and chooses none of its locks (DLW build ruling 2026-11-09, round 54b item 2). A scope
     // asked for by name whose root did not open says so, rather than being an unknown map.
@@ -1695,6 +1827,30 @@ fn admitted_as(
             .filter(|location| location.is_absolute())
             .and_then(|location| unreachable_location(&unreachable, location))
         {
+            return Err(error);
+        }
+        // A location in a Work project that does not read is that project's to say, by any spelling that reaches its folder
+        // (round 54i item 3; B3): not "unregistered". Only a member of Work is asked: a registered project that does not stand, or
+        // an external one that did not open, is listed with its root as written and holds no place under `Work` (round 54j
+        // item 3; C3).
+        if let Some(error) = input["path"].as_str().and_then(|asked| {
+            let location = resolved(&root.join(asked));
+            let work = root.join("Work");
+            unreachable.iter().find_map(|gone| {
+                let member = gone.root.as_deref().filter(|member| {
+                    gone.world.is_none() && member.parent() == Some(work.as_path())
+                })?;
+                (location.starts_with(member) || within(&location, member)).then(|| {
+                    io::Error::new(
+                        gone.kind,
+                        format!(
+                            "Location is in Work/{}, which is {}",
+                            gone.project, gone.message
+                        ),
+                    )
+                })
+            })
+        }) {
             return Err(error);
         }
     }
@@ -7384,5 +7540,115 @@ mod folder_scope_tests {
                 .contains("found at project:alpha, but the act runs at control:root"),
             "{planned}"
         );
+    }
+
+    /// Round 54g item 7 (review of #343, finding 5): a folder scope's Source is a place the person's gate judges, found where it
+    /// stands, never by walking the folder. A folder scope that a spelling once let stand inside Alpha's tree (here its scope, made
+    /// as the map makes it, set inside Alpha) gives its file's place, and that place is Alpha's.
+    #[test]
+    fn a_folder_scopes_source_is_a_place_the_gate_judges() {
+        let world = World::new();
+        world
+            .register("Music", &world.music(), json!(["mp3"]))
+            .unwrap();
+        let (all, _) = participating(&world.root).unwrap();
+        let mut folder = all
+            .into_iter()
+            .find(|scope| scope.world == "folder:Music")
+            .unwrap();
+        let audio = world.root.join("Work/Alpha/audio");
+        fs::create_dir_all(&audio).unwrap();
+        fs::write(audio.join("voice.mp3"), b"ID3 sound").unwrap();
+        folder.root = audio.canonicalize().unwrap();
+        let reference = source_horizon::source_ref("folder:Music", "voice.mp3");
+        let (owner, path) = source_place(std::slice::from_ref(&folder), &reference)
+            .expect("the folder scope's Source is found where it stands");
+        assert_eq!(owner.world, "folder:Music");
+        assert!(
+            within(&resolved(&path), &world.root.join("Work/Alpha")),
+            "{}",
+            path.display()
+        );
+    }
+
+    /// Round 54i item 6 (the reviewer's mutant M23): a folder scope's Source is found by its own reference alone. A reference that
+    /// spells the same file another way (a trailing slash) names a member that stands, and the Source standing there has another
+    /// reference, the file's own: no place is given for the spelling.
+    #[test]
+    fn a_folder_scopes_source_is_found_by_its_own_reference_alone() {
+        let world = World::new();
+        world
+            .register("Music", &world.music(), json!(["mp3"]))
+            .unwrap();
+        let (all, _) = participating(&world.root).unwrap();
+        let own = source_horizon::source_ref("folder:Music", "voice.mp3");
+        assert!(
+            source_place(&all, &own).is_some(),
+            "the file's own reference"
+        );
+        for spelled in [format!("{own}/"), format!("{own}//")] {
+            assert!(
+                source_place(&all, &spelled).is_none(),
+                "{spelled} is no Source's reference"
+            );
+        }
+    }
+
+    /// Round 54h item 4 (review of #346, the reviewer's mutant M3): apply checks its journal on its own read, whoever hands it its
+    /// scopes. The gate reads the journal first for every caller that comes through it, so this calls `apply` itself, with the
+    /// live map's scopes: a journal edited after its plan to keep the replaced link at another name is refused, and nothing moves.
+    #[test]
+    fn apply_checks_an_edited_journal_on_its_own_read() {
+        let world = World::new();
+        fs::write(
+            world.root.join("Control/user/page.md"),
+            "the person's page\n",
+        )
+        .unwrap();
+        let page = run(
+            &world.root,
+            "locate",
+            &json!({"path":"Control/user/page.md"}),
+        )
+        .unwrap()["source"]["ref"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        run(
+            &world.root,
+            "link",
+            &json!({"path":"Control/user/page-link","source_ref":page,"owner":"person","expected_revision":world.revision()}),
+        )
+        .unwrap();
+        let planned = run(
+            &world.root,
+            "move-plan",
+            &json!({"source_ref":page,"destination":"Control/user/page2.md"}),
+        )
+        .unwrap();
+        let id = planned["plan_id"].as_str().unwrap().to_owned();
+        let ground = world.root.canonicalize().unwrap();
+        let journal = ground.join(format!(".central/bkmr/moves/{id}.json"));
+        let mut plan: Value = serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
+        assert_eq!(plan["links"][0]["path"], "Control/user/page-link", "{plan}");
+        plan["links"][0]["backup"] = json!("Control/user/kept-elsewhere");
+        fs::write(&journal, serde_json::to_vec_pretty(&plan).unwrap()).unwrap();
+        let (all, _) = participating(&ground).unwrap();
+        let refused = super::super::file_map_moves::apply(
+            &ground,
+            &all,
+            &json!({"plan_id":id,"quiesced":true}),
+            false,
+        )
+        .unwrap_err();
+        // Refused before anything is moved: the words are the check's own, not those of a rename made and put back (round 54i).
+        assert!(
+            refused.to_string().starts_with(
+                "Invalid move journal: its link step at Control/user/page-link names a place its move does not write"
+            ),
+            "{refused}"
+        );
+        assert!(ground.join("Control/user/page.md").is_file());
+        assert!(!ground.join("Control/user/kept-elsewhere").exists());
     }
 }

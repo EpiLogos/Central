@@ -262,6 +262,15 @@ pub(crate) fn scope_register(all: &[Scope], input: &Value) -> io::Result<Value> 
     } else {
         safe_member(&root.root, raw, true)?
     };
+    // A project of Work is known by its folder's name, from Work's entries (file_map.rs `work_projects_of`): a scope registered
+    // under that name at another place would stand in for it in the map, so the name is taken (round 54g item 6).
+    if let Some(member) = work_member_named(&root.root, name) {
+        if !same_folder(&member, &path) {
+            return Err(conflict(format!(
+                "The scope name {name} is already taken: it is the Work project at Work/{name}"
+            )));
+        }
+    }
     let target = Scope::project(path.clone(), Some(name.into()))?;
     if let Some(existing) = all.iter().find(|s| s.world == target.world) {
         if existing.root == path {
@@ -327,14 +336,16 @@ fn folder_register(all: &[Scope], root: &Scope, name: &str, input: &Value) -> io
         return Err(invalid(format!("{raw} is a file, not a folder")));
     }
     let ground = root.root.canonicalize()?;
-    if target.starts_with(&ground) {
+    // Inside and around are asked of the folders themselves, by device and inode, as the person's gate asks them (file_map.rs
+    // `within`): on macOS the firmlink `/System/Volumes/Data` spells every folder of the ground another way (round 54g item 7).
+    if within(&target, &ground) {
         return Err(invalid(format!(
             "{raw} is inside this ground ({}): a folder scope stands outside it, and the ground's \
              own folders are read through Central and its projects",
             ground.display()
         )));
     }
-    if ground.starts_with(&target) {
+    if within(&ground, &target) {
         return Err(invalid(format!(
             "{raw} holds this ground ({}): a folder scope stands beside the ground, never around it",
             ground.display()
@@ -454,6 +465,29 @@ fn folder_register(all: &[Scope], root: &Scope, name: &str, input: &Value) -> io
         "media":folder.media,"exclude":folder.exclude,"registered_at":folder.registered_at,
         "declaration":state.join(FOLDER_SCOPE_DECLARATION)}),
     )
+}
+
+/// The project of Work whose folder is named exactly `name`, among Work's entries: a folder, not a link, that holds
+/// `ProjectCentral/project.json`, as the live map finds one.
+fn work_member_named(ground: &Path, name: &str) -> Option<PathBuf> {
+    fs::read_dir(ground.join("Work"))
+        .ok()?
+        .flatten()
+        .find(|child| {
+            child.file_name().to_str() == Some(name)
+                && child.file_type().is_ok_and(|kind| kind.is_dir())
+                && fs::symlink_metadata(child.path().join("ProjectCentral/project.json")).is_ok()
+        })
+        .map(|child| child.path())
+}
+
+/// Whether two paths are one folder, by device and inode.
+fn same_folder(one: &Path, other: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (fs::metadata(one), fs::metadata(other)) {
+        (Ok(one), Ok(other)) => one.dev() == other.dev() && one.ino() == other.ino(),
+        _ => false,
+    }
 }
 
 /// A list in words, or "none".

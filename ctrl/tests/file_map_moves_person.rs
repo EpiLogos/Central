@@ -74,6 +74,18 @@ fn ctrl_with(
     token: Option<&str>,
     variables: &[(&str, &str)],
 ) -> Value {
+    ctrl_at(world, &world.0, action, input, token, variables)
+}
+
+/// [`ctrl_with`] run from the working directory `cwd`.
+fn ctrl_at(
+    world: &World,
+    cwd: &Path,
+    action: &str,
+    input: &Value,
+    token: Option<&str>,
+    variables: &[(&str, &str)],
+) -> Value {
     let mut command = Command::new(env!("CARGO_BIN_EXE_ctrl"));
     command.envs(variables.iter().copied());
     command
@@ -86,7 +98,7 @@ fn ctrl_with(
             action,
             &input.to_string(),
         ])
-        .current_dir(&world.0)
+        .current_dir(cwd)
         .env("CENTRAL_ROOT", world.root())
         .env("HOME", world.0.join("home"))
         .env("CENTRAL_BKMR_BIN", world.0.join("no-bkmr-here"));
@@ -319,6 +331,22 @@ fn ground(world: &World) -> Vec<(PathBuf, Vec<u8>)> {
     files
 }
 
+/// [`ground`] without the lock files an act that runs takes where it stands (`file-map.lock` and `source-mutation.lock` in a
+/// scope's `.central`): empty files, made the first time an act gets past the gate and kept from then on. This is what an act
+/// refused past the gate, under its locks, must leave as it was; an act refused at the gate takes no lock, and is held to
+/// [`ground`] itself.
+fn ground_but_locks(world: &World) -> Vec<(PathBuf, Vec<u8>)> {
+    ground(world)
+        .into_iter()
+        .filter(|(path, bytes)| {
+            !(bytes.is_empty()
+                && [".central/file-map.lock", ".central/source-mutation.lock"]
+                    .iter()
+                    .any(|lock| path.ends_with(lock)))
+        })
+        .collect()
+}
+
 /// The file map's revision, which every write of the ground's is made on.
 fn revision(world: &World, project: Option<&str>) -> String {
     let inspected = ctrl(
@@ -332,6 +360,19 @@ fn revision(world: &World, project: Option<&str>) -> String {
         .as_str()
         .unwrap()
         .to_owned()
+}
+
+/// The ground spelled through macOS's firmlink (`/System/Volumes/Data` and the ground's canonical path) where that spelling is the
+/// ground's very folder and stays a spelling of its own when made canonical; None elsewhere, as on Linux.
+fn firmlink(root: &Path) -> Option<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    let canonical = fs::canonicalize(root).ok()?;
+    let firm = Path::new("/System/Volumes/Data").join(canonical.strip_prefix("/").ok()?);
+    let (held, spelled) = (fs::metadata(&canonical).ok()?, fs::metadata(&firm).ok()?);
+    (held.dev() == spelled.dev()
+        && held.ino() == spelled.ino()
+        && fs::canonicalize(&firm).ok()? != canonical)
+        .then_some(firm)
 }
 
 /// Where the person's page stands as a Source.
@@ -995,12 +1036,20 @@ fn every_act() -> Vec<&'static str> {
 /// so with the person's grant at the root alone, a link made inside alpha's tree and a register of alpha's file are refused in words
 /// that say both: where the act names (no project, so the root) and the Work project its path is in. The path is resolved on the
 /// disk first, so no spelling of it reaches alpha unseen: `..`, `./`, a trailing slash, an absolute path, a link in Work to alpha,
-/// and on a disk that folds case, another case. Nothing refused is written.
+/// `..` after a link in the root into alpha (round 54g item 8), on a disk that folds case another case, and on macOS the firmlink
+/// spelling of the ground (round 54g item 7). Nothing refused is written.
 #[test]
 fn a_root_grant_writes_into_no_work_project_by_any_spelling_of_the_path() {
     let world = granting(&every_act(), "control:root");
     let root = world.root();
     std::os::unix::fs::symlink(root.join("Work/alpha"), root.join("Work/alias")).unwrap();
+    // `Control/user/door/..` is alpha's own folder on the disk, though `Control/user` as written.
+    fs::create_dir_all(root.join("Work/alpha/inner")).unwrap();
+    std::os::unix::fs::symlink(
+        root.join("Work/alpha/inner"),
+        root.join("Control/user/door"),
+    )
+    .unwrap();
     let source = page_source(&world);
     let plan = fs::canonicalize(root.join("Work/alpha/plan.md")).unwrap();
     let before = ground(&world);
@@ -1026,7 +1075,21 @@ fn a_root_grant_writes_into_no_work_project_by_any_spelling_of_the_path() {
             "central.file-map.register",
             json!({"path":plan,"allow_external":true}),
         ),
+        (
+            "central.file-map.link",
+            link("Control/user/door/../links/note"),
+        ),
+        (
+            "central.file-map.register",
+            register("Control/user/door/../plan.md"),
+        ),
     ];
+    if let Some(firm) = firmlink(&root) {
+        probes.push((
+            "central.file-map.register",
+            json!({"path":firm.join("Work/alpha/plan.md"),"allow_external":true}),
+        ));
+    }
     // A disk that folds case reads `work/ALPHA` as alpha's own folder; on one that does not, it is no folder at all.
     let folds = root.join("work/ALPHA").exists();
     if folds {
@@ -1305,7 +1368,6 @@ fn an_expired_a_services_and_a_shared_grant_and_every_other_spelling_are_refused
         "alpha/",
         "alpha ",
         " alpha",
-        "alpha\u{0301}",
         "alias",
         "project:Alpha",
     ] {
@@ -1320,6 +1382,36 @@ fn an_expired_a_services_and_a_shared_grant_and_every_other_spelling_are_refused
         );
     }
     assert_eq!(ground(&world), before, "nothing refused is written");
+    // A real NFD spelling of a project's name is another name (round 54g item 8): `Café`, its folder made in NFC, asked for as `Cafe`
+    // and a combining acute accent is refused; asked for as it was made, it is selected.
+    let (nfc, nfd) = ("Caf\u{e9}", "Cafe\u{301}");
+    project(&root.join("Work").join(nfc), "cafe");
+    fs::write(
+        root.join("Work").join(nfc).join("plan.md"),
+        "the café's plan\n",
+    )
+    .unwrap();
+    authority(
+        &world,
+        vec![grant(PERSON, "human", &["project:cafe"], &acts, u64::MAX)],
+    );
+    let before = ground(&world);
+    refused_in_words(
+        &world,
+        "central.file-map.register",
+        &json!({"project":nfd,"path":"plan.md","expected_revision":"unread"}),
+        Some(PERSON),
+        opening,
+        "lacks this exact scope/action",
+    );
+    assert_eq!(ground(&world), before, "nothing refused is written");
+    let selected = ctrl(
+        &world,
+        "central.file-map.register",
+        &json!({"project":nfc,"path":"plan.md","expected_revision":revision(&world, Some(nfc))}),
+        Some(PERSON),
+    );
+    assert_eq!(selected["ok"], true, "{selected}");
 }
 
 /// Round 54d F5 (review of #340): an authority Source that does not read is refused in Central's own words, never the parser's,
@@ -1776,6 +1868,160 @@ fn a_journal_that_hides_the_project_its_move_goes_into_is_refused_naming_it() {
     }
 }
 
+/// Round 54g item 12 (the re-check of #343, N2): a Work project a move reaches whose declaration does not read is refused in words
+/// that name it, not in a bare OS error alone. The journal sends the file into alpha and leaves alpha out of its scopes, so the gate
+/// finds alpha on the disk; alpha's `project.json` is then a link to itself, or (where this process cannot read past it) a file
+/// with no permissions. Each is refused with its own error's code, a failure and a denial. Nothing moves.
+#[test]
+fn a_work_project_whose_declaration_does_not_read_is_named_in_the_refusal() {
+    use std::os::unix::fs::PermissionsExt;
+    for (broken, code) in [
+        ("a link to itself", "central.file_map_failure"),
+        ("no permissions", "central.file_map_denied"),
+    ] {
+        let world = granting(&every_act(), "control:root");
+        let root = world.root();
+        let carried = edited_journal(&world, |plan| {
+            plan["worlds"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|scope| scope["world"] == "control:root");
+            plan["to"] = json!("Work/alpha/note2.md");
+        });
+        let before = ground(&world);
+        let declaration = root.join("Work/alpha/ProjectCentral/project.json");
+        let kept = fs::read(&declaration).unwrap();
+        match broken {
+            "a link to itself" => {
+                fs::remove_file(&declaration).unwrap();
+                std::os::unix::fs::symlink("project.json", &declaration).unwrap();
+            }
+            _ => {
+                fs::set_permissions(&declaration, fs::Permissions::from_mode(0o000)).unwrap();
+                if fs::read(&declaration).is_ok() {
+                    eprintln!("skipped {broken}: this process reads a file with no permissions (a superuser)");
+                    continue;
+                }
+            }
+        }
+        for (action, opening) in [
+            (
+                "central.file-map.move-apply",
+                "Moving a file is the person's own press: ",
+            ),
+            (
+                "central.file-map.move-rollback",
+                "Moving a file back is the person's own press: ",
+            ),
+        ] {
+            refused_as(
+                &world,
+                action,
+                &carried,
+                Some(PERSON),
+                code,
+                opening,
+                "it reaches the Work project alpha, which does not read: ",
+            );
+        }
+        if broken == "a link to itself" {
+            fs::remove_file(&declaration).unwrap();
+        } else {
+            fs::set_permissions(&declaration, fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        fs::write(&declaration, kept).unwrap();
+        assert_eq!(ground(&world), before, "{broken}: nothing is written");
+        assert!(!root.join("Work/alpha/note2.md").exists(), "{broken}");
+    }
+}
+
+/// Round 54g item 12, for a project the journal itself runs from: a move planned into alpha on the root's and alpha's grants lists
+/// alpha among its journal's scopes, and nobody edits the journal. When alpha's declaration then stops reading (a link to itself,
+/// or a file with no permissions), the move's apply and rollback are refused in words that name alpha, with the error's own code,
+/// and nothing moves. Once the declaration reads again the same journal is applied and rolled back.
+#[test]
+fn a_project_a_journal_runs_from_whose_declaration_does_not_read_is_named_in_the_refusal() {
+    use std::os::unix::fs::PermissionsExt;
+    for (broken, code) in [
+        ("a link to itself", "central.file_map_failure"),
+        ("no permissions", "central.file_map_denied"),
+    ] {
+        let world = granting(&every_act(), "control:root");
+        granted_at(&world, &["control:root", "project:alpha"]);
+        let root = world.root();
+        let planned = ctrl(
+            &world,
+            "central.file-map.move-plan",
+            &json!({"source_ref":page_source(&world),"destination":"Work/alpha/note2.md"}),
+            Some(PERSON),
+        );
+        assert_eq!(planned["ok"], true, "{planned}");
+        let carried = json!({"plan_id":planned["data"]["result"]["plan_id"],"quiesced":true});
+        let before = ground(&world);
+        let declaration = root.join("Work/alpha/ProjectCentral/project.json");
+        let kept = fs::read(&declaration).unwrap();
+        match broken {
+            "a link to itself" => {
+                fs::remove_file(&declaration).unwrap();
+                std::os::unix::fs::symlink("project.json", &declaration).unwrap();
+            }
+            _ => {
+                fs::set_permissions(&declaration, fs::Permissions::from_mode(0o000)).unwrap();
+                if fs::read(&declaration).is_ok() {
+                    eprintln!("skipped {broken}: this process reads a file with no permissions (a superuser)");
+                    fs::set_permissions(&declaration, fs::Permissions::from_mode(0o644)).unwrap();
+                    continue;
+                }
+            }
+        }
+        for (action, opening) in [
+            (
+                "central.file-map.move-apply",
+                "Moving a file is the person's own press: ",
+            ),
+            (
+                "central.file-map.move-rollback",
+                "Moving a file back is the person's own press: ",
+            ),
+        ] {
+            refused_as(
+                &world,
+                action,
+                &carried,
+                Some(PERSON),
+                code,
+                opening,
+                "its journal runs from the project alpha, which does not read: ",
+            );
+        }
+        if broken == "a link to itself" {
+            fs::remove_file(&declaration).unwrap();
+        } else {
+            fs::set_permissions(&declaration, fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        fs::write(&declaration, kept).unwrap();
+        assert_eq!(ground(&world), before, "{broken}: nothing is written");
+        assert!(!root.join("Work/alpha/note2.md").exists(), "{broken}");
+        let applied = ctrl(
+            &world,
+            "central.file-map.move-apply",
+            &carried,
+            Some(PERSON),
+        );
+        assert_eq!(applied["ok"], true, "{broken}: {applied}");
+        assert!(root.join("Work/alpha/note2.md").is_file(), "{broken}");
+        let back = ctrl(
+            &world,
+            "central.file-map.move-rollback",
+            &carried,
+            Some(PERSON),
+        );
+        assert_eq!(back["ok"], true, "{broken}: {back}");
+        assert!(root.join("Control/user/note.md").is_file(), "{broken}");
+        assert!(!root.join("Work/alpha/note2.md").exists(), "{broken}");
+    }
+}
+
 /// Round 54f.2: the journal's root scope is the ground itself, as `move-plan` writes it. A journal that sets it inside a Work project
 /// would carry the move out in alpha's tree on the root's grant; it is refused as no journal of the ground, and nothing moves.
 #[test]
@@ -1828,4 +2074,2384 @@ fn a_journal_that_sets_the_roots_scope_inside_a_work_project_is_refused() {
         "nothing in alpha moves on the root's grant"
     );
     assert!(page.is_file());
+}
+
+/// The person's grant for every act at `scopes`, with the registrar's for `scope-register` at the root beside it.
+fn granted_at(world: &World, scopes: &[&str]) {
+    let acts = every_act();
+    authority(
+        world,
+        vec![
+            grant(PERSON, "human", scopes, &acts, u64::MAX),
+            grant(
+                OWNER,
+                "human",
+                &["control:root"],
+                &["central.file-map.scope-register"],
+                u64::MAX,
+            ),
+        ],
+    );
+}
+
+/// The root's relations document, changed by `edit` as a hand or an older `ctrl` could have written it.
+fn edit_root_relations(world: &World, edit: impl FnOnce(&mut Value)) {
+    let relations = world.root().join("Control/relations/source-relations.json");
+    let mut document: Value = serde_json::from_slice(&fs::read(&relations).unwrap()).unwrap();
+    edit(&mut document);
+    fs::write(&relations, serde_json::to_vec(&document).unwrap()).unwrap();
+}
+
+/// A Source of the root's at `path`, kept in the root's file map as a registration made before round 54d's gate could have kept it
+/// (a root Source in a Work project's tree, or one that holds a Work project). Answers its SourceRef.
+fn legacy_root_source(world: &World, path: &str) -> String {
+    let reference = Scope::resolve(&world.root(), None)
+        .unwrap()
+        .source_ref(path);
+    edit_root_relations(world, |document| {
+        document["file_map"]["resources"][&reference] = json!({"path":path,"title":path});
+    });
+    reference
+}
+
+/// Round 54g item 4 (review of #343, finding 2): a move stands at each Work project it writes in, and that is every one whose
+/// links it rewrites, not only where its Source stands and where it goes. Alpha links the root's page; a move of the page repoints
+/// alpha's link, so its plan, and its apply and rollback, are refused on the root's grant alone in words that name alpha, and
+/// nothing is staged in alpha. On the root's grant and alpha's the move is carried out and alpha's link follows the page.
+#[test]
+fn a_root_move_that_repoints_a_link_in_alpha_stands_on_alphas_grant() {
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    granted_at(&world, &["control:root", "project:alpha"]);
+    let source = page_source(&world);
+    let linked = ctrl(
+        &world,
+        "central.file-map.link",
+        &json!({"project":"alpha","source_ref":source,"path":"links/note","owner":"person",
+            "expected_revision":revision(&world, Some("alpha"))}),
+        Some(PERSON),
+    );
+    assert_eq!(linked["ok"], true, "{linked}");
+    let reaches = "it reaches the Work project alpha, whose grant does not hold it";
+    let plan = json!({"source_ref":source,"destination":"Control/user/note2.md"});
+    granted_at(&world, &["control:root"]);
+    let before = ground(&world);
+    refused_in_words(
+        &world,
+        "central.file-map.move-plan",
+        &plan,
+        Some(PERSON),
+        "Planning a move is the person's own press: ",
+        reaches,
+    );
+    assert_eq!(
+        ground(&world),
+        before,
+        "a refused plan stages nothing in alpha"
+    );
+    assert_eq!(journals(&root), 0);
+    granted_at(&world, &["control:root", "project:alpha"]);
+    let planned = ctrl(&world, "central.file-map.move-plan", &plan, Some(PERSON));
+    assert_eq!(planned["ok"], true, "{planned}");
+    let carried = json!({"plan_id":planned["data"]["result"]["plan_id"],"quiesced":true});
+    granted_at(&world, &["control:root"]);
+    let before = ground(&world);
+    for (action, opening) in [
+        (
+            "central.file-map.move-apply",
+            "Moving a file is the person's own press: ",
+        ),
+        (
+            "central.file-map.move-rollback",
+            "Moving a file back is the person's own press: ",
+        ),
+    ] {
+        refused_in_words(&world, action, &carried, Some(PERSON), opening, reaches);
+    }
+    assert_eq!(
+        ground(&world),
+        before,
+        "a refused apply or rollback moves nothing"
+    );
+    granted_at(&world, &["control:root", "project:alpha"]);
+    let applied = ctrl(
+        &world,
+        "central.file-map.move-apply",
+        &carried,
+        Some(PERSON),
+    );
+    assert_eq!(applied["ok"], true, "{applied}");
+    assert_eq!(
+        fs::canonicalize(root.join("Work/alpha/links/note")).unwrap(),
+        fs::canonicalize(root.join("Control/user/note2.md")).unwrap(),
+        "alpha's link follows the page"
+    );
+}
+
+/// Round 54g item 4: a move's journal writes only where its move does. A journal edited after its plan to rewrite alpha's relations,
+/// where the move changes no link, is refused on the root's grant and on alpha's alike; one whose link step is edited to land
+/// outside its scope is refused on the grants its plan was made on. Nothing is written by either.
+#[test]
+fn an_edited_journal_is_refused_before_anything_is_written() {
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    let carried = edited_journal(&world, |plan| {
+        plan["documents"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"world":"project:alpha","path":null,"before":null,
+            "after":"{\"edited\":\"by someone else\"}"}));
+    });
+    let alphas = root.join("Work/alpha/ProjectCentral/relations/source-relations.json");
+    for scopes in [
+        &["control:root"][..],
+        &["control:root", "project:alpha"][..],
+    ] {
+        granted_at(&world, scopes);
+        let before = ground(&world);
+        for (action, opening) in [
+            (
+                "central.file-map.move-apply",
+                "Moving a file is the person's own press: ",
+            ),
+            (
+                "central.file-map.move-rollback",
+                "Moving a file back is the person's own press: ",
+            ),
+        ] {
+            refused_as(
+                &world,
+                action,
+                &carried,
+                Some(PERSON),
+                "central.file_map_failure",
+                opening,
+                "Invalid move journal: it rewrites the relations of project:alpha, where its move changes no link",
+            );
+        }
+        assert_eq!(ground(&world), before, "{scopes:?}: nothing is written");
+        assert!(
+            !alphas.exists(),
+            "{scopes:?}: alpha's relations stay unwritten"
+        );
+    }
+    // A plan that repoints alpha's link, its link step then edited to land outside alpha.
+    granted_at(&world, &["control:root", "project:alpha"]);
+    let source = page_source(&world);
+    let linked = ctrl(
+        &world,
+        "central.file-map.link",
+        &json!({"project":"alpha","source_ref":source,"path":"links/note","owner":"person",
+            "expected_revision":revision(&world, Some("alpha"))}),
+        Some(PERSON),
+    );
+    assert_eq!(linked["ok"], true, "{linked}");
+    let planned = ctrl(
+        &world,
+        "central.file-map.move-plan",
+        &json!({"source_ref":source,"destination":"Control/user/note3.md"}),
+        Some(PERSON),
+    );
+    assert_eq!(planned["ok"], true, "{planned}");
+    let id = planned["data"]["result"]["plan_id"].as_str().unwrap();
+    let journal = root.join(format!(".central/bkmr/moves/{id}.json"));
+    let mut plan: Value = serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
+    assert_eq!(plan["links"][0]["world"], "project:alpha", "{plan}");
+    plan["links"][0]["after_path"] = json!("../../Control/user/planted");
+    fs::write(&journal, serde_json::to_vec_pretty(&plan).unwrap()).unwrap();
+    let before = ground(&world);
+    refused_as(
+        &world,
+        "central.file-map.move-apply",
+        &json!({"plan_id":id,"quiesced":true}),
+        Some(PERSON),
+        "central.file_map_failure",
+        "Moving a file is the person's own press: ",
+        "Invalid move journal: its link step at links/note names a place its move does not write",
+    );
+    assert_eq!(ground(&world), before, "an edited link step writes nothing");
+    assert!(!root.join("Control/user/planted").exists());
+}
+
+/// Round 54g item 5 (review of #343, finding 3): a place that holds a Work project's folder reaches that project's tree. `Work`
+/// itself, and the ground by any spelling, are refused a register on the root's grant, in words that say which project they hold.
+/// A move of a root Source that holds Work (kept before round 54d could refuse it) needs the grant of every project it holds:
+/// refused naming alpha on the root's grant, naming beta on the root's and alpha's, and planned on all three. Nothing refused is
+/// written.
+#[test]
+fn a_place_that_holds_a_work_project_reaches_its_tree() {
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    project(&root.join("Work/beta"), "beta");
+    let before = ground(&world);
+    for spelled in ["Work", "Work/", ".", "Control/.."] {
+        refused_in_words(
+            &world,
+            "central.file-map.register",
+            &json!({"path":spelled,"expected_revision":revision(&world, None)}),
+            Some(PERSON),
+            opening("central.file-map.register"),
+            &format!("{spelled} holds the Work project alpha, but the act names no project, so it stands at the root"),
+        );
+    }
+    assert_eq!(ground(&world), before, "nothing refused is written");
+    let work = legacy_root_source(&world, "Work");
+    let plan = json!({"source_ref":work,"destination":"Work2"});
+    for (scopes, missing) in [
+        (&["control:root"][..], "alpha"),
+        (&["control:root", "project:alpha"][..], "beta"),
+    ] {
+        granted_at(&world, scopes);
+        let before = ground(&world);
+        refused_in_words(
+            &world,
+            "central.file-map.move-plan",
+            &plan,
+            Some(PERSON),
+            "Planning a move is the person's own press: ",
+            &format!("it reaches the Work project {missing}, whose grant does not hold it"),
+        );
+        assert_eq!(
+            ground(&world),
+            before,
+            "without {missing}'s grant: a refused move plans nothing"
+        );
+    }
+    assert_eq!(journals(&root), 0);
+    granted_at(&world, &["control:root", "project:alpha", "project:beta"]);
+    let planned = ctrl(&world, "central.file-map.move-plan", &plan, Some(PERSON));
+    assert_eq!(planned["ok"], true, "{planned}");
+}
+
+/// Round 54g item 6 (review of #343, finding 4): Work's projects come from Work's own entries. The root's registrar cannot register
+/// a scope under alpha's name at another place, and a register written by hand that does so (as one made before round 54g) stands
+/// in for nothing at the gate: a root-only register and link into alpha are refused naming alpha, before the shadow and after it.
+/// The after is the re-check's P3 (round 54g item 11): a gate that took Work's projects from the scopes it reads would let both
+/// through and make `Work/alpha/links/note`.
+#[test]
+fn a_scope_registered_under_a_work_projects_name_stands_in_for_none() {
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    let zeta = world.0.join("zeta");
+    project(&zeta, "zeta");
+    let zeta = fs::canonicalize(zeta).unwrap();
+    let source = page_source(&world);
+    let refused_into_alpha = |when: &str| {
+        for (action, input) in [
+            (
+                "central.file-map.register",
+                json!({"path":"Work/alpha/plan.md"}),
+            ),
+            (
+                "central.file-map.link",
+                json!({"source_ref":source,"path":"Work/alpha/links/note","owner":"person"}),
+            ),
+        ] {
+            let mut input = input;
+            input["expected_revision"] = revision(&world, None).into();
+            let before = ground(&world);
+            refused_in_words(
+                &world,
+                action,
+                &input,
+                Some(PERSON),
+                opening(action),
+                "is in the Work project alpha, but the act names no project, so it stands at the root",
+            );
+            assert_eq!(
+                ground(&world),
+                before,
+                "{action} {when}: nothing refused is written"
+            );
+        }
+        assert!(!root.join("Work/alpha/links/note").exists(), "{when}");
+    };
+    refused_into_alpha("before the shadow");
+    // The registrar's grant holds this act, so it is refused past the gate, under the root's locks.
+    let before = ground_but_locks(&world);
+    let shadow = ctrl(
+        &world,
+        "central.file-map.scope-register",
+        &json!({"name":"alpha","path":zeta,"allow_external":true,"expected_revision":revision(&world, None)}),
+        Some(OWNER),
+    );
+    assert_eq!(shadow["ok"], false, "{shadow}");
+    assert_eq!(
+        shadow["error"]["code"], "central.file_map_conflict",
+        "{shadow}"
+    );
+    assert!(
+        shadow["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(
+                "The scope name alpha is already taken: it is the Work project at Work/alpha"
+            ),
+        "{shadow}"
+    );
+    assert_eq!(
+        ground_but_locks(&world),
+        before,
+        "nothing refused is written"
+    );
+    edit_root_relations(&world, |document| {
+        document["file_map"]["scopes"]["alpha"] = json!(zeta);
+    });
+    refused_into_alpha("after the shadow");
+}
+
+/// Round 54g item 7 (review of #343, finding 5): on macOS the firmlink `/System/Volumes/Data` spells every folder of the ground
+/// another way. A folder inside alpha, spelled so, is refused as a folder scope ("inside this ground"), as its canonical spelling
+/// is; and a folder scope's declaration edited by hand to that spelling is not read, so its file links nowhere on the root's grant.
+#[test]
+fn the_firmlink_spelling_of_a_folder_in_alpha_is_no_folder_scope() {
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    let Some(firm) = firmlink(&root) else {
+        eprintln!("no firmlink spelling of the ground here; nothing to probe");
+        return;
+    };
+    let audio = root.join("Work/alpha/audio");
+    fs::create_dir_all(&audio).unwrap();
+    fs::write(audio.join("voice.wav"), b"RIFF").unwrap();
+    let spelled = firm.join("Work/alpha/audio");
+    // Both refusals below are the act's own, past the gate and under the root's locks.
+    let before = ground_but_locks(&world);
+    let registered = ctrl(
+        &world,
+        "central.file-map.scope-register",
+        &json!({"name":"audio","path":spelled,"kind":"folder","allow_external":true,"media":["wav"],
+            "expected_revision":revision(&world, None)}),
+        Some(OWNER),
+    );
+    assert_eq!(registered["ok"], false, "{registered}");
+    assert!(
+        registered["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("is inside this ground"),
+        "{registered}"
+    );
+    assert_eq!(
+        ground_but_locks(&world),
+        before,
+        "nothing refused is written"
+    );
+    // The Music folder outside the ground, its declaration then pointed at alpha's folder by that spelling.
+    declare_outside_scopes(&world);
+    let declaration = root.join(".central/scopes/Music/scope.json");
+    let mut declared: Value = serde_json::from_slice(&fs::read(&declaration).unwrap()).unwrap();
+    declared["root"] = json!(spelled);
+    fs::write(&declaration, serde_json::to_vec_pretty(&declared).unwrap()).unwrap();
+    let link = json!({"source_ref":"central:source:folder:Music:voice.wav","path":"Control/user/voice-link",
+        "owner":"person","expected_revision":revision(&world, None)});
+    let before = ground_but_locks(&world);
+    let refused = ctrl(&world, "central.file-map.link", &link, Some(PERSON));
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("is inside this ground"),
+        "{refused}"
+    );
+    assert_eq!(
+        ground_but_locks(&world),
+        before,
+        "nothing refused is written"
+    );
+    assert!(fs::symlink_metadata(root.join("Control/user/voice-link")).is_err());
+}
+
+/// Round 54g item 8 (review of #343, mutants A4, A6 and A9) and item 10: a root act on a file in alpha's tree stands on alpha's grant
+/// as well, though the act only reads the file. A root Source in alpha (kept before round 54d could refuse it) is refused a bookmark
+/// binding and a move's plan on the root's grant alone, and a move planned on the root's and alpha's grants is refused its apply and
+/// rollback on the root's alone; a database inside alpha is refused adoption at the root, by either spelling. Each refusal names
+/// alpha, and nothing refused is written.
+#[test]
+fn a_root_act_on_a_file_in_alpha_stands_on_alphas_grant() {
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    fs::write(root.join("Work/alpha/bookmarks.db"), b"SQLite format 3\0").unwrap();
+    let legacy = legacy_root_source(&world, "Work/alpha/plan.md");
+    let reaches = "it reaches the Work project alpha, whose grant does not hold it";
+    let database = fs::canonicalize(root.join("Work/alpha/bookmarks.db")).unwrap();
+    let before = ground(&world);
+    for (action, input) in [
+        (
+            "central.file-map.record-adopt",
+            json!({"source_ref":legacy,"record_id":1,"record_revision":"r"}),
+        ),
+        (
+            "central.file-map.adopt-db",
+            json!({"database":"Work/alpha/bookmarks.db","quiesced":true}),
+        ),
+        (
+            "central.file-map.adopt-db",
+            json!({"database":database,"quiesced":true}),
+        ),
+    ] {
+        let mut input = input;
+        input["expected_revision"] = revision(&world, None).into();
+        refused_in_words(
+            &world,
+            action,
+            &input,
+            Some(PERSON),
+            opening(action),
+            reaches,
+        );
+    }
+    let plan = json!({"source_ref":legacy,"destination":"Control/user/plan.md"});
+    refused_in_words(
+        &world,
+        "central.file-map.move-plan",
+        &plan,
+        Some(PERSON),
+        "Planning a move is the person's own press: ",
+        reaches,
+    );
+    assert_eq!(ground(&world), before, "nothing refused is written");
+    assert_eq!(journals(&root), 0);
+    granted_at(&world, &["control:root", "project:alpha"]);
+    let planned = ctrl(&world, "central.file-map.move-plan", &plan, Some(PERSON));
+    assert_eq!(planned["ok"], true, "{planned}");
+    let carried = json!({"plan_id":planned["data"]["result"]["plan_id"],"quiesced":true});
+    granted_at(&world, &["control:root"]);
+    let before = ground(&world);
+    for (action, opening) in [
+        (
+            "central.file-map.move-apply",
+            "Moving a file is the person's own press: ",
+        ),
+        (
+            "central.file-map.move-rollback",
+            "Moving a file back is the person's own press: ",
+        ),
+    ] {
+        refused_in_words(&world, action, &carried, Some(PERSON), opening, reaches);
+    }
+    assert_eq!(
+        ground(&world),
+        before,
+        "a refused apply or rollback moves nothing"
+    );
+}
+
+/// Round 54g item 10 (review of #343, finding 11): a hard link carries a project's file under another name, a stated limit against
+/// a writer that runs as the same user. A root Source registered at a hard link to alpha's file is the root's, and moving it renames
+/// the root's name for the file alone: no act writes through a file path, so no file of alpha's is made, changed or removed. What
+/// the move does make in alpha is what every move makes in every scope it runs with: the scope's two lock files, empty, in its
+/// `.central` (main's behaviour before this round, pinned here as it is).
+#[test]
+fn a_hard_link_at_the_root_is_the_roots_and_no_file_of_alphas_is_written() {
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    fs::hard_link(
+        root.join("Work/alpha/plan.md"),
+        root.join("Control/user/hl.md"),
+    )
+    .unwrap();
+    let alpha = |world: &World| {
+        ground(world)
+            .into_iter()
+            .filter(|(path, _)| path.starts_with(world.root().join("Work/alpha")))
+            .collect::<Vec<_>>()
+    };
+    let before = alpha(&world);
+    let registered = ctrl(
+        &world,
+        "central.file-map.register",
+        &json!({"path":"Control/user/hl.md","expected_revision":revision(&world, None)}),
+        Some(PERSON),
+    );
+    assert_eq!(registered["ok"], true, "{registered}");
+    assert_eq!(
+        registered["data"]["result"]["world_ref"], "control:root",
+        "{registered}"
+    );
+    let planned = ctrl(
+        &world,
+        "central.file-map.move-plan",
+        &json!({"source_ref":registered["data"]["result"]["source_ref"],"destination":"Control/user/hl2.md"}),
+        Some(PERSON),
+    );
+    assert_eq!(planned["ok"], true, "{planned}");
+    let applied = ctrl(
+        &world,
+        "central.file-map.move-apply",
+        &json!({"plan_id":planned["data"]["result"]["plan_id"],"quiesced":true}),
+        Some(PERSON),
+    );
+    assert_eq!(applied["ok"], true, "{applied}");
+    assert!(root.join("Control/user/hl2.md").is_file());
+    let after = alpha(&world);
+    assert!(
+        before.iter().all(|kept| after.contains(kept)),
+        "nothing of alpha's is changed or removed"
+    );
+    let made: Vec<_> = after
+        .iter()
+        .filter(|entry| !before.contains(entry))
+        .map(|(path, bytes)| {
+            let within = path.strip_prefix(root.join("Work/alpha")).unwrap();
+            (within.to_path_buf(), bytes.clone())
+        })
+        .collect();
+    let locks = [
+        ".central",
+        ".central/file-map.lock",
+        ".central/source-mutation.lock",
+    ]
+    .map(|lock| (PathBuf::from(lock), Vec::new()));
+    assert_eq!(
+        made, locks,
+        "the move makes alpha's two empty lock files and nothing else"
+    );
+}
+
+/// The files of alpha's tree, with their bytes or where they link: what the root's grant alone must leave as it was.
+fn alphas_tree(world: &World) -> Vec<(PathBuf, Vec<u8>)> {
+    let alpha = world.root().join("Work/alpha");
+    ground_but_locks(world)
+        .into_iter()
+        .filter(|(path, _)| path.starts_with(&alpha))
+        .collect()
+}
+
+/// A move's two carried acts, each with the words its refusal opens with.
+const CARRIED: [(&str, &str); 2] = [
+    (
+        "central.file-map.move-apply",
+        "Moving a file is the person's own press: ",
+    ),
+    (
+        "central.file-map.move-rollback",
+        "Moving a file back is the person's own press: ",
+    ),
+];
+
+/// What a refusal says of a Work project whose grant is missing.
+const REACHES_ALPHA: &str = "it reaches the Work project alpha, whose grant does not hold it";
+
+/// A link the root keeps at `path` to the person's page, made as `link` at the root makes one. Answers the page's SourceRef.
+fn root_link(world: &World, path: &str) -> String {
+    let source = page_source(world);
+    let linked = ctrl(
+        world,
+        "central.file-map.link",
+        &json!({"source_ref":source,"path":path,"owner":"person","expected_revision":revision(world, None)}),
+        Some(PERSON),
+    );
+    assert_eq!(linked["ok"], true, "{linked}");
+    source
+}
+
+/// A planned move of the person's page to `destination`, its journal then edited by `edit`. Answers the move's carried input.
+fn edited_move(world: &World, destination: &str, edit: impl FnOnce(&mut Value)) -> Value {
+    let planned = ctrl(
+        world,
+        "central.file-map.move-plan",
+        &json!({"source_ref":page_source(world),"destination":destination}),
+        Some(PERSON),
+    );
+    assert_eq!(planned["ok"], true, "{planned}");
+    let id = planned["data"]["result"]["plan_id"].as_str().unwrap();
+    let journal = world.root().join(format!(".central/bkmr/moves/{id}.json"));
+    let mut plan: Value = serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
+    edit(&mut plan);
+    fs::write(&journal, serde_json::to_vec_pretty(&plan).unwrap()).unwrap();
+    json!({"plan_id":id,"quiesced":true})
+}
+
+/// Round 54h item 1 (review of #346, F1): a link step's own path is a place the gate judges. A journal edited to add a link step
+/// in the root's world at a path inside alpha is refused on the root's grant alone, in words that name alpha: alpha's `plan.md`
+/// stays as it was and nothing else changes.
+#[test]
+fn an_edited_link_step_of_the_roots_inside_alpha_stands_on_alphas_grant() {
+    use std::os::unix::fs::MetadataExt;
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    let target = fs::symlink_metadata(root.join("Work/alpha/plan.md")).unwrap();
+    let carried = edited_journal(&world, |plan| {
+        let id = plan["id"].as_str().unwrap().to_owned();
+        let staged = format!(".central/bkmr/moves/{id}-0-new");
+        fs::write(root.join(&staged), "planted through the root's journal\n").unwrap();
+        let made = fs::symlink_metadata(root.join(&staged)).unwrap();
+        plan["links"].as_array_mut().unwrap().push(
+            json!({"world":"control:root","path":"Work/alpha/plan.md",
+            "after_path":"Work/alpha/plan.md",
+            "before":{"source_ref":"x","world_ref":"control:root","owner":"person","target":"x",
+                "device":target.dev(),"inode":target.ino()},
+            "staged":staged,"backup":format!(".central/bkmr/moves/{id}-0-old"),
+            "new_device":made.dev(),"new_inode":made.ino()}),
+        );
+    });
+    let before = ground(&world);
+    for (action, opening) in CARRIED {
+        refused_in_words(
+            &world,
+            action,
+            &carried,
+            Some(PERSON),
+            opening,
+            REACHES_ALPHA,
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(root.join("Work/alpha/plan.md")).unwrap(),
+        "alpha's plan\n"
+    );
+    assert_eq!(ground(&world), before, "nothing is written or moved");
+}
+
+/// Round 54h item 1: a link step in alpha's own world needs alpha's grant by its own place, with no relations document of alpha's
+/// in the journal to ask it (the reviewer's mutant M9).
+#[test]
+fn an_edited_link_step_in_alphas_world_stands_on_alphas_grant() {
+    let world = granting(&every_act(), "control:root");
+    let carried = edited_journal(&world, |plan| {
+        let id = plan["id"].as_str().unwrap().to_owned();
+        plan["links"].as_array_mut().unwrap().push(json!({"world":"project:alpha","path":"plan.md","after_path":"plan.md",
+            "before":{"source_ref":"x","world_ref":"project:alpha","owner":"person","target":"x","device":0,"inode":0},
+            "staged":format!(".central/bkmr/moves/{id}-0-new"),"backup":format!(".central/bkmr/moves/{id}-0-old"),
+            "new_device":0,"new_inode":0}));
+    });
+    let before = ground(&world);
+    for (action, opening) in CARRIED {
+        refused_in_words(
+            &world,
+            action,
+            &carried,
+            Some(PERSON),
+            opening,
+            REACHES_ALPHA,
+        );
+    }
+    assert_eq!(ground(&world), before, "nothing is written or moved");
+}
+
+/// Round 54h item 1: apply's link steps refuse a link in any folder above the step's path at their own check. A journal's link step
+/// is edited to stand behind a link the root holds to alpha's folder. On the root's grant alone the gate refuses it, naming alpha,
+/// since the step's place is read on the disk. On the root's grant and alpha's the gate has nothing to refuse, and apply itself
+/// refuses the link in the path: alpha's `plan.md` stays as it was.
+#[test]
+fn a_link_step_behind_a_link_is_refused_by_the_gate_and_by_apply() {
+    use std::os::unix::fs::MetadataExt;
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    std::os::unix::fs::symlink("../../Work/alpha", root.join("Control/user/door")).unwrap();
+    let target = fs::symlink_metadata(root.join("Work/alpha/plan.md")).unwrap();
+    let carried = edited_journal(&world, |plan| {
+        let id = plan["id"].as_str().unwrap().to_owned();
+        let staged = format!(".central/bkmr/moves/{id}-0-new");
+        fs::write(root.join(&staged), "planted behind the door\n").unwrap();
+        let made = fs::symlink_metadata(root.join(&staged)).unwrap();
+        plan["links"].as_array_mut().unwrap().push(
+            json!({"world":"control:root","path":"Control/user/door/plan.md",
+            "after_path":"Control/user/door/plan.md",
+            "before":{"source_ref":"x","world_ref":"control:root","owner":"person","target":"x",
+                "device":target.dev(),"inode":target.ino()},
+            "staged":staged,"backup":format!(".central/bkmr/moves/{id}-0-old"),
+            "new_device":made.dev(),"new_inode":made.ino()}),
+        );
+    });
+    let before = ground(&world);
+    refused_in_words(
+        &world,
+        CARRIED[0].0,
+        &carried,
+        Some(PERSON),
+        CARRIED[0].1,
+        REACHES_ALPHA,
+    );
+    assert_eq!(ground(&world), before, "the gate's refusal writes nothing");
+    granted_at(&world, &["control:root", "project:alpha"]);
+    let before = alphas_tree(&world);
+    let refused = ctrl(&world, CARRIED[0].0, &carried, Some(PERSON));
+    assert_eq!(refused["ok"], false, "{refused}");
+    let words = refused["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        words.contains("refusing symlink source path component"),
+        "{words}"
+    );
+    assert_eq!(
+        alphas_tree(&world),
+        before,
+        "apply's own check writes nothing in alpha"
+    );
+    assert!(
+        root.join("Control/user/note.md").is_file(),
+        "the refusal comes before the Source moves"
+    );
+}
+
+/// Round 54h item 2 (review of #346, F2): a journal's scope is spelled as its plan writes it. A journal whose project scope is
+/// spelled through the moved folder with `..` reads a stand-in before the rename and alpha after it; it is refused on the root's
+/// grant alone before anything is written, and alpha's relations stay unwritten.
+#[test]
+fn a_journal_scope_spelled_through_the_moved_folder_is_refused() {
+    use std::os::unix::fs::MetadataExt;
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    fs::create_dir_all(root.join("Control/user/dir")).unwrap();
+    fs::write(root.join("Control/user/dir/in.md"), "in\n").unwrap();
+    let stand_in = root.join("Control/Work/alpha");
+    project(&stand_in, "alpha");
+    fs::hard_link(root.join("Work/alpha/plan.md"), stand_in.join("plan.md")).unwrap();
+    let real = fs::symlink_metadata(root.join("Work/alpha/plan.md")).unwrap();
+    let dir = fs::symlink_metadata(root.join("Control/user/dir")).unwrap();
+    let spelled = "Control/user/dir/../../Work/alpha";
+    let carried = edited_journal(&world, |plan| {
+        let id = plan["id"].as_str().unwrap().to_owned();
+        let staged = format!(".central/bkmr/moves/{id}-0-new");
+        fs::create_dir_all(stand_in.join(".central/bkmr/moves")).unwrap();
+        fs::hard_link(root.join("Work/alpha/plan.md"), stand_in.join(&staged)).unwrap();
+        plan["from"] = json!("Control/user/dir");
+        plan["to"] = json!("Control/dir2");
+        plan["device"] = json!(dir.dev());
+        plan["inode"] = json!(dir.ino());
+        for scope in plan["worlds"].as_array_mut().unwrap() {
+            if scope["world"] == "project:alpha" {
+                scope["path"] = json!(spelled);
+            }
+        }
+        plan["refresh_worlds"] = json!([]);
+        plan["documents"] = json!([{"world":"project:alpha","path":null,"before":null,
+            "after":"{\"edited\":\"by someone else\"}"}]);
+        plan["links"] = json!([{"world":"project:alpha","path":"plan.md","after_path":"plan.md",
+            "before":{"source_ref":"x","world_ref":"project:alpha","owner":"person","target":"x","device":0,"inode":0},
+            "staged":staged,"backup":format!(".central/bkmr/moves/{id}-0-old"),
+            "new_device":real.dev(),"new_inode":real.ino()}]);
+    });
+    let before = ground(&world);
+    for (action, opening) in CARRIED {
+        refused_as(
+            &world,
+            action,
+            &carried,
+            Some(PERSON),
+            "central.file_map_failure",
+            opening,
+            &format!("Invalid move journal: it spells the scope project:alpha as {spelled}"),
+        );
+    }
+    assert_eq!(ground(&world), before, "nothing is written or moved");
+    assert!(!root
+        .join("Work/alpha/ProjectCentral/relations/source-relations.json")
+        .exists());
+}
+
+/// Round 54h item 2, as round 54j item 1 leaves it (DLW build ruling 2026-11-11; the review of #346's third commit, C1): a journal's
+/// project scope spelled, in plain names, through a link inside the moved folder (`dir/lnk -> ../Work/alpha`) reads a stand-in in
+/// the root's tree before the rename and alpha after it. Round 54h let the rename happen and put it back; a scope spelled through a
+/// link is now refused as a spelling, at the gate, before the rename: nothing moves and nothing is written.
+#[test]
+fn a_journal_scope_spelled_through_a_link_in_the_moved_folder_is_refused() {
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    fs::create_dir_all(root.join("Control/user/dir")).unwrap();
+    fs::write(root.join("Control/user/dir/in.md"), "in\n").unwrap();
+    std::os::unix::fs::symlink("../Work/alpha", root.join("Control/user/dir/lnk")).unwrap();
+    let stand_in = root.join("Control/user/Work/alpha");
+    project(&stand_in, "alpha");
+    let dir = identity(&root.join("Control/user/dir"));
+    let carried = edited_journal(&world, |plan| {
+        plan["from"] = json!("Control/user/dir");
+        plan["to"] = json!("dir2");
+        plan["device"] = json!(dir.0);
+        plan["inode"] = json!(dir.1);
+        for scope in plan["worlds"].as_array_mut().unwrap() {
+            if scope["world"] == "project:alpha" {
+                scope["path"] = json!("Control/user/dir/lnk");
+            }
+        }
+        plan["refresh_worlds"] = json!([]);
+        plan["documents"] = json!([]);
+        plan["links"] = json!([]);
+    });
+    let before = ground(&world);
+    for (action, opening) in CARRIED {
+        refused_as(
+            &world,
+            action,
+            &carried,
+            Some(PERSON),
+            "central.file_map_failure",
+            opening,
+            "This move's journal spells the scope project:alpha as Control/user/dir/lnk, which is not that folder's own \
+             spelling on the disk now",
+        );
+    }
+    assert_eq!(ground(&world), before, "nothing is moved or written");
+    assert!(
+        root.join("Control/user/dir/in.md").is_file() && !root.join("dir2").exists(),
+        "the folder never moved"
+    );
+}
+
+/// Round 54h item 3 (review of #346, F3): a rewritten link is judged by where it stands. The root keeps a link inside alpha's
+/// tree, as `link` at the root made one before round 54d refused it. A move of its Source is refused on the root's grant alone,
+/// naming alpha, at its plan; and at its apply and rollback, for a plan made on both grants. On both grants it plans, applies and
+/// rolls back.
+#[test]
+fn a_link_the_root_keeps_inside_alpha_stands_on_alphas_grant() {
+    use std::os::unix::fs::MetadataExt;
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    let source = page_source(&world);
+    fs::create_dir_all(root.join("Work/alpha/links")).unwrap();
+    let link = root.join("Work/alpha/links/note");
+    std::os::unix::fs::symlink("../../../Control/user/note.md", &link).unwrap();
+    let made = fs::symlink_metadata(&link).unwrap();
+    edit_root_relations(&world, |document| {
+        document["file_map"]["links"]["Work/alpha/links/note"] = json!({"source_ref":source,"world_ref":"control:root",
+            "owner":"person","target":"../../../Control/user/note.md","device":made.dev(),"inode":made.ino()});
+    });
+    let plan = json!({"source_ref":source,"destination":"Control/user/note2.md"});
+    let before = ground(&world);
+    refused_in_words(
+        &world,
+        "central.file-map.move-plan",
+        &plan,
+        Some(PERSON),
+        "Planning a move is the person's own press: ",
+        REACHES_ALPHA,
+    );
+    assert_eq!(ground(&world), before, "a refused plan writes nothing");
+    assert_eq!(journals(&root), 0);
+    granted_at(&world, &["control:root", "project:alpha"]);
+    let planned = ctrl(&world, "central.file-map.move-plan", &plan, Some(PERSON));
+    assert_eq!(planned["ok"], true, "{planned}");
+    assert_eq!(planned["data"]["result"]["links"], 1, "{planned}");
+    let carried = json!({"plan_id":planned["data"]["result"]["plan_id"],"quiesced":true});
+    granted_at(&world, &["control:root"]);
+    let before = ground(&world);
+    for (action, opening) in CARRIED {
+        refused_in_words(
+            &world,
+            action,
+            &carried,
+            Some(PERSON),
+            opening,
+            REACHES_ALPHA,
+        );
+    }
+    assert_eq!(
+        ground(&world),
+        before,
+        "a refused apply or rollback moves nothing"
+    );
+    granted_at(&world, &["control:root", "project:alpha"]);
+    let applied = ctrl(&world, CARRIED[0].0, &carried, Some(PERSON));
+    assert_eq!(applied["ok"], true, "{applied}");
+    assert_eq!(
+        fs::read_link(&link).unwrap(),
+        Path::new("../../../Control/user/note2.md")
+    );
+    let back = ctrl(&world, CARRIED[1].0, &carried, Some(PERSON));
+    assert_eq!(back["ok"], true, "{back}");
+    assert_eq!(
+        fs::read_link(&link).unwrap(),
+        Path::new("../../../Control/user/note.md")
+    );
+    assert!(root.join("Control/user/note.md").is_file());
+}
+
+/// Round 54h item 4 (the reviewer's mutants M1 and M2): a link step's staged and kept links stand only at the names its plan gives
+/// them, and its path is contained in its scope. A real link step of the root's, edited in each of those, is refused as an invalid
+/// journal, and nothing is written.
+#[test]
+fn a_link_step_edited_in_its_names_or_its_path_is_an_invalid_journal() {
+    for (field, planted) in [
+        ("backup", "Work/alpha/kept"),
+        ("staged", "Control/user/note.md"),
+        ("path", "../outside"),
+        ("path", "/outside"),
+    ] {
+        let world = granting(&every_act(), "control:root");
+        root_link(&world, "Control/user/note-link");
+        let carried = edited_move(&world, "Control/user/note2.md", |plan| {
+            assert_eq!(plan["links"][0]["world"], "control:root", "{plan}");
+            assert_eq!(plan["links"][0]["path"], "Control/user/note-link", "{plan}");
+            plan["links"][0][field] = json!(planted);
+        });
+        // The refusal names the step by its path, as the journal now spells it.
+        let named = if field == "path" {
+            planted
+        } else {
+            "Control/user/note-link"
+        };
+        let before = ground(&world);
+        for (action, opening) in CARRIED {
+            refused_as(
+                &world,
+                action,
+                &carried,
+                Some(PERSON),
+                "central.file_map_failure",
+                opening,
+                &format!("Invalid move journal: its link step at {named} names a place its move does not write"),
+            );
+        }
+        assert_eq!(
+            ground(&world),
+            before,
+            "{field} {planted}: nothing is written"
+        );
+    }
+}
+
+/// Round 54h item 6 (review of #346, F5): a link whose Source is gone stops a move's plan in words that name the link and the
+/// project it stands in, and say that no grant mends it. The words are the same on the root's grant alone and with alpha's: the
+/// person is not sent for a grant that will not help.
+#[test]
+fn a_link_whose_source_is_gone_is_named_with_what_mends_it() {
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    granted_at(&world, &["control:root", "project:alpha"]);
+    fs::write(root.join("Control/user/gone.md"), "gone\n").unwrap();
+    fs::write(root.join("Control/user/other.md"), "other\n").unwrap();
+    let located = |path: &str| {
+        let located = ctrl(
+            &world,
+            "central.file-map.locate",
+            &json!({"path":path}),
+            None,
+        );
+        located["data"]["result"]["source"]["ref"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{located}"))
+            .to_owned()
+    };
+    let (gone, other) = (
+        located("Control/user/gone.md"),
+        located("Control/user/other.md"),
+    );
+    let linked = ctrl(
+        &world,
+        "central.file-map.link",
+        &json!({"project":"alpha","source_ref":gone,"path":"links/gone","owner":"person",
+            "expected_revision":revision(&world, Some("alpha"))}),
+        Some(PERSON),
+    );
+    assert_eq!(linked["ok"], true, "{linked}");
+    fs::remove_file(root.join("Control/user/gone.md")).unwrap();
+    let plan = json!({"source_ref":other,"destination":"Control/user/other2.md"});
+    for scopes in [
+        &["control:root"][..],
+        &["control:root", "project:alpha"][..],
+    ] {
+        granted_at(&world, scopes);
+        let before = ground(&world);
+        let refused = ctrl(&world, "central.file-map.move-plan", &plan, Some(PERSON));
+        assert_eq!(refused["ok"], false, "{scopes:?}: {refused}");
+        let words = refused["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            words.starts_with("Planning a move is the person's own press: the link links/gone in the project alpha names a Source that does not read"),
+            "{scopes:?}: {words}"
+        );
+        assert!(
+            words.contains("no grant mends this: remove the link or restore its Source"),
+            "{scopes:?}: {words}"
+        );
+        assert!(
+            !words.contains("whose grant does not hold it"),
+            "{scopes:?}: {words}"
+        );
+        assert_eq!(ground(&world), before, "{scopes:?}: nothing is planned");
+    }
+}
+
+/// Round 54h item 4 (the reviewer's mutant M10): a scope whose relations document does not read counts as one the move rewrites,
+/// since the plan cannot tell. An unrelated move at the root is refused on the root's grant alone, naming alpha.
+#[test]
+fn a_project_whose_relations_do_not_read_is_asked_for_its_grant() {
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    let source = page_source(&world);
+    let relations = root.join("Work/alpha/ProjectCentral/relations/source-relations.json");
+    fs::create_dir_all(relations.parent().unwrap()).unwrap();
+    fs::write(&relations, "{ this is not a relations document").unwrap();
+    let before = ground(&world);
+    refused_in_words(
+        &world,
+        "central.file-map.move-plan",
+        &json!({"source_ref":source,"destination":"Control/user/note2.md"}),
+        Some(PERSON),
+        "Planning a move is the person's own press: ",
+        REACHES_ALPHA,
+    );
+    assert_eq!(ground(&world), before, "nothing is planned");
+}
+
+/// Round 54h item 4 (the reviewer's mutants M4 and M7, for round 54g's item 14 and its regression note): a folder under Work that
+/// holds no declaration is no project, so the root's grant alone registers a file in it; and a Work project registers at its own
+/// place, by its path in the ground or its absolute path, changing nothing.
+#[test]
+fn an_undeclared_folder_under_work_is_the_roots_and_a_work_project_registers_where_it_stands() {
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    fs::create_dir_all(root.join("Work/beta")).unwrap();
+    fs::write(root.join("Work/beta/loose.md"), "loose\n").unwrap();
+    let registered = ctrl(
+        &world,
+        "central.file-map.register",
+        &json!({"path":"Work/beta/loose.md","expected_revision":revision(&world, None)}),
+        Some(PERSON),
+    );
+    assert_eq!(registered["ok"], true, "{registered}");
+    let absolute = fs::canonicalize(root.join("Work/alpha")).unwrap();
+    for declared in [
+        json!({"name":"alpha","path":"Work/alpha"}),
+        json!({"name":"alpha","path":absolute,"allow_external":true}),
+    ] {
+        let mut declared = declared;
+        declared["expected_revision"] = revision(&world, None).into();
+        let answered = ctrl(
+            &world,
+            "central.file-map.scope-register",
+            &declared,
+            Some(OWNER),
+        );
+        assert_eq!(answered["ok"], true, "{answered}");
+        assert_eq!(
+            answered["data"]["result"],
+            json!({"changed":false,"world_ref":"project:alpha"}),
+            "{declared}"
+        );
+    }
+}
+
+/// Round 54h item 5 (review of #346, F4): a Work project whose `ProjectCentral` does not open is named, with what to mend, and an
+/// act that does not touch it goes on. With the folder at mode 000, and with a link to itself in its place: a register at the
+/// root's own page goes through; a register of a file in alpha, and a move's plan (which reads every project's links), are refused
+/// in words that name alpha and say what to mend. The same holds for a declaration that is a file with no permissions, and for
+/// one that is no declaration.
+#[test]
+fn a_work_project_that_does_not_open_is_named_and_other_acts_go_on() {
+    use std::os::unix::fs::PermissionsExt;
+    // A folder's mode does not keep root out.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    let source = page_source(&world);
+    let central = root.join("Work/alpha/ProjectCentral");
+    let closed = |tag: &str| {
+        let page = format!("Control/user/{tag}.md");
+        fs::write(root.join(&page), "another page\n").unwrap();
+        let registered = ctrl(
+            &world,
+            "central.file-map.register",
+            &json!({"path":page,"expected_revision":revision(&world, None)}),
+            Some(PERSON),
+        );
+        assert_eq!(registered["ok"], true, "{tag}: {registered}");
+        let mends = "the Work project alpha does not read its declaration, Work/alpha/ProjectCentral/project.json: ";
+        for (action, input) in [
+            (
+                "central.file-map.register",
+                json!({"path":"Work/alpha/plan.md","expected_revision":revision(&world, None)}),
+            ),
+            (
+                "central.file-map.move-plan",
+                json!({"source_ref":source,"destination":"Control/user/note2.md"}),
+            ),
+        ] {
+            let refused = ctrl(&world, action, &input, Some(PERSON));
+            assert_eq!(refused["ok"], false, "{tag} {action}: {refused}");
+            let words = refused["error"]["message"].as_str().unwrap_or_default();
+            assert!(words.contains(mends), "{tag} {action}: {words}");
+            assert!(
+                words.contains("mend that file or its folder (a mode, or a link in its place) and the project stands again"),
+                "{tag} {action}: {words}"
+            );
+        }
+        assert_eq!(journals(&root), 0, "{tag}: nothing is planned");
+        // The readers answer too, with the project listed as unreachable in the same words (a change beyond the review's ruling:
+        // before, one Work project that did not open failed every read of the map).
+        for (action, input) in [
+            ("central.file-map.inspect", json!({"resources":false})),
+            ("central.file-map.search", json!({"query":"page","limit":1})),
+            (
+                "central.file-map.locate",
+                json!({"path":"Control/user/note.md"}),
+            ),
+        ] {
+            let read = ctrl(&world, action, &input, None);
+            assert_eq!(read["ok"], true, "{tag} {action}: {read}");
+            let listed = read["data"]["unreachable"].to_string();
+            assert!(listed.contains(mends), "{tag} {action}: {read}");
+        }
+        // A location inside the project is the project's to say (round 54i item 3; B3): not "unregistered".
+        let located = ctrl(
+            &world,
+            "central.file-map.locate",
+            &json!({"path":"Work/alpha/plan.md"}),
+            None,
+        );
+        assert_eq!(located["ok"], false, "{tag}: {located}");
+        let words = located["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            words.starts_with("Location is in Work/alpha, which is unreachable: ")
+                && words.contains(mends),
+            "{tag}: {words}"
+        );
+    };
+    fs::set_permissions(&central, fs::Permissions::from_mode(0o000)).unwrap();
+    closed("closed");
+    fs::set_permissions(&central, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::rename(&central, root.join("Work/alpha/kept")).unwrap();
+    std::os::unix::fs::symlink("ProjectCentral", &central).unwrap();
+    closed("looped");
+    fs::remove_file(&central).unwrap();
+    fs::rename(root.join("Work/alpha/kept"), &central).unwrap();
+    let declaration = central.join("project.json");
+    fs::set_permissions(&declaration, fs::Permissions::from_mode(0o000)).unwrap();
+    closed("unreadable");
+    fs::set_permissions(&declaration, fs::Permissions::from_mode(0o644)).unwrap();
+    fs::write(&declaration, "this is no declaration").unwrap();
+    closed("garbled");
+    // The project's own folder closed by its mode: the declaration is there and cannot be reached.
+    let alpha = root.join("Work/alpha");
+    fs::set_permissions(&alpha, fs::Permissions::from_mode(0o000)).unwrap();
+    closed("shut");
+    fs::set_permissions(&alpha, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// Round 54h item 7 (review of #346, F6): a pool stops at a Work project's folder. A project scope registered over `Work`, pooled
+/// on the root's grant, takes none of alpha's files as its own Sources: alpha's `plan.md` is located as alpha's or as no Source,
+/// never as the other scope's. A file of that scope's own outside alpha is still pooled.
+#[test]
+fn a_pool_of_a_scope_that_holds_a_work_project_stops_at_it() {
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    project(&root.join("Work"), "works");
+    fs::write(root.join("Work/own.md"), "the scope's own page\n").unwrap();
+    let registered = ctrl(
+        &world,
+        "central.file-map.scope-register",
+        &json!({"name":"works","path":"Work","expected_revision":revision(&world, None)}),
+        Some(OWNER),
+    );
+    assert_eq!(registered["ok"], true, "{registered}");
+    let pooled = ctrl(
+        &world,
+        "central.file-map.pool",
+        &json!({"project":"works","enable":true,"expected_revision":revision(&world, Some("works"))}),
+        Some(PERSON),
+    );
+    assert_eq!(pooled["ok"], true, "{pooled}");
+    let own = ctrl(
+        &world,
+        "central.file-map.locate",
+        &json!({"project":"works","path":"own.md"}),
+        None,
+    );
+    assert_eq!(
+        own["data"]["result"]["source"]["ref"], "central:source:project:works:own.md",
+        "{own}"
+    );
+    for asked in [
+        json!({"path":"Work/alpha/plan.md"}),
+        json!({"project":"works","path":"alpha/plan.md"}),
+    ] {
+        let located = ctrl(&world, "central.file-map.locate", &asked, None);
+        let text = located.to_string();
+        assert!(
+            !text.contains("central:source:project:works:alpha/plan.md"),
+            "{asked}: {located}"
+        );
+    }
+}
+
+/// Round 54h item 1: a link step is judged where its link stands after the move as well as before it. A real link step of the
+/// root's, edited so the rewritten link lands inside alpha, is refused on the root's grant alone, naming alpha, and nothing is
+/// written.
+#[test]
+fn an_edited_link_step_that_lands_inside_alpha_stands_on_alphas_grant() {
+    let world = granting(&every_act(), "control:root");
+    root_link(&world, "Control/user/note-link");
+    let carried = edited_move(&world, "Control/user/note2.md", |plan| {
+        assert_eq!(plan["links"][0]["path"], "Control/user/note-link", "{plan}");
+        plan["links"][0]["after_path"] = json!("Work/alpha/landed");
+    });
+    let before = ground(&world);
+    for (action, opening) in CARRIED {
+        refused_in_words(
+            &world,
+            action,
+            &carried,
+            Some(PERSON),
+            opening,
+            REACHES_ALPHA,
+        );
+    }
+    assert_eq!(ground(&world), before, "nothing is written or moved");
+    assert!(!world.root().join("Work/alpha/landed").exists());
+}
+
+/// Round 54h item 5, beyond the review's ruling: a folder under Work that holds a file called `ProjectCentral` holds no
+/// declaration, so it is no project. The map reads on, and the root's grant alone registers a file in it. Before, that folder
+/// failed every act of the map with a bare "Not a directory".
+#[test]
+fn a_work_folder_with_a_file_called_projectcentral_is_no_project() {
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    fs::create_dir_all(root.join("Work/gamma")).unwrap();
+    fs::write(
+        root.join("Work/gamma/ProjectCentral"),
+        "a file, not a folder\n",
+    )
+    .unwrap();
+    fs::write(root.join("Work/gamma/loose.md"), "loose\n").unwrap();
+    let registered = ctrl(
+        &world,
+        "central.file-map.register",
+        &json!({"path":"Work/gamma/loose.md","expected_revision":revision(&world, None)}),
+        Some(PERSON),
+    );
+    assert_eq!(registered["ok"], true, "{registered}");
+    let inspected = ctrl(
+        &world,
+        "central.file-map.inspect",
+        &json!({"resources":false}),
+        None,
+    );
+    assert_eq!(inspected["ok"], true, "{inspected}");
+    assert!(
+        inspected["data"].get("unreachable").is_none(),
+        "{inspected}"
+    );
+}
+
+/// Round 54h items 1 and 3: a link is judged where it stands and is never read through to what it points at. The root keeps a link
+/// in a folder of its own that points at alpha's folder (a Source kept before round 54d could refuse it). A move of the link's
+/// folder rewrites the link where it stands, in the root's tree, so the root's grant alone plans it, applies it and rolls it back,
+/// and no file of alpha's changes.
+#[test]
+fn a_link_that_points_into_alpha_is_judged_where_it_stands() {
+    use std::os::unix::fs::MetadataExt;
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    let alphas = legacy_root_source(&world, "Work/alpha");
+    fs::create_dir_all(root.join("Control/user/box")).unwrap();
+    fs::write(root.join("Control/user/box/a.md"), "a\n").unwrap();
+    let link = root.join("Control/user/box/door");
+    std::os::unix::fs::symlink("../../../Work/alpha", &link).unwrap();
+    let made = fs::symlink_metadata(&link).unwrap();
+    edit_root_relations(&world, |document| {
+        document["file_map"]["links"]["Control/user/box/door"] = json!({"source_ref":alphas,"world_ref":"control:root",
+            "owner":"person","target":"../../../Work/alpha","device":made.dev(),"inode":made.ino()});
+    });
+    let registered = ctrl(
+        &world,
+        "central.file-map.register",
+        &json!({"path":"Control/user/box","expected_revision":revision(&world, None)}),
+        Some(PERSON),
+    );
+    assert_eq!(registered["ok"], true, "{registered}");
+    let planned = ctrl(
+        &world,
+        "central.file-map.move-plan",
+        &json!({"source_ref":registered["data"]["result"]["source_ref"],"destination":"Control/user/box2"}),
+        Some(PERSON),
+    );
+    assert_eq!(planned["ok"], true, "{planned}");
+    assert_eq!(planned["data"]["result"]["links"], 1, "{planned}");
+    // A move takes its locks in every scope it runs with, so the plan has made alpha's `.central` by now (a stated limit).
+    let before = alphas_tree(&world);
+    let carried = json!({"plan_id":planned["data"]["result"]["plan_id"],"quiesced":true});
+    let applied = ctrl(&world, CARRIED[0].0, &carried, Some(PERSON));
+    assert_eq!(applied["ok"], true, "{applied}");
+    assert_eq!(
+        fs::canonicalize(root.join("Control/user/box2/door")).unwrap(),
+        fs::canonicalize(root.join("Work/alpha")).unwrap()
+    );
+    let back = ctrl(&world, CARRIED[1].0, &carried, Some(PERSON));
+    assert_eq!(back["ok"], true, "{back}");
+    assert!(root.join("Control/user/box/door").is_symlink());
+    assert_eq!(alphas_tree(&world), before, "nothing in alpha changes");
+}
+
+/// A link step of the root's world for the journal `plan`, as `plan` writes one: at `path`, replacing the entry whose device and
+/// inode are `before`, by the staged entry whose device and inode are `staged` (it stands at the plan's own staged name).
+fn root_step(plan: &Value, path: &str, before: (u64, u64), staged: (u64, u64)) -> Value {
+    let id = plan["id"].as_str().unwrap();
+    json!({"world":"control:root","path":path,"after_path":path,
+        "before":{"source_ref":"x","world_ref":"control:root","owner":"person","target":"x","device":before.0,"inode":before.1},
+        "staged":format!(".central/bkmr/moves/{id}-0-new"),"backup":format!(".central/bkmr/moves/{id}-0-old"),
+        "new_device":staged.0,"new_inode":staged.1})
+}
+
+/// An entry's device and inode, the entry itself and never what a link points at.
+fn identity(path: &Path) -> (u64, u64) {
+    use std::os::unix::fs::MetadataExt;
+    let entry = fs::symlink_metadata(path).unwrap();
+    (entry.dev(), entry.ino())
+}
+
+/// Round 54i item 1 (DLW build ruling 2026-11-11; the review of #346's second commit, B1): a link step replaces a link and nothing
+/// else. A journal edited to add a link step of the root's at alpha's own folder, or at `Work`, would move the whole folder into
+/// the root's moves folder. On the root's grant alone the gate refuses it, naming alpha: a link place where a folder stands is
+/// judged as that folder, with all it holds. Apply and rollback are both refused, and nothing changes. On the root's grant and
+/// alpha's the gate has nothing to refuse, and apply itself refuses the step, in words that say what stands there: a scope's own
+/// folder, or a folder above one (round 54j item 1). The folder stands where it was, with its bytes.
+#[test]
+fn a_link_step_at_a_folder_moves_no_folder() {
+    for path in ["Work/alpha", "Work"] {
+        let world = granting(&every_act(), "control:root");
+        let root = world.root();
+        let carried = edited_journal(&world, |plan| {
+            let id = plan["id"].as_str().unwrap().to_owned();
+            let staged = root.join(format!(".central/bkmr/moves/{id}-0-new"));
+            fs::write(&staged, "planted in the folder's place\n").unwrap();
+            let step = root_step(plan, path, identity(&root.join(path)), identity(&staged));
+            plan["links"].as_array_mut().unwrap().push(step);
+        });
+        let before = ground(&world);
+        for (action, opening) in CARRIED {
+            refused_in_words(
+                &world,
+                action,
+                &carried,
+                Some(PERSON),
+                opening,
+                REACHES_ALPHA,
+            );
+        }
+        assert_eq!(
+            ground(&world),
+            before,
+            "{path}: the gate's refusal changes nothing"
+        );
+        granted_at(&world, &["control:root", "project:alpha"]);
+        let before = alphas_tree(&world);
+        for (action, _) in CARRIED {
+            let refused = ctrl(&world, action, &carried, Some(PERSON));
+            assert_eq!(refused["ok"], false, "{path} {action}: {refused}");
+            let words = refused["error"]["message"].as_str().unwrap_or_default();
+            assert!(
+                words.contains(&format!(
+                    "Invalid move journal: its link step at {path} names {path}, which is a scope's own folder or a folder \
+                     above one"
+                )),
+                "{path} {action}: {words}"
+            );
+        }
+        assert!(root.join(path).is_dir(), "{path} stands where it was");
+        assert_eq!(
+            alphas_tree(&world),
+            before,
+            "{path}: alpha's files are as they were"
+        );
+        assert!(
+            root.join("Control/user/note.md").is_file(),
+            "{path}: nothing moved"
+        );
+    }
+}
+
+/// Round 54i item 1: the same rule where no grant is in question. A link step of the root's own, edited to stand at a file of the
+/// root's, or to stage a file where its plan staged a link, is refused by apply: a file is no link. The file stays, and nothing
+/// moves. So is a step edited to land at a file after the move, and one at whose kept name a file stands (round 54j item 4).
+#[test]
+fn a_link_step_at_a_file_or_staging_a_file_is_refused() {
+    for edit in [
+        "the step stands at a file",
+        "the step stages a file",
+        "the step lands at a file",
+        "a file stands at the step's kept name",
+    ] {
+        let world = granting(&every_act(), "control:root");
+        let root = world.root();
+        root_link(&world, "Control/user/note-link");
+        fs::write(root.join("Control/user/other.md"), "another page\n").unwrap();
+        let carried = edited_move(&world, "Control/user/note2.md", |plan| {
+            let staged = root.join(plan["links"][0]["staged"].as_str().unwrap());
+            if edit == "the step stands at a file" {
+                let other = identity(&root.join("Control/user/other.md"));
+                plan["links"][0]["path"] = json!("Control/user/other.md");
+                plan["links"][0]["after_path"] = json!("Control/user/other.md");
+                plan["links"][0]["before"]["device"] = json!(other.0);
+                plan["links"][0]["before"]["inode"] = json!(other.1);
+            } else if edit == "the step lands at a file" {
+                // Only where the link stands after the move is changed (the reviewer's mutant X4).
+                plan["links"][0]["after_path"] = json!("Control/user/other.md");
+            } else if edit == "a file stands at the step's kept name" {
+                // The reviewer's mutant X5.
+                let kept = root.join(plan["links"][0]["backup"].as_str().unwrap());
+                fs::write(kept, "a file where the old link is kept\n").unwrap();
+            } else {
+                fs::remove_file(&staged).unwrap();
+                fs::write(&staged, "a file where the plan staged a link\n").unwrap();
+                let made = identity(&staged);
+                plan["links"][0]["new_device"] = json!(made.0);
+                plan["links"][0]["new_inode"] = json!(made.1);
+            }
+        });
+        let before = ground_but_locks(&world);
+        let refused = ctrl(&world, CARRIED[0].0, &carried, Some(PERSON));
+        assert_eq!(refused["ok"], false, "{edit}: {refused}");
+        let words = refused["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            words.contains("which is not a link: a link step replaces a link and nothing else"),
+            "{edit}: {words}"
+        );
+        assert_eq!(
+            ground_but_locks(&world),
+            before,
+            "{edit}: nothing is moved or written"
+        );
+    }
+}
+
+/// A journal whose scopes stop reading once its Source has moved, with no link in any spelling: a project `standin` of the root's
+/// own tree is one of the journal's scopes, and the journal moves that project's `ProjectCentral` folder away, so `standin` has no
+/// declaration after the rename. The folder goes to `to`. Answers the world and the move's carried input. (Until round 54j this
+/// case was reached through a link inside the moved folder, which is now refused as a spelling before the rename.)
+fn scopes_that_do_not_read_once_moved(to: &str) -> (World, Value) {
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    project(&root.join("Control/user/standin"), "standin");
+    let declared = identity(&root.join("Control/user/standin/ProjectCentral"));
+    let carried = edited_journal(&world, |plan| {
+        plan["from"] = json!("Control/user/standin/ProjectCentral");
+        plan["to"] = json!(to);
+        plan["device"] = json!(declared.0);
+        plan["inode"] = json!(declared.1);
+        plan["worlds"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"world":"project:standin",
+            "path":"Control/user/standin","external":false,"project":"standin"}));
+        plan["refresh_worlds"] = json!([]);
+        plan["documents"] = json!([]);
+        plan["links"] = json!([]);
+    });
+    (world, carried)
+}
+
+/// A journal's `state`, as it stands on the disk.
+fn journal_state(world: &World, carried: &Value) -> String {
+    let id = carried["plan_id"].as_str().unwrap();
+    let journal = world.root().join(format!(".central/bkmr/moves/{id}.json"));
+    let plan: Value = serde_json::from_slice(&fs::read(journal).unwrap()).unwrap();
+    plan["state"].as_str().unwrap().to_owned()
+}
+
+/// Round 54i item 2 (B2): the rename is put back whenever the scopes are not the ones the gate saw. A journal moves away the
+/// declaration of a project it runs from, so the scopes do not read after the rename. Apply puts the folder back and writes
+/// nothing. The journal is left as it was, so a second apply answers the same way, in words, and a rollback has nothing to undo.
+#[test]
+fn a_journal_whose_scopes_do_not_read_after_the_rename_is_put_back() {
+    let (world, carried) = scopes_that_do_not_read_once_moved("Control/pc2");
+    let root = world.root();
+    let declaration = root.join("Control/user/standin/ProjectCentral/project.json");
+    let before = alphas_tree(&world);
+    for attempt in ["the first apply", "a second apply"] {
+        let refused = ctrl(&world, CARRIED[0].0, &carried, Some(PERSON));
+        assert_eq!(refused["ok"], false, "{attempt}: {refused}");
+        let words = refused["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            words.contains("Move journal's scopes do not read")
+                && words.contains("the Source is back where it stood and nothing else was written"),
+            "{attempt}: {words}"
+        );
+        assert!(
+            declaration.is_file() && !root.join("Control/pc2").exists(),
+            "{attempt}: the folder is back where it stood"
+        );
+        assert_eq!(journal_state(&world, &carried), "prepared", "{attempt}");
+    }
+    let back = ctrl(&world, CARRIED[1].0, &carried, Some(PERSON));
+    assert_eq!(back["ok"], true, "a rollback reads the journal: {back}");
+    assert!(declaration.is_file());
+    assert_eq!(alphas_tree(&world), before, "nothing is written in alpha");
+}
+
+/// Round 54j item 2 (DLW build ruling 2026-11-11; the review of #346's third commit, C2): what stands after a put-back that failed,
+/// for the two tests below. `first` is the refusal of the apply whose put-back failed; `free` takes away what made it fail. The
+/// refusal says where the Source stands and that it must be moved back by hand, and the journal says "renamed". With the way back
+/// still closed, a rollback cannot move the Source back and says the same; an apply is refused, since the scopes do not read. Once
+/// the way is free, a rollback makes the rename back and nothing else, and says so; a second rollback then finds the scopes
+/// reading and has nothing left to undo. Nothing is written in alpha at any point (`before` is alpha's tree from before the apply).
+fn after_a_put_back_that_failed(
+    world: &World,
+    carried: &Value,
+    (from, to): (&Path, &Path),
+    first: &str,
+    before: &[(PathBuf, Vec<u8>)],
+    free: impl FnOnce(),
+) {
+    let moved = || to.join("project.json").is_file() && !from.join("project.json").exists();
+    assert!(moved(), "the Source stands where the rename put it");
+    assert_eq!(journal_state(world, carried), "renamed");
+    let stuck = ctrl(world, CARRIED[1].0, carried, Some(PERSON));
+    assert_eq!(stuck["ok"], false, "{stuck}");
+    let stuck = stuck["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    let again = ctrl(world, CARRIED[0].0, carried, Some(PERSON));
+    assert_eq!(again["ok"], false, "{again}");
+    assert!(moved(), "neither moved it");
+    free();
+    let back = ctrl(world, CARRIED[1].0, carried, Some(PERSON));
+    assert_eq!(back["ok"], true, "{back}");
+    assert!(
+        from.join("project.json").is_file() && !to.exists(),
+        "the Source is back where it stood"
+    );
+    assert_eq!(back["data"]["result"]["state"], "rolling-back", "{back}");
+    let note = back["data"]["result"]["note"].as_str().unwrap_or_default();
+    assert!(
+        note.contains(
+            "the Source is back at Control/user/standin/ProjectCentral, and nothing else was written"
+        ),
+        "{back}"
+    );
+    let done = ctrl(world, CARRIED[1].0, carried, Some(PERSON));
+    assert_eq!(done["ok"], true, "{done}");
+    assert_eq!(done["data"]["result"]["state"], "rolled-back", "{done}");
+    assert_eq!(alphas_tree(world), before, "nothing is written in alpha");
+    // What the two refusals said of the Source: where it stands, and that a hand must move it back.
+    for (said, could_not) in [
+        (first, "could not be put back"),
+        (stuck.as_str(), "could not be moved back"),
+    ] {
+        assert!(
+            said.contains(could_not)
+                && said.contains(to.to_str().unwrap())
+                && said.contains(from.to_str().unwrap())
+                && said.contains("by hand"),
+            "{said}"
+        );
+    }
+}
+
+/// A folder that takes new entries and gives none up while this stands (the `uappnd` flag of macOS and the BSDs, which the
+/// folder's own user sets and clears): a rename into it goes through and the rename back out of it is refused by the system.
+#[cfg(target_os = "macos")]
+struct TakesAndKeeps(PathBuf);
+#[cfg(target_os = "macos")]
+impl TakesAndKeeps {
+    fn flags(folder: &Path, flags: u32) {
+        use std::os::unix::ffi::OsStrExt;
+        let folder = std::ffi::CString::new(folder.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::chflags(folder.as_ptr(), flags) }, 0);
+    }
+    fn at(folder: PathBuf) -> Self {
+        fs::create_dir_all(&folder).unwrap();
+        Self::flags(&folder, libc::UF_APPEND);
+        Self(folder)
+    }
+}
+#[cfg(target_os = "macos")]
+impl Drop for TakesAndKeeps {
+    fn drop(&mut self) {
+        Self::flags(&self.0, 0);
+    }
+}
+
+/// Round 54j item 2 (C2): when the put-back itself fails, the journal is not dead ([`after_a_put_back_that_failed`]). Here the
+/// put-back fails every time, with no second writer: the move's destination lies in a folder that takes entries and gives none up
+/// ([`TakesAndKeeps`]), so the rename goes through and the rename back is refused by the system until the flag is cleared. macOS
+/// only: Linux has no such flag a plain user may set, and there the race below is the test.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_put_back_that_fails_leaves_a_journal_that_a_rollback_still_reads() {
+    let (world, carried) = scopes_that_do_not_read_once_moved("Control/kept/pc2");
+    let root = world.root();
+    let from = root.join("Control/user/standin/ProjectCentral");
+    let to = root.join("Control/kept/pc2");
+    let kept = TakesAndKeeps::at(root.join("Control/kept"));
+    let before = alphas_tree(&world);
+    let refused = ctrl(&world, CARRIED[0].0, &carried, Some(PERSON));
+    assert_eq!(refused["ok"], false, "{refused}");
+    let first = refused["error"]["message"].as_str().unwrap_or_default();
+    assert!(first.contains("could not be put back"), "{first}");
+    after_a_put_back_that_failed(&world, &carried, (&from, &to), first, &before, || {
+        drop(kept)
+    });
+}
+
+/// Round 54j item 2 (C2), as the review reached it: while apply runs, another hand takes the Source's old name the moment the
+/// rename frees it, so the put-back is refused by the system ([`after_a_put_back_that_failed`] is asked of every such world). The
+/// other hand is two threads of this test's that make a folder at the old name as soon as it is free. Whether one gets there before
+/// apply's own put-back is a race, so this test is run by name and never by the suite: it makes 20 worlds, prints how many the
+/// other hand won, and fails only where a world it won answers wrongly, or where it won none.
+#[test]
+#[ignore = "a race by nature: another hand must take the freed name before apply's own put-back does; run by name"]
+fn a_put_back_that_loses_a_race_leaves_a_journal_that_a_rollback_still_reads() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let mut won = 0;
+    for _ in 0..20 {
+        let (world, carried) = scopes_that_do_not_read_once_moved("Control/pc2");
+        let root = world.root();
+        let from = root.join("Control/user/standin/ProjectCentral");
+        let to = root.join("Control/pc2");
+        let before = alphas_tree(&world);
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let hands: Vec<_> = (0..2)
+            .map(|_| {
+                let (stop, from) = (stop.clone(), from.clone());
+                std::thread::spawn(move || {
+                    while !stop.load(Ordering::Relaxed) {
+                        if fs::create_dir(&from).is_ok() {
+                            return;
+                        }
+                    }
+                })
+            })
+            .collect();
+        let refused = ctrl(&world, CARRIED[0].0, &carried, Some(PERSON));
+        stop.store(true, Ordering::Relaxed);
+        for hand in hands {
+            hand.join().unwrap();
+        }
+        assert_eq!(refused["ok"], false, "{refused}");
+        let first = refused["error"]["message"].as_str().unwrap_or_default();
+        if !first.contains("could not be put back") {
+            // Apply's own put-back got there first: the case of the test above the last.
+            assert!(from.join("project.json").is_file(), "{first}");
+            continue;
+        }
+        won += 1;
+        after_a_put_back_that_failed(&world, &carried, (&from, &to), first, &before, || {
+            fs::remove_dir(&from).unwrap()
+        });
+    }
+    println!("the other hand won {won} of 20 worlds, and each of those answered as asked");
+    assert!(
+        won > 0,
+        "the other hand never took the name before apply's put-back in 20 worlds"
+    );
+}
+
+/// Round 54i item 4 (B4): a `project.json` that is there and is no ordinary file, a link here, makes its Work folder unreachable in
+/// words, as one that does not open does; a move's plan is refused in them. And the root's pool does not stop without a word at a
+/// folder of the root's own whose `project.json` is a link: its files stay the root's pooled Sources.
+#[test]
+fn a_declaration_that_is_a_link_is_said_and_stops_no_pool_of_the_roots() {
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    let source = page_source(&world);
+    let kit = root.join("Shelf/kit");
+    fs::create_dir_all(kit.join("ProjectCentral")).unwrap();
+    fs::write(kit.join("a.md"), "a page of the root's\n").unwrap();
+    fs::write(kit.join("kept.json"), "{}").unwrap();
+    std::os::unix::fs::symlink("../kept.json", kit.join("ProjectCentral/project.json")).unwrap();
+    let pooled = ctrl(
+        &world,
+        "central.file-map.pool",
+        &json!({"enable":true,"expected_revision":revision(&world, None)}),
+        Some(PERSON),
+    );
+    assert_eq!(pooled["ok"], true, "{pooled}");
+    let located = ctrl(
+        &world,
+        "central.file-map.locate",
+        &json!({"path":"Shelf/kit/a.md"}),
+        None,
+    );
+    assert_eq!(
+        located["data"]["result"]["source"]["provenance"], "pooled",
+        "the root's pool goes on past a folder whose project.json is a link: {located}"
+    );
+    let declaration = root.join("Work/alpha/ProjectCentral/project.json");
+    fs::rename(
+        &declaration,
+        root.join("Work/alpha/ProjectCentral/kept.json"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("kept.json", &declaration).unwrap();
+    let said = "the Work project alpha does not read its declaration, Work/alpha/ProjectCentral/project.json: \
+        Participating Project manifest is not an ordinary file";
+    let inspected = ctrl(
+        &world,
+        "central.file-map.inspect",
+        &json!({"resources":false}),
+        None,
+    );
+    assert_eq!(inspected["ok"], true, "{inspected}");
+    assert!(
+        inspected["data"]["unreachable"].to_string().contains(said),
+        "{inspected}"
+    );
+    let refused = ctrl(
+        &world,
+        "central.file-map.move-plan",
+        &json!({"source_ref":source,"destination":"Control/user/note2.md"}),
+        Some(PERSON),
+    );
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(said),
+        "{refused}"
+    );
+}
+
+/// Round 54i item 5 (the reviewer's mutant B1m): apply reads a link step's staged and kept links where they stand, with no link in
+/// a folder above them. Alpha links the root's page, and a move of the page stages alpha's new link in alpha's moves folder. That
+/// folder is then put elsewhere and a link left in its place. On both grants apply refuses the link in the path, and the page
+/// stays where it was.
+#[test]
+fn a_link_step_s_staged_link_behind_a_link_is_refused() {
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    granted_at(&world, &["control:root", "project:alpha"]);
+    let source = page_source(&world);
+    let linked = ctrl(
+        &world,
+        "central.file-map.link",
+        &json!({"project":"alpha","source_ref":source,"path":"links/note","owner":"person",
+            "expected_revision":revision(&world, Some("alpha"))}),
+        Some(PERSON),
+    );
+    assert_eq!(linked["ok"], true, "{linked}");
+    let carried = edited_move(&world, "Control/user/note2.md", |plan| {
+        assert_eq!(plan["links"][0]["world"], "project:alpha", "{plan}");
+    });
+    let moves = root.join("Work/alpha/.central/bkmr/moves");
+    fs::rename(&moves, root.join("Control/user/moved-moves")).unwrap();
+    std::os::unix::fs::symlink("../../../../Control/user/moved-moves", &moves).unwrap();
+    let refused = ctrl(&world, CARRIED[0].0, &carried, Some(PERSON));
+    assert_eq!(refused["ok"], false, "{refused}");
+    let words = refused["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        words.contains("refusing symlink source path component"),
+        "{words}"
+    );
+    assert!(
+        root.join("Control/user/note.md").is_file(),
+        "the page stays"
+    );
+    assert_eq!(
+        fs::read_link(root.join("Work/alpha/links/note")).unwrap(),
+        Path::new("../../../Control/user/note.md"),
+        "alpha's link is as it was"
+    );
+}
+
+/// Round 54i item 5 (the reviewer's mutants B2m and B3m): a journal's scope outside the ground is spelled by the folder's own
+/// absolute path, as an external root is opened. One spelled through a link to it, or with `..` in it, is refused as an invalid
+/// journal, and nothing moves.
+#[test]
+fn a_journal_scope_outside_the_ground_is_spelled_by_its_own_path() {
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    declare_outside_scopes(&world);
+    let far = fs::canonicalize(world.0.join("far")).unwrap();
+    std::os::unix::fs::symlink(&far, world.0.join("far-by-a-link")).unwrap();
+    let by_a_link = fs::canonicalize(&world.0).unwrap().join("far-by-a-link");
+    let dotted = far.parent().unwrap().join("far/../far");
+    // And with `..` after a name that is not there, which no reading of the disk can make canonical.
+    let dotted_past_nothing = far.parent().unwrap().join("nothing-here/../far");
+    for spelled in [by_a_link, dotted, dotted_past_nothing] {
+        let spelled = spelled.to_str().unwrap().to_owned();
+        let carried = edited_journal(&world, |plan| {
+            let scopes = plan["worlds"].as_array_mut().unwrap();
+            let scope = scopes
+                .iter_mut()
+                .find(|scope| scope["world"] == "project:far")
+                .expect("the journal lists the scope outside the ground");
+            assert_eq!(scope["external"], true, "{scope}");
+            scope["path"] = json!(spelled);
+        });
+        for (action, opening) in CARRIED {
+            refused_as(
+                &world,
+                action,
+                &carried,
+                Some(PERSON),
+                "central.file_map_failure",
+                opening,
+                &format!("Invalid move journal: it spells the scope project:far as {spelled}"),
+            );
+        }
+        assert!(
+            root.join("Control/user/note.md").is_file(),
+            "{spelled}: nothing moved"
+        );
+    }
+}
+
+/// A link step for the journal `id`, as `plan` writes one: the `index`th, in `world_ref`, at `path`, replacing the entry whose
+/// device and inode are `before` by the staged entry whose device and inode are `staged`.
+fn link_step(
+    world_ref: &str,
+    id: &str,
+    index: usize,
+    path: &str,
+    before: (u64, u64),
+    staged: (u64, u64),
+) -> Value {
+    json!({"world":world_ref,"path":path,"after_path":path,
+        "before":{"source_ref":"x","world_ref":world_ref,"owner":"person","target":"x","device":before.0,"inode":before.1},
+        "staged":format!(".central/bkmr/moves/{id}-{index}-new"),"backup":format!(".central/bkmr/moves/{id}-{index}-old"),
+        "new_device":staged.0,"new_inode":staged.1})
+}
+
+/// The four spellings of the review's route C1: how the journal spells the scope, where its link step stands, and whether the
+/// scope's link leads through a second one (`door -> mid -> standin`).
+const THROUGH_A_LINK: [(&str, &str, bool); 4] = [
+    ("Control/user/door", "Control/user/door", false),
+    ("Control/user/door", "Control/user/DOOR", false),
+    ("Control/user/DOOR", "Control/user/door", false),
+    ("Control/user/door", "Control/user/mid", true),
+];
+
+/// The review's route C1: a journal lists a scope `project:standin` spelled through a link of the root's own, `Control/user/door`,
+/// which leads to a stand-in project in the root's tree, so the root's grant is enough for all the gate reads. A link step of the
+/// root's then replaces that link (or `mid`, the link it leads through) by a staged link to another Work project, beta, and the
+/// journal's relations document for `project:standin` would be written wherever the link then leads. Answers the world and the
+/// carried input, or none where this volume does not read the spelling (another case, on a volume that tells cases apart).
+fn scope_through_a_link(
+    scope_spelled: &str,
+    step_spelled: &str,
+    chain: bool,
+) -> Option<(World, Value)> {
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    project(&root.join("Work/beta"), "beta");
+    fs::write(root.join("Work/beta/plan.md"), "beta's plan\n").unwrap();
+    let standin = root.join("Control/user/standin");
+    project(&standin, "standin");
+    std::os::unix::fs::symlink("ProjectCentral/project.json", standin.join("l0")).unwrap();
+    if chain {
+        std::os::unix::fs::symlink("standin", root.join("Control/user/mid")).unwrap();
+        std::os::unix::fs::symlink("mid", root.join("Control/user/door")).unwrap();
+    } else {
+        std::os::unix::fs::symlink("standin", root.join("Control/user/door")).unwrap();
+    }
+    if !root.join(step_spelled).exists() || !root.join(scope_spelled).exists() {
+        return None;
+    }
+    let swapped = identity(&root.join(if chain {
+        "Control/user/mid"
+    } else {
+        "Control/user/door"
+    }));
+    let kept = identity(&standin.join("l0"));
+    let carried = edited_journal(&world, |plan| {
+        let id = plan["id"].as_str().unwrap().to_owned();
+        fs::create_dir_all(standin.join(".central/bkmr/moves")).unwrap();
+        let staged = standin.join(format!(".central/bkmr/moves/{id}-0-new"));
+        std::os::unix::fs::symlink("ProjectCentral/project.json", &staged).unwrap();
+        let to_beta = root.join(format!(".central/bkmr/moves/{id}-1-new"));
+        std::os::unix::fs::symlink("../../Work/beta", &to_beta).unwrap();
+        plan["worlds"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"world":"project:standin",
+            "path":scope_spelled,"external":false,"project":"standin"}));
+        let links = plan["links"].as_array_mut().unwrap();
+        links.push(link_step(
+            "project:standin",
+            &id,
+            0,
+            "l0",
+            kept,
+            identity(&staged),
+        ));
+        links.push(link_step(
+            "control:root",
+            &id,
+            1,
+            step_spelled,
+            swapped,
+            identity(&to_beta),
+        ));
+        plan["documents"].as_array_mut().unwrap().push(json!({"world":"project:standin","path":null,
+            "before":null,"after":"{\"written\":\"through the root's link, on the root's grant alone\"}"}));
+    });
+    Some((world, carried))
+}
+
+/// Round 54j item 1 (DLW build ruling 2026-11-11; the review of #346's third commit, C1): a journal's scope in the ground is
+/// spelled as the disk spells the folder it reads as, with no link in it and no other case of a name. Each spelling of the route
+/// (the exact one, the step in another case, the scope in another case, and a chain of two links) is refused on the root's grant
+/// alone, at the gate, as a spelling: apply and rollback both, and nothing in the world changes.
+#[test]
+fn a_journal_scope_spelled_through_a_link_of_the_roots_is_refused_as_a_spelling() {
+    for (scope_spelled, step_spelled, chain) in THROUGH_A_LINK {
+        let Some((world, carried)) = scope_through_a_link(scope_spelled, step_spelled, chain)
+        else {
+            continue;
+        };
+        let case = format!("scope {scope_spelled}, step {step_spelled}");
+        let before = ground(&world);
+        for (action, opening) in CARRIED {
+            let refused = ctrl(&world, action, &carried, Some(PERSON));
+            assert_eq!(refused["ok"], false, "{case} {action}: {refused}");
+            let words = refused["error"]["message"].as_str().unwrap_or_default();
+            assert!(
+                words.starts_with(opening)
+                    && words.contains(&format!(
+                        "This move's journal spells the scope project:standin as {scope_spelled}, which is not that \
+                         folder's own spelling on the disk now"
+                    )),
+                "{case} {action}: {words}"
+            );
+        }
+        assert_eq!(
+            ground(&world),
+            before,
+            "{case}: nothing is moved or written"
+        );
+    }
+}
+
+/// Round 54j item 1, by what is left on the disk and whatever words refuse it: for each spelling of the same route, apply is
+/// refused on the root's grant alone, and after it and after a rollback nothing is written in beta, the root's link still leads to
+/// the stand-in, the stand-in's own link is the one it was, and the person's page has not moved. This is the test that holds when one of the
+/// guards is taken away: the spelling rule, the rule that a step's path is no scope's folder, and the scopes held again after each
+/// link step each stop the route alone.
+#[test]
+fn a_journal_scope_spelled_through_a_link_of_the_roots_writes_nothing_in_another_project() {
+    for (scope_spelled, step_spelled, chain) in THROUGH_A_LINK {
+        let Some((world, carried)) = scope_through_a_link(scope_spelled, step_spelled, chain)
+        else {
+            continue;
+        };
+        let root = world.root();
+        let case = format!("scope {scope_spelled}, step {step_spelled}");
+        let beta = |world: &World| -> Vec<(PathBuf, Vec<u8>)> {
+            let beta = world.root().join("Work/beta");
+            ground_but_locks(world)
+                .into_iter()
+                .filter(|(path, _)| path.starts_with(&beta))
+                .collect()
+        };
+        let before = beta(&world);
+        let kept = identity(&root.join("Control/user/standin/l0"));
+        for (action, _) in CARRIED {
+            let answer = ctrl(&world, action, &carried, Some(PERSON));
+            // Apply is refused by whichever guard meets the journal first. A rollback is refused by the spelling rule; were
+            // that rule not there, it would find nothing carried and answer that nothing was undone. Either way it is held
+            // to what it leaves, as apply is.
+            if action == CARRIED[0].0 {
+                assert_eq!(answer["ok"], false, "{case} {action}: {answer}");
+            }
+            assert_eq!(
+                beta(&world),
+                before,
+                "{case} {action}: nothing is written in beta"
+            );
+            assert!(
+                !root.join("Work/beta/ProjectCentral/relations").exists(),
+                "{case} {action}"
+            );
+            assert_eq!(
+                fs::canonicalize(root.join("Control/user/door")).unwrap(),
+                fs::canonicalize(root.join("Control/user/standin")).unwrap(),
+                "{case} {action}: the root's link leads where it led"
+            );
+            assert_eq!(
+                identity(&root.join("Control/user/standin/l0")),
+                kept,
+                "{case} {action}: the stand-in's link is the one it was"
+            );
+            assert!(
+                root.join("Control/user/note.md").is_file()
+                    && !root.join("Control/user/note2.md").exists(),
+                "{case} {action}: the page stands where it stood"
+            );
+        }
+    }
+}
+
+/// Round 54j item 1: a journal's scope in the ground that is no project and does not stand is refused as a spelling too. Nothing can
+/// be read through it now, and a link made at that name later would decide where it reads. (A project that does not stand is named
+/// in its own refusal: `a_project_a_journal_runs_from_whose_declaration_does_not_read_is_named_in_the_refusal`.)
+#[test]
+fn a_journal_scope_in_the_ground_that_does_not_stand_is_refused() {
+    let world = granting(&every_act(), "control:root");
+    let carried = edited_journal(&world, |plan| {
+        plan["worlds"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"world":"folder:nowhere",
+            "path":"Control/user/nowhere","external":false,"project":"nowhere"}));
+    });
+    let before = ground(&world);
+    for (action, opening) in CARRIED {
+        refused_as(
+            &world,
+            action,
+            &carried,
+            Some(PERSON),
+            "central.file_map_failure",
+            opening,
+            "This move's journal spells the scope folder:nowhere as Control/user/nowhere, which is not that folder's own \
+             spelling on the disk now",
+        );
+    }
+    assert_eq!(ground(&world), before, "nothing is moved or written");
+}
+
+/// Round 54j item 2: a rollback makes the rename back alone only for a journal that says its rename was carried. The same journal
+/// still "prepared", its Source moved by another hand to where the move would put it, is refused as before, naming the project that
+/// does not read, and the Source stays where that hand put it.
+#[test]
+fn a_rollback_alone_is_for_a_journal_whose_rename_was_carried() {
+    let (world, carried) = scopes_that_do_not_read_once_moved("Control/pc2");
+    let root = world.root();
+    fs::rename(
+        root.join("Control/user/standin/ProjectCentral"),
+        root.join("Control/pc2"),
+    )
+    .unwrap();
+    assert_eq!(journal_state(&world, &carried), "prepared");
+    let refused = ctrl(&world, CARRIED[1].0, &carried, Some(PERSON));
+    assert_eq!(refused["ok"], false, "{refused}");
+    let words = refused["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        words.contains("its journal runs from the project standin, which does not read"),
+        "{words}"
+    );
+    assert!(
+        root.join("Control/pc2/project.json").is_file()
+            && !root.join("Control/user/standin/ProjectCentral").exists(),
+        "the Source stays where the other hand put it"
+    );
+}
+
+/// Round 54j item 3 (the review of #346's third commit, C3): `locate` answers in a Work project's words only for a place in a member
+/// of Work. The root's relations name a project `folder:x` at a folder of the root's own; a project spelled so does not stand, and
+/// is listed unreachable with its root as written, relative. A Source of the root's in that folder is located as the root's, from
+/// a working directory in the ground as from one outside it, with the project listed; it is not "in Work/folder:x".
+#[test]
+fn a_roots_source_under_a_project_that_does_not_stand_is_located_as_the_roots() {
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    fs::create_dir_all(root.join("Control/user/pdir")).unwrap();
+    fs::write(root.join("Control/user/pdir/p.md"), "p\n").unwrap();
+    let registered = ctrl(
+        &world,
+        "central.file-map.register",
+        &json!({"path":"Control/user/pdir/p.md","expected_revision":revision(&world, None)}),
+        Some(PERSON),
+    );
+    assert_eq!(registered["ok"], true, "{registered}");
+    edit_root_relations(&world, |document| {
+        document["file_map"]["scopes"]["folder:x"] = json!("Control/user/pdir");
+    });
+    for cwd in [world.0.clone(), root.clone()] {
+        let located = ctrl_at(
+            &world,
+            &cwd,
+            "central.file-map.locate",
+            &json!({"path":"Control/user/pdir/p.md"}),
+            None,
+            &[],
+        );
+        assert_eq!(located["ok"], true, "from {}: {located}", cwd.display());
+        assert!(
+            located["data"]["result"]["source"]["ref"]
+                .as_str()
+                .is_some_and(|reference| reference.ends_with("Control/user/pdir/p.md")),
+            "from {}: {located}",
+            cwd.display()
+        );
+        assert!(
+            located["data"]["unreachable"]
+                .to_string()
+                .contains("a project named folder:x (Control/user/pdir) does not stand"),
+            "from {}: {located}",
+            cwd.display()
+        );
+    }
+}
+
+/// Round 54j item 4 (the reviewer's mutant X7): a place in a Work project that does not read is that project's to say by the
+/// folder it names, not by its spelling alone. Asked by the firmlink spelling of the ground (macOS's `/System/Volumes/Data`, which
+/// stays a spelling of its own when made canonical), a file in alpha is still "in Work/alpha, which is unreachable". Where the
+/// ground has no such spelling, as on Linux, there is nothing to ask.
+#[test]
+fn a_place_in_a_project_that_does_not_read_is_located_by_the_folder_it_names() {
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    let Some(firm) = firmlink(&root) else {
+        return;
+    };
+    fs::write(
+        root.join("Work/alpha/ProjectCentral/project.json"),
+        "this is no declaration",
+    )
+    .unwrap();
+    let asked = firm.join("Work/alpha/plan.md");
+    let located = ctrl(
+        &world,
+        "central.file-map.locate",
+        &json!({"path":asked.to_str().unwrap()}),
+        None,
+    );
+    assert_eq!(located["ok"], false, "{located}");
+    let words = located["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        words.starts_with("Location is in Work/alpha, which is unreachable: "),
+        "{words}"
+    );
+}
+
+/// Round 54j.1 (DLW build ruling 2026-11-11; the review of #346's fourth commit): a move the person plans is never refused by the
+/// spelling rule for how they spelled where it goes. A folder that holds a registered project is moved to a destination whose
+/// folders are spelled otherwise than the disk spells them: in another case (`control/USER/pdir2`), on a volume that folds case;
+/// and with a letter in its decomposed form (`cafe` and a combining acute, for a folder made as `caf\u{e9}`), on a volume that
+/// folds form. The plan answers, and writes in its journal, the disk's own spelling; the project inside is read where it went;
+/// and the move applies, rolls back and applies again. Where the volume does not read the other spelling there is nothing to ask.
+#[test]
+fn a_destination_spelled_in_another_case_or_form_is_planned_as_the_disk_spells_it() {
+    for (made, asked, written) in [
+        ("Control/user", "control/USER/pdir2", "Control/user/pdir2"),
+        (
+            "Control/user/caf\u{e9}",
+            "Control/user/cafe\u{301}/pdir2",
+            "Control/user/caf\u{e9}/pdir2",
+        ),
+    ] {
+        let world = granting(&every_act(), "control:root");
+        let root = world.root();
+        fs::create_dir_all(root.join(made)).unwrap();
+        let other = Path::new(asked).parent().unwrap();
+        if !root.join(other).is_dir() {
+            continue;
+        }
+        project(&root.join("Control/user/pdir/proj"), "proj");
+        fs::write(root.join("Control/user/pdir/proj/p.md"), "proj's page\n").unwrap();
+        let declared = ctrl(
+            &world,
+            "central.file-map.scope-register",
+            &json!({"name":"proj","path":"Control/user/pdir/proj","kind":"project","expected_revision":revision(&world, None)}),
+            Some(OWNER),
+        );
+        assert_eq!(declared["ok"], true, "{declared}");
+        let registered = ctrl(
+            &world,
+            "central.file-map.register",
+            &json!({"path":"Control/user/pdir","expected_revision":revision(&world, None)}),
+            Some(PERSON),
+        );
+        assert_eq!(registered["ok"], true, "{registered}");
+        let planned = ctrl(
+            &world,
+            "central.file-map.move-plan",
+            &json!({"source_ref":registered["data"]["result"]["source_ref"],"destination":asked}),
+            Some(PERSON),
+        );
+        assert_eq!(planned["ok"], true, "{asked}: {planned}");
+        // The disk's spelling, as the disk gives it for the folder that was made (a volume may keep a name in another form
+        // than it was made in; the destination's own new name is as asked).
+        let disk = fs::canonicalize(root.join(made)).unwrap().join("pdir2");
+        let disk = disk.strip_prefix(fs::canonicalize(&root).unwrap()).unwrap();
+        assert_eq!(
+            planned["data"]["result"]["destination"],
+            disk.to_str().unwrap(),
+            "{asked}: {planned}"
+        );
+        if made == "Control/user" {
+            assert_eq!(disk, Path::new(written));
+        }
+        let carried = json!({"plan_id":planned["data"]["result"]["plan_id"],"quiesced":true});
+        let moved = || {
+            root.join(written).join("proj/p.md").is_file()
+                && !root.join("Control/user/pdir").exists()
+        };
+        for (action, there) in [
+            (CARRIED[0].0, true),
+            (CARRIED[1].0, false),
+            (CARRIED[0].0, true),
+        ] {
+            let answer = ctrl(&world, action, &carried, Some(PERSON));
+            assert_eq!(answer["ok"], true, "{asked} {action}: {answer}");
+            assert_eq!(moved(), there, "{asked} {action}");
+        }
+        assert_eq!(
+            ctrl(
+                &world,
+                "central.file-map.inspect",
+                &json!({"project":"proj","resources":false}),
+                None
+            )["ok"],
+            true,
+            "{asked}: the live map reads, with proj where it now stands"
+        );
+    }
+}
+
+/// A folder of the root's that holds a registered project `proj`, registered as a Source. Answers its SourceRef.
+fn folder_holding_a_project(world: &World) -> Value {
+    let root = world.root();
+    project(&root.join("Control/user/pdir/proj"), "proj");
+    fs::write(root.join("Control/user/pdir/proj/p.md"), "proj's page\n").unwrap();
+    let declared = ctrl(
+        world,
+        "central.file-map.scope-register",
+        &json!({"name":"proj","path":"Control/user/pdir/proj","kind":"project","expected_revision":revision(world, None)}),
+        Some(OWNER),
+    );
+    assert_eq!(declared["ok"], true, "{declared}");
+    let registered = ctrl(
+        world,
+        "central.file-map.register",
+        &json!({"path":"Control/user/pdir","expected_revision":revision(world, None)}),
+        Some(PERSON),
+    );
+    assert_eq!(registered["ok"], true, "{registered}");
+    registered["data"]["result"]["source_ref"].clone()
+}
+
+/// Whether the live map reads, with `proj` in it.
+fn the_map_reads_proj(world: &World) -> bool {
+    ctrl(
+        world,
+        "central.file-map.inspect",
+        &json!({"project":"proj","resources":false}),
+        None,
+    )["ok"]
+        == true
+}
+
+/// Round 54j.1 (the review of #346's fourth commit, D1, its probe as an assertion): the same move, to a destination whose folders
+/// are typed in another case, when it does not run straight through. Interrupted after the rename, it is finished by a second
+/// apply. Left mid-move by another hand (the folder at the destination, the journal saying "renamed"), it is finished by apply.
+/// After each the live map reads, with the project where it went; and a rollback then undoes the move and the map reads again.
+#[test]
+fn a_move_to_a_destination_spelled_in_another_case_is_finished_and_undone_from_mid_move() {
+    for asked in ["control/user/pdir2", "Control/USER/pdir2"] {
+        for left in [
+            "interrupted after the rename",
+            "left renamed by another hand",
+        ] {
+            let world = granting(&every_act(), "control:root");
+            let root = world.root();
+            if !root.join(asked).parent().unwrap().is_dir() {
+                continue;
+            }
+            let case = format!("{asked}, {left}");
+            let source = folder_holding_a_project(&world);
+            let planned = ctrl(
+                &world,
+                "central.file-map.move-plan",
+                &json!({"source_ref":source,"destination":asked}),
+                Some(PERSON),
+            );
+            assert_eq!(planned["ok"], true, "{case}: {planned}");
+            let id = planned["data"]["result"]["plan_id"].as_str().unwrap();
+            let carried = json!({"plan_id":id,"quiesced":true});
+            if left == "interrupted after the rename" {
+                let interrupted = ctrl_with(
+                    &world,
+                    CARRIED[0].0,
+                    &carried,
+                    Some(PERSON),
+                    &[("CENTRAL_FILE_MAP_TEST_INTERRUPT_AFTER_RENAME", "1")],
+                );
+                assert_eq!(interrupted["ok"], false, "{case}: {interrupted}");
+            } else {
+                fs::rename(root.join("Control/user/pdir"), root.join(asked)).unwrap();
+                let journal = root.join(format!(".central/bkmr/moves/{id}.json"));
+                let mut plan: Value = serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
+                plan["state"] = json!("renamed");
+                fs::write(&journal, serde_json::to_vec_pretty(&plan).unwrap()).unwrap();
+            }
+            assert!(
+                root.join("Control/user/pdir2/proj/p.md").is_file(),
+                "{case}"
+            );
+            let finished = ctrl(&world, CARRIED[0].0, &carried, Some(PERSON));
+            assert_eq!(finished["ok"], true, "{case}: {finished}");
+            assert!(
+                the_map_reads_proj(&world),
+                "{case}: the map reads after the apply"
+            );
+            let undone = ctrl(&world, CARRIED[1].0, &carried, Some(PERSON));
+            assert_eq!(undone["ok"], true, "{case}: {undone}");
+            assert!(
+                root.join("Control/user/pdir/proj/p.md").is_file()
+                    && !root.join("Control/user/pdir2").exists(),
+                "{case}: the folder is back"
+            );
+            assert!(
+                the_map_reads_proj(&world),
+                "{case}: the map reads after the rollback"
+            );
+        }
+    }
+}
+
+/// Round 54j.1 (D1): a journal as a `ctrl` before this rule planned it, its destination and the relations it would write spelled
+/// as the person typed them (`control/USER/pdir2`; the journal is edited to that here, in its `to` and in its documents). Carried
+/// out, that journal leaves relations the map does not read, as it did before this rule. So apply refuses it in words that say
+/// what to do and blame no one, with nothing moved; and where it was already begun (the folder at the destination, the journal
+/// saying "renamed") apply refuses it the same way and a rollback goes through: the folder is back and the map reads.
+#[test]
+fn a_journal_planned_with_its_destination_in_another_case_is_rolled_back_and_not_carried_out() {
+    for left in ["prepared", "renamed"] {
+        let world = granting(&every_act(), "control:root");
+        let root = world.root();
+        if !root.join("control/USER").is_dir() {
+            return;
+        }
+        let source = folder_holding_a_project(&world);
+        let planned = ctrl(
+            &world,
+            "central.file-map.move-plan",
+            &json!({"source_ref":source,"destination":"Control/user/pdir2"}),
+            Some(PERSON),
+        );
+        assert_eq!(planned["ok"], true, "{planned}");
+        let id = planned["data"]["result"]["plan_id"].as_str().unwrap();
+        let journal = root.join(format!(".central/bkmr/moves/{id}.json"));
+        let mut plan: Value = serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
+        assert_eq!(plan["to"], "Control/user/pdir2", "{plan}");
+        plan["to"] = json!("control/USER/pdir2");
+        for document in plan["documents"].as_array_mut().unwrap() {
+            let after = document["after"].as_str().unwrap();
+            assert!(after.contains("Control/user/pdir2/proj"), "{after}");
+            document["after"] = json!(after.replace("Control/user/pdir2", "control/USER/pdir2"));
+        }
+        if left == "renamed" {
+            plan["state"] = json!("renamed");
+            fs::rename(
+                root.join("Control/user/pdir"),
+                root.join("Control/user/pdir2"),
+            )
+            .unwrap();
+        }
+        fs::write(&journal, serde_json::to_vec_pretty(&plan).unwrap()).unwrap();
+        let carried = json!({"plan_id":id,"quiesced":true});
+        let stands = root.join(if left == "renamed" {
+            "Control/user/pdir2/proj/p.md"
+        } else {
+            "Control/user/pdir/proj/p.md"
+        });
+        let refused = ctrl(&world, CARRIED[0].0, &carried, Some(PERSON));
+        assert_eq!(refused["ok"], false, "{left}: {refused}");
+        let words = refused["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            words.contains(
+                "This move was planned with its destination spelled control/USER/pdir2, where the disk spells it \
+                 Control/user/pdir2"
+            ) && words.contains("then plan it again; nothing was written")
+                && !words.contains("Invalid move journal"),
+            "{left}: {words}"
+        );
+        assert!(stands.is_file(), "{left}: apply moved nothing");
+        let undone = ctrl(&world, CARRIED[1].0, &carried, Some(PERSON));
+        assert_eq!(undone["ok"], true, "{left}: {undone}");
+        assert!(
+            root.join("Control/user/pdir/proj/p.md").is_file()
+                && !root.join("Control/user/pdir2").exists(),
+            "{left}: the folder stands where it stood"
+        );
+        assert!(the_map_reads_proj(&world), "{left}: the map reads");
+    }
 }
