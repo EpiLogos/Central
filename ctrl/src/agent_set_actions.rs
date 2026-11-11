@@ -11,7 +11,9 @@ use crate::action::{
     ActionAvailability, ActionDescriptor, ActionExecutionContext, ActionInputDefinition,
     ActionOutputDefinition, ActionRegistry, MutationClass,
 };
-use crate::agent_set_store::{RelationRecordKind, RelationRecordStore, RelationRecordStoreError};
+use crate::agent_set_store::{
+    RelationRecordKind, RelationRecordReading, RelationRecordStore, RelationRecordStoreError,
+};
 use crate::projectcentral::read_project_manifest;
 use crate::result::{ActionResult, ResultStatus};
 use crate::root::resolve_central_root;
@@ -513,9 +515,31 @@ fn world_relations_list(
 
 fn list_action(store: RelationRecordStore, action: &str) -> ActionResult {
     match store.list() {
-        Ok(readings) => ActionResult::success(action, json!({ "records": readings })),
+        Ok(readings) => ActionResult::success(
+            action,
+            json!({ "records": readings.iter().map(shown_record).collect::<Vec<_>>() }),
+        ),
         Err(error) => store_failure(action, error),
     }
+}
+
+/// A kept record as it is shown (be2j item 16, DLW build ruling 2026-11-10): a world's place without the characters that draw
+/// nothing (`WorldPlace::shown`), and what the reading says of it once, when it held any. The record keeps its bytes.
+fn shown_record(reading: &RelationRecordReading) -> Value {
+    let mut value = json!(reading);
+    let place = reading
+        .record
+        .get("place")
+        .filter(|_| matches!(reading.kind, RelationRecordKind::World))
+        .and_then(|place| {
+            serde_json::from_value::<crate::world_place::WorldPlace>(place.clone()).ok()
+        });
+    if let Some((place, note)) = place.and_then(|place| place.kept_note().map(|note| (place, note)))
+    {
+        value["record"]["place"] = json!(place.shown());
+        value["notes"] = json!([note]);
+    }
+    value
 }
 
 fn agent_set_read(
@@ -550,7 +574,7 @@ fn read_action(store: RelationRecordStore, input: &Value, action: &str) -> Actio
         None => return invalid(action, "`ref` is required".into()),
     };
     match store.read(&ref_) {
-        Ok(reading) => ActionResult::success(action, json!(reading)),
+        Ok(reading) => ActionResult::success(action, shown_record(&reading)),
         Err(error) => store_failure(action, error),
     }
 }

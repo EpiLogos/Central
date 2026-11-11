@@ -409,3 +409,271 @@ fn a_world_s_chain_order_is_kept_on_its_own_record_with_compare_and_swap() {
     );
     assert_eq!(stale["data"]["outcome"], "conflict", "{stale}");
 }
+
+/// be2j item 13 (DLW build ruling 2026-11-10): a place given through your world's record (`central.world-relations.save`) is checked
+/// with the whole set, as `central.world.place` checks it: created or changed to hold a character that draws nothing, it is refused
+/// and nothing is kept.
+#[test]
+fn a_place_given_through_your_world_record_is_checked_with_the_whole_set() {
+    let home = made(&[ACTION]);
+    let save = |revision: &str, place: Value, expected: Option<&str>| {
+        let mut input = json!({"scope":"root","record":{"schema":"central.world-relations/v1","ref":"control:root",
+            "revision":revision,"parent":null,"place":place}});
+        if let Some(expected) = expected {
+            input["expected_revision"] = json!(expected);
+        }
+        cli(&home, "central.world-relations.save", input, None)
+    };
+    let read = || {
+        cli(
+            &home,
+            "central.world-relations.read",
+            json!({"scope":"root","ref":"control:root"}),
+            None,
+        )
+    };
+    let mut hidden = hastings();
+    hidden["label"] = json!("Hast\u{200D}ings");
+    let created = save("w1", hidden.clone(), None);
+    assert_eq!(created["ok"], false, "{created}");
+    assert!(
+        created.to_string().contains("no invisible one"),
+        "{created}"
+    );
+    assert_eq!(read()["ok"], false, "nothing was kept");
+
+    assert_eq!(save("w1", hastings(), None)["ok"], true);
+    let mut tagged = hastings();
+    tagged["reference"] = json!("geonames:2647356\u{E0041}");
+    for place in [hidden, tagged] {
+        let changed = save("w2", place.clone(), Some("w1"));
+        assert_eq!(changed["ok"], false, "{place}: {changed}");
+        assert!(
+            changed.to_string().contains("no invisible one"),
+            "{changed}"
+        );
+    }
+    let kept = read();
+    assert_eq!(kept["data"]["record"]["place"], hastings(), "{kept}");
+    assert_eq!(kept["data"]["revision"], "w1");
+}
+
+/// be2j items 13 and 16: your world's place kept before be2i with a character that draws nothing stays as kept when the record is
+/// saved beside it (a chain order, or the record saved again with that place), and reads and lists shown cleaned, with its note.
+/// Declared again, the receipt shows the kept old place cleaned.
+#[test]
+fn your_worlds_place_kept_before_be2i_stays_through_a_chain_order_and_reads_cleaned_with_its_note()
+{
+    const ORDER: &str = "central.world.chain-order";
+    let home = made(&[ACTION, ORDER]);
+    let declared = cli(
+        &home,
+        "central.world-relations.save",
+        json!({"scope":"root","record":{"schema":"central.world-relations/v1","ref":"control:root","revision":"w1",
+            "parent":null,"place":hastings()}}),
+        None,
+    );
+    assert_eq!(declared["ok"], true, "{declared}");
+    let file = home
+        .ground()
+        .join(declared["data"]["source_path"].as_str().unwrap());
+    let mut kept: Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+    kept["place"]["label"] = json!("Hast\u{200D}ings");
+    fs::write(&file, serde_json::to_vec_pretty(&kept).unwrap()).unwrap();
+
+    let ordered = cli(
+        &home,
+        ORDER,
+        json!({"order":["docs","scope"],"expected_revision":"w1"}),
+        Some(TOKEN),
+    );
+    assert_eq!(ordered["data"]["outcome"], "ordered", "{ordered}");
+    let stored: Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+    assert_eq!(stored["place"]["label"], "Hast\u{200D}ings");
+    let mut again = stored.clone();
+    again["revision"] = json!("w3");
+    again.as_object_mut().unwrap().remove("chain_order");
+    let saved = cli(
+        &home,
+        "central.world-relations.save",
+        json!({"scope":"root","record":again,"expected_revision":"w2"}),
+        None,
+    );
+    assert_eq!(saved["ok"], true, "the kept place, kept as it was: {saved}");
+    let stored: Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+    assert_eq!(stored["place"]["label"], "Hast\u{200D}ings");
+
+    let read = cli(
+        &home,
+        "central.world-relations.read",
+        json!({"scope":"root","ref":"control:root"}),
+        None,
+    );
+    assert_eq!(read["data"]["record"]["place"], hastings(), "{read}");
+    let notes = read["data"]["notes"].as_array().unwrap().clone();
+    assert_eq!(notes.len(), 1, "{read}");
+    assert!(notes[0].as_str().unwrap().contains(ACTION), "{notes:?}");
+    let listed = cli(
+        &home,
+        "central.world-relations.list",
+        json!({"scope":"root"}),
+        None,
+    );
+    let row = listed["data"]["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["ref"] == "control:root")
+        .unwrap()
+        .clone();
+    assert_eq!(row["record"]["place"], hastings(), "{listed}");
+    assert_eq!(row["notes"], json!(notes));
+
+    let placed = cli(
+        &home,
+        ACTION,
+        json!({"place":hastings(),"expected_revision":"w3"}),
+        Some(TOKEN),
+    );
+    assert_eq!(placed["data"]["outcome"], "placed", "{placed}");
+    assert_eq!(placed["data"]["previous_place"], hastings(), "{placed}");
+    let stored: Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+    assert_eq!(stored["place"], hastings());
+}
+
+/// be2j.c2 item 1 (DLW build ruling 2026-11-10): your world's record read and saved through the real `ctrl`, as O-I's Scope does it
+/// (it spreads the record it read, changes what it excludes and saves it at the revision), keeps the bytes of a place the read
+/// showed cleaned: a label kept with a character that draws nothing, and a reference with nothing visible, which the read
+/// shows as an unnamed place. Declared again as shown (`central.world.place`), the place is kept so.
+#[test]
+fn your_world_record_read_and_saved_keeps_the_bytes_of_a_place_the_read_showed_cleaned() {
+    let home = made(&[ACTION]);
+    let declared = cli(
+        &home,
+        "central.world-relations.save",
+        json!({"scope":"root","record":{"schema":"central.world-relations/v1","ref":"control:root","revision":"w1",
+            "parent":null,"place":hastings()}}),
+        None,
+    );
+    assert_eq!(declared["ok"], true, "{declared}");
+    let file = home
+        .ground()
+        .join(declared["data"]["source_path"].as_str().unwrap());
+    let mut kept: Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+    kept["place"]["label"] = json!("Hast\u{200D}ings");
+    kept["place"]["reference"] = json!("\u{200B}");
+    fs::write(&file, serde_json::to_vec_pretty(&kept).unwrap()).unwrap();
+
+    let read = cli(
+        &home,
+        "central.world-relations.read",
+        json!({"scope":"root","ref":"control:root"}),
+        None,
+    );
+    let mut record = read["data"]["record"].clone();
+    assert_eq!(record["place"]["label"], "Hastings", "{read}");
+    assert_eq!(record["place"]["reference"], "unnamed place aiq2");
+    let shown = record["place"].clone();
+    record["revision"] = json!("w2");
+    record["excluded_sources"] = json!(["central:source:x"]);
+    let saved = cli(
+        &home,
+        "central.world-relations.save",
+        json!({"scope":"root","record":record,"expected_revision":"w1"}),
+        None,
+    );
+    assert_eq!(saved["ok"], true, "{saved}");
+    let stored: Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+    assert_eq!(stored["place"], kept["place"], "the place, kept as it was");
+    assert_eq!(stored["revision"], "w2");
+    assert_eq!(stored["excluded_sources"], json!(["central:source:x"]));
+
+    let placed = cli(
+        &home,
+        ACTION,
+        json!({"place":shown,"expected_revision":"w2"}),
+        Some(TOKEN),
+    );
+    assert_eq!(placed["data"]["outcome"], "placed", "{placed}");
+    let stored: Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+    assert_eq!(stored["place"], shown);
+}
+
+/// be2j items 16 and 17: a project's world named before be2i with a character that draws nothing still takes a place and a chain
+/// order, keeping its name as kept; renamed, the receipt shows the kept old name cleaned. A name with nothing visible left calls
+/// the world by its folder on the map, which says so once, and a rename's receipt calls it an unnamed world, never blank.
+#[test]
+fn a_project_world_named_before_be2i_takes_a_place_and_an_order_and_a_blank_name_reads_by_its_folder(
+) {
+    const ORDER: &str = "central.world.chain-order";
+    const NAME: &str = "central.world.name";
+    let home = made(&[ACTION, ORDER, NAME]);
+    let manifest = home
+        .ground()
+        .join("Work")
+        .join(PROJECT)
+        .join("ProjectCentral/project.json");
+    let keep_name = |name: &str| {
+        let mut kept: Value = serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+        kept["name"] = json!(name);
+        fs::write(&manifest, serde_json::to_vec_pretty(&kept).unwrap()).unwrap();
+    };
+    let world = || project_of(&cli(&home, "central.world", json!({}), None));
+    let revision = || world()["manifest_revision"].as_str().unwrap().to_owned();
+    keep_name("Field\u{200D} notes");
+    let placed = cli(
+        &home,
+        ACTION,
+        json!({"project":PROJECT,"place":hastings(),"expected_revision":revision()}),
+        Some(TOKEN),
+    );
+    assert_eq!(placed["data"]["outcome"], "placed", "{placed}");
+    let ordered = cli(
+        &home,
+        ORDER,
+        json!({"project":PROJECT,"order":["docs","scope"],"expected_revision":revision()}),
+        Some(TOKEN),
+    );
+    assert_eq!(ordered["data"]["outcome"], "ordered", "{ordered}");
+    let kept: Value = serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+    assert_eq!(kept["name"], "Field\u{200D} notes");
+    assert_eq!(world()["world_name"], "Field notes");
+    // Inspected, the manifest is shown as the map shows it, with what the reading says of it (be2j item 16).
+    let inspected = cli(
+        &home,
+        "projectcentral.inspect",
+        json!({"project":PROJECT}),
+        None,
+    );
+    assert_eq!(
+        inspected["data"]["manifest"]["name"], "Field notes",
+        "{inspected}"
+    );
+    let notes = inspected["data"]["notes"].as_array().unwrap();
+    assert_eq!(notes.len(), 1, "{inspected}");
+    assert!(notes[0].as_str().unwrap().contains(NAME), "{notes:?}");
+    let renamed = cli(
+        &home,
+        NAME,
+        json!({"project":PROJECT,"name":"Field book","expected_revision":revision()}),
+        Some(TOKEN),
+    );
+    assert_eq!(renamed["data"]["outcome"], "named", "{renamed}");
+    assert_eq!(renamed["data"]["previous_name"], "Field notes");
+
+    keep_name("\u{3164}");
+    let blank = world();
+    assert!(blank.get("world_name").is_none(), "{blank}");
+    assert_eq!(blank["name"], PROJECT);
+    let notes = blank["world_notes"].as_array().unwrap();
+    assert_eq!(notes.len(), 1, "{blank}");
+    assert!(notes[0].as_str().unwrap().contains(NAME), "{notes:?}");
+    let renamed = cli(
+        &home,
+        NAME,
+        json!({"project":PROJECT,"name":"Field book","expected_revision":revision()}),
+        Some(TOKEN),
+    );
+    assert_eq!(renamed["data"]["outcome"], "named", "{renamed}");
+    assert_eq!(renamed["data"]["previous_name"], "unnamed world tiz0");
+}

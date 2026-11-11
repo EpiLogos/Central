@@ -36,6 +36,8 @@ pub const NOTIFICATION_LEDGER_SCHEMA: &str = "central.notification-ledger/v1";
 const LEDGER: &str = "ledger.jsonl";
 const LOCK: &str = "notifications.lock";
 const DEFAULT_LIMIT: usize = 200;
+/// The refusal of a request whose title or body is given and shows nothing.
+const SHOWS_NOTHING: &str = "Notification title and body hold only characters that do not show.";
 const MAX_LIMIT: usize = 1000;
 /// The ledger is read whole; past this size it is read from its tail.
 const MAX_READ: u64 = 8 * 1024 * 1024;
@@ -215,6 +217,107 @@ fn with_keeping(mut data: Value, keeping: Value) -> Value {
     data
 }
 
+/// The request as the provider is handed it to show: its title and body are a
+/// caller's words, and the operating system draws them as given, so they go
+/// without the characters that draw nothing (`names::shown`; be2j ruling 2)
+/// and without what a notification centre must not be handed (`shown_words`).
+/// The ledger keeps the request as it was asked. The request's other words
+/// (`subject_ref`, `category`, `action_ref`, `callback`) go as asked: no
+/// provider draws them.
+fn shown_request(request: &NotificationRequest) -> NotificationRequest {
+    NotificationRequest {
+        title: shown_words(&request.title, ' '),
+        body: shown_words(&request.body, '\n'),
+        ..request.clone()
+    }
+}
+
+/// A caller's words as a notification shows them (DLW build ruling 2026-11-10,
+/// be2j.c2 item 2), cleaned before the shared `names::shown`:
+/// - a line or paragraph separator (U+2028, U+2029) parts words, so it is not
+///   taken out: it becomes `separator`, a space in a title and a line break in
+///   a body;
+/// - an ANSI escape sequence is taken out whole (`escape_end`), and an ESC
+///   that opens none takes only itself and the character that named its form;
+/// - any other control character but a line break and a tab is taken out. The
+///   one-character openings U+009B and U+009D open nothing: each is a control
+///   like any other, so the words after one stay.
+fn shown_words(text: &str, separator: char) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut plain = String::with_capacity(text.len());
+    let mut at = 0;
+    while at < chars.len() {
+        let c = chars[at];
+        if c == '\u{1b}' {
+            at = escape_end(&chars, at);
+            continue;
+        }
+        at += 1;
+        if c == '\u{2028}' || c == '\u{2029}' {
+            plain.push(separator);
+        } else if c == '\n' || c == '\t' || !c.is_control() {
+            plain.push(c);
+        }
+    }
+    crate::names::shown(&plain)
+}
+
+/// Where the escape that the ESC at `at` opens ends: the place to read on
+/// from. The rules are the ones AIKit's cleaning of a run's reason keeps
+/// (be2j.a2 item 4), so both sides read one text alike, and where a sequence
+/// is not whole the words a person would read stay:
+/// - a CSI in its strict form goes whole: ESC `[`, parameter characters
+///   (U+0030–003F), then intermediate ones (U+0020–002F), then one final
+///   character (U+0040–007E). Anything else after ESC `[` is not a CSI, and
+///   only the ESC and the `[` go;
+/// - a string sequence (OSC ESC `]`, DCS ESC `P`, APC ESC `_`, PM ESC `^`,
+///   SOS ESC `X`) goes whole when it is ended on its own line: by ESC `\`, by
+///   a BEL for an OSC, or by another ESC, which is then read as an opening of
+///   its own. Without an end only its two opening characters go;
+/// - ESC, one or more intermediate characters and one final character
+///   (U+0030–007E), a character set selection and the like, goes whole;
+/// - any other ESC goes alone.
+fn escape_end(chars: &[char], at: usize) -> usize {
+    let run = |from: usize, low: char, high: char| {
+        from + chars[from.min(chars.len())..]
+            .iter()
+            .take_while(|c| (low..=high).contains(*c))
+            .count()
+    };
+    let is =
+        |at: usize, low: char, high: char| chars.get(at).is_some_and(|c| (low..=high).contains(c));
+    match chars.get(at + 1) {
+        Some('[') => {
+            let end = run(run(at + 2, '\u{30}', '\u{3f}'), '\u{20}', '\u{2f}');
+            if is(end, '\u{40}', '\u{7e}') {
+                end + 1
+            } else {
+                at + 2
+            }
+        }
+        Some(&form @ (']' | 'P' | '_' | '^' | 'X')) => {
+            for (end, &c) in chars.iter().enumerate().skip(at + 2) {
+                match c {
+                    '\u{07}' if form == ']' => return end + 1,
+                    '\u{1b}' if chars.get(end + 1) == Some(&'\\') => return end + 2,
+                    '\u{1b}' => return end,
+                    '\n' | '\r' | '\u{2028}' | '\u{2029}' => break,
+                    _ => {}
+                }
+            }
+            at + 2
+        }
+        _ => {
+            let end = run(at + 1, '\u{20}', '\u{2f}');
+            if end > at + 1 && is(end, '\u{30}', '\u{7e}') {
+                end + 1
+            } else {
+                at + 1
+            }
+        }
+    }
+}
+
 fn personal_notify_action(
     _registry: &ActionRegistry,
     input: &Value,
@@ -242,8 +345,16 @@ fn personal_notify_action(
         caller_ref,
         provenance_refs,
     };
-    // A request the Port would not accept is refused before anything is kept.
-    if let Err(error) = request.validate() {
+    // A request the Port would not accept is refused before anything is kept;
+    // so is one whose words show nothing once cleaned (`shown_request`), in
+    // its own words: its title or body is not empty, it only shows nothing.
+    let shows_nothing = || {
+        let shown = shown_request(&request);
+        (shown.title.is_empty() && shown.body.is_empty()).then(|| {
+            central_connector_sdk::PortError::new(PortErrorCode::InvalidInput, SHOWS_NOTHING)
+        })
+    };
+    if let Some(error) = request.validate().err().or_else(shows_nothing) {
         return notification_failure(ACTION, error, json!({}), None);
     }
     let root = resolve_central_root(context.root_options).map(|root| root.path);
@@ -319,7 +430,7 @@ fn personal_notify_action(
         );
         return refused(record, failed);
     };
-    match notification.deliver(&record.request) {
+    match notification.deliver(&shown_request(&record.request)) {
         Ok(delivery) => {
             record.delivery = Some(delivery.clone());
             let keeping = keep_into(&root, &record);
@@ -479,6 +590,8 @@ mod tests {
     struct Provider {
         manifest: ConnectorManifest,
         refuse: bool,
+        /// The title and body of each request the provider was handed to show.
+        delivered: std::sync::Mutex<Vec<(String, String)>>,
     }
 
     impl Provider {
@@ -502,6 +615,7 @@ mod tests {
                     known_limitations: Vec::new(),
                 },
                 refuse,
+                delivered: std::sync::Mutex::new(Vec::new()),
             }
         }
     }
@@ -523,6 +637,10 @@ mod tests {
         }
 
         fn deliver(&self, input: &NotificationRequest) -> Result<NotificationDelivery, PortError> {
+            self.delivered
+                .lock()
+                .unwrap()
+                .push((input.title.clone(), input.body.clone()));
             if self.refuse {
                 return Err(PortError::provider(
                     "The fixture's notification centre rejected the request.",
@@ -656,6 +774,251 @@ mod tests {
         assert_eq!(
             limited.data.unwrap()["requests"].as_array().unwrap().len(),
             1
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// be2j ruling 2 (DLW build ruling 2026-11-09): what the operating system
+    /// shows of a request is its words without the characters that draw nothing;
+    /// the ledger keeps them as asked, and a request that would show nothing is
+    /// refused before anything is kept.
+    #[test]
+    fn a_requests_words_are_shown_without_what_draws_nothing_and_kept_as_asked() {
+        let root = root();
+        let provider = std::sync::Arc::new(Provider::new(false));
+        struct Shared(std::sync::Arc<Provider>);
+        impl Connector for Shared {
+            fn manifest(&self) -> &ConnectorManifest {
+                self.0.manifest()
+            }
+            fn probe(&self, port: &PortContract, context: &ConnectorContext) -> CapabilityProbe {
+                self.0.probe(port, context)
+            }
+            fn user_notification(&self) -> Option<&dyn UserNotification> {
+                Some(self.0.as_ref())
+            }
+        }
+        let mut connectors = ConnectorRegistry::default();
+        connectors.register(Shared(provider.clone())).unwrap();
+        let title = "Checks \u{202E}deliaf\u{202C}\u{200B}";
+        let asked = run(
+            &root,
+            &connectors,
+            "personal.notify",
+            json!({"title": title, "body": "2\u{2066} of\u{2069} 14\u{3164}", "caller_ref": "routine:checks"}),
+        );
+        assert!(asked.ok, "{asked:?}");
+        assert_eq!(
+            *provider.delivered.lock().unwrap(),
+            vec![("Checks deliaf".to_owned(), "2 of 14".to_owned())]
+        );
+        let listed = run(&root, &connectors, "personal.notifications.list", json!({}));
+        let kept = listed.data.unwrap()["requests"][0]["request"].clone();
+        assert_eq!(kept["title"], title, "the ledger keeps the words as asked");
+        let blank = run(
+            &root,
+            &connectors,
+            "personal.notify",
+            json!({"title": "\u{200B}\u{2066}", "body": "\u{3164}", "caller_ref": "routine:checks"}),
+        );
+        assert!(!blank.ok, "words that show nothing are refused");
+        assert_eq!(
+            blank.error.unwrap().message,
+            "Notification title and body hold only characters that do not show."
+        );
+        assert_eq!(
+            provider.delivered.lock().unwrap().len(),
+            1,
+            "and nothing is shown"
+        );
+        let listed = run(&root, &connectors, "personal.notifications.list", json!({}));
+        assert_eq!(
+            listed.data.unwrap()["requests"].as_array().unwrap().len(),
+            1,
+            "nor kept"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// be2j.c2 item 2 (DLW build ruling 2026-11-10): the reviewer's notification
+    /// probe as assertions. A line or paragraph separator parts words, so it
+    /// stays as a space in a title and a line break in a body; an ANSI escape
+    /// sequence goes whole; no other control but a line break and a tab reaches
+    /// the provider; and a request that shows nothing is refused in its own
+    /// words, with nothing shown and nothing kept.
+    #[test]
+    fn a_request_reaches_the_provider_without_escapes_or_controls_and_its_separators_part_words() {
+        let root = root();
+        let provider = std::sync::Arc::new(Provider::new(false));
+        struct Shared(std::sync::Arc<Provider>);
+        impl Connector for Shared {
+            fn manifest(&self) -> &ConnectorManifest {
+                self.0.manifest()
+            }
+            fn probe(&self, port: &PortContract, context: &ConnectorContext) -> CapabilityProbe {
+                self.0.probe(port, context)
+            }
+            fn user_notification(&self) -> Option<&dyn UserNotification> {
+                Some(self.0.as_ref())
+            }
+        }
+        let mut connectors = ConnectorRegistry::default();
+        connectors.register(Shared(provider.clone())).unwrap();
+        // (title, body) as asked, then as the provider is handed them.
+        type Words = (&'static str, &'static str);
+        let rows: Vec<(Words, Words)> = vec![
+            // The reviewer's rows: separators fused words, an escape went through.
+            (("A\u{2028}B", "para\u{2029}sep"), ("A B", "para\nsep")),
+            (("ESC", "a\u{1b}[31mred\u{1b}[0m"), ("ESC", "ared")),
+            // Each separator in the other word too.
+            (("A\u{2029}B", "line\u{2028}sep"), ("A B", "line\nsep")),
+            // An escape in a title; a CSI with a private parameter and with an intermediate character.
+            (
+                ("\u{1b}[1;31mRed\u{1b}[0m alert", "a\u{1b}[?25lb\u{1b}[0 qc"),
+                ("Red alert", "abc"),
+            ),
+            // What is not a CSI in its strict form keeps its words: only the ESC and the [ go. A one-character opening
+            // (U+009B, U+009D) opens nothing and goes as the control it is.
+            (
+                (
+                    "\u{1b}[ 12 tests failed",
+                    "cost \u{9b} 12 345 euros, note \u{9d} kept",
+                ),
+                ("12 tests failed", "cost  12 345 euros, note  kept"),
+            ),
+            // A CSI cut short is not one either.
+            (("Cut", "a\u{1b}[31"), ("Cut", "a31")),
+            // OSC, ended by a BEL and by ESC \: the whole sequence goes, its text with it. U+009C ends nothing.
+            (
+                (
+                    "\u{1b}]0;window title\u{07}Done",
+                    "a\u{1b}]8;;https://example.test\u{1b}\\link\u{9c}b",
+                ),
+                ("Done", "alinkb"),
+            ),
+            // An OSC ended by the ESC of a sequence after it goes whole, and that sequence is read as its own.
+            (
+                ("Next", "boom \u{1b}]0;t\u{1b}[31mred\u{1b}[0m"),
+                ("Next", "boom red"),
+            ),
+            // An OSC that nothing ends on its line loses its opening, never the words after it; an end on a later line
+            // is not its end.
+            (
+                (
+                    "\u{1b}]0;never ended",
+                    "a\u{1b}]0;first line\nsecond\u{07} line",
+                ),
+                ("0;never ended", "a0;first line\nsecond line"),
+            ),
+            // The other string sequences (DCS, APC, PM, SOS) go whole when ESC \ ends them; a BEL ends only an OSC.
+            (
+                (
+                    "\u{1b}Pq#0\u{1b}\\Done, \u{1b}Pnot\u{07} ended",
+                    "a\u{1b}_hidden\u{1b}\\b\u{1b}^x\u{1b}\\c\u{1b}Xy\u{1b}\\d",
+                ),
+                ("Done, not ended", "abcd"),
+            ),
+            // A character set selection goes whole; an ESC that opens nothing goes alone.
+            (
+                ("Set", "text \u{1b}(B more, f\u{1b}g"),
+                ("Set", "text  more, fg"),
+            ),
+            // So does any ESC, intermediate characters, one final character: the final may be a digit.
+            (("\u{1b}(0Line", "p\u{1b}#8q\u{1b} Fr"), ("Line", "pqr")),
+            // Each line end closes the line a string sequence may end on: a \r, a line and a paragraph separator.
+            (
+                (
+                    "\u{1b}]0;a\rb\u{07}c",
+                    "x\u{1b}]0;a\u{2028}b\u{07}c\u{1b}]0;d\u{2029}e\u{07}f",
+                ),
+                ("0;abc", "x0;a\nbc0;d\nef"),
+            ),
+            // Any other control goes; a line break and a tab stay, a \r goes from before its \n.
+            (
+                ("Bell\u{07} and\u{0} null", "a\u{08}b\u{7f}c\u{85}d\r\ne\tf"),
+                ("Bell and null", "abcd\ne\tf"),
+            ),
+            // A zero-width joiner and non-joiner are taken out as ruled (be2j rulings 2 and 9): unchanged.
+            (
+                ("Fam\u{200D}ily", "\u{0633}\u{200C}\u{062F}"),
+                ("Family", "\u{0633}\u{062F}"),
+            ),
+        ];
+        let last = *rows.last().unwrap();
+        for &((title, body), shown) in &rows {
+            let asked = run(
+                &root,
+                &connectors,
+                "personal.notify",
+                json!({"title": title, "body": body, "caller_ref": "routine:probe"}),
+            );
+            assert!(asked.ok, "{title:?} {body:?}: {asked:?}");
+            let delivered = provider.delivered.lock().unwrap().last().cloned().unwrap();
+            assert_eq!(
+                (delivered.0.as_str(), delivered.1.as_str()),
+                shown,
+                "{title:?} {body:?}"
+            );
+        }
+        let listed = run(&root, &connectors, "personal.notifications.list", json!({}));
+        let kept = listed.data.unwrap()["requests"][0]["request"].clone();
+        assert_eq!(
+            (kept["title"].as_str(), kept["body"].as_str()),
+            (Some(last.0 .0), Some(last.0 .1)),
+            "the ledger keeps the words as asked"
+        );
+        // Given, and showing nothing: refused in its own words, not as an empty request.
+        for (title, body) in [
+            ("\u{200B}", "\u{200B}"),
+            ("\u{1b}[0m", ""),
+            ("", "\u{2028}\u{07}"),
+        ] {
+            let blank = run(
+                &root,
+                &connectors,
+                "personal.notify",
+                json!({"title": title, "body": body, "caller_ref": "routine:probe"}),
+            );
+            assert!(!blank.ok, "{title:?} {body:?}");
+            assert_eq!(
+                blank.error.unwrap().message,
+                "Notification title and body hold only characters that do not show.",
+                "{title:?} {body:?}"
+            );
+        }
+        // A request with no words at all is still the Port's own refusal.
+        let empty = run(
+            &root,
+            &connectors,
+            "personal.notify",
+            json!({"title": " ", "body": "", "caller_ref": "routine:probe"}),
+        );
+        assert_eq!(
+            empty.error.unwrap().message,
+            "Notification requires a non-empty title or body."
+        );
+        assert_eq!(
+            provider.delivered.lock().unwrap().len(),
+            rows.len(),
+            "nothing refused is shown"
+        );
+        let listed = run(&root, &connectors, "personal.notifications.list", json!({}));
+        assert_eq!(
+            listed.data.unwrap()["requests"].as_array().unwrap().len(),
+            rows.len(),
+            "nor kept"
+        );
+        // One visible word is enough: the other may show nothing.
+        let half = run(
+            &root,
+            &connectors,
+            "personal.notify",
+            json!({"title": "Done", "body": "\u{200B}", "caller_ref": "routine:probe"}),
+        );
+        assert!(half.ok, "{half:?}");
+        assert_eq!(
+            provider.delivered.lock().unwrap().last().cloned().unwrap(),
+            ("Done".to_owned(), String::new())
         );
         let _ = fs::remove_dir_all(root);
     }

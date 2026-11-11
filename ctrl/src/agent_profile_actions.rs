@@ -332,27 +332,37 @@ fn read_action(
         .unwrap_or_else(|error| store_failure(AGENT_PROFILE_READ_ACTION, error))
 }
 
-/// A kept profile's reading as it is shown (be2i.1): its name without the characters that draw nothing (none, when nothing else is
-/// left), and what the reading says of it once, when it held any. The record itself stays as it is kept.
-fn shown_reading(reading: &AgentProfileReading) -> Value {
+/// A kept profile's reading as it is shown (be2i.1): its name as `shown_agent_name` shows it, and what the reading says of it once,
+/// when it held a character that draws nothing. The record itself stays as it is kept.
+pub(crate) fn shown_reading(reading: &AgentProfileReading) -> Value {
     let mut value = to_value(reading).expect("AgentProfile reading serializes");
-    let Some(name) = reading.profile.name.as_deref() else {
-        return value;
-    };
-    if let Some(note) = crate::names::kept_note(
-        name,
-        "This agent's name",
-        "Rename the agent (agent-profile.rename) to keep it so.",
-    ) {
-        let shown = crate::names::shown(name);
-        value["profile"]["name"] = if shown.is_empty() {
-            Value::Null
-        } else {
-            json!(shown)
-        };
+    let (name, note) = shown_agent_name(&reading.profile);
+    if let Some(note) = note {
+        value["profile"]["name"] = json!(name);
         value["notes"] = json!([note]);
     }
     value
+}
+
+/// An agent's kept name as it reaches a person (be2i.1; be2j item 14): without the characters that draw nothing, or "unnamed agent"
+/// and its ref's short form when nothing else is left (`names::shown_or_unnamed`, be2j ruling 5), with what a reading says of it,
+/// once, when it held one. No name stays none.
+pub(crate) fn shown_agent_name(profile: &AgentProfile) -> (Option<String>, Option<String>) {
+    let Some(name) = profile.name.as_deref() else {
+        return (None, None);
+    };
+    (
+        Some(crate::names::shown_or_unnamed(
+            name,
+            "agent",
+            &profile.agent_ref,
+        )),
+        crate::names::kept_note(
+            name,
+            "This agent's name",
+            "Rename the agent (agent-profile.rename) to keep it so.",
+        ),
+    )
 }
 
 fn save_action(
@@ -427,7 +437,7 @@ fn remove_action(
             ActionResult::success(
                 AGENT_PROFILE_REMOVE_ACTION,
                 json!({
-                    "removed": reading,
+                    "removed": shown_reading(&reading),
                     "agent_identity_deleted": false,
                     "runtime_state_deleted": false,
                 }),
@@ -523,15 +533,21 @@ fn chain_edit(
     if let Err(error) = validate_ingested_profile(&profile) {
         return invalid_input(action, error);
     }
+    // The profile is the one this store keeps, edited here: every word is as given (`save_given`), so a rename to the name as
+    // a read shows it replaces the kept bytes (be2j.c2 item 1, DLW build ruling 2026-11-10).
     store
-        .save(&profile, Some(&expected_revision))
+        .save_given(&profile, Some(&expected_revision))
         .map(|receipt| {
             let mut data = to_value(receipt).expect("AgentProfile receipt serializes");
             data["state"] = json!("saved");
+            let (name, note) = shown_agent_name(&profile);
             data["chain"] = json!({
                 "skill_set_refs": profile.skill_set_refs,
-                "name": profile.name,
+                "name": name,
             });
+            if let Some(note) = note {
+                data["notes"] = json!([note]);
+            }
             ActionResult::success(action, data)
         })
         .unwrap_or_else(|error| store_failure(action, error))
@@ -1509,6 +1525,164 @@ mod tests {
             &context,
         );
         assert!(plain.data.unwrap().get("notes").is_none());
+        // A name with nothing visible left reads as an unnamed agent and its ref's short form, never blank (be2j items 14, 15).
+        kept["name"] = json!("\u{200B}\u{3164}");
+        std::fs::write(&path, serde_json::to_vec_pretty(&kept).unwrap()).unwrap();
+        let blank = registry.execute(
+            AGENT_PROFILE_READ_ACTION,
+            &json!({"scope":"personal", "profile_ref":"agent-profile:guardian"}),
+            &context,
+        );
+        let blank = blank.data.unwrap();
+        assert_eq!(blank["profile"]["name"], "unnamed agent 8p9z");
+        assert_eq!(blank["notes"].as_array().unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A kept profile with `name` spelt so, written as base wrote it, and the action registry over it (be2j item 14).
+    fn kept_name_fixture(
+        name: &str,
+        skill_set_refs: &[&str],
+    ) -> (PathBuf, ActionRegistry, PathBuf) {
+        let root = fixture_root();
+        let registry = registry();
+        let mut options = None;
+        let mut connectors = None;
+        let mut connector_context = None;
+        let context = context(&root, &mut options, &mut connectors, &mut connector_context);
+        let created = registry.execute(
+            AGENT_PROFILE_SAVE_ACTION,
+            &json!({"scope":"personal", "profile": personal_profile("p1")}),
+            &context,
+        );
+        assert!(created.ok, "{created:?}");
+        let path = AgentProfileStore::personal(&root)
+            .source_path("agent-profile:guardian")
+            .unwrap();
+        let mut kept: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        kept["name"] = json!(name);
+        kept["skill_set_refs"] = json!(skill_set_refs);
+        std::fs::write(&path, serde_json::to_vec_pretty(&kept).unwrap()).unwrap();
+        (root, registry, path)
+    }
+
+    /// be2j item 14 (DLW build ruling 2026-11-10): every chain edit answers with the agent's kept name shown cleaned, and its note,
+    /// while the record keeps the name as it was kept.
+    #[test]
+    fn a_chain_edit_answers_with_the_agents_kept_name_shown_cleaned_and_its_note() {
+        let (root, registry, path) =
+            kept_name_fixture("Guar\u{200D}dian", &["skill-set:a", "skill-set:b"]);
+        let mut options = None;
+        let mut connectors = None;
+        let mut connector_context = None;
+        let context = context(&root, &mut options, &mut connectors, &mut connector_context);
+        let ordered = registry.execute(
+            AGENT_PROFILE_CHAIN_ORDER_ACTION,
+            &json!({"scope":"personal", "profile_ref":"agent-profile:guardian", "expected_revision":"p1",
+                "skill_set_refs": ["skill-set:b", "skill-set:a"]}),
+            &context,
+        );
+        assert!(ordered.ok, "{ordered:?}");
+        let ordered = ordered.data.unwrap();
+        assert_eq!(ordered["state"], "saved");
+        assert_eq!(ordered["chain"]["name"], "Guardian");
+        let notes = ordered["notes"].as_array().unwrap();
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0]
+            .as_str()
+            .unwrap()
+            .contains(AGENT_PROFILE_RENAME_ACTION));
+        let stored: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(stored["name"], "Guar\u{200D}dian");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// be2j.c2 item 1 (DLW build ruling 2026-11-10): a profile read, changed in something else and saved keeps its name's bytes,
+    /// whether the read showed the name without a character that draws nothing or as an unnamed agent. Before, the first
+    /// replaced the kept name with the shown one, and the second wrote "unnamed agent 8p9z" as the agent's name.
+    #[test]
+    fn a_profile_read_and_saved_keeps_the_bytes_of_a_name_the_read_showed_cleaned() {
+        for (kept, shown) in [
+            ("Guar\u{200D}dian", "Guardian"),
+            ("\u{200B}\u{3164}", "unnamed agent 8p9z"),
+        ] {
+            let (root, registry, path) = kept_name_fixture(kept, &["skill-set:personal"]);
+            let mut options = None;
+            let mut connectors = None;
+            let mut connector_context = None;
+            let context = context(&root, &mut options, &mut connectors, &mut connector_context);
+            let read = registry.execute(
+                AGENT_PROFILE_READ_ACTION,
+                &json!({"scope":"personal", "profile_ref":"agent-profile:guardian"}),
+                &context,
+            );
+            assert!(read.ok, "{read:?}");
+            let mut profile = read.data.unwrap()["profile"].clone();
+            assert_eq!(profile["name"], shown);
+            profile["revision"] = json!("p2");
+            profile["purpose"] = json!("Keeps the ground, changed.");
+            let saved = registry.execute(
+                AGENT_PROFILE_SAVE_ACTION,
+                &json!({"scope":"personal", "profile": profile, "expected_revision":"p1"}),
+                &context,
+            );
+            assert!(saved.ok, "{kept:?}: {saved:?}");
+            let stored: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(stored["name"], kept, "read as {shown:?}");
+            assert_eq!(stored["revision"], "p2");
+            assert_eq!(stored["purpose"], "Keeps the ground, changed.");
+            let _ = std::fs::remove_dir_all(&root);
+        }
+    }
+
+    /// be2j.c2 item 1: the rename a reading's note names still keeps the name as shown. `agent-profile.rename` gives a word, not a
+    /// profile read back, so the shown name replaces the kept bytes and the note goes.
+    #[test]
+    fn a_rename_to_the_name_as_shown_replaces_the_kept_bytes() {
+        let (root, registry, path) = kept_name_fixture("Guar\u{200D}dian", &["skill-set:personal"]);
+        let mut options = None;
+        let mut connectors = None;
+        let mut connector_context = None;
+        let context = context(&root, &mut options, &mut connectors, &mut connector_context);
+        let renamed = registry.execute(
+            AGENT_PROFILE_RENAME_ACTION,
+            &json!({"scope":"personal", "profile_ref":"agent-profile:guardian", "expected_revision":"p1",
+                "name": "Guardian"}),
+            &context,
+        );
+        assert!(renamed.ok, "{renamed:?}");
+        let renamed = renamed.data.unwrap();
+        assert_eq!(renamed["state"], "saved");
+        assert_eq!(renamed["chain"]["name"], "Guardian");
+        let stored: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(stored["name"], "Guardian");
+        let read = registry.execute(
+            AGENT_PROFILE_READ_ACTION,
+            &json!({"scope":"personal", "profile_ref":"agent-profile:guardian"}),
+            &context,
+        );
+        assert!(read.data.unwrap().get("notes").is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// be2j item 14: a remove answers with the profile it removed, its kept name shown cleaned, and its note.
+    #[test]
+    fn a_remove_answers_with_the_agents_kept_name_shown_cleaned_and_its_note() {
+        let (root, registry, _) = kept_name_fixture("Guar\u{2060}dian", &["skill-set:personal"]);
+        let mut options = None;
+        let mut connectors = None;
+        let mut connector_context = None;
+        let context = context(&root, &mut options, &mut connectors, &mut connector_context);
+        let removed = registry.execute(
+            AGENT_PROFILE_REMOVE_ACTION,
+            &json!({"scope":"personal", "profile_ref":"agent-profile:guardian", "expected_revision":"p1"}),
+            &context,
+        );
+        assert!(removed.ok, "{removed:?}");
+        let removed = removed.data.unwrap();
+        assert_eq!(removed["removed"]["profile"]["name"], "Guardian");
+        assert_eq!(removed["removed"]["profile"]["revision"], "p1");
+        assert_eq!(removed["removed"]["notes"].as_array().unwrap().len(), 1);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -2576,6 +2750,47 @@ mod tests {
                 "invalid intent must never mutate ground"
             );
             fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    /// be2j item 11 (DLW build ruling 2026-11-10): a ref given through agent-profile.propose is checked with the set where it is
+    /// given, as a save checks it, and nothing is written.
+    #[test]
+    fn propose_refuses_a_ref_that_holds_an_invisible_character_without_writing_ground() {
+        for (field, value, said) in [
+            ("skill_refs", "skill:orien\u{200B}tation", "Skill refs"),
+            ("method_refs", "method:\u{202E}orient", "Method refs"),
+            (
+                "knowledge_source_refs",
+                "wiki:\u{3164}",
+                "Knowledge source refs",
+            ),
+        ] {
+            let root = fixture_root();
+            let registry = registry();
+            let mut options = None;
+            let mut connectors = None;
+            let mut connector_context = None;
+            let context = context(&root, &mut options, &mut connectors, &mut connector_context);
+            let mut input = propose_input(None);
+            input[field] = json!([value]);
+            let result = registry.execute(AGENT_PROFILE_PROPOSE_ACTION, &input, &context);
+            assert!(!result.ok, "{field}: {result:?}");
+            let message = result.error.as_ref().unwrap().message.clone();
+            assert!(
+                message.contains(&format!(
+                    "{said} must hold no control character and no invisible one"
+                )),
+                "{field}: {message}"
+            );
+            assert!(
+                AgentProfileStore::personal(&root)
+                    .list()
+                    .unwrap()
+                    .is_empty(),
+                "{field}: nothing is written"
+            );
+            let _ = fs::remove_dir_all(root);
         }
     }
 

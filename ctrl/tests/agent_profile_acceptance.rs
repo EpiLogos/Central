@@ -539,3 +539,45 @@ fn roster_reads_receipts_that_record_self_definition_pins() {
     assert!(execute_with_token_at(&w.0, REVIEW, &input(&p), None, 100).is_err());
     assert!(execute_with_token_at(&w.0, ROSTER, &json!({"scope":"root"}), None, 300).is_err());
 }
+
+/// A proposed profile whose name is then kept with a character that draws nothing, written as base wrote it (be2j item 14).
+fn kept_with_invisible_name(root: &Path) -> (AgentProfile, PathBuf) {
+    let p = proposal(root);
+    let path = AgentProfileStore::personal(root)
+        .source_path(&p.profile_ref)
+        .unwrap();
+    let mut kept: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    kept["name"] = json!("Source\u{200B} reader");
+    fs::write(&path, serde_json::to_vec_pretty(&kept).unwrap()).unwrap();
+    (p, path)
+}
+
+/// be2j item 14 (DLW build ruling 2026-11-10): a review shows the agent's kept name cleaned, with its note, and stays bound to the
+/// kept bytes.
+#[test]
+fn a_review_shows_the_agents_kept_name_cleaned_with_its_note() {
+    let w = world();
+    let (p, path) = kept_with_invisible_name(&w.0);
+    let reviewed = review(&w.0, &p);
+    assert_eq!(reviewed["profile"]["name"], "Source reader");
+    let notes = reviewed["notes"].as_array().unwrap();
+    assert_eq!(notes.len(), 1);
+    assert!(notes[0].as_str().unwrap().contains("agent-profile.rename"));
+    // Accepting what was reviewed binds to the kept bytes, which the review's digest names.
+    let accepted =
+        execute_with_token_at(&w.0, ACCEPT, &acceptance(&w.0, &p), Some(HUMAN), 100).unwrap();
+    assert_eq!(accepted["accepted"], true);
+    assert_eq!(accepted["content_digest"], reviewed["content_digest"]);
+    let kept: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(kept["name"], "Source\u{200B} reader");
+}
+
+/// be2j item 14: a roster shows each agent's kept name cleaned, with its note.
+#[test]
+fn a_roster_shows_the_agents_kept_name_cleaned_with_its_note() {
+    let w = world();
+    kept_with_invisible_name(&w.0);
+    let roster = execute_with_token_at(&w.0, ROSTER, &json!({"scope":"root"}), None, 300).unwrap();
+    assert_eq!(roster["profiles"][0]["profile"]["name"], "Source reader");
+    assert_eq!(roster["profiles"][0]["notes"].as_array().unwrap().len(), 1);
+}
