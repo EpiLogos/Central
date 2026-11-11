@@ -249,6 +249,18 @@ pub(crate) fn plan(root: &Path, all: &[Scope], input: &Value) -> io::Result<Valu
     if !dest.parent().is_some_and(Path::is_dir) {
         return Err(invalid("Move destination parent must already exist"));
     }
+    // The journal names the destination as the disk spells it: the folders above it in the disk's own case and form, and its own
+    // new name as asked (DLW build ruling 2026-11-11, round 54j.1). On a volume that folds case a person may spell an existing
+    // folder otherwise (`control/user/new` for `Control/user/new`); a scope inside the moved folder is read after the rename by
+    // the journal's own spelling of where it went, and a journal's scope must be the disk's spelling of its folder
+    // (`in_ground_spelling`). So the plan writes that spelling, and the checks above are made of it again.
+    let to = disk_spelling(&owner.root, &to).unwrap_or(to);
+    if Path::new(&to).starts_with(&from) || Path::new(&to).starts_with(".central") {
+        return Err(invalid(
+            "Move would include its state or owning relation document",
+        ));
+    }
+    safe_member(&owner.root, &to, false)?;
     if std::env::current_dir()?.starts_with(&entry.path) {
         return Err(conflict(
             "Cannot move the invoking process's working directory",
@@ -413,6 +425,17 @@ pub(crate) fn plan(root: &Path, all: &[Scope], input: &Value) -> io::Result<Valu
     Ok(
         json!({"plan_id":id,"source_ref":entry.source.source_ref,"from":from,"destination":to,"state":"prepared","links":plan.links.len(),"requires_quiesced":true,"source_bytes_changed":false}),
     )
+}
+/// A destination under `owner_root` as the disk spells it: the folders above it in the disk's own case and form, read through no
+/// link that `safe_member` would refuse, and its own name as given (the name the rename makes, or made). None where the folder
+/// above it does not read or the place is not under the root.
+fn disk_spelling(owner_root: &Path, to: &str) -> Option<String> {
+    let place = owner_root.join(to);
+    let spelled = fs::canonicalize(place.parent()?)
+        .ok()?
+        .join(place.file_name()?);
+    let root = fs::canonicalize(owner_root).ok()?;
+    Some(spelled.strip_prefix(root).ok()?.to_str()?.to_owned())
 }
 /// A move of the Source at `moved` (`from` to `to`, under `owner`'s root).
 type Moving<'a> = (&'a Scope, &'a Path, &'a str, &'a str);
@@ -617,7 +640,7 @@ fn rename_stands_alone(root: &Path, plan: &Plan) -> bool {
 fn in_ground_spelling(root: &Path, current: &Path, world: &PlanWorld) -> io::Result<()> {
     let refused = || {
         invalid(format!(
-            "Invalid move journal: it spells the scope {} as {}, which is not that folder's own spelling on the disk: a link, or \
+            "This move's journal spells the scope {} as {}, which is not that folder's own spelling on the disk now: a link, or \
              another case or form of a name, stands in it",
             world.world, world.path
         ))
@@ -712,6 +735,10 @@ fn resume_scopes_as(
     let from = owner_root.join(&plan.from);
     let to = owner_root.join(&plan.to);
     let moved = identity(&to, plan.device, plan.inode);
+    // Where the Source went, as the disk spells the folders above it: a journal planned before round 54j.1, or by hand, may spell
+    // them in another case, and a scope inside the moved folder is read below by this spelling. The Source's own name is the
+    // journal's: the rename made it so, and it is not read through if it is a link.
+    let to = disk_spelling(&owner_root, &plan.to).map_or(to, |spelled| owner_root.join(spelled));
     let mut result = Vec::new();
     for world in &plan.worlds {
         // The root's scope is the ground itself, as `plan` writes it: a journal that sets it anywhere else would carry the move out
@@ -845,6 +872,24 @@ pub(crate) fn apply(
     let at_to = identity(&to, plan.device, plan.inode);
     if at_from == at_to {
         return Err(conflict("Move source identity missing or ambiguous"));
+    }
+    // A journal whose destination is spelled otherwise than the disk spells it was planned before `plan` wrote the disk's
+    // spelling (round 54j.1; the review of #346's fourth commit, D1). Its relations documents name every scope and Source under
+    // the moved folder by that spelling, and the map does not read them: carried out, it leaves a ground that only a rollback
+    // mends, as it did before this rule. So it is not carried out, and the words say what to do. A rollback of it goes on, from
+    // any state: it writes the relations as they were.
+    if !rollback {
+        if let Some(spelled) =
+            disk_spelling(&owner.root, &plan.to).filter(|spelled| *spelled != plan.to)
+        {
+            return Err(conflict(format!(
+                "This move was planned with its destination spelled {}, where the disk spells it {spelled}: carried out, the \
+                 relations it writes would name that spelling and not read. Roll the move back{}, then plan it again; nothing \
+                 was written",
+                plan.to,
+                if at_to { "" } else { " if it was begun" }
+            )));
+        }
     }
     let present = if at_from { &from } else { &to };
     if present.is_file() && content_revision_bytes(&fs::read(present)?) != plan.revision {

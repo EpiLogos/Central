@@ -192,6 +192,9 @@ what the ground already declares, and read no credential.
 
 `move-plan` takes a `source_ref` and scope-relative `destination`; it records a
 recovery journal and stages owned link replacements, without moving source bytes.
+The journal, and the plan's answer, name the destination as the disk spells it:
+the folders above it in the disk's own case and form, whatever the person typed,
+and its own new name as asked.
 `move-apply` and `move-rollback` take the returned `plan_id` and `quiesced:true`.
 Each move is the person's own act: it authenticates on the host's native
 credential (`CENTRAL_NATIVE_TOKEN`) for a human grant naming that exact Action
@@ -201,7 +204,11 @@ it is refused in words that name the project whose grant is missing, with nothin
 planned or moved. Apply and rollback read the move from its journal,
 and stand on the scopes the journal runs from. So an interrupted move can be
 finished or undone while a scope inside the moved folder is still declared where
-it stood. They take nothing else from the journal's list of scopes: the move
+it stood. One journal is undone and not finished: one that an earlier `ctrl`
+planned with its destination's folders typed in another case or form than the
+disk keeps. Its relations name that spelling, which the map does not read, so
+apply refuses it, from any state, in words that say to roll it back and plan
+again, and a rollback goes through. They take nothing else from the journal's list of scopes: the move
 stands at the root wherever the list puts it, each Work project its Source or
 destination lies in is found on the disk, and a journal whose root scope's path
 is not empty, as `move-plan` writes it, is refused. Apply and rollback also stand at each
@@ -236,7 +243,10 @@ a time:
   refused as well.
 
 A journal that fails one of these is refused at the gate, before anything is
-moved or written. Apply then makes checks of its own, on its own read:
+moved or written. A scope inside the moved folder is asked again where it went,
+once the Source has moved; the destination is read there as the disk spells it,
+so a plan's own journal reads. Apply then makes checks of its own, on its own
+read:
 
 - It refuses a link in any folder above a link step's path, its staged link or
   its kept link.
@@ -290,6 +300,12 @@ on the root's grant alone. Each is closed and held by a test:
 - a scope spelled through a link of the root's own, with a link step that
   replaces that link, so the scope's relations document was written wherever the
   new link led.
+
+One more is known and not closed. A journal edited to name a project outside
+the ground as the move's owner moves a folder inside that project, on the root's
+grant. No Work project is written and no grant is passed by, since a project
+outside the ground stands on the root's grant; but `move-plan` refuses every
+move in such a scope ("External scopes are read-only"), and apply does not ask.
 
 A journal edited by a hand that can write in the root's `.central` may find
 another such route. So every sentence here that says a root grant writes into no

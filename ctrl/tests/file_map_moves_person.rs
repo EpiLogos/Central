@@ -2879,8 +2879,8 @@ fn a_journal_scope_spelled_through_a_link_in_the_moved_folder_is_refused() {
             Some(PERSON),
             "central.file_map_failure",
             opening,
-            "Invalid move journal: it spells the scope project:alpha as Control/user/dir/lnk, which is not that folder's own \
-             spelling on the disk",
+            "This move's journal spells the scope project:alpha as Control/user/dir/lnk, which is not that folder's own \
+             spelling on the disk now",
         );
     }
     assert_eq!(ground(&world), before, "nothing is moved or written");
@@ -3994,8 +3994,8 @@ fn a_journal_scope_spelled_through_a_link_of_the_roots_is_refused_as_a_spelling(
             assert!(
                 words.starts_with(opening)
                     && words.contains(&format!(
-                        "Invalid move journal: it spells the scope project:standin as {scope_spelled}, which is not that \
-                         folder's own spelling on the disk"
+                        "This move's journal spells the scope project:standin as {scope_spelled}, which is not that \
+                         folder's own spelling on the disk now"
                     )),
                 "{case} {action}: {words}"
             );
@@ -4089,8 +4089,8 @@ fn a_journal_scope_in_the_ground_that_does_not_stand_is_refused() {
             Some(PERSON),
             "central.file_map_failure",
             opening,
-            "Invalid move journal: it spells the scope folder:nowhere as Control/user/nowhere, which is not that folder's own \
-             spelling on the disk",
+            "This move's journal spells the scope folder:nowhere as Control/user/nowhere, which is not that folder's own \
+             spelling on the disk now",
         );
     }
     assert_eq!(ground(&world), before, "nothing is moved or written");
@@ -4199,4 +4199,259 @@ fn a_place_in_a_project_that_does_not_read_is_located_by_the_folder_it_names() {
         words.starts_with("Location is in Work/alpha, which is unreachable: "),
         "{words}"
     );
+}
+
+/// Round 54j.1 (DLW build ruling 2026-11-11; the review of #346's fourth commit): a move the person plans is never refused by the
+/// spelling rule for how they spelled where it goes. A folder that holds a registered project is moved to a destination whose
+/// folders are spelled otherwise than the disk spells them: in another case (`control/USER/pdir2`), on a volume that folds case;
+/// and with a letter in its decomposed form (`cafe` and a combining acute, for a folder made as `caf\u{e9}`), on a volume that
+/// folds form. The plan answers, and writes in its journal, the disk's own spelling; the project inside is read where it went;
+/// and the move applies, rolls back and applies again. Where the volume does not read the other spelling there is nothing to ask.
+#[test]
+fn a_destination_spelled_in_another_case_or_form_is_planned_as_the_disk_spells_it() {
+    for (made, asked, written) in [
+        ("Control/user", "control/USER/pdir2", "Control/user/pdir2"),
+        (
+            "Control/user/caf\u{e9}",
+            "Control/user/cafe\u{301}/pdir2",
+            "Control/user/caf\u{e9}/pdir2",
+        ),
+    ] {
+        let world = granting(&every_act(), "control:root");
+        let root = world.root();
+        fs::create_dir_all(root.join(made)).unwrap();
+        let other = Path::new(asked).parent().unwrap();
+        if !root.join(other).is_dir() {
+            continue;
+        }
+        project(&root.join("Control/user/pdir/proj"), "proj");
+        fs::write(root.join("Control/user/pdir/proj/p.md"), "proj's page\n").unwrap();
+        let declared = ctrl(
+            &world,
+            "central.file-map.scope-register",
+            &json!({"name":"proj","path":"Control/user/pdir/proj","kind":"project","expected_revision":revision(&world, None)}),
+            Some(OWNER),
+        );
+        assert_eq!(declared["ok"], true, "{declared}");
+        let registered = ctrl(
+            &world,
+            "central.file-map.register",
+            &json!({"path":"Control/user/pdir","expected_revision":revision(&world, None)}),
+            Some(PERSON),
+        );
+        assert_eq!(registered["ok"], true, "{registered}");
+        let planned = ctrl(
+            &world,
+            "central.file-map.move-plan",
+            &json!({"source_ref":registered["data"]["result"]["source_ref"],"destination":asked}),
+            Some(PERSON),
+        );
+        assert_eq!(planned["ok"], true, "{asked}: {planned}");
+        // The disk's spelling, as the disk gives it for the folder that was made (a volume may keep a name in another form
+        // than it was made in; the destination's own new name is as asked).
+        let disk = fs::canonicalize(root.join(made)).unwrap().join("pdir2");
+        let disk = disk.strip_prefix(fs::canonicalize(&root).unwrap()).unwrap();
+        assert_eq!(
+            planned["data"]["result"]["destination"],
+            disk.to_str().unwrap(),
+            "{asked}: {planned}"
+        );
+        if made == "Control/user" {
+            assert_eq!(disk, Path::new(written));
+        }
+        let carried = json!({"plan_id":planned["data"]["result"]["plan_id"],"quiesced":true});
+        let moved = || {
+            root.join(written).join("proj/p.md").is_file()
+                && !root.join("Control/user/pdir").exists()
+        };
+        for (action, there) in [
+            (CARRIED[0].0, true),
+            (CARRIED[1].0, false),
+            (CARRIED[0].0, true),
+        ] {
+            let answer = ctrl(&world, action, &carried, Some(PERSON));
+            assert_eq!(answer["ok"], true, "{asked} {action}: {answer}");
+            assert_eq!(moved(), there, "{asked} {action}");
+        }
+        assert_eq!(
+            ctrl(
+                &world,
+                "central.file-map.inspect",
+                &json!({"project":"proj","resources":false}),
+                None
+            )["ok"],
+            true,
+            "{asked}: the live map reads, with proj where it now stands"
+        );
+    }
+}
+
+/// A folder of the root's that holds a registered project `proj`, registered as a Source. Answers its SourceRef.
+fn folder_holding_a_project(world: &World) -> Value {
+    let root = world.root();
+    project(&root.join("Control/user/pdir/proj"), "proj");
+    fs::write(root.join("Control/user/pdir/proj/p.md"), "proj's page\n").unwrap();
+    let declared = ctrl(
+        world,
+        "central.file-map.scope-register",
+        &json!({"name":"proj","path":"Control/user/pdir/proj","kind":"project","expected_revision":revision(world, None)}),
+        Some(OWNER),
+    );
+    assert_eq!(declared["ok"], true, "{declared}");
+    let registered = ctrl(
+        world,
+        "central.file-map.register",
+        &json!({"path":"Control/user/pdir","expected_revision":revision(world, None)}),
+        Some(PERSON),
+    );
+    assert_eq!(registered["ok"], true, "{registered}");
+    registered["data"]["result"]["source_ref"].clone()
+}
+
+/// Whether the live map reads, with `proj` in it.
+fn the_map_reads_proj(world: &World) -> bool {
+    ctrl(
+        world,
+        "central.file-map.inspect",
+        &json!({"project":"proj","resources":false}),
+        None,
+    )["ok"]
+        == true
+}
+
+/// Round 54j.1 (the review of #346's fourth commit, D1, its probe as an assertion): the same move, to a destination whose folders
+/// are typed in another case, when it does not run straight through. Interrupted after the rename, it is finished by a second
+/// apply. Left mid-move by another hand (the folder at the destination, the journal saying "renamed"), it is finished by apply.
+/// After each the live map reads, with the project where it went; and a rollback then undoes the move and the map reads again.
+#[test]
+fn a_move_to_a_destination_spelled_in_another_case_is_finished_and_undone_from_mid_move() {
+    for asked in ["control/user/pdir2", "Control/USER/pdir2"] {
+        for left in [
+            "interrupted after the rename",
+            "left renamed by another hand",
+        ] {
+            let world = granting(&every_act(), "control:root");
+            let root = world.root();
+            if !root.join(asked).parent().unwrap().is_dir() {
+                continue;
+            }
+            let case = format!("{asked}, {left}");
+            let source = folder_holding_a_project(&world);
+            let planned = ctrl(
+                &world,
+                "central.file-map.move-plan",
+                &json!({"source_ref":source,"destination":asked}),
+                Some(PERSON),
+            );
+            assert_eq!(planned["ok"], true, "{case}: {planned}");
+            let id = planned["data"]["result"]["plan_id"].as_str().unwrap();
+            let carried = json!({"plan_id":id,"quiesced":true});
+            if left == "interrupted after the rename" {
+                let interrupted = ctrl_with(
+                    &world,
+                    CARRIED[0].0,
+                    &carried,
+                    Some(PERSON),
+                    &[("CENTRAL_FILE_MAP_TEST_INTERRUPT_AFTER_RENAME", "1")],
+                );
+                assert_eq!(interrupted["ok"], false, "{case}: {interrupted}");
+            } else {
+                fs::rename(root.join("Control/user/pdir"), root.join(asked)).unwrap();
+                let journal = root.join(format!(".central/bkmr/moves/{id}.json"));
+                let mut plan: Value = serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
+                plan["state"] = json!("renamed");
+                fs::write(&journal, serde_json::to_vec_pretty(&plan).unwrap()).unwrap();
+            }
+            assert!(
+                root.join("Control/user/pdir2/proj/p.md").is_file(),
+                "{case}"
+            );
+            let finished = ctrl(&world, CARRIED[0].0, &carried, Some(PERSON));
+            assert_eq!(finished["ok"], true, "{case}: {finished}");
+            assert!(
+                the_map_reads_proj(&world),
+                "{case}: the map reads after the apply"
+            );
+            let undone = ctrl(&world, CARRIED[1].0, &carried, Some(PERSON));
+            assert_eq!(undone["ok"], true, "{case}: {undone}");
+            assert!(
+                root.join("Control/user/pdir/proj/p.md").is_file()
+                    && !root.join("Control/user/pdir2").exists(),
+                "{case}: the folder is back"
+            );
+            assert!(
+                the_map_reads_proj(&world),
+                "{case}: the map reads after the rollback"
+            );
+        }
+    }
+}
+
+/// Round 54j.1 (D1): a journal as a `ctrl` before this rule planned it, its destination and the relations it would write spelled
+/// as the person typed them (`control/USER/pdir2`; the journal is edited to that here, in its `to` and in its documents). Carried
+/// out, that journal leaves relations the map does not read, as it did before this rule. So apply refuses it in words that say
+/// what to do and blame no one, with nothing moved; and where it was already begun (the folder at the destination, the journal
+/// saying "renamed") apply refuses it the same way and a rollback goes through: the folder is back and the map reads.
+#[test]
+fn a_journal_planned_with_its_destination_in_another_case_is_rolled_back_and_not_carried_out() {
+    for left in ["prepared", "renamed"] {
+        let world = granting(&every_act(), "control:root");
+        let root = world.root();
+        if !root.join("control/USER").is_dir() {
+            return;
+        }
+        let source = folder_holding_a_project(&world);
+        let planned = ctrl(
+            &world,
+            "central.file-map.move-plan",
+            &json!({"source_ref":source,"destination":"Control/user/pdir2"}),
+            Some(PERSON),
+        );
+        assert_eq!(planned["ok"], true, "{planned}");
+        let id = planned["data"]["result"]["plan_id"].as_str().unwrap();
+        let journal = root.join(format!(".central/bkmr/moves/{id}.json"));
+        let mut plan: Value = serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
+        assert_eq!(plan["to"], "Control/user/pdir2", "{plan}");
+        plan["to"] = json!("control/USER/pdir2");
+        for document in plan["documents"].as_array_mut().unwrap() {
+            let after = document["after"].as_str().unwrap();
+            assert!(after.contains("Control/user/pdir2/proj"), "{after}");
+            document["after"] = json!(after.replace("Control/user/pdir2", "control/USER/pdir2"));
+        }
+        if left == "renamed" {
+            plan["state"] = json!("renamed");
+            fs::rename(
+                root.join("Control/user/pdir"),
+                root.join("Control/user/pdir2"),
+            )
+            .unwrap();
+        }
+        fs::write(&journal, serde_json::to_vec_pretty(&plan).unwrap()).unwrap();
+        let carried = json!({"plan_id":id,"quiesced":true});
+        let stands = root.join(if left == "renamed" {
+            "Control/user/pdir2/proj/p.md"
+        } else {
+            "Control/user/pdir/proj/p.md"
+        });
+        let refused = ctrl(&world, CARRIED[0].0, &carried, Some(PERSON));
+        assert_eq!(refused["ok"], false, "{left}: {refused}");
+        let words = refused["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            words.contains(
+                "This move was planned with its destination spelled control/USER/pdir2, where the disk spells it \
+                 Control/user/pdir2"
+            ) && words.contains("then plan it again; nothing was written")
+                && !words.contains("Invalid move journal"),
+            "{left}: {words}"
+        );
+        assert!(stands.is_file(), "{left}: apply moved nothing");
+        let undone = ctrl(&world, CARRIED[1].0, &carried, Some(PERSON));
+        assert_eq!(undone["ok"], true, "{left}: {undone}");
+        assert!(
+            root.join("Control/user/pdir/proj/p.md").is_file()
+                && !root.join("Control/user/pdir2").exists(),
+            "{left}: the folder stands where it stood"
+        );
+        assert!(the_map_reads_proj(&world), "{left}: the map reads");
+    }
 }
