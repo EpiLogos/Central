@@ -889,17 +889,17 @@ pub(crate) fn insert_pool_bindings(
     // project of Work does) is that project's, pooled there on its grant, so the root's pool stops at it: it makes no Source of a
     // Work project's file (DLW build ruling 2026-11-09, round 54d F1: a root grant does not cover a Work tree). A project's own pool
     // keeps the subtrees in it that hold a manifest of their own, as it did before (round 54g item 9): its grant holds its tree.
+    // But no scope's pool takes a Work project's files as its own Sources, the root's or a scope's registered over a folder that
+    // holds one: every pool stops at a project of Work that is not the scope itself (DLW build ruling 2026-11-11, round 54h item 7).
     let projects = std::cell::RefCell::new(BTreeMap::<PathBuf, bool>::new());
+    let stands = fs::canonicalize(world_root).unwrap_or_else(|_| world_root.to_path_buf());
     let own = |relative: &str| {
         let mut projects = projects.borrow_mut();
         !Path::new(relative).ancestors().skip(1).any(|folder| {
             !folder.as_os_str().is_empty()
-                && *projects.entry(folder.to_path_buf()).or_insert_with(|| {
-                    fs::symlink_metadata(
-                        world_root.join(folder).join("ProjectCentral/project.json"),
-                    )
-                    .is_ok_and(|manifest| manifest.is_file())
-                })
+                && *projects
+                    .entry(folder.to_path_buf())
+                    .or_insert_with(|| stops_a_pool(&stands.join(folder), world_ref))
         })
     };
     insert_admitted_bindings(
@@ -912,8 +912,51 @@ pub(crate) fn insert_pool_bindings(
         "pooled-content",
         exclude,
         bindings,
-        |relative| holds_text(relative) && (world_ref != CONTROL_WORLD_REF || own(relative)),
+        |relative| holds_text(relative) && own(relative),
     )
+}
+
+/// Whether the pool of the scope `world_ref` stops at `folder`, a folder below its root: the root's at any folder that declares a
+/// project, any other scope's at a member of Work (`insert_pool_bindings`).
+fn stops_a_pool(folder: &Path, world_ref: &str) -> bool {
+    declares_a_project(folder) && (world_ref == CONTROL_WORLD_REF || is_work_member(folder))
+}
+
+/// Whether the pool of the scope at `world_root` leaves `relative` out because a folder above it is where that pool stops
+/// (`insert_pool_bindings`): one reading for the pool's walk and for a single file asked of the pool by its path.
+pub(crate) fn pool_stops_above(world_root: &Path, world_ref: &str, relative: &str) -> bool {
+    let stands = fs::canonicalize(world_root).unwrap_or_else(|_| world_root.to_path_buf());
+    Path::new(relative)
+        .ancestors()
+        .skip(1)
+        .any(|folder| !folder.as_os_str().is_empty() && stops_a_pool(&stands.join(folder), world_ref))
+}
+
+/// Whether `folder` holds a project's declaration, `ProjectCentral/project.json`, or something there that does not read: only a
+/// declaration that is not there makes a folder no project (round 54h item 5), so one that cannot be opened is not pooled past.
+pub(crate) fn declares_a_project(folder: &Path) -> bool {
+    !matches!(
+        fs::symlink_metadata(folder.join("ProjectCentral/project.json")),
+        Err(error) if error.kind() == io::ErrorKind::NotFound || error.raw_os_error() == Some(libc::ENOTDIR)
+    )
+}
+
+/// Whether `folder` stands as a member of a ground's Work: one folder under the `Work` of a folder that holds `Control`, as the
+/// live map finds a ground and its Work projects (`file_map_catalog::participating`). The folders are asked by their device and
+/// inode, so no spelling of `Work` stands for another place.
+fn is_work_member(folder: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let Some((work, ground)) = folder
+        .parent()
+        .and_then(|work| Some((work, work.parent()?)))
+    else {
+        return false;
+    };
+    let same = match (fs::metadata(work), fs::metadata(ground.join("Work"))) {
+        (Ok(one), Ok(other)) => one.dev() == other.dev() && one.ino() == other.ino(),
+        _ => false,
+    };
+    same && fs::metadata(ground.join("Control")).is_ok_and(|control| control.is_dir())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2242,6 +2285,40 @@ mod retrieval_tests {
             !kept.iter().any(|path| path.starts_with("Work/alpha/")),
             "{kept:?}"
         );
+    }
+
+    /// Round 54h item 7 (review of #346, F6): every pool stops at a Work project's folder that is not the scope itself. A project
+    /// scope over a ground's `Work` pools its own file and a plain folder's, and none of a Work project's. A folder called `Work` in
+    /// a project that is no ground (it holds no `Control`) is that project's own tree, kept as round 54g item 9 keeps it.
+    #[test]
+    fn a_pool_stops_at_a_work_project_of_the_ground_it_stands_in() {
+        let ground = Ground::new();
+        let root = &ground.0;
+        for (relative, bytes) in [
+            ("g/Control/user/note.md", &b"x"[..]),
+            ("g/Work/ProjectCentral/project.json", b"{}"),
+            ("g/Work/own.md", b"x"),
+            ("g/Work/loose/readme.md", b"x"),
+            ("g/Work/alpha/ProjectCentral/project.json", b"{}"),
+            ("g/Work/alpha/plan.md", b"x"),
+            ("p/ProjectCentral/project.json", b"{}"),
+            ("p/Work/inner/ProjectCentral/project.json", b"{}"),
+            ("p/Work/inner/page.md", b"x"),
+        ] {
+            let path = root.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        }
+        let mut pooled = BTreeMap::new();
+        insert_pool_bindings(&root.join("g/Work"), "project:works", &[], &mut pooled).unwrap();
+        let kept = paths(&pooled);
+        assert!(kept.iter().any(|path| path == "own.md"), "{kept:?}");
+        assert!(kept.iter().any(|path| path == "loose/readme.md"), "{kept:?}");
+        assert!(!kept.iter().any(|path| path.starts_with("alpha/")), "{kept:?}");
+        let mut pooled = BTreeMap::new();
+        insert_pool_bindings(&root.join("p"), "project:p", &[], &mut pooled).unwrap();
+        let kept = paths(&pooled);
+        assert!(kept.iter().any(|path| path == "Work/inner/page.md"), "{kept:?}");
     }
 
     #[test]

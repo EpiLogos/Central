@@ -65,11 +65,20 @@ fn path(root: &Path, id: &str) -> io::Result<PathBuf> {
     }
     Ok(root.join(".central/bkmr/moves").join(format!("{id}.json")))
 }
+/// One place a move's journal writes (`journal_places`): how the refusal names it, where it stands, and whether it is a link's own
+/// place, which is judged where the link stands and never where it points.
+pub(crate) struct JournalPlace {
+    pub named: String,
+    pub path: PathBuf,
+    pub link: bool,
+}
 /// The places a move's journal writes, read without changing anything, for the person's gate (file_map.rs `act_places`; round 54d
-/// F1): where it moves its Source between (its `from` and its `to`, each under its owner's root), and the relations document of each
-/// scope it rewrites a relation or a link in, as that scope stands among `all`, the scopes the move runs from (round 54g item 4). A
-/// journal that does not read names none: the act itself then refuses it.
-pub(crate) fn journal_places(root: &Path, all: &[Scope], input: &Value) -> Vec<(String, PathBuf)> {
+/// F1): where it moves its Source between (its `from` and its `to`, each under its owner's root), the relations document of each
+/// scope it writes one in, and each link step's own link, before and after, under its scope's root, as that scope stands among
+/// `all`, the scopes the move runs from (round 54g item 4; DLW build ruling 2026-11-11, round 54h item 1). A link step in a Work
+/// project's tree so needs that project's grant, whichever scope the journal says keeps the link. A step's staged and kept links
+/// stand in its scope's own moves folder (`checked`). A journal that does not read names none: the act itself then refuses it.
+pub(crate) fn journal_places(root: &Path, all: &[Scope], input: &Value) -> Vec<JournalPlace> {
     let Some(plan) = input
         .get("plan_id")
         .and_then(Value::as_str)
@@ -87,25 +96,56 @@ pub(crate) fn journal_places(root: &Path, all: &[Scope], input: &Value) -> Vec<(
     } else {
         root.join(&owner.path)
     };
+    let place = |named: String, path: PathBuf, link: bool| JournalPlace { named, path, link };
     let mut places = vec![
-        (plan.from.clone(), base.join(&plan.from)),
-        (plan.to.clone(), base.join(&plan.to)),
+        place(plan.from.clone(), base.join(&plan.from), false),
+        place(plan.to.clone(), base.join(&plan.to), false),
     ];
     let written = plan
         .documents
         .iter()
         .map(|document| &document.world)
-        .chain(plan.links.iter().map(|step| &step.world))
         .collect::<std::collections::BTreeSet<_>>();
     for world in written {
         if let Some(scope) = all.iter().find(|scope| &scope.world == world) {
-            places.push((
+            places.push(place(
                 format!("the relations of {world}"),
                 scope.root.join(scope.relations_path()),
+                false,
+            ));
+        }
+    }
+    for step in &plan.links {
+        let Some(scope) = all.iter().find(|scope| scope.world == step.world) else {
+            continue;
+        };
+        places.push(place(
+            link_named(scope, &step.path),
+            scope.root.join(&step.path),
+            true,
+        ));
+        if step.after_path != step.path {
+            places.push(place(
+                link_named(scope, &step.after_path),
+                scope.root.join(&step.after_path),
+                true,
             ));
         }
     }
     places
+}
+/// How a refusal names a managed link: its path in its scope, and the scope.
+fn link_named(scope: &Scope, link_path: &str) -> String {
+    format!("the link {link_path} of {}", scope.world)
+}
+/// Where a link step's link, its staged link or its kept link stands under its scope's root: a contained path, with no link in any
+/// folder above it (round 54h item 1). The last name is the link itself and is not followed.
+fn step_member(root: &Path, raw: &str) -> io::Result<PathBuf> {
+    let contained = relative(raw)?;
+    if let Some(folder) = contained.parent() {
+        crate::source_safety::reject_symlink_components(root, folder)?;
+    }
+    Ok(root.join(contained))
 }
 fn save(
     root: &Path,
@@ -386,7 +426,8 @@ fn link_after(
     link_path: &str,
     before: &Link,
 ) -> io::Result<Option<(String, PathBuf)>> {
-    let (_, target) = lookup(all, &before.source_ref)?;
+    let (_, target) =
+        lookup(all, &before.source_ref).map_err(|error| link_unread(current, link_path, &error))?;
     let after_path = if current.world == owner.world {
         transform(link_path, from, to)
     } else {
@@ -416,34 +457,81 @@ fn link_after(
     }
     Ok(Some((after_path, new_target)))
 }
+/// A managed link whose Source does not read stops every move's plan: no grant mends it, so the refusal names the link and the
+/// scope it stands in, and says what does (round 54h item 6).
+fn link_unread(current: &Scope, link_path: &str, error: &io::Error) -> io::Error {
+    let stands = match current.project.as_deref() {
+        Some(project) if current.world != "control:root" => format!("the project {project}"),
+        _ => "the root".to_owned(),
+    };
+    io::Error::new(
+        error.kind(),
+        format!(
+            "the link {link_path} in {stands} names a Source that does not read ({error}); no grant mends this: remove the link or \
+             restore its Source, then plan the move again"
+        ),
+    )
+}
+/// A scope a move rewrites in (`rewritten_scopes`), and each link it rewrites there: how a refusal names it, and where it stands
+/// before and after the move.
+pub(crate) struct Rewritten<'a> {
+    pub scope: &'a Scope,
+    pub links: Vec<(String, PathBuf)>,
+}
 /// The scopes whose managed links a move of the Source at `moved` to `to`, under `owner`, rewrites, as `plan` rewrites them: in each,
 /// the move stages the new link in its `.central/bkmr/moves`, replaces the link and rewrites its relations document, so the
-/// person's gate asks each one's grant (DLW build ruling 2026-11-09, round 54g item 4). A link whose Source does not read is counted
-/// as rewritten: `plan` refuses it, and the gate asks no less than the act would write.
+/// person's gate asks each one's grant (DLW build ruling 2026-11-09, round 54g item 4). Each rewritten link is named with where it
+/// stands, before the move and after it, so the gate judges the link by its own place and not by the scope that keeps it (round
+/// 54h item 3). A scope whose relations do not read is counted, with no link named: `plan` refuses it, and the gate asks no less
+/// than the act would write. A link whose Source does not read is refused here in the words `plan` refuses it in (`link_unread`).
 pub(crate) fn rewritten_scopes<'a>(
     all: &'a [Scope],
     owner: &Scope,
     moved: &Path,
     to: &str,
-) -> Vec<&'a Scope> {
+) -> io::Result<Vec<Rewritten<'a>>> {
     let Some(from) = moved.strip_prefix(&owner.root).ok().and_then(Path::to_str) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    all.iter()
-        .filter(|current| !current.is_folder())
-        .filter(|current| {
-            current.ground().map_or(true, |ground| {
-                ground.links.iter().any(|(link_path, before)| {
-                    link_after(all, (owner, moved, from, to), current, link_path, before)
-                        .map_or(true, |after| after.is_some())
-                })
-            })
-        })
-        .collect()
+    let mut rewritten = Vec::new();
+    for current in all.iter().filter(|current| !current.is_folder()) {
+        let Ok(ground) = current.ground() else {
+            rewritten.push(Rewritten {
+                scope: current,
+                links: Vec::new(),
+            });
+            continue;
+        };
+        let mut links = Vec::new();
+        for (link_path, before) in &ground.links {
+            let Some((after_path, _)) =
+                link_after(all, (owner, moved, from, to), current, link_path, before)?
+            else {
+                continue;
+            };
+            links.push((link_named(current, link_path), current.root.join(link_path)));
+            let after_root = match current.root.strip_prefix(moved) {
+                Ok(rest) => owner.root.join(to).join(rest),
+                Err(_) => current.root.clone(),
+            };
+            links.push((
+                link_named(current, &after_path),
+                after_root.join(&after_path),
+            ));
+        }
+        if !links.is_empty() {
+            rewritten.push(Rewritten {
+                scope: current,
+                links,
+            });
+        }
+    }
+    Ok(rewritten)
 }
 /// What a move's journal may write, as `plan` writes it (round 54g item 4): a relations document only at the move's own scope or at
-/// one it rewrites a link in, and each link step only at the link it replaces, contained in its scope, and its own staged and kept
-/// links in the moves folder. An edited journal that names any other place is refused before anything is written.
+/// one it rewrites a link in, and each link step only at a path contained in its scope, with its own staged and kept links in that
+/// scope's moves folder. A journal edited to name anything else is refused here. A contained path in the root's scope can still
+/// stand in a Work project's tree: that is the gate's to judge, by the step's own place (`journal_places`; round 54h item 1).
 fn checked(plan: &Plan) -> io::Result<()> {
     for (index, step) in plan.links.iter().enumerate() {
         let slot = format!(".central/bkmr/moves/{}-{index}", plan.id);
@@ -479,6 +567,55 @@ pub(crate) fn resume_scopes(root: &Path, input: &Value) -> io::Result<Vec<Scope>
 pub(crate) fn resume_scopes_unmade(root: &Path, input: &Value) -> io::Result<Vec<Scope>> {
     resume_scopes_as(root, input, false)
 }
+/// A journal's scope is spelled as `plan` writes it (round 54h item 2): in the ground, plain names below it (none for the ground
+/// itself), so no `..` or `.` reads one folder before the rename and another after it; outside the ground, the folder's own
+/// absolute spelling, as an external root is opened (`open_external_root`). An external folder that is not there now is taken as
+/// spelled: nothing can be read or written through it.
+fn plain_world_path(world: &PlanWorld) -> io::Result<()> {
+    let spelled = Path::new(&world.path);
+    let refused = || {
+        invalid(format!(
+            "Invalid move journal: it spells the scope {} as {}, which is not the spelling its plan writes",
+            world.world, world.path
+        ))
+    };
+    let plain = |path: &Path| {
+        path.components()
+            .all(|part| matches!(part, std::path::Component::Normal(_)))
+    };
+    if !world.external {
+        return if spelled.is_absolute() || !plain(spelled) {
+            Err(refused())
+        } else {
+            Ok(())
+        };
+    }
+    let Ok(below) = spelled.strip_prefix("/") else {
+        return Err(refused());
+    };
+    if !plain(below) || Path::new("/").join(below).as_os_str() != spelled.as_os_str() {
+        return Err(refused());
+    }
+    match fs::canonicalize(spelled) {
+        Ok(canonical) if canonical != spelled => Err(refused()),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+/// The folder each scope stands at, by its device and inode, or none where it does not read.
+fn folders_of(all: &[Scope]) -> Vec<(String, Option<(u64, u64)>)> {
+    all.iter()
+        .map(|scope| {
+            (
+                scope.world.clone(),
+                fs::metadata(&scope.root)
+                    .ok()
+                    .map(|held| (held.dev(), held.ino())),
+            )
+        })
+        .collect()
+}
 fn resume_scopes_as(root: &Path, input: &Value, make_state: bool) -> io::Result<Vec<Scope>> {
     let id = text(input, "plan_id")?;
     safe_member(root, ".central/bkmr/moves", true)?;
@@ -511,6 +648,7 @@ fn resume_scopes_as(root: &Path, input: &Value, make_state: bool) -> io::Result<
                 "Invalid move journal: it sets the root's scope away from the ground",
             ));
         }
+        plain_world_path(world)?;
         let mut current = if world.external {
             PathBuf::from(&world.path)
         } else {
@@ -613,38 +751,59 @@ pub(crate) fn apply(
     }
     for link in &plan.links {
         let world = scope(all, &link.world)?;
-        let link_path = world.root.join(if at_from {
-            &link.path
-        } else {
-            &link.after_path
-        });
+        // Each of a step's three places is contained in its scope, with no link in a folder above it (round 54h item 1).
+        let link_path = step_member(
+            &world.root,
+            if at_from {
+                &link.path
+            } else {
+                &link.after_path
+            },
+        )?;
+        let kept = step_member(&world.root, &link.backup)?;
+        let staged = step_member(&world.root, &link.staged)?;
         let old = identity(&link_path, link.before.device, link.before.inode);
         let new = identity(&link_path, link.new_device, link.new_inode);
-        let backed = identity(
-            &world.root.join(&link.backup),
-            link.before.device,
-            link.before.inode,
-        );
+        let backed = identity(&kept, link.before.device, link.before.inode);
         if !(old || new || (backed && fs::symlink_metadata(&link_path).is_err())) {
             return Err(conflict(
                 "Managed link was replaced outside this transaction",
             ));
         }
-        if !identity(
-            &world.root.join(&link.staged),
-            link.new_device,
-            link.new_inode,
-        ) {
+        if !identity(&staged, link.new_device, link.new_inode) {
             return Err(conflict("Move's staged link is missing or replaced"));
         }
     }
-    if !rollback && at_from {
+    // Each scope's folder as the checks above and the gate read it. The rename moves folders and makes none, so each scope is the
+    // same folder after it, wherever it then stands (round 54h item 2).
+    let stood = folders_of(all);
+    let renamed = if !rollback && at_from {
         move_exclusive(&from, &to)?;
+        Some((&to, &from))
     } else if rollback && at_to {
         move_exclusive(&to, &from)?;
+        Some((&from, &to))
+    } else {
+        None
+    };
+    let moved_scopes = resume_scopes(root, input);
+    // A scope that reads as another folder once the Source has moved was spelled through the moved folder (a link inside it, say):
+    // its documents and links would be written in a tree the gate never judged. The rename is put back and nothing else is written.
+    if let Some((world, _)) = moved_scopes.as_ref().ok().and_then(|scopes| {
+        folders_of(scopes)
+            .into_iter()
+            .find(|now| !stood.contains(now))
+    }) {
+        if let Some((now, before)) = renamed {
+            move_exclusive(now, before)?;
+        }
+        return Err(conflict(format!(
+            "Move journal's scope {world} is another folder once its Source has moved; the Source is back where it stood and \
+             nothing else was written"
+        )));
     }
     let completion = (|| {
-        let moved_scopes = resume_scopes(root, input)?;
+        let moved_scopes = moved_scopes?;
         let all = moved_scopes.as_slice();
         plan.state = if rollback { "rolling-back" } else { "renamed" }.into();
         save(
@@ -661,12 +820,15 @@ pub(crate) fn apply(
         }
         for step in &plan.links {
             let world = scope(all, &step.world)?;
-            let link = world.root.join(if rollback {
-                &step.path
-            } else {
-                &step.after_path
-            });
-            let backup = world.root.join(&step.backup);
+            let link = step_member(
+                &world.root,
+                if rollback {
+                    &step.path
+                } else {
+                    &step.after_path
+                },
+            )?;
+            let backup = step_member(&world.root, &step.backup)?;
             if rollback {
                 if identity(&link, step.before.device, step.before.inode) {
                     continue;
@@ -684,7 +846,7 @@ pub(crate) fn apply(
                 }
                 // link(2) with a symlink source retains its inode and creates the
                 // destination exclusively. The staged inode is already journalled.
-                fs::hard_link(world.root.join(&step.staged), &link)?;
+                fs::hard_link(step_member(&world.root, &step.staged)?, &link)?;
             }
         }
         for doc in &plan.documents {
