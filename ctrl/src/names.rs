@@ -81,7 +81,7 @@ const ZWJ: char = '\u{200D}';
 /// The emoji ZWJ sequences Unicode lists (UTS #51's RGI_Emoji_ZWJ_Sequence, the set of `emoji-zwj-sequences.txt`), each
 /// in its fully qualified form: Unicode 17.0, as ICU4C 78.3 exports it, the Unicode of the `icu_properties` data the
 /// lock pins. `icu_properties` 2.3 compiles no set of sequences in, so the list is kept as a file whose lines are
-/// generated and never edited by hand (its header holds the command); O-I will hold the same bytes under the same
+/// generated and never edited by hand (its header holds the command); O-I holds the same bytes under the same
 /// sha256. What the list holds is pinned by that sha256 alone. Tests hold its shape to the compiled data (every part of
 /// every sequence is an emoji there, with its selector exactly where it is drawn as text without one) and its header's
 /// Unicode version to the Unicode the build carries, so a lock that moves the data fails until the list is generated
@@ -1142,7 +1142,7 @@ mod tests {
     }
 
     /// be2m.3 item 1 (DLW build ruling 2026-11-12): the list of emoji ZWJ sequences is Unicode's own, generated and pinned.
-    /// Its bytes are pinned by one sha256, the one O-I will hold too, and that sha256 alone says which sequences it
+    /// Its bytes are pinned by one sha256, the one O-I holds too, and that sha256 alone says which sequences it
     /// holds: no set of sequences is compiled into the build to hold it against. It names its generator, and it holds
     /// the 1,614 sequences of Unicode 17.0, each once.
     #[test]
@@ -1152,7 +1152,7 @@ mod tests {
         assert_eq!(
             format!("{:x}", Sha256::digest(list.as_bytes())),
             "3466f7002716b502b61957afbb751af85aee3bd379b577004c96f14d47dc151b",
-            "the list is the one O-I will hold"
+            "the list is the one O-I holds"
         );
         assert!(list.contains("icuexportdata -m uprops -d OUT RGI_Emoji_ZWJ_Sequence"));
         assert!(list.is_ascii() && !list.contains('\r') && list.ends_with('\n'));
@@ -1792,10 +1792,8 @@ mod tests {
     /// paragraph separator as a space, a joiner in its place kept; and a case is kept exactly when nothing stands in the way,
     /// named by its kind when something does. The file's sha256 is pinned beside the Day's tests. be2m.2: the shown form is
     /// `shown_prose`'s own, with nothing the rule refuses left in it, and the cases hold the rows the ruling names.
-    /// be2m.3 item 4: nothing calls `shown_prose` yet. The `shown` column is `shown_prose`'s form on one line, which is
-    /// what the label of an entry read as a part gives once it keeps a joiner; what a reader is given today is that
-    /// label as it stands (`plain_text_words` in `day_moves.rs`), the same form with every joiner left out, and the
-    /// Day's own test holds the column to it.
+    /// The `shown` column is `shown_prose`'s form on one line, which is what the label of an entry read as a part gives
+    /// (`plain_text_words` in `day_moves.rs` calls `shown_prose`), and the Day's own test holds the label to the column.
     #[test]
     fn every_joiner_case_is_shown_with_a_joiner_in_its_place_and_names_what_stood_in_the_way() {
         let cases: Vec<serde_json::Value> =
