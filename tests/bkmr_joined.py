@@ -151,6 +151,18 @@ class Joined(unittest.TestCase):
         basis = self.action("inspect", project)["revision"]
         return self.action("register", project, path=str(path), expected_revision=basis, **options)["source_ref"]
 
+    def legacy_root_source(self, path):
+        """A Source of the root's at `path`, kept in the root's file map as a registration made before the person's gate could
+        have kept it: a root act that writes in a Work project's tree is refused whatever grants stand (Central file_map.rs
+        `grant_scope`), so a Work project's own folder is no longer registered at the root; one registered before that still
+        stands in a ground, and is moved on the root's grant and that project's. Its SourceRef."""
+        relations = self.root / "Control/relations/source-relations.json"
+        doc = json.loads(relations.read_text())
+        reference = "central:source:control:root:" + path
+        doc.setdefault("file_map", {}).setdefault("resources", {})[reference] = {"path": path, "title": path}
+        relations.write_text(json.dumps(doc))
+        return reference
+
     def locate(self, path, project=None):
         return self.action("locate", project, path=str(path))
 
@@ -362,7 +374,10 @@ class Joined(unittest.TestCase):
         self.project("alpha")
         path = self.write("Work/alpha/ProjectCentral/user/note.md")
         ref = self.locate(path, "alpha")["source"]["ref"]
-        directory = self.register("Work/alpha")
+        # The move takes alpha's own folder, and the root links a Source of alpha's: each reaches alpha, so the person's grant is
+        # extended to it first, as the gate asks (a move stands at the root and at each Work project it writes in).
+        self.person_moves("alpha")
+        directory = self.legacy_root_source("Work/alpha")
         self.link(ref, "links/alpha")
         self.action("refresh", "alpha")
         plan = self.move(directory, "Work/renamed")
@@ -594,6 +609,8 @@ class Joined(unittest.TestCase):
 
     def test_37_retired_flow_registry_stays_retained_through_current_source_moves(self):
         self.project("alpha")
+        # The moves below are of a Source of alpha's, inside alpha: the person's grant is extended to alpha, as the gate asks.
+        self.person_moves("alpha")
         legacy = self.write("Work/alpha/.central/flows.json", b"retained retired registry bytes\n")
         history = self.write("Work/alpha/.central/flow-revisions/retained.bin", bytes([0, 255, 9]))
         source = self.write("Work/alpha/ProjectCentral/user/flows/original.md", "current ordinary Flow source\n")

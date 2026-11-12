@@ -1294,6 +1294,34 @@ fn the_persons_act(
     crate::continuous_work::authority::authenticate_before_scope(
         root, token, &action, expected, now,
     )
+    .map_err(|error| {
+        // A move of `Work` itself, planned by an older `ctrl` and begun, leaves a ground no act's grant can be asked of: the
+        // authority reads a ground that holds `Work`, and answers a bare "No such file or directory". For that journal's own
+        // apply and rollback the refusal says what stands and what a hand does (DLW build ruling 2026-11-12). A credential
+        // out of its bounds is refused before this, in its own words.
+        let moved = (error.kind() == io::ErrorKind::NotFound
+            && matches!(op, "move-apply" | "move-rollback"))
+        .then(|| super::file_map_moves::work_moved_to(root, input))
+        .flatten();
+        match moved {
+            Some(to) => io::Error::new(
+                error.kind(),
+                format!(
+                    "this move took Work itself from {} to {}, and no act reads a ground whose Work is away: move {} back to \
+                     {} by hand, then roll the move back",
+                    root.join("Work").display(),
+                    root.join(&to).display(),
+                    root.join(&to).display(),
+                    root.join("Work").display()
+                ),
+            ),
+            None => error,
+        }
+    })
+    .map_err(words)?;
+    crate::continuous_work::authority::authenticate_before_scope(
+        root, token, &action, expected, now,
+    )
     .map_err(words)?;
     let standing = grant_scope(root, op, input).map_err(words)?;
     let held = |scope: &crate::continuous_work::source::Scope| {
@@ -1472,8 +1500,19 @@ pub(crate) fn journal_reach(
     all: &[Scope],
     input: &Value,
 ) -> io::Result<Vec<(String, PathBuf)>> {
+    move_reach(ground, all, "move-apply", input)
+}
+
+/// Every Work project the places of a move reach, as the gate reads them for `op`: a plan's from its input, an apply's and a
+/// rollback's from the journal.
+fn move_reach(
+    ground: &Path,
+    all: &[Scope],
+    op: &str,
+    input: &Value,
+) -> io::Result<Vec<(String, PathBuf)>> {
     let mut reach = Vec::new();
-    for place in act_places(ground, all, root_scope(all), "move-apply", input)? {
+    for place in act_places(ground, all, root_scope(all), op, input)? {
         for reached in reached_projects(ground, &place.path, place.link) {
             if !reach.contains(&reached) {
                 reach.push(reached);
@@ -1481,6 +1520,46 @@ pub(crate) fn journal_reach(
         }
     }
     Ok(reach)
+}
+
+/// The scopes' state folders in which a move takes a lock only where one already stands, and makes none (DLW build ruling
+/// 2026-11-12; the review of #349, F1). A move takes the locks of every scope it runs with, and a lock taken where none stood
+/// makes `.central` and an empty lock file. Inside a Work project's tree that is an entry in the project, so it is made only
+/// where the project admitted the move: for a plan, where the move reaches the project, whose grant the gate then asked
+/// (`move_reach`); for an apply and a rollback, where the project holds the journal's seal
+/// (`file_map_moves::plan_held_by`). Anywhere else in a Work project the move writes nothing (`file_map_moves::Sealed`), and a
+/// lock that stands there is still taken, so other writers are held as before.
+fn locks_only_standing(
+    ground: &Path,
+    all: &[Scope],
+    op: &str,
+    input: &Value,
+) -> io::Result<Vec<PathBuf>> {
+    if !op.starts_with("move-") {
+        return Ok(Vec::new());
+    }
+    let reach = if op == "move-plan" {
+        move_reach(ground, all, op, input)?
+    } else {
+        Vec::new()
+    };
+    let mut only_standing = Vec::new();
+    for scope in all {
+        let admitted = work_projects_of(ground, &scope.state)
+            .into_iter()
+            .filter(|(_, project)| within(&scope.state, project))
+            .all(|(name, project)| {
+                if op == "move-plan" {
+                    reach.contains(&(name, project))
+                } else {
+                    super::file_map_moves::plan_held_by(ground, input, &project)
+                }
+            });
+        if !admitted && !only_standing.contains(&scope.state) {
+            only_standing.push(scope.state.clone());
+        }
+    }
+    Ok(only_standing)
 }
 
 /// The member of Work (its folder's name) whose grant holds an act at `scope`: a project of Work, one folder under `Work`, read in
@@ -1910,6 +1989,14 @@ fn admitted_as(
         Vec::new()
     };
 
+    let only_standing = locks_only_standing(&root, &all, op, input)?;
+    let take = |owner_root: &Path, name: &str| {
+        if only_standing.iter().any(|kept| kept == owner_root) {
+            crate::source_safety::lock_standing(owner_root, name)
+        } else {
+            crate::source_safety::lock(owner_root, name).map(Some)
+        }
+    };
     let mut locks = Vec::new();
     if !matches!(
         op,
@@ -1924,7 +2011,7 @@ fn admitted_as(
         roots.dedup();
         for owner_root in roots {
             if owner_root != root {
-                locks.push(crate::source_safety::lock(&owner_root, "file-map.lock")?);
+                locks.extend(take(&owner_root, "file-map.lock")?);
             }
         }
     }
@@ -1943,10 +2030,7 @@ fn admitted_as(
         roots.sort();
         roots.dedup();
         for owner_root in roots {
-            source_locks.push(crate::source_safety::lock(
-                &owner_root,
-                "source-mutation.lock",
-            )?);
+            source_locks.extend(take(&owner_root, "source-mutation.lock")?);
         }
     }
     if let Some(original) = &read_root {
