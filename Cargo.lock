@@ -302,6 +302,7 @@ dependencies = [
  "central-reference-connectors",
  "chrono",
  "chrono-tz",
+ "icu_properties",
  "jsonschema",
  "libc",
  "rusqlite",

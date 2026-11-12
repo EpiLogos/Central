@@ -13,8 +13,10 @@ use unicode_general_category::{get_general_category, GeneralCategory};
 /// The set is Unicode's own, never a hand-kept list of format characters:
 /// - every format character (general category Cf): the bidi controls and
 ///   marks, the zero-width characters (U+200C and U+200D among them, as
-///   ruled), the soft hyphen, the invisible operators, the interlinear
-///   annotation marks, the Mongolian vowel separator;
+///   ruled: a name, a label or a title never holds one, and prose holds one
+///   only in its place, `joiner_kept`), the soft hyphen, the invisible
+///   operators, the interlinear annotation marks, the Mongolian vowel
+///   separator;
 /// - save the format characters that draw a sign: the Arabic number signs,
 ///   end of ayah and the marks above (U+0600–0605, U+06DD, U+0890, U+0891,
 ///   U+08E2) and the Kaithi number signs (U+110BD, U+110CD);
@@ -68,6 +70,171 @@ pub fn unkept(c: char) -> bool {
 pub fn shown(text: &str) -> String {
     text.chars()
         .filter(|c| !invisible(*c))
+        .collect::<String>()
+        .trim()
+        .to_owned()
+}
+
+const ZWNJ: char = '\u{200C}';
+const ZWJ: char = '\u{200D}';
+
+/// Whether the joiner at `at` is part of the words a person sees (be2m, DLW
+/// build ruling 2026-11-10): a joiner that changes how the characters beside
+/// it are drawn is kept in prose, and one that draws nothing where it stands
+/// is refused like any other invisible character. Prose only: the words of a
+/// Day's field records and entry parts. A name, a label or a title keeps the
+/// whole rule (`unplain`).
+///
+/// U+200C and U+200D are in their place here and nowhere else:
+/// - U+200D between two emoji: the character before it, passing over U+FE0F
+///   and the skin tones U+1F3FB to U+1F3FF, and the character after it are
+///   both Extended_Pictographic;
+/// - inside a word of a script that joins or conjoins, in UAX #31's contexts
+///   (section 2.3, Layout and Format Control Characters):
+///   A1, U+200C between joining letters (`LJ T* ZWNJ T* RJ`: Joining_Type
+///   Left or Dual before it, Right or Dual after it, across Transparent
+///   characters); A2, U+200C after a virama and before a letter
+///   (`L M* V M1* ZWNJ M1* L`); B, U+200D after a virama and not before a
+///   dependent vowel (`L M* V M1* ZWJ (?!D)`). L is a letter, M a nonspacing
+///   mark, V a character of Canonical_Combining_Class Virama, M1 a nonspacing
+///   mark whose class is not 0, D a character of Indic_Syllabic_Category
+///   Vowel_Dependent.
+///
+/// The properties are Unicode's, read from the ICU data the lock pins
+/// (`icu_properties` 2.3.0 with its compiled data, Unicode 17.0), never from
+/// ranges kept by hand.
+pub fn joiner_kept(chars: &[char], at: usize) -> bool {
+    use icu_properties::props::{
+        CanonicalCombiningClass, ExtendedPictographic, GeneralCategory as Category,
+        GeneralCategoryGroup, IndicSyllabicCategory, JoiningType,
+    };
+    use icu_properties::{CodePointMapData, CodePointSetData};
+    let Some(&joiner) = chars.get(at).filter(|c| matches!(**c, ZWNJ | ZWJ)) else {
+        return false;
+    };
+    let (before, after) = (&chars[..at], &chars[at + 1..]);
+    let pictograph = |c: char| CodePointSetData::new::<ExtendedPictographic>().contains(c);
+    let joining = |c: char| CodePointMapData::<JoiningType>::new().get(c);
+    let category = |c: char| CodePointMapData::<Category>::new().get(c);
+    let class = |c: char| CodePointMapData::<CanonicalCombiningClass>::new().get(c);
+    let letter = |c: char| GeneralCategoryGroup::Letter.contains(category(c));
+    let mark = |c: char| category(c) == Category::NonspacingMark;
+    let reordered_mark = |c: char| mark(c) && class(c) != CanonicalCombiningClass::NotReordered;
+
+    // Between two emoji.
+    if joiner == ZWJ {
+        let base = before
+            .iter()
+            .rev()
+            .find(|c| !matches!(**c, '\u{FE0F}' | '\u{1F3FB}'..='\u{1F3FF}'));
+        if base.is_some_and(|c| pictograph(*c)) && after.first().is_some_and(|c| pictograph(*c)) {
+            return true;
+        }
+    }
+    // A1: between joining letters.
+    if joiner == ZWNJ {
+        let across = |c: &&char| joining(**c) != JoiningType::Transparent;
+        let left = before.iter().rev().find(across);
+        let right = after.iter().find(across);
+        if left.is_some_and(|c| {
+            matches!(
+                joining(*c),
+                JoiningType::LeftJoining | JoiningType::DualJoining
+            )
+        }) && right.is_some_and(|c| {
+            matches!(
+                joining(*c),
+                JoiningType::RightJoining | JoiningType::DualJoining
+            )
+        }) {
+            return true;
+        }
+    }
+    // After a virama: `L M* V M1*` ends where the joiner stands. A virama is
+    // itself a mark of its own class, so each one met on the way back may be
+    // the V.
+    let mut after_virama = false;
+    for (index, c) in before.iter().enumerate().rev() {
+        if class(*c) == CanonicalCombiningClass::Virama
+            && before[..index]
+                .iter()
+                .rev()
+                .find(|c| !mark(**c))
+                .is_some_and(|c| letter(*c))
+        {
+            after_virama = true;
+            break;
+        }
+        if !reordered_mark(*c) {
+            break;
+        }
+    }
+    if !after_virama {
+        return false;
+    }
+    if joiner == ZWNJ {
+        // A2: a letter follows, across marks of a class.
+        after
+            .iter()
+            .find(|c| !reordered_mark(**c))
+            .is_some_and(|c| letter(*c))
+    } else {
+        // B: no dependent vowel follows.
+        after.first().is_none_or(|c| {
+            CodePointMapData::<IndicSyllabicCategory>::new().get(*c)
+                != IndicSyllabicCategory::VowelDependent
+        })
+    }
+}
+
+/// What an invisible character is, in a person's terms, so words left out for
+/// one can be given again without it (be2m item 7).
+fn invisible_kind(c: char) -> &'static str {
+    use icu_properties::{props::BidiControl, CodePointSetData};
+    match c {
+        '\u{2028}' | '\u{2029}' => "a line or paragraph separator",
+        '\u{00AD}' => "a soft hyphen",
+        '\u{FEFF}' => "a byte order mark",
+        '\u{200B}' => "a zero-width space",
+        ZWNJ | ZWJ => "a joiner outside an emoji or a joined word",
+        '\u{E0000}'..='\u{E007F}' => "a tag character",
+        '\u{034F}' | '\u{115F}' | '\u{1160}' | '\u{2800}' | '\u{3164}' | '\u{FFA0}' => {
+            "a blank filler"
+        }
+        c if CodePointSetData::new::<BidiControl>().contains(c) => "a bidi control or mark",
+        _ => "a format character that draws nothing",
+    }
+}
+
+/// What stands in the way of keeping prose as it is given, or None when it
+/// reads as it is (be2m): a control character but a line break or a tab, a
+/// `\r` no `\n` follows, or an invisible character (`invisible`) that is not a
+/// joiner in its place (`joiner_kept`). The first one found is named by its
+/// kind.
+pub fn prose_fault(text: &str) -> Option<&'static str> {
+    let chars: Vec<char> = text.chars().collect();
+    chars.iter().enumerate().find_map(|(at, &c)| match c {
+        '\n' | '\t' => None,
+        '\r' if chars.get(at + 1) == Some(&'\n') => None,
+        '\r' => Some("a carriage return with no line break after it"),
+        c if c.is_control() => Some("a control character"),
+        c if invisible(c) && !joiner_kept(&chars, at) => Some(invisible_kind(c)),
+        _ => None,
+    })
+}
+
+/// Prose as it is shown (be2m item 4): `shown`, but a joiner in its place
+/// stays, so a family emoji is shown whole and a joined word as it is
+/// written. Each joiner is judged where it stands in the text as given, so
+/// taking another invisible character out never makes a join that was not
+/// drawn.
+pub fn shown_prose(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    chars
+        .iter()
+        .enumerate()
+        .filter(|(at, c)| !invisible(**c) || joiner_kept(&chars, *at))
+        .map(|(_, c)| *c)
         .collect::<String>()
         .trim()
         .to_owned()
@@ -331,6 +498,160 @@ mod tests {
         let (code, said) = guard(&none);
         assert_eq!(code, Some(1), "{said}");
         assert!(said.contains("could not read the tracked source"), "{said}");
+    }
+
+    /// be2m (DLW build ruling 2026-11-10): a joiner is kept where it changes how the characters beside it are drawn,
+    /// between two emoji and in UAX #31's contexts A1, A2 and B, and nowhere else; prose is shown with it in its place.
+    #[test]
+    fn a_joiner_is_kept_between_two_emoji_and_inside_a_joined_word_and_nowhere_else() {
+        let at = |text: &str| {
+            let chars: Vec<char> = text.chars().collect();
+            let at = chars
+                .iter()
+                .position(|c| matches!(*c, ZWNJ | ZWJ))
+                .expect("the text holds a joiner");
+            joiner_kept(&chars, at)
+        };
+        // between two emoji, passing back over a variation selector and a skin tone
+        assert!(at("\u{1F468}\u{200D}\u{1F469}"));
+        assert!(at("\u{2764}\u{FE0F}\u{200D}\u{1F525}"));
+        assert!(at("\u{1F9D1}\u{1F3FD}\u{200D}\u{1F4BB}"));
+        assert!(at("\u{1F3F3}\u{FE0F}\u{200D}\u{1F308}"));
+        assert!(!at("\u{1F468}\u{200D}a") && !at("a\u{200D}\u{1F468}"));
+        assert!(!at("\u{200D}\u{1F468}") && !at("\u{1F468}\u{200D}"));
+        assert!(!at("\u{FE0F}\u{200D}\u{1F525}") && !at("a\u{1F3FD}\u{200D}\u{1F4BB}"));
+        assert!(!at("\u{1F468}\u{200C}\u{1F469}"), "ZWNJ joins no emoji");
+        // A1: Left or Dual joining before, Right or Dual after, across Transparent characters
+        assert!(at("\u{06CC}\u{200C}\u{062E}"));
+        assert!(at("\u{0628}\u{064E}\u{200C}\u{064E}\u{0628}"));
+        assert!(at("\u{0628}\u{200C}\u{0627}"), "an alef joins on its right");
+        assert!(
+            !at("\u{0627}\u{200C}\u{0628}"),
+            "an alef joins nothing after it"
+        );
+        assert!(!at("\u{0628}\u{200C}a") && !at("a\u{200C}\u{0628}") && !at("pay\u{200C}pal"));
+        assert!(!at("\u{0628}\u{200C}") && !at("\u{200C}\u{0628}"));
+        assert!(
+            at("\u{A872}\u{200C}\u{0628}") && !at("\u{0628}\u{200C}\u{A872}"),
+            "a letter that joins only after it (Phags-pa superfixed ra) joins nothing before it"
+        );
+        assert!(
+            !at("\u{0628}\u{200D}\u{0628}"),
+            "ZWJ has no joining-letter context"
+        );
+        // A2 and B: after a letter, its marks, a virama and marks of a class
+        assert!(at("\u{0915}\u{094D}\u{200C}\u{0937}") && at("\u{0915}\u{094D}\u{200D}\u{0937}"));
+        assert!(at("\u{0915}\u{093C}\u{094D}\u{200D}\u{0937}"), "L M* V");
+        assert!(at("\u{0915}\u{094D}\u{093C}\u{200D}\u{0937}"), "V M1*");
+        assert!(at("\u{0915}\u{094D}\u{200C}\u{093C}\u{0937}"), "ZWNJ M1* L");
+        assert!(at("\u{0915}\u{094D}\u{200D}") && at("\u{0915}\u{094D}\u{200D} "));
+        assert!(!at("\u{0915}\u{094D}\u{200C}") && !at("\u{0915}\u{094D}\u{200C} \u{0915}"));
+        assert!(!at("\u{0915}\u{094D}\u{200D}\u{093E}"), "a dependent vowel");
+        assert!(at("\u{0915}\u{094D}\u{200C}\u{0937}\u{093E}"));
+        assert!(!at("\u{0915}\u{200D}\u{0937}") && !at("\u{0915}\u{200C}\u{0937}"));
+        assert!(!at("\u{094D}\u{200D}\u{0937}") && !at("1\u{094D}\u{200D}\u{0937}"));
+        assert!(!at("\u{0915}\u{094D}a\u{200D}\u{0937}"));
+        // a place that is no joiner, or past the end
+        assert!(!joiner_kept(&['a', 'b'], 0) && !joiner_kept(&['a'], 3));
+        assert!(
+            !joiner_kept(&['\u{0915}', '\u{094D}', '\u{AD}', '\u{0937}'], 2),
+            "a soft hyphen after a virama is no joiner"
+        );
+
+        // what stands in the way, by its kind; a line break, a tab and a \r\n stand
+        assert_eq!(
+            prose_fault("One.\n\tTwo.\r\nThree \u{1F468}\u{200D}\u{1F469}."),
+            None
+        );
+        for (text, kind) in [
+            ("a\rb", "a carriage return with no line break after it"),
+            ("a\r", "a carriage return with no line break after it"),
+            ("a\u{7}b", "a control character"),
+            ("a\u{85}b", "a control character"),
+            ("a\u{2029}b", "a line or paragraph separator"),
+            ("co\u{AD}operate", "a soft hyphen"),
+            ("\u{FEFF}a", "a byte order mark"),
+            ("a\u{200B}b", "a zero-width space"),
+            (
+                "pay\u{200C}pal",
+                "a joiner outside an emoji or a joined word",
+            ),
+            ("pal\u{200D}", "a joiner outside an emoji or a joined word"),
+            ("a\u{E0000}", "a tag character"),
+            ("a\u{E007F}", "a tag character"),
+            ("a\u{034F}b", "a blank filler"),
+            ("a\u{2800}b", "a blank filler"),
+            ("a\u{FFA0}b", "a blank filler"),
+            ("a\u{061C}b", "a bidi control or mark"),
+            ("a\u{200F}b", "a bidi control or mark"),
+            ("a\u{2066}b", "a bidi control or mark"),
+            ("a\u{2060}b", "a format character that draws nothing"),
+            ("a\u{180E}b", "a format character that draws nothing"),
+            ("a\u{FFF9}b", "a format character that draws nothing"),
+        ] {
+            assert_eq!(prose_fault(text), Some(kind), "{text:?}");
+        }
+        assert_eq!(
+            prose_fault("a\u{AD}b\u{200B}c"),
+            Some("a soft hyphen"),
+            "the first one found"
+        );
+        assert_eq!(
+            prose_fault("\u{0600}\u{06DD}"),
+            None,
+            "a format character that draws a sign"
+        );
+
+        // shown: a joiner in its place stays, every other invisible character goes, and each joiner is judged where it
+        // stands in the text as given
+        assert_eq!(
+            shown_prose(" \u{200B}\u{1F468}\u{200D}\u{1F469} pay\u{200C}pal\u{2060} "),
+            "\u{1F468}\u{200D}\u{1F469} paypal"
+        );
+        assert_eq!(
+            shown_prose("\u{1F468}\u{200D}\u{200B}\u{1F469}"),
+            "\u{1F468}\u{1F469}",
+            "taking the zero-width space out makes no join that was not drawn"
+        );
+        assert_eq!(
+            shown("\u{1F468}\u{200D}\u{1F469}"),
+            "\u{1F468}\u{1F469}",
+            "a name's shown form keeps the whole rule"
+        );
+        assert!("\u{1F468}\u{200D}\u{1F469}".chars().any(unplain));
+    }
+
+    /// be2m items 4 and 5: every case's shown form is its text on one line as prose is shown, a control character or a line or
+    /// paragraph separator as a space, a joiner in its place kept; and a case is kept exactly when nothing stands in the way,
+    /// named by its kind when something does. The file's sha256 is pinned beside the Day's tests.
+    #[test]
+    fn every_joiner_case_is_shown_with_a_joiner_in_its_place_and_names_what_stood_in_the_way() {
+        let cases: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("continuous_work/joiner-cases.json")).unwrap();
+        assert!(cases.len() >= 30);
+        for case in &cases {
+            let (name, text) = (&case["name"], case["text"].as_str().unwrap());
+            let spaced: String = text
+                .chars()
+                .map(|c| {
+                    if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
+                        ' '
+                    } else {
+                        c
+                    }
+                })
+                .collect();
+            let shown = shown_prose(&spaced)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert_eq!(shown, case["shown"].as_str().unwrap(), "{name}");
+            assert_eq!(prose_fault(text), case["kind"].as_str(), "{name}");
+            assert_eq!(case["kept"], prose_fault(text).is_none(), "{name}");
+            if text.contains([ZWNJ, ZWJ]) {
+                assert!(text.chars().any(unplain), "{name}: a name refuses it");
+            }
+        }
     }
 
     #[test]

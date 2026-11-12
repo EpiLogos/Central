@@ -63,6 +63,9 @@ sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 # The general category of a character, so the invisible set Central and O-I hold is derived, not hand-kept.
 unicode-general-category = "1.1"
+# Unicode's own properties for a joiner in its place (Extended_Pictographic, Joining_Type, Canonical_Combining_Class,
+# Indic_Syllabic_Category; be2m). The crate and its compiled data are in the lock already, through ammonia's url.
+icu_properties = "2.3"
 rusqlite = { version = "0.37", features = ["bundled", "backup"] }
 # git-sync backs the GitState/SourceHistory read models (central.git.census);
 # composed by the shipped CLI via the cli-git-sync feature, optional for
