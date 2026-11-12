@@ -4221,3 +4221,185 @@ fn an_end_for_an_ended_run_has_its_own_code_and_other_conflicts_keep_theirs() {
     ));
     assert_eq!(closed.code, CONFLICT);
 }
+
+// ---- be2m: words that hold a joiner are kept (DLW build ruling 2026-11-10) --------------------------------------
+
+/// The sha256 of `joiner-cases.json`, the cases O-I keeps beside its own tests too, byte for byte: rows of text, whether
+/// the Day keeps the words as given, what stood in the way when it does not, and the text as it is shown on one line. A
+/// file that moves on one side without the other's sha256 changing fails here or there (be2m item 5).
+const JOINER_CASES_SHA256: &str =
+    "65263d5c2a267e6de0e6eb6ed77640237c6e1b5ebd2677bb967ed84ab03367ea";
+
+fn joiner_cases() -> Vec<Value> {
+    let cases = include_str!("joiner-cases.json");
+    assert_eq!(
+        format!("{:x}", Sha256::digest(cases.as_bytes())),
+        JOINER_CASES_SHA256,
+        "the cases are the ones O-I holds"
+    );
+    serde_json::from_str(cases).unwrap()
+}
+
+/// A joiner that changes how the characters beside it are drawn is part of the words a person sees: a family emoji, a
+/// technologist with a skin tone, a Persian word with its ZWNJ and a Devanagari conjunct are recorded as given. A joiner
+/// that draws nothing where it stands is refused as before, and so is every other invisible character; the refusal
+/// leads with what stood in the way, in a person's terms, one kind per case.
+#[test]
+fn a_records_words_keep_a_joiner_in_its_place_and_refused_words_name_what_stood_in_the_way() {
+    let w = world("Europe/London", 0);
+    ensure(w.path(), at(T));
+    let at_ms = ms("2026-10-20T09:10:00Z");
+    let cases = joiner_cases();
+    let text = |case: &Value| case["text"].as_str().unwrap().to_owned();
+    let list: Vec<Value> = cases
+        .iter()
+        .enumerate()
+        .map(|(index, case)| {
+            reached(
+                &format!("saying:joiner-{index}"),
+                "to-you",
+                at_ms,
+                &text(case),
+            )
+        })
+        .collect();
+    let mut results = Vec::new();
+    for turn in list.chunks(32) {
+        let answers = records(w.path(), turn.to_vec(), at(T)).unwrap();
+        results.extend(answers["results"].as_array().unwrap().iter().cloned());
+    }
+    assert_eq!(results.len(), cases.len());
+    let mut kinds = std::collections::BTreeSet::new();
+    for (case, result) in cases.iter().zip(&results) {
+        let name = case["name"].as_str().unwrap();
+        if case["kept"] == true {
+            assert_eq!(result["created"], true, "{name}: {result}");
+            assert_eq!(result["item"]["words"], case["text"], "{name}: as given");
+        } else {
+            let kind = case["kind"].as_str().unwrap();
+            kinds.insert(kind);
+            let words = result["refused"].as_str().unwrap_or_default();
+            assert!(
+                words.starts_with(&format!(
+                    "words hold {kind}: they hold no control character but line breaks and tabs"
+                )),
+                "{name}: {result}"
+            );
+            assert!(
+                words.ends_with("but a joiner inside an emoji or a joined word"),
+                "{name}: {result}"
+            );
+        }
+    }
+    assert_eq!(
+        kinds.into_iter().collect::<Vec<_>>(),
+        [
+            "a bidi control or mark",
+            "a blank filler",
+            "a byte order mark",
+            "a carriage return with no line break after it",
+            "a control character",
+            "a format character that draws nothing",
+            "a joiner outside an emoji or a joined word",
+            "a line or paragraph separator",
+            "a soft hyphen",
+            "a tag character",
+            "a zero-width space",
+        ],
+        "one case at least for each kind"
+    );
+    // The Day reads back what it kept, and nothing else.
+    let reading = read(w.path(), "day_field_read", json!({}), at(T));
+    let mut read_back: Vec<String> = reading["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["words"].as_str().unwrap().to_owned())
+        .collect();
+    let mut kept: Vec<String> = cases
+        .iter()
+        .filter(|case| case["kept"] == true)
+        .map(text)
+        .collect();
+    read_back.sort();
+    kept.sort();
+    assert_eq!(read_back, kept);
+    assert!(
+        kept.len() >= 9
+            && kept
+                .iter()
+                .any(|words| words.contains("\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"))
+            && kept
+                .iter()
+                .any(|words| words.contains("\u{06CC}\u{200C}\u{062E}")),
+        "the family emoji and the Persian word are among them"
+    );
+}
+
+/// Prose only: a name keeps the whole rule, so a sender's name or a star's name that holds a joiner is refused though
+/// the same characters stand in a record's words; and a run's reason and summary, an agent's words the ruling does not
+/// name, keep the whole rule too.
+#[test]
+fn a_name_and_a_runs_own_words_still_refuse_a_joiner_that_a_records_words_keep() {
+    let w = world("Europe/London", 0);
+    ensure(w.path(), at(T));
+    let at_ms = ms("2026-10-20T09:10:00Z");
+    let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+    let persian = "\u{0645}\u{06CC}\u{200C}\u{062E}\u{0648}\u{0627}\u{0647}\u{0645}";
+    let mut list = Vec::new();
+    for (index, joined) in [family, persian].into_iter().enumerate() {
+        let mut named = reached(&format!("saying:name-{index}"), "to-you", at_ms, joined);
+        named["from"]["name"] = json!(joined);
+        list.push(named);
+        let mut starred = reached(&format!("saying:star-{index}"), "star", at_ms, joined);
+        starred["star"]["name"] = json!(joined);
+        list.push(starred);
+        list.push(reached(
+            &format!("saying:words-{index}"),
+            "to-you",
+            at_ms,
+            joined,
+        ));
+    }
+    let answers = records(w.path(), list, at(T)).unwrap();
+    for result in answers["results"].as_array().unwrap() {
+        let named = result["item_ref"].as_str().unwrap();
+        let words = result["refused"].as_str().unwrap_or_default();
+        if named.contains("name-") {
+            assert!(
+                words.starts_with("from.name stands on one line"),
+                "{result}"
+            );
+        } else if named.contains("star-") {
+            assert!(
+                words.starts_with("star.name stands on one line"),
+                "{result}"
+            );
+        } else {
+            assert_eq!(result["created"], true, "{result}");
+        }
+    }
+    let run_ref = begin(w.path(), "tasks", at_ms, HOST, at(T)).unwrap()["run"]["run_ref"].clone();
+    for (state, reason, summary, refusal) in [
+        (
+            "done",
+            None,
+            format!("Three tasks for {family}."),
+            "gave.summary holds no control character",
+        ),
+        (
+            "stalled",
+            Some(format!("Waiting on {persian}.")),
+            "Three tasks.".to_owned(),
+            "reason holds no control character",
+        ),
+    ] {
+        let mut input = json!({"event":"end","run_ref":run_ref,"at_unix_ms":at_ms + 60_000,"state":state,
+            "gave":{"summary":summary}});
+        if let Some(reason) = reason {
+            input["reason"] = json!(reason);
+        }
+        let refused = words_of(run(w.path(), "day_move_record", input, Some(AGENT), at(T)));
+        assert!(refused.contains(refusal), "{refused}");
+    }
+}
