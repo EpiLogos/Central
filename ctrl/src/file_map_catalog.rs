@@ -2811,12 +2811,12 @@ impl FolderWalk {
                 }
                 let walk = &*self;
                 let enters = walk.rules.enters_unless(&path, &name, &metadata, || {
-                    if walk.past(true) {
-                        return true;
-                    }
+                    let past = walk.past(true);
                     #[cfg(test)]
-                    walk.before_reading(&path.join("Contents"));
-                    false
+                    if !past {
+                        walk.before_reading(&path.join("Contents"));
+                    }
+                    past
                 });
                 let Some(enters) = enters else {
                     return Ok(self.stop_at_deadline());
