@@ -4287,7 +4287,47 @@ fn an_end_for_an_ended_run_has_its_own_code_and_other_conflicts_keep_theirs() {
 /// line. Once O-I holds them, a file that moves on one side without the other's sha256 changing fails here or there
 /// (be2m item 5).
 const JOINER_CASES_SHA256: &str =
-    "0c13a17d8bd88cbbe872150a64900e9bf207bb6c6e80654fdc361ed84273cc5c";
+    "4a79efda78eb645605cab6de61e50683e18e7bb34d184fd66d47d33ea280f506";
+
+/// be2m.5 item 3 (DLW build ruling 2026-11-12): the description of `central.day.field.record` names the kinds a refusal
+/// leads with, and the one that names a Unicode version is the rule's own words (`names::UNLISTED_EMOJI_SEQUENCE`, which
+/// a test of the rule holds to the header of the emoji sequence list). So the description cannot stay at one Unicode
+/// when the list moves to another; and no Day action's description names a Unicode version in any other words.
+#[test]
+fn the_field_records_description_names_the_unlisted_sequence_in_the_rules_own_words() {
+    let mut registry = crate::action::ActionRegistry::default();
+    super::day_moves::register_actions(&mut registry);
+    let unlisted = crate::names::UNLISTED_EMOJI_SEQUENCE;
+    let description = &registry
+        .get("central.day.field.record")
+        .unwrap()
+        .description;
+    assert!(
+        description.contains(&format!(", {unlisted}, ")),
+        "the description names the kind as the rule words it ({unlisted}): {description}"
+    );
+    assert_eq!(
+        description.matches("Unicode ").count(),
+        unlisted.matches("Unicode ").count() + 1,
+        "the description names Unicode once more than the kind does (\"inside an emoji sequence Unicode lists\"), and \
+         a version nowhere else: {description}"
+    );
+    let named: Vec<String> = registry
+        .list()
+        .into_iter()
+        .filter(|descriptor| descriptor.id.starts_with("central.day."))
+        .filter(|descriptor| {
+            descriptor.description.contains("does not list")
+                || descriptor
+                    .description
+                    .split("Unicode ")
+                    .skip(1)
+                    .any(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+        })
+        .map(|descriptor| descriptor.id.clone())
+        .collect();
+    assert_eq!(named, ["central.day.field.record"]);
+}
 
 fn joiner_cases() -> Vec<Value> {
     let cases = include_str!("joiner-cases.json");
@@ -4436,7 +4476,7 @@ fn an_entrys_label_is_each_cases_shown_form_without_its_joiners() {
         with_a_joiner += usize::from(column.contains(joiners));
     }
     assert_eq!(
-        with_a_joiner, 42,
+        with_a_joiner, 44,
         "the cases shown with a joiner in its place: every kept one that holds a joiner, and the family beside a soft hyphen"
     );
 }

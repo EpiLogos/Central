@@ -96,10 +96,19 @@ const EMOJI_SELECTOR: char = '\u{FE0F}';
 const MYANMAR_ASAT: char = '\u{103A}';
 const MYANMAR_STACKER: char = '\u{1039}';
 
+/// The Myanmar letters under whose asat a ZWNJ before a stacker changes what is drawn (be2m.5 item 1): nga, ra and Mon
+/// nga. They are named by code point and rest on no property: the review of #354 drew every pair of the 120 Myanmar
+/// letters on a Mac (letter, asat, with and without the ZWNJ, stacker, letter), and the ZWNJ changed the picture in 360
+/// of the 14,400, exactly the pairs whose first letter is one of these three. Under the other 117 it drew nothing
+/// new, so they keep no joiner there. A drawing is evidence, not data: a test holds only that the three are Myanmar
+/// letters.
+const KINZI_LETTERS: [char; 3] = ['\u{1004}', '\u{101B}', '\u{105A}'];
+
 /// What a ZWJ is called when it is refused between two emoji (be2m.4 item 5): the emoji are there, and joined they are
 /// no sequence the list holds. The version is the list's own (a test holds the two together), so a person who sees one
-/// emoji on a newer system is told why Central does not.
-const UNLISTED_EMOJI_SEQUENCE: &str =
+/// emoji on a newer system is told why Central does not. The description of `central.day.field.record` says these
+/// words too, and a test of the Day holds it to this constant (be2m.5 item 3).
+pub(crate) const UNLISTED_EMOJI_SEQUENCE: &str =
     "a joiner between emoji that Unicode 17.0 does not list as one emoji";
 
 /// Every spelling of every listed emoji ZWJ sequence, and the length of the longest.
@@ -177,9 +186,11 @@ fn listed_emoji() -> &'static ListedEmoji {
 ///   Indic_Syllabic_Category decides: a character of the virama class that
 ///   it calls Pure_Killer (24: the Thai phinthu, the Myanmar asat, the
 ///   Tibetan halanta, the Tagalog signs), Reordering_Killer (2) or
-///   Number_Joiner (the Brahmi number joiner) is no V, and a joiner after it
-///   is refused but for the asat's one place below. That is what the data
-///   says; nothing here says what a font draws there. The marks between are
+///   Number_Joiner (the Brahmi number joiner) is no V: it carries no joiner
+///   itself. A joiner right after one is still kept where a V before it
+///   carries the context (letter, virama, killer, joiner: the killer is a
+///   mark of a class, an M1), and after the asat in its one place below. That
+///   is what the data says; nothing here says what a font draws there. The marks between are
 ///   not asked their Script: a mark is often Inherited or Common. A virama
 ///   has the Script of the letters it is written with, so a letter of a
 ///   script that has none (a Latin one) carries none here;
@@ -193,14 +204,28 @@ fn listed_emoji() -> &'static ListedEmoji {
 ///   what a Mac draws, not data. A joiner between two Tifinagh letters with
 ///   no U+2D7F is refused: every Tifinagh letter is Joining_Type Non_Joining,
 ///   and no property gives the script a join there;
-/// - U+200C right after the Myanmar asat U+103A, which stands on a Myanmar
-///   letter, and right before the Myanmar stacker U+1039 and a Myanmar
-///   letter (be2m.4 item 2): the spelling that keeps a kinzi from forming.
-///   The two signs are named, since no property tells a kinzi: by the data
-///   the asat is of the virama class (UAX #31's V, so this is its A2, the
-///   stacker a mark of a class before the letter) and a Pure_Killer, the
-///   stacker an Invisible_Stacker, and both are Myanmar's. Nothing else is
-///   kept after an asat.
+/// - U+200C right after the Myanmar asat U+103A, which stands on nga, ra or
+///   Mon nga (U+1004, U+101B, U+105A: `KINZI_LETTERS`), and right before the
+///   Myanmar stacker U+1039 and a Myanmar letter (be2m.4 item 2, be2m.5
+///   item 1). On a Mac the letter, the asat, the stacker and the next letter
+///   were seen drawn as a kinzi over the next letter without the ZWNJ and
+///   apart with it, under those three letters and no other; that is a
+///   drawing, and no data here says the ZWNJ keeps a kinzi from forming.
+///   The signs and the letters are named, since no property tells a kinzi:
+///   by the data the asat is of the virama class (UAX #31's V, so this is
+///   its A2, the stacker a mark of a class before the letter) and a
+///   Pure_Killer, the stacker an Invisible_Stacker, and all are Myanmar's.
+///   So a joiner right after an asat is kept in four shapes: this one; and
+///   the three the contexts above keep through a stacker that stands before
+///   the asat (letter, stacker, asat, ZWJ by B; letter, stacker, asat, ZWNJ,
+///   letter by A2; and the two at once, A2 and this place).
+///
+/// Known and unruled (be2m.5 item 4): the rule stops here until the text of
+/// the Standard is read. A ZWJ between two Tifinagh letters with no U+2D7F
+/// (a Mac draws the bi-consonant ligature) and a ZWJ between a Bengali ra
+/// and its virama before ya (ra, ZWJ, virama, ya) are refused, and whether
+/// the Standard gives either spelling is not established from the data on
+/// the build machine.
 ///
 /// The properties are Unicode's, read from the ICU data the lock pins
 /// (`icu_properties` 2.3.0 with its compiled data, Unicode 17.0), and the
@@ -280,8 +305,10 @@ pub fn joiner_kept(chars: &[char], at: usize) -> bool {
         }
     }
     // Right after a sign that stands on a letter of its script, in two places of their own.
-    if let Some(sign) = at.checked_sub(1).filter(|sign| stands_on(*sign).is_some()) {
-        let sign = before[sign];
+    if let Some((sign, on)) = at
+        .checked_sub(1)
+        .and_then(|sign| Some((before[sign], *stands_on(sign)?)))
+    {
         let letter_at = |next: usize| {
             after
                 .get(next)
@@ -294,9 +321,10 @@ pub fn joiner_kept(chars: &[char], at: usize) -> bool {
         {
             return true;
         }
-        // ZWNJ between the Myanmar asat and the stacker of a letter: no kinzi.
+        // ZWNJ between the asat on nga, ra or Mon nga and the stacker of a letter.
         if joiner == ZWNJ
             && sign == MYANMAR_ASAT
+            && KINZI_LETTERS.contains(&on)
             && after.first() == Some(&MYANMAR_STACKER)
             && letter_at(1)
         {
@@ -945,7 +973,7 @@ mod tests {
         );
         // be2m.3 item 2 (DLW build ruling 2026-11-12): the virama conjoins, by Indic_Syllabic_Category Virama or
         // Invisible_Stacker; a sign of the virama class that the property calls a killer or a number joiner keeps no
-        // joiner here (the Tifinagh consonant joiner and the asat before a stacker have tests of their own, be2m.4)
+        // joiner here (the Tifinagh consonant joiner and the asat before a stacker have tests of their own, be2m.4 and be2m.5)
         for (letter, killer) in [
             ('\u{0E01}', '\u{0E3A}'),
             ('\u{0E81}', '\u{0EBA}'),
@@ -1173,7 +1201,8 @@ mod tests {
             "the Unicode data compiled into the build assigns {assigned} characters, and Unicode {version}, which the \
              header of emoji-zwj-sequences.txt names, assigns {characters}: the lock has moved icu_properties' data to \
              another Unicode. Generate the list again from the ICU of that Unicode (its header holds the command), then \
-             move its sha256, the count here and the version in the refusal's words"
+             move its sha256, the count here and the version in the refusal's words and in the description of \
+             central.day.field.record"
         );
         assert_ne!(
             category.get('\u{088F}'),
@@ -1507,16 +1536,18 @@ mod tests {
         }
     }
 
-    /// be2m.4 item 2 (DLW build ruling 2026-11-12): a ZWNJ right after the Myanmar asat U+103A, which stands on a
-    /// Myanmar letter, and right before the Myanmar stacker U+1039 and a Myanmar letter is kept: the spelling that
-    /// keeps a kinzi from forming. Nothing else is kept after an asat. What it rests on in the compiled data: the asat
-    /// is of the virama class, so UAX #31's A2 reads it as a V, with the stacker a mark of a class before the letter;
+    /// be2m.4 item 2 and be2m.5 items 1 and 2 (DLW build rulings 2026-11-12): a ZWNJ right after the Myanmar asat
+    /// U+103A, which stands on nga, ra or Mon nga, and right before the Myanmar stacker U+1039 and a Myanmar letter is
+    /// kept; under every other Myanmar letter it is refused. What it rests on in the compiled data: the asat is of
+    /// the virama class, so UAX #31's A2 reads it as a V, with the stacker a mark of a class before the letter;
     /// Indic_Syllabic_Category calls the asat a Pure_Killer and the stacker an Invisible_Stacker; both are Myanmar's
-    /// and nonspacing marks. That it is the spelling against a kinzi, and that it draws apart from one, is what the
-    /// review of #353 saw a Mac draw; no data on the build machine says it. The two signs are named in the code, since
-    /// no property tells a kinzi: the same shape in another script that has a killer and a stacker is refused.
+    /// and nonspacing marks. That the ZWNJ draws the letters apart where a kinzi is drawn without it, and that it does
+    /// so under these three letters only (360 of 14,400 pairs), is what the reviews of #353 and #354 saw a Mac draw; no
+    /// data on the build machine says it. The signs and the letters are named in the code, since no property tells a
+    /// kinzi: the same shape in another script that has a killer and a stacker is refused. A joiner right after an
+    /// asat is kept in three more shapes, which main's B and A2 keep through a stacker before the asat.
     #[test]
-    fn a_zwnj_between_the_myanmar_asat_and_a_stacker_is_kept_and_nothing_else_after_an_asat() {
+    fn a_zwnj_after_the_asat_on_nga_ra_or_mon_nga_and_before_a_stacker_is_kept() {
         use icu_properties::props::{
             CanonicalCombiningClass, GeneralCategory as Category, IndicSyllabicCategory, Script,
         };
@@ -1533,8 +1564,39 @@ mod tests {
             "\u{101B}\u{103A}\u{200C}\u{1039}\u{1002}",
             "a \u{1004}\u{103A}\u{200C}\u{1039}\u{1000}\u{102C} b",
             "\u{1004}\u{0301}\u{103A}\u{200C}\u{1039}\u{1000}",
+            "\u{105A}\u{103A}\u{200C}\u{1039}\u{1000}",
         ] {
             assert!(kept(text), "{text:?}");
+        }
+        // be2m.5 item 1: of the Myanmar letters, exactly the three keep it
+        let myanmar_letters: Vec<char> = ('\u{1000}'..='\u{109F}')
+            .chain('\u{A9E0}'..='\u{A9FF}')
+            .chain('\u{AA60}'..='\u{AA7F}')
+            .chain('\u{116D0}'..='\u{116E3}')
+            .filter(|c| {
+                icu_properties::props::GeneralCategoryGroup::Letter
+                    .contains(CodePointMapData::<Category>::new().get(*c))
+                    && CodePointMapData::<Script>::new().get(*c) == Script::Myanmar
+            })
+            .collect();
+        assert_eq!(myanmar_letters.len(), 120);
+        let keeping: Vec<char> = myanmar_letters
+            .iter()
+            .copied()
+            .filter(|letter| kept(&format!("{letter}\u{103A}\u{200C}\u{1039}\u{1000}")))
+            .collect();
+        assert_eq!(keeping, ['\u{1004}', '\u{101B}', '\u{105A}']);
+        assert_eq!(keeping, KINZI_LETTERS);
+        // be2m.5 item 2: what else is kept right after an asat, by main's B and A2 through a stacker before it
+        for (text, why) in [
+            ("\u{1000}\u{1039}\u{103A}\u{200D}", "B"),
+            ("\u{1000}\u{1039}\u{103A}\u{200C}\u{1000}", "A2"),
+            (
+                "\u{1000}\u{1039}\u{103A}\u{200C}\u{1039}\u{1000}",
+                "A2, with a stacker after it",
+            ),
+        ] {
+            assert!(kept(text), "{why}: {text:?}");
         }
         for (text, why) in [
             ("\u{1004}\u{103A}\u{200D}\u{1039}\u{1000}", "ZWJ"),
@@ -1577,6 +1639,16 @@ mod tests {
                 "an asat where the stacker stands",
             ),
             ("\u{103A}\u{200C}\u{1039}\u{1000}", "the asat on no letter"),
+            ("\u{1000}\u{103A}\u{200C}\u{1039}\u{1000}", "the asat on ka"),
+            ("\u{1019}\u{103A}\u{200C}\u{1039}\u{1019}", "the asat on ma"),
+            (
+                "\u{1004}\u{1000}\u{103A}\u{200C}\u{1039}\u{1000}",
+                "nga before the letter the asat stands on",
+            ),
+            (
+                "\u{1000}\u{103A}\u{200C}\u{1039}\u{1004}",
+                "nga after the stacker only",
+            ),
             (
                 "a\u{103A}\u{200C}\u{1039}\u{1000}",
                 "the asat on a Latin letter",
@@ -1728,7 +1800,7 @@ mod tests {
     fn every_joiner_case_is_shown_with_a_joiner_in_its_place_and_names_what_stood_in_the_way() {
         let cases: Vec<serde_json::Value> =
             serde_json::from_str(include_str!("continuous_work/joiner-cases.json")).unwrap();
-        assert_eq!(cases.len(), 109);
+        assert_eq!(cases.len(), 112);
         for case in &cases {
             let (name, text) = (&case["name"], case["text"].as_str().unwrap());
             let shown = shown_prose(text);
@@ -1823,8 +1895,21 @@ mod tests {
                 false,
             ),
             (
-                "ZWNJ after a Myanmar asat and before a stacker and a letter: no kinzi",
+                "ZWNJ after a Myanmar asat on nga and before a stacker and a letter: a Mac was seen to draw no kinzi there",
                 true,
+            ),
+            // be2m.5
+            (
+                "ZWNJ after a Myanmar asat on ra and before a stacker and a letter",
+                true,
+            ),
+            (
+                "ZWNJ after a Myanmar asat on Mon nga and before a stacker and a letter",
+                true,
+            ),
+            (
+                "ZWNJ after a Myanmar asat on ma and before a stacker and a letter: a Mac draws nothing new under any letter but nga, ra and Mon nga",
+                false,
             ),
             (
                 "ZWJ after a Myanmar asat and before a stacker and a letter",
