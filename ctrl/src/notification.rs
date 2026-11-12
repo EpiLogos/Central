@@ -1121,6 +1121,41 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    /// The sha256 of `escape-cases.json`, the cases AIKit holds too (`crates/aikit-cli/src/escape-cases.json`, read by its
+    /// day-move runner's tests), byte for byte: a rule that moves on one side fails that side's test of the cases, and a file
+    /// that moves on one side without the other fails here or there (be2j.a3 item 5, DLW build ruling 2026-11-11).
+    const ESCAPE_CASES_SHA256: &str =
+        "c2d19384dfacf5f39610c48494b2a45ba4010a655c549d30945844edd2ea9db8";
+
+    #[test]
+    fn a_notifications_words_are_cleaned_of_escapes_as_the_cases_aikit_holds_too_say() {
+        use sha2::{Digest, Sha256};
+        let file = include_str!("escape-cases.json");
+        assert_eq!(
+            format!("{:x}", Sha256::digest(file.as_bytes())),
+            ESCAPE_CASES_SHA256,
+            "the cases are the ones AIKit holds"
+        );
+        let cases: Value = serde_json::from_str(file).unwrap();
+        let cases = cases["cases"].as_array().unwrap();
+        assert!(cases.len() >= 30, "{}", cases.len());
+        for case in cases {
+            let name = case["name"].as_str().unwrap();
+            let text = case["text"].as_str().unwrap();
+            // A title is the words on one line, a body the words in a block.
+            assert_eq!(
+                shown_words(text, ' '),
+                case["line"].as_str().unwrap(),
+                "{name}"
+            );
+            assert_eq!(
+                shown_words(text, '\n'),
+                case["block"].as_str().unwrap(),
+                "{name}"
+            );
+        }
+    }
+
     /// be2j.c3 item 2 (DLW build ruling 2026-11-11): a request of white space alone is the Port's empty request, a line or a
     /// paragraph separator included, and gets the Port's words; nothing is shown and nothing is kept. The words for a request
     /// that shows nothing are for one that holds something else.
