@@ -78,106 +78,189 @@ pub fn shown(text: &str) -> String {
 const ZWNJ: char = '\u{200C}';
 const ZWJ: char = '\u{200D}';
 
+/// The emoji ZWJ sequences Unicode lists (UTS #51's RGI_Emoji_ZWJ_Sequence, the set of `emoji-zwj-sequences.txt`), each
+/// in its fully qualified form: Unicode 17.0, as ICU4C 78.3 exports it, the Unicode of the `icu_properties` data the
+/// lock pins. `icu_properties` 2.3 compiles no set of sequences in, so the list is kept as a file, generated and never
+/// edited by hand (its header holds the command), the same bytes in Central and O-I under one sha256. A test holds it
+/// to that sha256 and to the compiled data: every part of every sequence is an emoji there, with its selector exactly
+/// where it is drawn as text without one.
+const EMOJI_ZWJ_SEQUENCES: &str = include_str!("continuous_work/emoji-zwj-sequences.txt");
+
+/// U+FE0F, the selector that asks for a character to be drawn as an emoji.
+const EMOJI_SELECTOR: char = '\u{FE0F}';
+
+/// Every spelling of every listed emoji ZWJ sequence, and the length of the longest.
+struct ListedEmoji {
+    spellings: std::collections::HashSet<Vec<char>>,
+    longest: usize,
+}
+
+/// The listed emoji ZWJ sequences in each of their spellings: the fully qualified form, and that form with any of its
+/// U+FE0F left out (UTS #51's minimally qualified and unqualified forms), which is drawn the same. Nothing else is a
+/// spelling: no selector where the fully qualified form has none, and no skin tone the list does not give.
+fn listed_emoji() -> &'static ListedEmoji {
+    static LISTED: std::sync::OnceLock<ListedEmoji> = std::sync::OnceLock::new();
+    LISTED.get_or_init(|| {
+        let mut spellings = std::collections::HashSet::new();
+        for line in EMOJI_ZWJ_SEQUENCES
+            .lines()
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        {
+            let mut forms: Vec<Vec<char>> = vec![Vec::new()];
+            for c in line
+                .split(' ')
+                .filter_map(|point| u32::from_str_radix(point, 16).ok())
+                .filter_map(char::from_u32)
+            {
+                let without = if c == EMOJI_SELECTOR {
+                    forms.clone()
+                } else {
+                    Vec::new()
+                };
+                forms.iter_mut().for_each(|form| form.push(c));
+                forms.extend(without);
+            }
+            spellings.extend(forms);
+        }
+        let longest = spellings.iter().map(Vec::len).max().unwrap_or(0);
+        ListedEmoji { spellings, longest }
+    })
+}
+
 /// Whether the joiner at `at` is part of the words a person sees (be2m, DLW
-/// build ruling 2026-11-10): a joiner that changes how the characters beside
-/// it are drawn is kept in prose, and one that draws nothing where it stands
-/// is refused like any other invisible character. Prose only: the words of a
-/// Day's field records and entry parts. A name, a label or a title keeps the
-/// whole rule (`unplain`).
+/// build ruling 2026-11-10; be2m.2 and be2m.3, DLW build rulings 2026-11-12):
+/// a joiner that changes how the characters beside it are drawn is kept in
+/// prose, and one that draws nothing where it stands is refused like any other
+/// invisible character. Prose only: the words of a Day's field records and
+/// entry parts. A name, a label or a title keeps the whole rule (`unplain`).
 ///
 /// U+200C and U+200D are in their place here and nowhere else:
-/// - U+200D between two emoji: the character before it, passing over U+FE0F
-///   and the skin tones U+1F3FB to U+1F3FF, and the character after it are
-///   both Extended_Pictographic;
-/// - inside a word of a script that joins or conjoins, in UAX #31's contexts
+/// - U+200D inside an emoji ZWJ sequence Unicode lists (be2m.3 item 1). Some
+///   stretch of the text that holds the joiner is one of the listed sequences
+///   in one of its spellings (`listed_emoji`: the fully qualified form, with
+///   or without each of its U+FE0F), and the sequence stands whole: no ZWJ
+///   stands right before the stretch, and no ZWJ, U+FE0E, U+FE0F or skin tone
+///   (Emoji_Modifier) right after it. So a heart joined to a fire is kept
+///   with its selector or without, and a fire joined to a fire, a copyright
+///   sign joined to a registered sign, a family joined on to one more emoji,
+///   or a sequence with a skin tone the list does not give, is refused;
+/// - inside a word of one script that joins or conjoins, in UAX #31's contexts
 ///   (section 2.3, Layout and Format Control Characters):
-///   A1, U+200C between joining letters (`LJ T* ZWNJ T* RJ`: Joining_Type
-///   Left or Dual before it, Right or Dual after it, across Transparent
-///   characters); A2, U+200C after a virama and before a letter
-///   (`L M* V M1* ZWNJ M1* L`); B, U+200D after a virama and not before a
-///   dependent vowel (`L M* V M1* ZWJ (?!D)`). L is a letter, M a nonspacing
-///   mark, V a character of Canonical_Combining_Class Virama, M1 a nonspacing
-///   mark whose class is not 0, D a character of Indic_Syllabic_Category
-///   Vowel_Dependent.
+///   A1, U+200C between joining letters of one Script (`LJ T* ZWNJ T* RJ`:
+///   Joining_Type Left or Dual before it, Right or Dual after it, across
+///   Transparent characters); A2, U+200C after a virama and before a letter
+///   (`L M* V M1* ZWNJ M1* L`), both letters and the virama of one Script; B,
+///   U+200D after a virama and not before a dependent vowel
+///   (`L M* V M1* ZWJ (?!D)`), the letter and the virama of one Script. L is a
+///   letter, M a nonspacing mark, M1 a nonspacing mark whose class is not 0,
+///   D a character of Indic_Syllabic_Category Vowel_Dependent. V is a virama
+///   that conjoins (be2m.3 item 2): Canonical_Combining_Class Virama and
+///   Indic_Syllabic_Category Virama or Invisible_Stacker, in A2 and in B. A
+///   sign of the virama class that only kills the vowel (Pure_Killer: the
+///   Thai phinthu, the Myanmar asat, the Tibetan halanta, the Tagalog signs;
+///   Reordering_Killer; the Brahmi number joiner; the Tifinagh consonant
+///   joiner) forms no conjunct, so a joiner after it changes nothing and is
+///   refused. The marks between are not asked their Script: a mark is often
+///   Inherited or Common. A virama has the Script of the letters it is
+///   written with, so a letter of a script that has none (a Latin one)
+///   carries none here.
 ///
 /// The properties are Unicode's, read from the ICU data the lock pins
-/// (`icu_properties` 2.3.0 with its compiled data, Unicode 17.0), never from
-/// ranges kept by hand.
+/// (`icu_properties` 2.3.0 with its compiled data, Unicode 17.0), and the
+/// sequences from the list beside the cases (`EMOJI_ZWJ_SEQUENCES`), never
+/// from ranges kept by hand.
 pub fn joiner_kept(chars: &[char], at: usize) -> bool {
     use icu_properties::props::{
-        CanonicalCombiningClass, ExtendedPictographic, GeneralCategory as Category,
-        GeneralCategoryGroup, IndicSyllabicCategory, JoiningType,
+        CanonicalCombiningClass, EmojiModifier, GeneralCategory as Category, GeneralCategoryGroup,
+        IndicSyllabicCategory, JoiningType, Script,
     };
     use icu_properties::{CodePointMapData, CodePointSetData};
     let Some(&joiner) = chars.get(at).filter(|c| matches!(**c, ZWNJ | ZWJ)) else {
         return false;
     };
     let (before, after) = (&chars[..at], &chars[at + 1..]);
-    let pictograph = |c: char| CodePointSetData::new::<ExtendedPictographic>().contains(c);
+    let tone = |c: char| CodePointSetData::new::<EmojiModifier>().contains(c);
     let joining = |c: char| CodePointMapData::<JoiningType>::new().get(c);
     let category = |c: char| CodePointMapData::<Category>::new().get(c);
     let class = |c: char| CodePointMapData::<CanonicalCombiningClass>::new().get(c);
+    let script = |c: char| CodePointMapData::<Script>::new().get(c);
     let letter = |c: char| GeneralCategoryGroup::Letter.contains(category(c));
     let mark = |c: char| category(c) == Category::NonspacingMark;
     let reordered_mark = |c: char| mark(c) && class(c) != CanonicalCombiningClass::NotReordered;
+    let conjoins = |c: char| {
+        class(c) == CanonicalCombiningClass::Virama
+            && matches!(
+                CodePointMapData::<IndicSyllabicCategory>::new().get(c),
+                IndicSyllabicCategory::Virama | IndicSyllabicCategory::InvisibleStacker
+            )
+    };
 
-    // Between two emoji.
+    // Inside a listed emoji sequence that stands whole.
     if joiner == ZWJ {
-        let base = before
-            .iter()
-            .rev()
-            .find(|c| !matches!(**c, '\u{FE0F}' | '\u{1F3FB}'..='\u{1F3FF}'));
-        if base.is_some_and(|c| pictograph(*c)) && after.first().is_some_and(|c| pictograph(*c)) {
-            return true;
+        let listed = listed_emoji();
+        let whole = |from: usize, to: usize| {
+            (from == 0 || chars[from - 1] != ZWJ)
+                && chars.get(to).is_none_or(|next| {
+                    !matches!(*next, ZWJ | '\u{FE0E}' | EMOJI_SELECTOR) && !tone(*next)
+                })
+        };
+        for from in at.saturating_sub(listed.longest)..at {
+            for to in at + 2..=chars.len().min(from + listed.longest) {
+                if listed.spellings.contains(&chars[from..to]) && whole(from, to) {
+                    return true;
+                }
+            }
         }
     }
-    // A1: between joining letters.
+    // A1: between joining letters of one script.
     if joiner == ZWNJ {
         let across = |c: &&char| joining(**c) != JoiningType::Transparent;
-        let left = before.iter().rev().find(across);
-        let right = after.iter().find(across);
-        if left.is_some_and(|c| {
+        let left = before.iter().rev().find(across).filter(|c| {
             matches!(
-                joining(*c),
+                joining(**c),
                 JoiningType::LeftJoining | JoiningType::DualJoining
             )
-        }) && right.is_some_and(|c| {
+        });
+        let right = after.iter().find(across).filter(|c| {
             matches!(
-                joining(*c),
+                joining(**c),
                 JoiningType::RightJoining | JoiningType::DualJoining
             )
-        }) {
-            return true;
+        });
+        if let (Some(left), Some(right)) = (left, right) {
+            if script(*left) == script(*right) {
+                return true;
+            }
         }
     }
-    // After a virama: `L M* V M1*` ends where the joiner stands. A virama is
-    // itself a mark of its own class, so each one met on the way back may be
-    // the V.
-    let mut after_virama = false;
+    // After a virama that conjoins: `L M* V M1*` ends where the joiner stands,
+    // and the letter is of the virama's script. A virama is itself a mark of
+    // its own class, so each one met on the way back may be the V.
+    let mut carrier = None;
     for (index, c) in before.iter().enumerate().rev() {
-        if class(*c) == CanonicalCombiningClass::Virama
-            && before[..index]
+        if conjoins(*c) {
+            carrier = before[..index]
                 .iter()
                 .rev()
                 .find(|c| !mark(**c))
-                .is_some_and(|c| letter(*c))
-        {
-            after_virama = true;
-            break;
+                .filter(|l| letter(**l) && script(**l) == script(*c));
+            if carrier.is_some() {
+                break;
+            }
         }
         if !reordered_mark(*c) {
             break;
         }
     }
-    if !after_virama {
+    let Some(carrier) = carrier else {
         return false;
-    }
+    };
     if joiner == ZWNJ {
-        // A2: a letter follows, across marks of a class.
+        // A2: a letter of the same script follows, across marks of a class.
         after
             .iter()
             .find(|c| !reordered_mark(**c))
-            .is_some_and(|c| letter(*c))
+            .is_some_and(|c| letter(*c) && script(*c) == script(*carrier))
     } else {
         // B: no dependent vowel follows.
         after.first().is_none_or(|c| {
@@ -206,38 +289,55 @@ fn invisible_kind(c: char) -> &'static str {
     }
 }
 
-/// What stands in the way of keeping prose as it is given, or None when it
-/// reads as it is (be2m): a control character but a line break or a tab, a
+/// What stands in the way of keeping the character at `at` in prose, or None
+/// when it reads as it is: a control character but a line break or a tab, a
 /// `\r` no `\n` follows, or an invisible character (`invisible`) that is not a
-/// joiner in its place (`joiner_kept`). The first one found is named by its
-/// kind.
-pub fn prose_fault(text: &str) -> Option<&'static str> {
-    let chars: Vec<char> = text.chars().collect();
-    chars.iter().enumerate().find_map(|(at, &c)| match c {
+/// joiner in its place (`joiner_kept`), named by its kind.
+fn prose_fault_at(chars: &[char], at: usize) -> Option<&'static str> {
+    match chars[at] {
         '\n' | '\t' => None,
         '\r' if chars.get(at + 1) == Some(&'\n') => None,
         '\r' => Some("a carriage return with no line break after it"),
         c if c.is_control() => Some("a control character"),
-        c if invisible(c) && !joiner_kept(&chars, at) => Some(invisible_kind(c)),
+        c if invisible(c) && !joiner_kept(chars, at) => Some(invisible_kind(c)),
         _ => None,
-    })
+    }
 }
 
-/// Prose as it is shown (be2m item 4): `shown`, but a joiner in its place
-/// stays, so a family emoji is shown whole and a joined word as it is
-/// written. Each joiner is judged where it stands in the text as given, so
-/// taking another invisible character out never makes a join that was not
-/// drawn.
-pub fn shown_prose(text: &str) -> String {
+/// What stands in the way of keeping prose as it is given, or None when it
+/// reads as it is (be2m): the first character in the way (`prose_fault_at`),
+/// named by its kind.
+pub fn prose_fault(text: &str) -> Option<&'static str> {
     let chars: Vec<char> = text.chars().collect();
-    chars
-        .iter()
-        .enumerate()
-        .filter(|(at, c)| !invisible(**c) || joiner_kept(&chars, *at))
-        .map(|(_, c)| *c)
-        .collect::<String>()
-        .trim()
-        .to_owned()
+    (0..chars.len()).find_map(|at| prose_fault_at(&chars, at))
+}
+
+/// Prose as it is shown (be2m item 4; be2m.2 item 2): without the characters
+/// that stand in the way of keeping it (`prose_fault_at`) and without the
+/// whitespace at either end, so a joiner in its place stays, a family emoji is
+/// shown whole and a joined word as it is written. A control character or a
+/// line or paragraph separator in the way is shown as a space, since it
+/// stood between words; any other character in the way draws nothing and is
+/// taken out. What is left is read again until nothing more goes: a joiner
+/// whose partner went with what was taken out goes too, so the shown form
+/// holds nothing the rule refuses (`prose_fault` finds nothing in it), and
+/// showing it again changes nothing.
+pub fn shown_prose(text: &str) -> String {
+    let mut shown: Vec<char> = text.chars().collect();
+    loop {
+        let left: String = (0..shown.len())
+            .filter_map(|at| match (prose_fault_at(&shown, at), shown[at]) {
+                (None, c) => Some(c),
+                (Some(_), c) if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') => Some(' '),
+                (Some(_), _) => None,
+            })
+            .collect();
+        let left: Vec<char> = left.trim().chars().collect();
+        if left == shown {
+            return left.into_iter().collect();
+        }
+        shown = left;
+    }
 }
 
 /// A short form of a ref, for a name that shows nothing else (be2j ruling 5): four base-36 digits of its FNV-1a hash (32 bits, over
@@ -361,6 +461,10 @@ pub fn descriptive_id(slug: &str, fallback: &str, taken: &dyn Fn(&str) -> bool) 
     }
     unreachable!("unbounded counter never exhausts")
 }
+
+#[cfg(test)]
+#[path = "names_joiner_fuzz.rs"]
+mod joiner_fuzz;
 
 #[cfg(test)]
 mod tests {
@@ -512,15 +616,162 @@ mod tests {
                 .expect("the text holds a joiner");
             joiner_kept(&chars, at)
         };
-        // between two emoji, passing back over a variation selector and a skin tone
-        assert!(at("\u{1F468}\u{200D}\u{1F469}"));
-        assert!(at("\u{2764}\u{FE0F}\u{200D}\u{1F525}"));
-        assert!(at("\u{1F9D1}\u{1F3FD}\u{200D}\u{1F4BB}"));
-        assert!(at("\u{1F3F3}\u{FE0F}\u{200D}\u{1F308}"));
+        let each = |text: &str| -> Vec<bool> {
+            let chars: Vec<char> = text.chars().collect();
+            (0..chars.len())
+                .filter(|i| matches!(chars[*i], ZWNJ | ZWJ))
+                .map(|i| joiner_kept(&chars, i))
+                .collect()
+        };
+        let none = |text: &str| !each(text).is_empty() && each(text).iter().all(|kept| !*kept);
+        // be2m.3 item 1 (DLW build ruling 2026-11-12): inside an emoji ZWJ sequence Unicode lists, in its fully qualified
+        // form or with any of its variation selectors left out, and nowhere else between emoji
+        assert!(at("\u{1F468}\u{200D}\u{1F467}"));
+        assert_eq!(
+            each("\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"),
+            [true, true]
+        );
+        assert!(
+            at("\u{2764}\u{FE0F}\u{200D}\u{1F525}") && at("\u{2764}\u{200D}\u{1F525}"),
+            "a heart on fire, with its selector and without"
+        );
+        assert!(at("\u{1F9D1}\u{1F3FD}\u{200D}\u{1F4BB}") && at("\u{1F468}\u{200D}\u{1F9B0}"));
+        assert!(at("\u{1F3F3}\u{FE0F}\u{200D}\u{1F308}") && at("\u{1F3F3}\u{200D}\u{1F308}"));
+        assert!(at("\u{1F3F4}\u{200D}\u{2620}\u{FE0F}") && at("\u{1F3F4}\u{200D}\u{2620}"));
+        assert!(
+            at("\u{26F9}\u{1F3FD}\u{200D}\u{2640}\u{FE0F}")
+                && at("\u{26F9}\u{1F3FD}\u{200D}\u{2640}"),
+            "a tone on a base"
+        );
+        assert!(
+            at("\u{26F9}\u{FE0F}\u{200D}\u{2640}\u{FE0F}")
+                && at("\u{26F9}\u{200D}\u{2640}\u{FE0F}")
+                && at("\u{26F9}\u{FE0F}\u{200D}\u{2640}")
+                && at("\u{26F9}\u{200D}\u{2640}"),
+            "each selector of the fully qualified form, there or left out"
+        );
+        assert_eq!(
+            each("\u{1F9D1}\u{1F3FB}\u{200D}\u{1F91D}\u{200D}\u{1F9D1}\u{1F3FF}"),
+            [true, true]
+        );
+        assert_eq!(
+            each("\u{1F469}\u{200D}\u{2764}\u{200D}\u{1F48B}\u{200D}\u{1F468}"),
+            [true, true, true]
+        );
+        assert_eq!(
+            each(
+                "a\u{1F468}\u{200D}\u{1F467}\u{2764}\u{200D}\u{1F525}\u{1F468}\u{200D}\u{1F467} b"
+            ),
+            [true, true, true],
+            "listed sequences side by side, with text around them"
+        );
+        // the twelve the review of #353 drew without a selector: each is one emoji on a Mac, the same pixels as its fully
+        // qualified form
+        for text in [
+            "\u{2764}\u{200D}\u{1F525}",
+            "\u{1F469}\u{200D}\u{2764}\u{200D}\u{1F468}",
+            "\u{1F468}\u{200D}\u{2695}",
+            "\u{1F3F3}\u{200D}\u{1F308}",
+            "\u{1F3F4}\u{200D}\u{2620}",
+            "\u{1F441}\u{200D}\u{1F5E8}",
+            "\u{1F636}\u{200D}\u{1F32B}",
+            "\u{1F43B}\u{200D}\u{2744}",
+            "\u{26D3}\u{200D}\u{1F4A5}",
+            "\u{1F642}\u{200D}\u{2194}",
+            "\u{26F9}\u{200D}\u{2640}\u{FE0F}",
+            "\u{1F3F3}\u{FE0F}\u{200D}\u{26A7}",
+        ] {
+            assert!(
+                !each(text).is_empty() && each(text).iter().all(|kept| *kept),
+                "{text:?}"
+            );
+            assert_eq!(prose_fault(text), None, "{text:?}");
+        }
+        // two emoji that are no listed sequence
+        for text in [
+            "\u{1F468}\u{200D}\u{1F469}",
+            "\u{1F525}\u{200D}\u{1F525}",
+            "\u{1F468}\u{200D}\u{1F525}",
+            "\u{231A}\u{200D}\u{26A1}",
+            "\u{A9}\u{200D}\u{AE}",
+            "\u{A9}\u{FE0F}\u{200D}\u{AE}\u{FE0F}",
+            "\u{1F468}\u{200D}\u{26F9}",
+            "\u{26F9}\u{200D}\u{1F468}",
+            "\u{26F9}\u{FE0F}\u{200D}\u{26F9}\u{1F3FD}",
+            "\u{1F468}\u{200D}\u{1F9D1}\u{1F3FD}",
+            "\u{1F468}\u{200D}\u{1F468}\u{200D}\u{1F468}\u{200D}\u{1F468}\u{200D}\u{1F468}",
+            "\u{1F468}\u{200D}\u{1F525}\u{1F3FD}",
+        ] {
+            assert!(none(text), "{text:?}");
+        }
+        // a listed sequence that does not stand whole: joined on to another emoji at either end, or followed by a skin
+        // tone or a selector that is no part of the spelling
+        assert!(none(
+            "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F525}"
+        ));
+        assert!(none(
+            "\u{1F525}\u{200D}\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"
+        ));
+        assert!(none("\u{1F469}\u{200D}\u{2764}\u{FE0F}\u{200D}\u{1F525}"));
+        assert!(
+            none("\u{1F468}\u{200D}\u{1F467}\u{1F3FD}")
+                && none("\u{1F9D1}\u{200D}\u{1F91D}\u{200D}\u{1F9D1}\u{1F3FF}")
+                && none("\u{2764}\u{200D}\u{1F525}\u{1F3FD}"),
+            "a skin tone the list does not give"
+        );
+        assert!(
+            none("\u{1F468}\u{200D}\u{1F4BB}\u{FE0F}")
+                && none("\u{1F468}\u{FE0F}\u{200D}\u{1F4BB}")
+                && none("\u{2764}\u{FE0F}\u{FE0F}\u{200D}\u{1F525}"),
+            "a selector where the fully qualified form has none"
+        );
+        assert!(
+            none("\u{2764}\u{FE0E}\u{200D}\u{1F525}") && none("\u{1F468}\u{200D}\u{1F467}\u{FE0E}"),
+            "the text selector"
+        );
+        assert!(
+            none("\u{1F469}\u{200D}\u{2764}\u{FE0E}\u{200D}\u{1F468}"),
+            "the text selector inside"
+        );
         assert!(!at("\u{1F468}\u{200D}a") && !at("a\u{200D}\u{1F468}"));
         assert!(!at("\u{200D}\u{1F468}") && !at("\u{1F468}\u{200D}"));
         assert!(!at("\u{FE0F}\u{200D}\u{1F525}") && !at("a\u{1F3FD}\u{200D}\u{1F4BB}"));
-        assert!(!at("\u{1F468}\u{200C}\u{1F469}"), "ZWNJ joins no emoji");
+        assert!(!at("\u{1F468}\u{200C}\u{1F467}"), "ZWNJ joins no emoji");
+        // be2m.2 item 1, as it stands under be2m.3: no other pictograph, no unassigned code point, no regional
+        // indicator, no keycap base, no lone tone
+        assert!(!at("\u{1F02C}\u{200D}\u{1F469}") && !at("\u{1F469}\u{200D}\u{1F02C}"));
+        assert!(
+            !at("\u{1F02C}\u{FE0F}\u{200D}\u{1F469}") && !at("\u{1F469}\u{200D}\u{1F02C}\u{FE0F}"),
+            "an unassigned pictograph is no emoji, with a selector or without"
+        );
+        assert!(
+            !at("\u{2605}\u{FE0F}\u{200D}\u{1F469}"),
+            "a star is no emoji"
+        );
+        assert!(
+            !at("\u{1F1EC}\u{200D}\u{1F1E7}")
+                && !at("#\u{200D}*")
+                && !at("1\u{FE0F}\u{200D}2\u{FE0F}")
+        );
+        assert!(!at("\u{1F3FD}\u{200D}\u{1F4BB}") && !at("\u{1F4BB}\u{200D}\u{1F3FD}"));
+        assert!(
+            !at("\u{1F525}\u{1F3FD}\u{200D}\u{1F4BB}") && !at("\u{2764}\u{1F3FD}\u{200D}\u{1F4BB}"),
+            "a tone on an emoji that takes none"
+        );
+        assert!(
+            !at("\u{1F468}\u{FE0F}\u{1F3FD}\u{200D}\u{1F4BB}")
+                && !at("\u{1F468}\u{1F3FD}\u{FE0F}\u{200D}\u{1F4BB}"),
+            "one selector or one tone, not both"
+        );
+        assert!(
+            !at("\u{1F468}\u{200D}\u{FE0F}\u{1F467}"),
+            "no selector is passed over after the joiner"
+        );
+        assert!(!at("\u{1F468}\u{200D}\u{2620}a") && !at("\u{1F468}\u{200D}\u{26F9}a"));
+        assert!(
+            !at("\u{1F468}\u{200D}\u{2764}\u{1F3FD}"),
+            "a tone after an emoji that takes none"
+        );
         // A1: Left or Dual joining before, Right or Dual after, across Transparent characters
         assert!(at("\u{06CC}\u{200C}\u{062E}"));
         assert!(at("\u{0628}\u{064E}\u{200C}\u{064E}\u{0628}"));
@@ -532,8 +783,23 @@ mod tests {
         assert!(!at("\u{0628}\u{200C}a") && !at("a\u{200C}\u{0628}") && !at("pay\u{200C}pal"));
         assert!(!at("\u{0628}\u{200C}") && !at("\u{200C}\u{0628}"));
         assert!(
-            at("\u{A872}\u{200C}\u{0628}") && !at("\u{0628}\u{200C}\u{A872}"),
+            at("\u{A872}\u{200C}\u{A840}") && !at("\u{A840}\u{200C}\u{A872}"),
             "a letter that joins only after it (Phags-pa superfixed ra) joins nothing before it"
+        );
+        // be2m.2 item 1: the two joining letters are of one script; item 3: a tatweel causes a join and is no joining
+        // letter
+        assert!(at("\u{07CA}\u{200C}\u{07CB}") && at("\u{1820}\u{200C}\u{1821}"));
+        assert!(at("\u{0628}\u{200C}\u{06CC}") && at("\u{0712}\u{0730}\u{200C}\u{0712}"));
+        assert!(!at("\u{0628}\u{200C}\u{1820}") && !at("\u{1820}\u{200C}\u{0628}"));
+        assert!(!at("\u{A872}\u{200C}\u{0628}") && !at("\u{0628}\u{200C}\u{0712}"));
+        assert!(
+            at("\u{0628}\u{0301}\u{200C}\u{0628}"),
+            "a mark between is not asked its script"
+        );
+        assert!(!at("\u{0640}\u{200C}\u{0628}") && !at("\u{0628}\u{200C}\u{0640}"));
+        assert!(
+            !at("\u{07FA}\u{200C}\u{07CA}") && !at("\u{07CA}\u{200C}\u{07FA}"),
+            "nor is a lajanyalan, which is of the letters' own script"
         );
         assert!(
             !at("\u{0628}\u{200D}\u{0628}"),
@@ -551,6 +817,82 @@ mod tests {
         assert!(!at("\u{0915}\u{200D}\u{0937}") && !at("\u{0915}\u{200C}\u{0937}"));
         assert!(!at("\u{094D}\u{200D}\u{0937}") && !at("1\u{094D}\u{200D}\u{0937}"));
         assert!(!at("\u{0915}\u{094D}a\u{200D}\u{0937}"));
+        // be2m.2 item 1: the letter that carries the virama is of the virama's script, and in A2 the letter after is too
+        assert!(at("\u{09B0}\u{09CD}\u{200D}\u{09AF}") && at("\u{0D9A}\u{0DCA}\u{200D}\u{0DBA}"));
+        assert!(at("\u{0995}\u{09CD}\u{200C}\u{09B7}"));
+        assert!(!at("pay\u{094D}\u{200D}pal") && !at("a\u{094D}\u{200C}a"));
+        assert!(!at("a\u{094D}\u{200D}") && !at("\u{0995}\u{094D}\u{200D}\u{0937}"));
+        assert!(
+            !at("\u{0967}\u{094D}\u{200D}"),
+            "a digit of the virama's script is no letter"
+        );
+        assert!(!at("\u{0915}\u{094D}\u{200C}a") && !at("\u{0915}\u{094D}\u{200C}\u{0995}"));
+        assert!(!at("\u{0915}\u{094D}\u{200C}\u{3164}") && !at("a\u{094D}\u{200C}\u{0937}"));
+        assert!(
+            at("\u{0915}\u{094D}\u{200D}a") && at("\u{0915}\u{0301}\u{094D}\u{0301}\u{200D}"),
+            "B asks nothing of what follows but that it is no dependent vowel, and a mark between is not asked its script"
+        );
+        // be2m.2 item 3, the edges the review of #350 found unpinned
+        assert!(
+            !at("\u{0915}\u{094D}\u{0902}\u{200D}")
+                && !at("\u{0915}\u{094D}\u{0902}\u{200C}\u{0937}"),
+            "a mark of no class between the virama and the joiner"
+        );
+        assert!(
+            at("\u{0915}\u{0902}\u{094D}\u{200D}")
+                && at("\u{0915}\u{0902}\u{094D}\u{200C}\u{0937}"),
+            "a mark of no class between the letter and its virama"
+        );
+        assert!(
+            !at("\u{0915}\u{094D}\u{200C}\u{0902}\u{0937}"),
+            "a mark of no class between the ZWNJ and the letter"
+        );
+        assert!(
+            at("\u{1B13}\u{1B44}\u{094D}\u{200D}") && at("\u{1B13}\u{1B44}\u{094D}\u{200C}\u{1B13}"),
+            "the nearer virama stands on no letter (an adeg adeg is no nonspacing mark), the one before it does"
+        );
+        // be2m.3 item 2 (DLW build ruling 2026-11-12): the virama conjoins, by Indic_Syllabic_Category Virama or
+        // Invisible_Stacker; a sign of the virama class that only kills the vowel keeps no joiner
+        for (letter, killer) in [
+            ('\u{0E01}', '\u{0E3A}'),
+            ('\u{0E81}', '\u{0EBA}'),
+            ('\u{0F40}', '\u{0F84}'),
+            ('\u{1000}', '\u{103A}'),
+            ('\u{1703}', '\u{1714}'),
+            ('\u{0D15}', '\u{0D3B}'),
+            ('\u{1BC0}', '\u{1BF2}'),
+            ('\u{2D30}', '\u{2D7F}'),
+            ('\u{11013}', '\u{1107F}'),
+        ] {
+            for text in [
+                format!("{letter}{killer}\u{200D}"),
+                format!("{letter}{killer}\u{200D}{letter}"),
+                format!("{letter}{killer}\u{200C}{letter}"),
+            ] {
+                assert!(!at(&text), "{text:?}");
+            }
+        }
+        assert!(
+            !at("\u{1703}\u{1715}\u{1714}\u{200D}")
+                && !at("\u{1703}\u{1715}\u{1714}\u{200C}\u{1703}"),
+            "neither Tagalog sign conjoins"
+        );
+        assert!(
+            at("\u{1000}\u{1039}\u{200D}\u{1000}")
+                && at("\u{1000}\u{1039}\u{200C}\u{1000}")
+                && at("\u{1780}\u{17D2}\u{200C}\u{1780}"),
+            "an invisible stacker conjoins"
+        );
+        assert!(
+            at("\u{0915}\u{094D}\u{0E3A}\u{200D}"),
+            "after the virama a killer is a mark of a class like any other"
+        );
+        // be2m.3 item 4, the edge the review of #353 found unpinned: a mark of a class is no virama
+        assert!(!at("\u{0915}\u{093C}\u{200D}") && !at("\u{0915}\u{093C}\u{200C}\u{0937}"));
+        assert!(
+            !at("\u{0915}\u{1B44}\u{094D}\u{200D}") && !at("a\u{1715}\u{1714}\u{200D}"),
+            "and a virama before it of another script than the letter carries nothing"
+        );
         // a place that is no joiner, or past the end
         assert!(!joiner_kept(&['a', 'b'], 0) && !joiner_kept(&['a'], 3));
         assert!(
@@ -560,7 +902,7 @@ mod tests {
 
         // what stands in the way, by its kind; a line break, a tab and a \r\n stand
         assert_eq!(
-            prose_fault("One.\n\tTwo.\r\nThree \u{1F468}\u{200D}\u{1F469}."),
+            prose_fault("One.\n\tTwo.\r\nThree \u{1F468}\u{200D}\u{1F467}."),
             None
         );
         for (text, kind) in [
@@ -602,17 +944,54 @@ mod tests {
             "a format character that draws a sign"
         );
 
-        // shown: a joiner in its place stays, every other invisible character goes, and each joiner is judged where it
-        // stands in the text as given
+        // shown: a joiner in its place stays, every other invisible character goes, and what is left is read again
         assert_eq!(
-            shown_prose(" \u{200B}\u{1F468}\u{200D}\u{1F469} pay\u{200C}pal\u{2060} "),
-            "\u{1F468}\u{200D}\u{1F469} paypal"
+            shown_prose(" \u{200B}\u{1F468}\u{200D}\u{1F467} pay\u{200C}pal\u{2060} "),
+            "\u{1F468}\u{200D}\u{1F467} paypal"
         );
         assert_eq!(
-            shown_prose("\u{1F468}\u{200D}\u{200B}\u{1F469}"),
-            "\u{1F468}\u{1F469}",
+            shown_prose("\u{1F468}\u{200D}\u{200B}\u{1F467}"),
+            "\u{1F468}\u{1F467}",
             "taking the zero-width space out makes no join that was not drawn"
         );
+        // be2m.2 item 2: the shown form holds nothing the rule refuses. A joiner whose place went with what was taken out
+        // goes too; a control character or a separator in the way is shown as a space.
+        for (text, shown) in [
+            (
+                "\u{0915}\u{094D}\u{200D}\u{200C}\u{093E}",
+                "\u{0915}\u{094D}\u{093E}",
+            ),
+            (
+                "\u{0915}\u{094D}\u{200D}\u{200B}\u{093E}",
+                "\u{0915}\u{094D}\u{093E}",
+            ),
+            ("a\u{094D}\u{200C}\u{0301}\u{3164}", "a\u{094D}\u{0301}"),
+            ("\u{3164}\u{094D}\u{200D}", "\u{094D}"),
+            ("\u{0915}\u{094D}\u{200D}\u{7}", "\u{0915}\u{094D}\u{200D}"),
+            ("a\u{7}b\rc\u{2028}d\r\ne\tf\n", "a b c d\r\ne\tf"),
+            (
+                "\u{0915}\u{094D}\u{200C}\u{7}\u{0937}",
+                "\u{0915}\u{094D} \u{0937}",
+            ),
+            ("\u{200D}\u{200D}\u{200C}", ""),
+            // be2m.3: a listed sequence a refused character stood beside is read again as it stands without it
+            (
+                "\u{1F468}\u{200D}\u{1F467}\u{200B}\u{1F3FD}",
+                "\u{1F468}\u{1F467}\u{1F3FD}",
+            ),
+            (
+                "\u{1F468}\u{200D}\u{200B}\u{1F469}\u{200D}\u{1F467}",
+                "\u{1F468}\u{1F469}\u{200D}\u{1F467}",
+            ),
+            (
+                "\u{2764}\u{200B}\u{FE0F}\u{200D}\u{1F525}",
+                "\u{2764}\u{FE0F}\u{1F525}",
+            ),
+        ] {
+            assert_eq!(shown_prose(text), shown, "{text:?}");
+            assert_eq!(prose_fault(shown), None, "{text:?}");
+            assert_eq!(shown_prose(shown), shown, "{text:?}");
+        }
         assert_eq!(
             shown("\u{1F468}\u{200D}\u{1F469}"),
             "\u{1F468}\u{1F469}",
@@ -621,36 +1000,285 @@ mod tests {
         assert!("\u{1F468}\u{200D}\u{1F469}".chars().any(unplain));
     }
 
+    /// The emoji ZWJ sequences Unicode lists, fully qualified, by this test's own reading of the list.
+    fn listed_sequences() -> Vec<Vec<char>> {
+        include_str!("continuous_work/emoji-zwj-sequences.txt")
+            .lines()
+            .filter(|line| !line.starts_with('#'))
+            .map(|line| {
+                line.split(' ')
+                    .map(|point| char::from_u32(u32::from_str_radix(point, 16).unwrap()).unwrap())
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Whether each joiner of the text is kept, in order.
+    fn joiners_kept(chars: &[char]) -> Vec<bool> {
+        (0..chars.len())
+            .filter(|at| matches!(chars[*at], ZWNJ | ZWJ))
+            .map(|at| joiner_kept(chars, at))
+            .collect()
+    }
+
+    /// be2m.3 item 1 (DLW build ruling 2026-11-12): the list of emoji ZWJ sequences is Unicode's own, generated and pinned.
+    /// Its bytes are the ones O-I holds (one sha256); it names its Unicode version and its generator; it holds the 1,614
+    /// sequences of Unicode 17.0; and it agrees with the Unicode data compiled into the build: every part of every
+    /// sequence is an emoji there (Emoji and Extended_Pictographic), carrying U+FE0F exactly when it is drawn as text
+    /// without one (no Emoji_Presentation), or a skin tone on a character that takes one.
+    #[test]
+    fn the_emoji_sequence_list_is_unicodes_own_and_agrees_with_the_compiled_data() {
+        use icu_properties::props::{
+            Emoji, EmojiModifier, EmojiModifierBase, EmojiPresentation, ExtendedPictographic,
+        };
+        use icu_properties::CodePointSetData;
+        use sha2::{Digest, Sha256};
+        let list = include_str!("continuous_work/emoji-zwj-sequences.txt");
+        assert_eq!(
+            format!("{:x}", Sha256::digest(list.as_bytes())),
+            "af2b9a9975656052c11e2e162c45346ab3ce5d59a5a36699473805e5c4c45f85",
+            "the list is the one O-I holds"
+        );
+        assert!(list.starts_with("# The RGI emoji ZWJ sequences of Unicode 17.0 "));
+        assert!(list.contains("icuexportdata -m uprops -d OUT RGI_Emoji_ZWJ_Sequence"));
+        assert!(list.is_ascii() && !list.contains('\r') && list.ends_with('\n'));
+        let sequences = listed_sequences();
+        assert_eq!(sequences.len(), 1614);
+        let distinct: std::collections::BTreeSet<&Vec<char>> = sequences.iter().collect();
+        assert_eq!(distinct.len(), 1614);
+        let emoji = |c: char| {
+            CodePointSetData::new::<Emoji>().contains(c)
+                && CodePointSetData::new::<ExtendedPictographic>().contains(c)
+        };
+        let presentation = |c: char| CodePointSetData::new::<EmojiPresentation>().contains(c);
+        for sequence in &sequences {
+            let parts: Vec<&[char]> = sequence.split(|c| *c == ZWJ).collect();
+            assert!((2..=4).contains(&parts.len()), "{sequence:?}");
+            for part in parts {
+                let qualified = match part {
+                    [c] => emoji(*c) && presentation(*c),
+                    [c, '\u{FE0F}'] => emoji(*c) && !presentation(*c),
+                    [c, tone] => {
+                        emoji(*c)
+                            && CodePointSetData::new::<EmojiModifierBase>().contains(*c)
+                            && CodePointSetData::new::<EmojiModifier>().contains(*tone)
+                    }
+                    _ => false,
+                };
+                assert!(qualified, "{part:?} of {sequence:?}");
+            }
+        }
+    }
+
+    /// be2m.3 item 1: every listed sequence is kept in its fully qualified form and with each of its variation selectors
+    /// left out, in every combination (2,667 spellings of the 1,614; 961 of them hold a selector, and were refused
+    /// without it before). It is kept only whole: joined on to one more emoji at either end, followed by a skin tone, by
+    /// the text selector or by one more U+FE0F, or with a U+FE0F of its own turned into the text selector, no joiner of it
+    /// is kept.
+    #[test]
+    fn every_listed_emoji_sequence_is_kept_in_each_of_its_spellings_and_only_whole() {
+        let (mut spellings, mut with_a_selector, mut not_whole) = (0, 0, 0);
+        for sequence in listed_sequences() {
+            let selectors: Vec<usize> = (0..sequence.len())
+                .filter(|at| sequence[*at] == '\u{FE0F}')
+                .collect();
+            with_a_selector += usize::from(!selectors.is_empty());
+            for left_out in 0..1u32 << selectors.len() {
+                let spelling: Vec<char> = (0..sequence.len())
+                    .filter(|at| {
+                        !selectors
+                            .iter()
+                            .enumerate()
+                            .any(|(nth, selector)| selector == at && (left_out >> nth) & 1 == 1)
+                    })
+                    .map(|at| sequence[at])
+                    .collect();
+                spellings += 1;
+                let kept = joiners_kept(&spelling);
+                assert!(
+                    !kept.is_empty() && kept.iter().all(|kept| *kept),
+                    "{spelling:?}"
+                );
+                let text: String = spelling.iter().collect();
+                assert_eq!(prose_fault(&text), None, "{spelling:?}");
+            }
+            let with = |before: &[char], after: &[char]| -> Vec<char> {
+                [before, &sequence[..], after].concat()
+            };
+            let mut others = vec![
+                with(&[], &[ZWJ, '\u{1F525}']),
+                with(&['\u{1F525}', ZWJ], &[]),
+                with(&[], &['\u{1F3FD}']),
+                with(&[], &['\u{FE0E}']),
+                with(&[], &['\u{FE0F}']),
+            ];
+            for selector in &selectors {
+                let mut other = sequence.clone();
+                other[*selector] = '\u{FE0E}';
+                others.push(other);
+            }
+            for other in others {
+                not_whole += 1;
+                assert!(joiners_kept(&other).iter().all(|kept| !*kept), "{other:?}");
+            }
+        }
+        assert_eq!((spellings, with_a_selector, not_whole), (2667, 961, 9077));
+    }
+
+    /// be2m.3 item 2 (DLW build ruling 2026-11-12): a joiner is kept after a character of the virama class only when that
+    /// character conjoins, and Indic_Syllabic_Category decides: Virama or Invisible_Stacker (41 of the 69 of Unicode
+    /// 17.0). The 28 named here never form a conjunct or a half form (24 Pure_Killer, 2 Reordering_Killer, the Brahmi
+    /// number joiner, the Tifinagh consonant joiner; the list of the review of #353, F2): after each, on a letter of its
+    /// own script, neither joiner is kept, with a letter after it or none.
+    #[test]
+    fn a_joiner_is_kept_after_a_virama_only_when_the_virama_conjoins() {
+        use icu_properties::props::{
+            CanonicalCombiningClass, GeneralCategory as Category, GeneralCategoryGroup,
+            IndicSyllabicCategory, Script,
+        };
+        use icu_properties::CodePointMapData;
+        const NEVER_CONJOINS: [u32; 28] = [
+            0x0D3B, 0x0D3C, 0x0E3A, 0x0EBA, 0x0F84, 0x103A, 0x1714, 0x1715, 0x1734, 0x1BAA, 0x1BF2,
+            0x1BF3, 0x2D7F, 0xA82C, 0xA953, 0xABED, 0x11070, 0x1107F, 0x11134, 0x112EA, 0x113CE,
+            0x113CF, 0x1172B, 0x1193D, 0x11A34, 0x11D44, 0x11F41, 0x1612F,
+        ];
+        let class = CodePointMapData::<CanonicalCombiningClass>::new();
+        let script = CodePointMapData::<Script>::new();
+        let category = CodePointMapData::<Category>::new();
+        let syllabic = CodePointMapData::<IndicSyllabicCategory>::new();
+        let mut first_letter: Vec<(Script, char)> = Vec::new();
+        let mut viramas = Vec::new();
+        for c in (0..=0x10_FFFF).filter_map(char::from_u32) {
+            if class.get(c) == CanonicalCombiningClass::Virama {
+                viramas.push(c);
+            }
+            if GeneralCategoryGroup::Letter.contains(category.get(c))
+                && !first_letter.iter().any(|(of, _)| *of == script.get(c))
+            {
+                first_letter.push((script.get(c), c));
+            }
+        }
+        assert_eq!(viramas.len(), 69);
+        let mut conjoining = 0;
+        for virama in viramas {
+            let letter = first_letter
+                .iter()
+                .find(|(of, _)| *of == script.get(virama))
+                .map(|(_, letter)| *letter)
+                .unwrap_or_else(|| panic!("U+{:04X} has a letter of its script", virama as u32));
+            let conjoins = !NEVER_CONJOINS.contains(&(virama as u32));
+            conjoining += usize::from(conjoins);
+            assert_eq!(
+                conjoins,
+                matches!(
+                    syllabic.get(virama),
+                    IndicSyllabicCategory::Virama | IndicSyllabicCategory::InvisibleStacker
+                ),
+                "U+{:04X}: Indic_Syllabic_Category decides",
+                virama as u32
+            );
+            for text in [
+                vec![letter, virama, ZWJ],
+                vec![letter, virama, ZWJ, letter],
+                vec![letter, virama, ZWNJ, letter],
+            ] {
+                assert_eq!(
+                    joiner_kept(&text, 2),
+                    conjoins,
+                    "U+{:04X} in {text:?}",
+                    virama as u32
+                );
+            }
+        }
+        assert_eq!(conjoining, 41);
+    }
+
     /// be2m items 4 and 5: every case's shown form is its text on one line as prose is shown, a control character or a line or
     /// paragraph separator as a space, a joiner in its place kept; and a case is kept exactly when nothing stands in the way,
-    /// named by its kind when something does. The file's sha256 is pinned beside the Day's tests.
+    /// named by its kind when something does. The file's sha256 is pinned beside the Day's tests. be2m.2: the shown form is
+    /// `shown_prose`'s own, with nothing the rule refuses left in it, and the cases hold the rows the ruling names.
+    /// be2m.3 item 4: nothing calls `shown_prose` yet. The `shown` column is `shown_prose`'s form on one line, which is
+    /// what the label of an entry read as a part gives once it keeps a joiner; what a reader is given today is that
+    /// label as it stands (`plain_text_words` in `day_moves.rs`), the same form with every joiner left out, and the
+    /// Day's own test holds the column to it.
     #[test]
     fn every_joiner_case_is_shown_with_a_joiner_in_its_place_and_names_what_stood_in_the_way() {
         let cases: Vec<serde_json::Value> =
             serde_json::from_str(include_str!("continuous_work/joiner-cases.json")).unwrap();
-        assert!(cases.len() >= 30);
+        assert_eq!(cases.len(), 97);
         for case in &cases {
             let (name, text) = (&case["name"], case["text"].as_str().unwrap());
-            let spaced: String = text
-                .chars()
-                .map(|c| {
-                    if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
-                        ' '
-                    } else {
-                        c
-                    }
-                })
-                .collect();
-            let shown = shown_prose(&spaced)
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ");
+            let shown = shown_prose(text);
+            assert_eq!(prose_fault(&shown), None, "{name}");
+            let shown = shown.split_whitespace().collect::<Vec<_>>().join(" ");
             assert_eq!(shown, case["shown"].as_str().unwrap(), "{name}");
             assert_eq!(prose_fault(text), case["kind"].as_str(), "{name}");
             assert_eq!(case["kept"], prose_fault(text).is_none(), "{name}");
             if text.contains([ZWNJ, ZWJ]) {
                 assert!(text.chars().any(unplain), "{name}: a name refuses it");
             }
+        }
+        let row = |name: &str| {
+            cases
+                .iter()
+                .find(|case| case["name"] == name)
+                .unwrap_or_else(|| panic!("the cases hold {name:?}"))
+        };
+        for (name, kept) in [
+            ("a family emoji", true),
+            (
+                "a Persian word with ZWNJ between joining letters (A1)",
+                true,
+            ),
+            ("a Devanagari conjunct with ZWJ after a virama (B)", true),
+            ("ZWNJ between N'Ko letters (A1)", true),
+            ("ZWNJ between Mongolian letters (A1)", true),
+            ("a virama on a Latin letter, then ZWJ", false),
+            (
+                "ZWJ between a copyright sign and a registered sign, drawn as text",
+                false,
+            ),
+            (
+                "ZWJ after a pictograph that is no assigned character",
+                false,
+            ),
+            ("ZWNJ between joining letters of two scripts (A1)", false),
+            // be2m.3
+            ("a heart on fire with no variation selector", true),
+            ("a pirate flag with no variation selector", true),
+            (
+                "an eye in a speech bubble with neither variation selector",
+                true,
+            ),
+            (
+                "ZWJ between a fire and a fire: two emoji, no listed sequence",
+                false,
+            ),
+            (
+                "ZWJ between a copyright sign and a registered sign, each with its variation selector",
+                false,
+            ),
+            (
+                "a family joined on to a fire: longer than any listed sequence",
+                false,
+            ),
+            ("ZWJ after a Myanmar stacker, which conjoins (B)", true),
+            ("ZWJ after a Thai phinthu, which never conjoins", false),
+            ("ZWNJ after a Myanmar asat, which never conjoins", false),
+            (
+                "Bengali ra, virama, ZWJ, ya: ZWJ after a virama (B)",
+                true,
+            ),
+            (
+                "Bengali ra, ZWJ, virama, ya: a ZWJ between a letter and its virama is in no context of the rule",
+                false,
+            ),
+            (
+                "ZWJ after a nukta: a mark of a class that is no virama",
+                false,
+            ),
+        ] {
+            assert_eq!(row(name)["kept"], kept, "{name}");
         }
     }
 

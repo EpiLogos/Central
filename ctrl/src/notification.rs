@@ -1140,13 +1140,15 @@ mod tests {
         let cases = cases["cases"].as_array().unwrap();
         assert!(cases.len() >= 30, "{}", cases.len());
         // be2j.c4 item 2 (DLW build ruling 2026-11-12): U+007E, the last character an escape can end with, ends a short escape
-        // and a control sequence; U+007F ends neither. Held here, beside the shared cases, not in them.
+        // and a control sequence; U+007F ends neither (the short escape's row: review of #351, DLW build ruling 2026-11-12:
+        // the escape character goes alone and its intermediate stays). Held here, beside the shared cases, not in them.
         for (text, shown) in [
             ("a\u{1b}~b", "ab"),
             ("a\u{1b}#~b", "ab"),
             ("a\u{1b}[3~b", "ab"),
             ("a\u{1b}}b", "ab"),
             ("a\u{1b}[3\u{7f}b", "a3b"),
+            ("a\u{1b}#\u{7f}b", "a#b"),
         ] {
             assert_eq!(shown_words(text, ' '), shown, "{text:?}");
             assert_eq!(shown_words(text, '\n'), shown, "{text:?}");

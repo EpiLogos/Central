@@ -4286,7 +4286,7 @@ fn an_end_for_an_ended_run_has_its_own_code_and_other_conflicts_keep_theirs() {
 /// the Day keeps the words as given, what stood in the way when it does not, and the text as it is shown on one line. A
 /// file that moves on one side without the other's sha256 changing fails here or there (be2m item 5).
 const JOINER_CASES_SHA256: &str =
-    "65263d5c2a267e6de0e6eb6ed77640237c6e1b5ebd2677bb967ed84ab03367ea";
+    "56d86905278fada2c13a081d5e7058a00864d17e0382c84ec2ce85f084c83bd4";
 
 fn joiner_cases() -> Vec<Value> {
     let cases = include_str!("joiner-cases.json");
@@ -4383,7 +4383,7 @@ fn a_records_words_keep_a_joiner_in_its_place_and_refused_words_name_what_stood_
     kept.sort();
     assert_eq!(read_back, kept);
     assert!(
-        kept.len() >= 9
+        kept.len() >= 20
             && kept
                 .iter()
                 .any(|words| words.contains("\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"))
@@ -4391,6 +4391,51 @@ fn a_records_words_keep_a_joiner_in_its_place_and_refused_words_name_what_stood_
                 .iter()
                 .any(|words| words.contains("\u{06CC}\u{200C}\u{062E}")),
         "the family emoji and the Persian word are among them"
+    );
+}
+
+/// be2m.3 item 4 (DLW build ruling 2026-11-12): the cases' `shown` column against the form a reader of the Day is given
+/// today, the label of an entry read as a part (`central.day.entry.part`, whose words `plain_text_words` gives). The
+/// label still leaves every joiner out (it keeps one in its place once O-I shows a part label that holds one), so for
+/// every case it is the column without its joiners, and the column itself where the column holds none.
+#[test]
+fn an_entrys_label_is_each_cases_shown_form_without_its_joiners() {
+    let w = world("Europe/London", 0);
+    ensure(w.path(), at(T));
+    make_document(w.path(), TODAY, "day:c1-today", PROPOSAL, at(T));
+    let cases = joiner_cases();
+    let items: Vec<Value> = cases
+        .iter()
+        .enumerate()
+        .map(|(index, case)| json!({"id":format!("j{index}"),"text":case["text"]}))
+        .collect();
+    set_field(
+        w.path(),
+        TODAY,
+        "p1_must",
+        Value::Array(items),
+        "set:joiners",
+        at(T),
+    );
+    let joiners = ['\u{200C}', '\u{200D}'];
+    let mut with_a_joiner = 0;
+    for (index, case) in cases.iter().enumerate() {
+        let name = &case["name"];
+        let read = part(
+            w.path(),
+            json!({"field_id":"p1_must","item_id":format!("j{index}")}),
+            at(T),
+        )
+        .unwrap();
+        let label = read["part"]["label"].as_str().unwrap();
+        let column = case["shown"].as_str().unwrap();
+        assert_eq!(label, column.replace(joiners, ""), "{name}");
+        assert_eq!(label == column, !column.contains(joiners), "{name}");
+        with_a_joiner += usize::from(column.contains(joiners));
+    }
+    assert_eq!(
+        with_a_joiner, 38,
+        "the cases shown with a joiner in its place: every kept one that holds a joiner, and the family beside a soft hyphen"
     );
 }
 
