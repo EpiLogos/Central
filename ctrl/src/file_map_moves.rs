@@ -5,6 +5,7 @@ use crate::source_horizon;
 use crate::source_safety::content_revision_bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::os::unix::fs::MetadataExt;
 use std::{
     fs, io,
@@ -53,6 +54,185 @@ struct Plan {
     documents: Vec<Document>,
     links: Vec<LinkStep>,
     state: String,
+}
+/// A journal as `move-plan` wrote it before plans were sealed (round 54k), and one written since.
+const JOURNAL_UNSEALED: &str = "central.file-map-move/v1";
+const JOURNAL_SEALED: &str = "central.file-map-move/v2";
+const SEAL_SCHEMA: &str = "central.file-map-move-seal/v1";
+fn journal_schema(schema: &str) -> bool {
+    schema == JOURNAL_UNSEALED || schema == JOURNAL_SEALED
+}
+/// A Work project's own copy of a move's plan (DLW build ruling 2026-11-11, round 54k): the digest of the whole journal as
+/// `move-plan` wrote it, kept in that project's `.central/bkmr/moves/<id>.seal.json`, beside the lock files a plan makes there.
+/// `move-plan` is gated by that project's grant, so the seal stands only for a plan the project's grant admitted.
+#[derive(Serialize, Deserialize)]
+struct Seal {
+    schema: String,
+    plan_id: String,
+    project: String,
+    digest: String,
+}
+fn seal_member(id: &str) -> String {
+    format!(".central/bkmr/moves/{id}.seal.json")
+}
+/// The digest a seal holds: SHA-256 over the journal written again from its parsed form, with `state` blanked, since apply and
+/// rollback change it as the move goes and nothing else of a journal changes after its plan. So every field that steers a write
+/// is under it (the scopes and their spellings, the owner, `from`, `to`, the Source's identity and revision, each link step, each
+/// document's world, place and bytes), and the spacing and key order of the file on the disk are not.
+fn digest(plan: &Plan) -> io::Result<String> {
+    let mut sealed = plan.clone();
+    sealed.state = String::new();
+    Ok(format!(
+        "sha256:{:x}",
+        Sha256::digest(serde_json::to_vec(&sealed)?)
+    ))
+}
+/// `move-plan` seals its plan in every Work project the journal's places reach, by the gate's own reading of them
+/// (`journal_reach`): the folder is made 0700 where it was not there, the file is 0600, and a seal already standing for this id
+/// with another digest is never written over. If one cannot be written, those written are taken away and the plan fails.
+fn seal(root: &Path, all: &[Scope], plan: &Plan) -> io::Result<()> {
+    let member = seal_member(&plan.id);
+    let digest = digest(plan)?;
+    let mut written: Vec<PathBuf> = Vec::new();
+    let result = (|| {
+        for (name, project) in journal_reach(root, all, &json!({"plan_id":plan.id}))? {
+            let file = project.join(&member);
+            let bytes = serde_json::to_vec_pretty(&Seal {
+                schema: SEAL_SCHEMA.into(),
+                plan_id: plan.id.clone(),
+                project: name.clone(),
+                digest: digest.clone(),
+            })?;
+            safe_directory(&project, Path::new(".central/bkmr/moves"))?;
+            if fs::symlink_metadata(&file).is_ok() {
+                return Err(conflict(format!(
+                    "The Work project {name} already holds a plan for the move {} (Work/{name}/{member}); nothing was planned",
+                    plan.id
+                )));
+            }
+            write_atomic(
+                &project,
+                &file,
+                &bytes,
+                crate::file_mutation::RecordDisposition::CreateNew,
+            )?;
+            written.push(file.clone());
+            fs::set_permissions(
+                &file,
+                <fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o600),
+            )?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        for file in written {
+            let _ = fs::remove_file(file);
+        }
+    }
+    result
+}
+/// What a carried move holds every write to (round 54k): a write that lands in a Work project is made only when that project's
+/// own seal is the digest of the journal in hand. The project is found on the disk at the moment of the write, from the folder
+/// actually written in (`projects_written_at`), never from what the journal says of its scopes; so a journal edited in the root's
+/// `.central` matches no project's seal and writes in none, whatever the edit is. A journal planned before plans were sealed
+/// (`unsealed`) writes in no Work project: the refusal lists what is left there for a hand.
+struct Sealed {
+    ground: PathBuf,
+    id: String,
+    digest: Option<String>,
+    left: String,
+}
+impl Sealed {
+    fn of(root: &Path, all: &[Scope], plan: &Plan) -> io::Result<Self> {
+        let sealed = plan.schema == JOURNAL_SEALED;
+        Ok(Self {
+            ground: root.to_path_buf(),
+            id: plan.id.clone(),
+            digest: sealed.then(|| digest(plan)).transpose()?,
+            left: if sealed {
+                String::new()
+            } else {
+                left_in_work(root, all, plan)
+            },
+        })
+    }
+    /// Refuses a write at `path` (a link's own place where `link`) unless every Work project it lies in, or holds, holds this
+    /// journal's seal. `named` is how the refusal names the place.
+    fn place(&self, path: &Path, link: bool, named: &str) -> io::Result<()> {
+        let member = seal_member(&self.id);
+        for (name, project) in projects_written_at(&self.ground, path, link) {
+            let Some(digest) = &self.digest else {
+                return Err(conflict(format!(
+                    "This move was planned before a plan was kept in each Work project it writes in, and {named} is in the Work \
+                     project {name}: it is not carried out there. Plan the move again; if it was begun, roll back what stands \
+                     outside Work's projects and mend by hand what it left in them: {}; nothing was written",
+                    self.left
+                )));
+            };
+            let file = project.join(&member);
+            let held = crate::source_safety::reject_symlink_components(
+                &project,
+                Path::new(".central/bkmr/moves"),
+            )
+            .ok()
+            .and_then(|()| fs::symlink_metadata(&file).ok())
+            .filter(|entry| entry.is_file())
+            .and_then(|_| fs::read(&file).ok())
+            .and_then(|bytes| serde_json::from_slice::<Seal>(&bytes).ok());
+            if !held.is_some_and(|seal| seal.plan_id == self.id && seal.digest == *digest) {
+                return Err(conflict(format!(
+                    "This move's journal is not the plan the Work project {name} holds (Work/{name}/{member}): {named} is in \
+                     {name}, and nothing is written there; plan the move again"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+/// A seal lives as long as its journal, at every state: a rolled-back move can be applied again, and that needs it (DLW build
+/// ruling 2026-11-11). Nothing removes a journal today. This is the one place a seal goes: whatever comes to remove a journal
+/// calls it first, with the journal still standing, and the seals in the projects its places reach go with it.
+#[allow(dead_code)]
+pub(crate) fn remove_seals(root: &Path, all: &[Scope], id: &str) -> io::Result<()> {
+    for (_, project) in journal_reach(root, all, &json!({"plan_id":id}))? {
+        let _ = fs::remove_file(project.join(seal_member(id)));
+    }
+    Ok(())
+}
+/// For the refusal of an unsealed journal: each link step and relations document it holds in a Work project, by project, so a
+/// hand can see what the move may have left there.
+fn left_in_work(root: &Path, all: &[Scope], plan: &Plan) -> String {
+    let project_of = |world: &str| {
+        all.iter()
+            .find(|scope| scope.world == world)
+            .and_then(|scope| scope.root.strip_prefix(root.join("Work")).ok())
+            .filter(|member| member.components().count() == 1)
+            .map(|member| member.to_string_lossy().into_owned())
+    };
+    let mut left: Vec<String> = plan
+        .links
+        .iter()
+        .filter_map(|step| {
+            let project = project_of(&step.world)?;
+            Some(if step.after_path == step.path {
+                format!("in {project}, the link {}", step.path)
+            } else {
+                format!(
+                    "in {project}, the link {} (to stand at {})",
+                    step.path, step.after_path
+                )
+            })
+        })
+        .collect();
+    left.extend(plan.documents.iter().filter_map(|document| {
+        let project = project_of(&document.world)?;
+        Some(format!("in {project}, its relations document"))
+    }));
+    if left.is_empty() {
+        "the Source itself, between where it stood and where it was to go".to_owned()
+    } else {
+        left.join("; ")
+    }
 }
 fn scope<'a>(all: &'a [Scope], world: &str) -> io::Result<&'a Scope> {
     all.iter()
@@ -297,7 +477,7 @@ pub(crate) fn plan(root: &Path, all: &[Scope], input: &Value) -> io::Result<Valu
     let mut plan = Plan {
         worlds,
         refresh_worlds,
-        schema: "central.file-map-move/v1".into(),
+        schema: JOURNAL_SEALED.into(),
         id: id.clone(),
         world: owner.world.clone(),
         source_ref: entry.source.source_ref.clone(),
@@ -422,6 +602,11 @@ pub(crate) fn plan(root: &Path, all: &[Scope], input: &Value) -> io::Result<Valu
         &plan,
         crate::file_mutation::RecordDisposition::CreateNew,
     )?;
+    // Each Work project the move writes in keeps its own copy of the plan (round 54k). A plan that cannot be sealed is no plan.
+    if let Err(error) = seal(root, all, &plan) {
+        let _ = fs::remove_file(path(root, &id)?);
+        return Err(error);
+    }
     Ok(
         json!({"plan_id":id,"source_ref":entry.source.source_ref,"from":from,"destination":to,"state":"prepared","links":plan.links.len(),"requires_quiesced":true,"source_bytes_changed":false}),
     )
@@ -717,7 +902,7 @@ fn resume_scopes_as(
     safe_member(root, ".central/bkmr/moves", true)?;
     let plan: Plan =
         serde_json::from_value(read_json(&path(root, id)?)?).map_err(io::Error::other)?;
-    if plan.schema != "central.file-map-move/v1" || plan.id != id {
+    if !journal_schema(&plan.schema) || plan.id != id {
         return Err(invalid("Invalid move journal"));
     }
     // The gate reads the journal here too, so an edited one is refused before any grant is asked of it (round 54g item 4).
@@ -815,7 +1000,13 @@ fn resume_scopes_as(
 /// One link step carried at its scope's root, or taken back (`back`): the staged link put in the link's place with the old link kept
 /// aside, or the old link put back. The link's place is its path before the move for a rollback and after it for an apply
 /// (`rollback`), whichever way the step then goes. Answers whether anything was changed: a step already as asked is left.
-fn carry_link(scope_root: &Path, step: &LinkStep, rollback: bool, back: bool) -> io::Result<bool> {
+fn carry_link(
+    scope_root: &Path,
+    step: &LinkStep,
+    rollback: bool,
+    back: bool,
+    sealed: Option<&Sealed>,
+) -> io::Result<bool> {
     let link = step_member(
         scope_root,
         if rollback {
@@ -825,6 +1016,12 @@ fn carry_link(scope_root: &Path, step: &LinkStep, rollback: bool, back: bool) ->
         },
     )?;
     let backup = step_member(scope_root, &step.backup)?;
+    // Each of the step's three places is asked for its project's seal as it stands now (round 54k).
+    if let Some(sealed) = sealed {
+        sealed.place(&link, true, &step.path)?;
+        sealed.place(&backup, true, &step.backup)?;
+        sealed.place(&step_member(scope_root, &step.staged)?, true, &step.staged)?;
+    }
     if back {
         if identity(&link, step.before.device, step.before.inode) {
             return Ok(false);
@@ -861,11 +1058,21 @@ pub(crate) fn apply(
     safe_member(root, ".central/bkmr/moves", true)?;
     let mut plan: Plan =
         serde_json::from_value(read_json(&path(root, id)?)?).map_err(io::Error::other)?;
-    if plan.schema != "central.file-map-move/v1" || plan.id != id {
+    if !journal_schema(&plan.schema) || plan.id != id {
         return Err(invalid("Invalid move journal"));
     }
     checked(&plan)?;
     let owner = scope(all, &plan.world)?;
+    // `move-plan` plans no move in a folder scope or in a project outside the ground, and a journal that names one as its owner
+    // is carried out no more than it would be planned (round 54k; the review of #346's fourth commit, D2).
+    if owner.is_folder() || owner.is_external() {
+        return Err(invalid(format!(
+            "A move's journal names {} as its owner, and Central moves nothing in a folder scope or a project outside the \
+             ground: such a scope is read-only; nothing was moved",
+            owner.world
+        )));
+    }
+    let sealed = Sealed::of(root, all, &plan)?;
     let from = safe_member(&owner.root, &plan.from, false)?;
     let to = safe_member(&owner.root, &plan.to, false)?;
     let at_from = identity(&from, plan.device, plan.inode);
@@ -905,6 +1112,8 @@ pub(crate) fn apply(
     // they may, and a second rollback then undoes whatever the move had carried of them.
     if rollback && at_to && rename_stands_alone(root, &plan) {
         if let Err(unread) = resume_scopes_as(root, input, false, false) {
+            sealed.place(&to, false, &plan.to)?;
+            sealed.place(&from, false, &plan.from)?;
             return match move_exclusive(&to, &from) {
                 Ok(()) => {
                     plan.state = "rolling-back".into();
@@ -993,13 +1202,22 @@ pub(crate) fn apply(
             return Err(conflict("Move's staged link is missing or replaced"));
         }
     }
+    // Every place the journal writes at is asked for its project's seal now, so a journal that cannot be carried out whole is
+    // refused before anything moves (round 54k). Each write asks again as it is made: that asking is the boundary.
+    for place in journal_places(root, all, input) {
+        sealed.place(&place.path, place.link, &place.named)?;
+    }
     // Each scope's folder as the checks above and the gate read it. The rename moves folders and makes none, so each scope is the
     // same folder after it, wherever it then stands (round 54h item 2).
     let stood = folders_of(all);
     let renamed = if !rollback && at_from {
+        sealed.place(&from, false, &plan.from)?;
+        sealed.place(&to, false, &plan.to)?;
         move_exclusive(&from, &to)?;
         Some((&to, &from))
     } else if rollback && at_to {
+        sealed.place(&to, false, &plan.to)?;
+        sealed.place(&from, false, &plan.from)?;
         move_exclusive(&to, &from)?;
         Some((&from, &to))
     } else {
@@ -1049,6 +1267,9 @@ pub(crate) fn apply(
         )));
     }
     let was = plan.state.clone();
+    // Set where a refusal inside the completion left everything as this call found it: such a refusal is passed on as it is,
+    // and not as a completion that may be partial (round 54k; the review of #346's fourth commit, D3).
+    let whole = std::cell::Cell::new(false);
     let completion = (|| {
         let moved_scopes = moved_scopes?;
         let all = moved_scopes.as_slice();
@@ -1069,7 +1290,7 @@ pub(crate) fn apply(
         let mut carried: Vec<&LinkStep> = Vec::new();
         for step in &plan.links {
             let world = scope(all, &step.world)?;
-            if carry_link(&world.root, step, rollback, rollback)? {
+            if carry_link(&world.root, step, rollback, rollback, Some(&sealed))? {
                 carried.push(step);
             }
             // Each scope is held to its folder again after every link step, so before the next one and before any document is
@@ -1087,7 +1308,8 @@ pub(crate) fn apply(
                 let holds = folders_of(std::slice::from_ref(world))
                     .iter()
                     .all(|now| stood.contains(now));
-                match holds.then(|| carry_link(&world.root, taken, rollback, !rollback)) {
+                // Taking back what this call carried asks no seal: each of those writes asked it a moment ago.
+                match holds.then(|| carry_link(&world.root, taken, rollback, !rollback, None)) {
                     Some(Ok(_)) => {}
                     Some(Err(error)) => left.push(format!("{} ({error})", taken.path)),
                     None => left.push(format!("{} (its scope strayed)", taken.path)),
@@ -1106,6 +1328,7 @@ pub(crate) fn apply(
                     crate::file_mutation::RecordDisposition::ReplaceOrCreate,
                 )?;
             }
+            whole.set(left.is_empty() && (renamed.is_none() || source.is_some()));
             let steps = if left.is_empty() {
                 "the link steps this call carried are undone".to_owned()
             } else {
@@ -1128,6 +1351,7 @@ pub(crate) fn apply(
             let relative = doc.path.as_deref().unwrap_or(world.relations_path());
             document_at(world, relative)?;
             let target = safe_member(&world.root, relative, false)?;
+            sealed.place(&target, false, &format!("the relations of {}", world.world))?;
             if rollback {
                 if let Some(before) = &doc.before {
                     write_atomic(
@@ -1170,6 +1394,9 @@ pub(crate) fn apply(
         )
     })();
     completion.map_err(|error| {
+        if whole.get() {
+            return error;
+        }
         crate::file_mutation::record_owner_error(
             error,
             "file_map.move_after_path_observation",
