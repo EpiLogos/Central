@@ -2,7 +2,7 @@
 ctrl/src/continuous_work/invisible-code-points.txt -text
 # The escape cases are the same bytes in Central and AIKit, under one sha256 (be2j.a3 item 5): never converted on checkout.
 ctrl/src/escape-cases.json -text
-# The joiner cases are the same bytes in Central and O-I, under one sha256 (be2m item 5): never converted on checkout.
+# The joiner cases are kept under one sha256, the one O-I's copy will be held to (be2m item 5): never converted on checkout.
 ctrl/src/continuous_work/joiner-cases.json -text
-# The listed emoji ZWJ sequences are the same bytes in Central and O-I, under one sha256 (be2m.3 item 1): never converted on checkout.
+# The listed emoji ZWJ sequences are kept under one sha256, the one O-I's copy will be held to (be2m.3 item 1): never converted on checkout.
 ctrl/src/continuous_work/emoji-zwj-sequences.txt -text

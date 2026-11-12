@@ -4282,18 +4282,19 @@ fn an_end_for_an_ended_run_has_its_own_code_and_other_conflicts_keep_theirs() {
 
 // ---- be2m: words that hold a joiner are kept (DLW build ruling 2026-11-10) --------------------------------------
 
-/// The sha256 of `joiner-cases.json`, the cases O-I keeps beside its own tests too, byte for byte: rows of text, whether
-/// the Day keeps the words as given, what stood in the way when it does not, and the text as it is shown on one line. A
-/// file that moves on one side without the other's sha256 changing fails here or there (be2m item 5).
+/// The sha256 of `joiner-cases.json`, the cases O-I will keep beside its own tests too, byte for byte: rows of text,
+/// whether the Day keeps the words as given, what stood in the way when it does not, and the text as it is shown on one
+/// line. Once O-I holds them, a file that moves on one side without the other's sha256 changing fails here or there
+/// (be2m item 5).
 const JOINER_CASES_SHA256: &str =
-    "56d86905278fada2c13a081d5e7058a00864d17e0382c84ec2ce85f084c83bd4";
+    "0c13a17d8bd88cbbe872150a64900e9bf207bb6c6e80654fdc361ed84273cc5c";
 
 fn joiner_cases() -> Vec<Value> {
     let cases = include_str!("joiner-cases.json");
     assert_eq!(
         format!("{:x}", Sha256::digest(cases.as_bytes())),
         JOINER_CASES_SHA256,
-        "the cases are the ones O-I holds"
+        "the cases are the ones O-I will hold"
     );
     serde_json::from_str(cases).unwrap()
 }
@@ -4358,6 +4359,7 @@ fn a_records_words_keep_a_joiner_in_its_place_and_refused_words_name_what_stood_
             "a carriage return with no line break after it",
             "a control character",
             "a format character that draws nothing",
+            "a joiner between emoji that Unicode 17.0 does not list as one emoji",
             "a joiner outside an emoji or a joined word",
             "a line or paragraph separator",
             "a soft hyphen",
@@ -4434,7 +4436,7 @@ fn an_entrys_label_is_each_cases_shown_form_without_its_joiners() {
         with_a_joiner += usize::from(column.contains(joiners));
     }
     assert_eq!(
-        with_a_joiner, 38,
+        with_a_joiner, 42,
         "the cases shown with a joiner in its place: every kept one that holds a joiner, and the family beside a soft hyphen"
     );
 }
