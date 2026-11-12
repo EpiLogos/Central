@@ -1594,8 +1594,8 @@ fn validate_absent_instance_location(root: &Path, loc: &CentralPathRef) -> io::R
         ));
     }
     reject_symlink_components(root, relative)?;
-    let expected = format!("central:path:{}:{}", root.display(), loc.path);
-    if loc.ref_id != expected {
+    // The ref as Central mints it (files.rs CentralPathRef::new): the root escaped, so a ground whose path holds a space is this root.
+    if *loc != CentralPathRef::new(root, loc.path.clone())? {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "Central location belongs to another root or an unsupported schema",
