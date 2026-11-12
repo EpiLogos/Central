@@ -600,7 +600,7 @@ impl AgentProfile {
             .as_ref()
             .is_some_and(|name| name.len() > 256 || name.chars().any(crate::names::unkept))
         {
-            return Err(AgentProfileError::InvalidText("Agent Profile name".into()));
+            return Err(AgentProfileError::NameNotOneLine);
         }
         validate_optional_text(&self.role, "Agent Profile role")?;
         validate_optional_text(&self.purpose, "Agent Profile purpose")?;
@@ -727,6 +727,8 @@ fn validate_world_refs(worlds: &[WorldRef]) -> Result<(), AgentProfileError> {
 pub enum AgentProfileError {
     Schema(String),
     InvalidText(String),
+    /// The name holds a control character, a tab and a line break among them, or is over 256 bytes (be2j.c4 item 1).
+    NameNotOneLine,
     DuplicateRef {
         field: String,
         value: String,
@@ -785,6 +787,9 @@ impl fmt::Display for AgentProfileError {
         match self {
             Self::Schema(schema) => write!(formatter, "unsupported Agent Profile schema {schema}"),
             Self::InvalidText(field) => write!(formatter, "{field} cannot be empty"),
+            Self::NameNotOneLine => formatter.write_str(
+                "Agent Profile name stands on one line of at most 256 bytes, with no control character (a tab or a line break is one)",
+            ),
             Self::DuplicateRef { field, value } => write!(formatter, "{field} repeats ref {value}"),
             Self::DuplicateWorld(world) => write!(formatter, "Agent Profile repeats World {world}"),
             Self::SelfSourceProfile(profile) => {
@@ -1547,9 +1552,28 @@ mod tests {
             named.name = Some(name.into());
             named.validate_shape().unwrap();
         }
-        named.name = Some("No\u{7}us".into());
-        assert!(
-            matches!(named.validate_shape(), Err(AgentProfileError::InvalidText(field)) if field == "Agent Profile name")
+        // be2j.c4 item 1 (DLW build ruling 2026-11-12): a name with a control character, a tab or a line break among them, or
+        // over 256 bytes, is refused in words that say so; only a blank name "cannot be empty".
+        for name in [
+            "No\u{7}us".to_owned(),
+            "\tNous".to_owned(),
+            "Nous\n".to_owned(),
+            "No\r\nus".to_owned(),
+            "N".repeat(257),
+        ] {
+            named.name = Some(name.clone());
+            assert_eq!(
+                named.validate_shape().unwrap_err().to_string(),
+                "Agent Profile name stands on one line of at most 256 bytes, with no control character (a tab or a line break is one)",
+                "{name:?}"
+            );
+        }
+        named.name = Some("N".repeat(256));
+        named.validate_shape().unwrap();
+        named.name = Some(" \u{3000} ".into());
+        assert_eq!(
+            named.validate_shape().unwrap_err().to_string(),
+            "Agent Profile name cannot be empty"
         );
         let mut expressive = profile.clone();
         let character = "central:Control/agents/expressive-material/character/nous";

@@ -4116,6 +4116,64 @@ fn a_label_reads_as_it_is_and_a_field_that_holds_no_text_offers_none() {
     );
 }
 
+/// be2j.c4 item 2 (DLW build ruling 2026-11-12): an end for a run that has ended already is answered as ended whatever
+/// else the end holds or lacks: no state, a state that is none, a time before the begin. The same end for a run still
+/// running is refused as invalid, in its own words.
+#[test]
+fn an_end_with_no_state_for_an_ended_run_is_answered_as_ended_and_for_a_running_one_as_invalid() {
+    let w = world("Europe/London", 0);
+    ensure(w.path(), at(T));
+    let began = ms("2026-10-20T09:00:05Z");
+    let run_ref = begin(w.path(), "context", began, HOST, at(T)).unwrap()["run"]["run_ref"].clone();
+    let lacking = || {
+        [
+            json!({"event":"end","run_ref":run_ref,"at_unix_ms":began + 60_000}),
+            json!({"event":"end","run_ref":run_ref,"at_unix_ms":began + 60_000,"state":"finished"}),
+            json!({"event":"end","run_ref":run_ref,"at_unix_ms":began - 1,"state":"done"}),
+        ]
+    };
+    for input in lacking() {
+        let error = run(
+            w.path(),
+            "day_move_record",
+            input.clone(),
+            Some(HOST),
+            at(T),
+        )
+        .expect_err("a running run's end that lacks its state or its time is refused");
+        assert_eq!(
+            error.kind(),
+            io::ErrorKind::InvalidInput,
+            "{input}: {error}"
+        );
+    }
+    end(w.path(), &run_ref, began + 60_000, "stalled", HOST, at(T)).unwrap();
+    for input in lacking() {
+        let error = run(
+            w.path(),
+            "day_move_record",
+            input.clone(),
+            Some(HOST),
+            at(T),
+        )
+        .expect_err("an ended run takes no end");
+        assert_eq!(
+            error.kind(),
+            io::ErrorKind::AlreadyExists,
+            "{input}: {error}"
+        );
+        let refusal = *action_result("central.day.move.record", Err(error))
+            .error
+            .expect("a refusal");
+        assert_eq!(refusal.code, "run_ended_already", "{input}");
+        assert_eq!(
+            refusal.details.unwrap()["run"]["state"],
+            "stalled",
+            "{input}"
+        );
+    }
+}
+
 /// be2j.c3 (DLW build ruling 2026-11-11): an end given to a run that has ended
 /// already answers with a code of its own and the run as it ended, so a caller
 /// knows the run is finished without reading the Day again. Every other

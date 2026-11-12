@@ -193,8 +193,16 @@ impl AgentProfileStore {
         }
 
         let dir = self.source_dir();
-        ensure_directory_path(&self.owner_root, &dir)?;
         let path = self.source_path(&profile.profile_ref)?;
+        // An update of a profile that does not stand is refused before a directory is made for it, so the refusal leaves no
+        // empty folder behind it (be2j.c4 item 3, DLW build ruling 2026-11-12).
+        if let (false, Some(expected)) = (path.exists(), expected_revision) {
+            return Err(AgentProfileStoreError::MissingForUpdate {
+                profile_ref: profile.profile_ref.clone(),
+                expected: expected.to_owned(),
+            });
+        }
+        ensure_directory_path(&self.owner_root, &dir)?;
         // The read-compare-write window must be exclusive per profile file:
         // two concurrent saves of the same revision otherwise both pass the
         // CAS check and the loser's write silently wins or collides.
@@ -673,6 +681,24 @@ mod tests {
         let reading = store.read("agent-profile:guardian").unwrap();
         assert_eq!(reading.profile, profile);
         assert_eq!(store.list().unwrap().len(), 1);
+    }
+
+    /// be2j.c4 item 3 (DLW build ruling 2026-11-12): an update of a profile that does not stand is refused and makes no folder
+    /// for profiles: nothing under Control. The save's own lock stands in the root, as after every save.
+    #[test]
+    fn an_update_of_a_profile_that_does_not_stand_is_refused_and_leaves_no_folder() {
+        let root = crate::tempdir().unwrap();
+        let store = AgentProfileStore::personal(root.path());
+        assert!(matches!(
+            store.save(&personal_profile("p2"), Some("p1")),
+            Err(AgentProfileStoreError::MissingForUpdate { profile_ref, expected })
+            if profile_ref == "agent-profile:guardian" && expected == "p1"
+        ));
+        assert!(!root.path().join("Control").exists());
+        assert!(!store.source_dir().exists());
+        store.save(&personal_profile("p1"), None).unwrap();
+        assert!(store.source_dir().is_dir());
+        store.save(&personal_profile("p2"), Some("p1")).unwrap();
     }
 
     #[test]

@@ -326,6 +326,14 @@ impl RelationRecordStore {
         // refused here, before a directory is made for it.
         if !path.exists() {
             within_limit(&bytes)?;
+            // And an update of a record that does not stand is refused here too, so the refusal leaves no empty folder behind
+            // it (be2j.c4 item 3, DLW build ruling 2026-11-12).
+            if let Some(expected) = expected_revision {
+                return Err(RelationRecordStoreError::MissingForUpdate {
+                    ref_: ref_.clone(),
+                    expected: expected.to_owned(),
+                });
+            }
         }
         let dir = self.source_dir();
         ensure_directory_path(&self.owner_root, &dir)?;
@@ -1677,6 +1685,36 @@ mod tests {
         ));
         assert_eq!(fs::read(&path).unwrap(), bytes);
         assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
+    }
+
+    /// be2j.c4 item 3 (DLW build ruling 2026-11-12): an update of a record that does not stand is refused and leaves nothing
+    /// in the root, no empty folder among it; one over the size limit is still refused for its size first.
+    #[test]
+    fn an_update_of_a_record_that_does_not_stand_is_refused_and_leaves_no_folder() {
+        let fixture = ReadFixture::new();
+        let store = RelationRecordStore::worlds_at_root(&fixture.0);
+        assert!(matches!(
+            store.save(&native_world_record(), Some("w0")),
+            Err(RelationRecordStoreError::MissingForUpdate { ref_, expected })
+            if ref_ == "control:root" && expected == "w0"
+        ));
+        assert_eq!(fs::read_dir(&fixture.0).unwrap().count(), 0);
+        let mut record = native_world_record();
+        record["retained_padding"] = json!("x".repeat(RELATION_RECORD_METADATA_LIMIT));
+        assert!(matches!(
+            store.save(&record, Some("w0")),
+            Err(RelationRecordStoreError::RecordBudget { .. })
+        ));
+        assert_eq!(fs::read_dir(&fixture.0).unwrap().count(), 0);
+        // What stands is updated as before, and a record that stands still refuses a wrong revision.
+        store.save(&native_world_record(), None).unwrap();
+        let mut next = native_world_record();
+        next["revision"] = json!("w2");
+        assert!(matches!(
+            store.save(&next, Some("w0")),
+            Err(RelationRecordStoreError::RevisionConflict { .. })
+        ));
+        store.save(&next, Some("w1")).unwrap();
     }
 
     #[test]

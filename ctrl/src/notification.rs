@@ -1139,6 +1139,18 @@ mod tests {
         let cases: Value = serde_json::from_str(file).unwrap();
         let cases = cases["cases"].as_array().unwrap();
         assert!(cases.len() >= 30, "{}", cases.len());
+        // be2j.c4 item 2 (DLW build ruling 2026-11-12): U+007E, the last character an escape can end with, ends a short escape
+        // and a control sequence; U+007F ends neither. Held here, beside the shared cases, not in them.
+        for (text, shown) in [
+            ("a\u{1b}~b", "ab"),
+            ("a\u{1b}#~b", "ab"),
+            ("a\u{1b}[3~b", "ab"),
+            ("a\u{1b}}b", "ab"),
+            ("a\u{1b}[3\u{7f}b", "a3b"),
+        ] {
+            assert_eq!(shown_words(text, ' '), shown, "{text:?}");
+            assert_eq!(shown_words(text, '\n'), shown, "{text:?}");
+        }
         for case in cases {
             let name = case["name"].as_str().unwrap();
             let text = case["text"].as_str().unwrap();
