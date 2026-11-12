@@ -1,13 +1,13 @@
-//! be2m.2 item 4, be2m.3 item 5 and be2m.4 (DLW build rulings 2026-11-12): the fuzz of the review of #350, kept as a
+//! be2m.2 item 4, be2m.3 item 5, be2m.4 and be2m.5 (DLW build rulings 2026-11-12): the fuzz of the review of #350, kept as a
 //! test that runs in a few seconds.
 //!
-//! It makes 130,852 strings, the same ones every run: 12,000 random ones of 1 to 24 characters over the alphabet below
+//! It makes 139,594 strings, the same ones every run: 12,000 random ones of 1 to 24 characters over the alphabet below
 //! (seeded); 50,914 of up to two characters, a joiner and up to two characters over eighteen kinds of neighbour and
 //! the text's end; 39,200, every arrangement of up to three characters before a joiner and two after it over the
 //! virama's kinds; 936, every arrangement of up to three before a joiner and one after it over a Thai letter and its
-//! killer and a Myanmar letter, its stacker and its killer; 16,058, every arrangement of up to three before a joiner
-//! and two after it over a Tifinagh letter and its consonant joiner, a Myanmar letter, its asat and its stacker, and a
-//! Latin letter; and 11,744, every listed emoji ZWJ sequence in each of its spellings (2,667) and in six forms that are
+//! killer and a Myanmar letter, its stacker and its killer; 24,800, every arrangement of up to three before a joiner
+//! and two after it over a Tifinagh letter and its consonant joiner, two Myanmar letters (nga and ka), the asat and the
+//! stacker, and a Latin letter; and 11,744, every listed emoji ZWJ sequence in each of its spellings (2,667) and in six forms that are
 //! no spelling of it (9,077).
 //!
 //! The invariant, checked on every string against the rule written a second time (`ruled`, by position, not
@@ -19,7 +19,8 @@
 //! - whatever is kept between emoji stands inside a sequence Unicode lists, in one of its spellings, that stands whole
 //!   (be2m.3 item 1); whatever is kept after a virama is kept after one that conjoins (be2m.3 item 2), or right after
 //!   one Indic_Syllabic_Category gives no category and right before a letter of its script (be2m.4 item 1), or it is
-//!   a ZWNJ right after the asat on a Myanmar letter and right before the stacker and a Myanmar letter (item 2);
+//!   a ZWNJ right after the asat on nga, ra or Mon nga and right before the stacker and a Myanmar letter (item 2,
+//!   be2m.5 item 1);
 //! - the rule only narrowed: whatever it keeps, the rule of #350 kept (`kept_by_350`);
 //! - `prose_fault` names the first character in the way by its kind, a ZWJ refused between two emoji as a sequence
 //!   Unicode does not list (be2m.4 item 5), and a text with no joiner is judged as it was before any joiner was kept;
@@ -149,7 +150,8 @@ fn in_a_listed_sequence(p: &[Read], chars: &[char], i: usize) -> bool {
 
 /// be2m.4's two places, each by position: right after a character of the virama class that Indic_Syllabic_Category
 /// gives no category, on a letter of its script, and right before another letter of that script (either joiner); and a
-/// ZWNJ right after the Myanmar asat on a Myanmar letter and right before the Myanmar stacker and a Myanmar letter.
+/// ZWNJ right after the Myanmar asat on nga, ra or Mon nga (be2m.5 item 1: the letter is found here by walking back
+/// over the marks under the asat) and right before the Myanmar stacker and a Myanmar letter.
 fn in_a_place_of_its_own(p: &[Read], chars: &[char], i: usize) -> Option<&'static str> {
     let n = chars.len();
     if i == 0 || carrier(p, i - 1, true).is_none() {
@@ -159,8 +161,13 @@ fn in_a_place_of_its_own(p: &[Read], chars: &[char], i: usize) -> Option<&'stati
     if p[i - 1].unreached_virama && letter_at(i + 1) {
         return Some("after a virama the categories do not reach");
     }
+    let mut under = i - 1;
+    while under > 0 && p[under - 1].mark {
+        under -= 1;
+    }
     if chars[i] == ZWNJ
         && chars[i - 1] == '\u{103A}'
+        && matches!(chars[under - 1], '\u{1004}' | '\u{101B}' | '\u{105A}')
         && i + 1 < n
         && chars[i + 1] == '\u{1039}'
         && letter_at(i + 2)
@@ -619,9 +626,10 @@ fn every_arrangement_before_a_joiner_keeps_it_only_after_a_virama_that_conjoins(
 #[test]
 fn every_arrangement_around_a_joiner_keeps_it_in_the_two_places_of_their_own_and_nowhere_else_there(
 ) {
-    // be2m.4 items 1 and 2: up to three before the joiner and up to two after, over a Tifinagh letter and its consonant
-    // joiner, a Myanmar letter, its asat and its stacker, and a Latin letter
-    let before = points(&[0x2D4E, 0x2D7F, 0x1004, 0x103A, 0x1039, 0x61]);
+    // be2m.4 items 1 and 2, be2m.5 item 1: up to three before the joiner and up to two after, over a Tifinagh letter
+    // and its consonant joiner, two Myanmar letters (nga, under whose asat the ZWNJ is kept, and ka, under whose asat it
+    // is not), the asat and the stacker, and a Latin letter
+    let before = points(&[0x2D4E, 0x2D7F, 0x1004, 0x1000, 0x103A, 0x1039, 0x61]);
     let after = points(&[0x2D5C, 0x1000, 0x1039, 0x103A, 0x61]);
     let mut tally = Tally::default();
     for len in 0..=3u32 {
@@ -647,7 +655,7 @@ fn every_arrangement_around_a_joiner_keeps_it_in_the_two_places_of_their_own_and
         }
     }
     report("places of their own", &tally);
-    assert_eq!(tally.strings, (1 + 6 + 36 + 216) * (1 + 5 + 25) * 2);
+    assert_eq!(tally.strings, (1 + 7 + 49 + 343) * (1 + 5 + 25) * 2);
     for context in [
         "after a virama the categories do not reach",
         "between the asat and a stacker",
