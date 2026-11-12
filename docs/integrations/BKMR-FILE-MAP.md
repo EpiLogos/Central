@@ -203,14 +203,39 @@ The journal, and the plan's answer, name the destination as the disk spells it:
 the folders above it in the disk's own case and form, whatever the person typed,
 and its own new name as asked.
 `move-apply` and `move-rollback` take the returned `plan_id` and `quiesced:true`.
+Each move is the person's own act: it authenticates on the host's native
+credential (`CENTRAL_NATIVE_TOKEN`) for a human grant naming that exact Action
+at the root, and at each Work project it writes in: where its Source stands, where
+it goes, and each one whose links it rewrites, with their relations. Without one
+it is refused in words that name the project whose grant is missing, with nothing
+planned or moved. Apply and rollback read the move from its journal,
+and stand on the scopes the journal runs from. So an interrupted move can be
+finished or undone while a scope inside the moved folder is still declared where
+it stood. One journal is undone and not finished: one that an earlier `ctrl`
+planned with its destination's folders typed in another case or form than the
+disk keeps. Its relations name that spelling, which the map does not read, so
+apply refuses it, from any state, in words that say to roll it back and plan
+again, and a rollback goes through. They take nothing else from the journal's list of scopes: the move
+stands at the root wherever the list puts it, each Work project its Source or
+destination lies in is found on the disk, and a journal whose root scope's path
+is not empty, as `move-plan` writes it, is refused. Apply and rollback also stand at each
+Work project whose relations or links the journal rewrites.
 
 `Work` itself is not moved, nor a folder that holds it: every project of Work
-stands under it, and no act reads a ground whose `Work` is away, so the plan is
-refused in words. A move of `Work` that an older `ctrl` planned and began leaves
-such a ground: every act asks its grant of a ground that holds `Work`, so no
-press mends it. The apply and the rollback of that journal are refused in words
-that say where `Work` stands now and where it stood, and that a hand moves it
-back; the rollback is then an ordinary one.
+stands under it, and no act reads a ground whose `Work` is away. The plan of
+such a move is refused in words. So is the apply of a journal that names one,
+whatever seals it holds, as an earlier `ctrl` could plan and seal it; its
+rollback goes on and closes the journal.
+
+On a ground whose `Work` is away, by such a move carried out or by a hand, no
+act of the person's is admitted: the authority reads a ground that holds `Work`
+before it matches a credential. Each act is refused in the same words for every
+caller whose credential is of valid length, granted or not: `Work` does not
+stand where the ground keeps it, and a hand puts it back before any press. The
+words are made from the ground alone. No journal is read for them, and they
+name no place but the ground's own `Work`; where a move took it is in that
+move's journal, in its `to`. Once `Work` is back, a move that took it away is
+rolled back as any other.
 
 A link the move rewrites is judged by where it stands on the disk, before the
 move and after it, and never by what it points at. A link in a Work project's

@@ -6372,12 +6372,23 @@ fn a_move_of_work_itself_is_refused_at_its_plan() {
     assert!(root.join("Work/alpha/plan.md").is_file() && !root.join("Work2").exists());
 }
 
-/// The review of #349, F5: a move of `Work` that an older `ctrl` planned and began. The journal is as such a `ctrl` left it
-/// (from before seals), "renamed" or "applied", and `Work` stands at `Work2`. No act's grant can be asked of that ground, and
-/// before this every press answered a bare "No such file or directory". Now the apply and the rollback of that journal are
-/// refused in words that say where `Work` stands and stood and that a hand moves it back, and nothing moves. A caller with no
-/// credential is told nothing of it. Once a hand has moved `Work` back, the rollback is an ordinary one: it asks alpha's grant,
-/// since the journal's Source holds alpha, and closes the journal. Then the map reads.
+/// What every act of the person's answers on a ground whose `Work` is away (file_map.rs `work_away`), after its opening.
+fn work_is_away(root: &Path) -> String {
+    format!(
+        "Work does not stand at {}, where the ground keeps it, and no act reads a ground without it: a hand puts Work back there \
+         before any press. If a move took it away, that move's journal says in its `to` where it stands, and the move is rolled \
+         back once Work is back",
+        root.join("Work").display()
+    )
+}
+
+/// The review of #349, F5, and of #352, F1: a move of `Work` that an older `ctrl` planned and began. The journal is as such a
+/// `ctrl` left it (from before seals), "renamed" or "applied", and `Work` stands at `Work2`. No act's grant can be asked of
+/// that ground. The apply and the rollback of that journal are refused in words that say `Work` does not stand where the
+/// ground keeps it and that a hand puts it back, and nothing moves. The words come from the ground alone: they do not name
+/// where the journal says `Work` went. A caller with no credential is told nothing of it. Once a hand has moved `Work` back,
+/// the rollback is an ordinary one: it asks alpha's grant, since the journal's Source holds alpha, and closes the journal.
+/// Then the map reads.
 #[test]
 fn a_move_of_work_left_half_done_by_an_older_ctrl_says_how_a_hand_mends_it() {
     for state in ["renamed", "applied"] {
@@ -6401,7 +6412,7 @@ fn a_move_of_work_left_half_done_by_an_older_ctrl_says_how_a_hand_mends_it() {
             let unknown = ctrl(&world, action, &carried, None);
             let words = unknown["error"]["message"].as_str().unwrap_or_default();
             assert!(
-                words.contains("missing bounded CENTRAL_NATIVE_TOKEN") && !words.contains("Work2"),
+                words.contains("missing bounded CENTRAL_NATIVE_TOKEN") && !words.contains("Work"),
                 "{state} {action}: {words}"
             );
             let refused = ctrl(&world, action, &carried, Some(PERSON));
@@ -6410,21 +6421,10 @@ fn a_move_of_work_left_half_done_by_an_older_ctrl_says_how_a_hand_mends_it() {
                 refused["error"]["code"], "central.file_map_not_found",
                 "{state} {action}: {refused}"
             );
-            let words = refused["error"]["message"].as_str().unwrap_or_default();
-            let (stood, stands) = (root.join("Work"), root.join("Work2"));
-            assert!(
-                words.starts_with(opening)
-                    && words.contains(&format!(
-                        "this move took Work itself from {} to {}",
-                        stood.display(),
-                        stands.display()
-                    ))
-                    && words.contains(&format!(
-                        "move {} back to {} by hand, then roll the move back",
-                        stands.display(),
-                        stood.display()
-                    )),
-                "{state} {action}: {words}"
+            assert_eq!(
+                refused["error"]["message"].as_str().unwrap_or_default(),
+                format!("{opening}{}; nothing was moved", work_is_away(&root)),
+                "{state} {action}"
             );
         }
         assert_eq!(
@@ -6432,7 +6432,7 @@ fn a_move_of_work_left_half_done_by_an_older_ctrl_says_how_a_hand_mends_it() {
             before,
             "{state}: nothing moves on a refused press"
         );
-        // A hand follows the words.
+        // A hand puts `Work` back.
         fs::rename(root.join("Work2"), root.join("Work")).unwrap();
         refused_in_words(
             &world,
@@ -6458,20 +6458,105 @@ fn a_move_of_work_left_half_done_by_an_older_ctrl_says_how_a_hand_mends_it() {
     }
 }
 
-/// The review of #349, F5: the words about `Work` are for the journal that took it away, and no other. `Work` is taken away by
-/// a hand while another move, of the root's own page, stands interrupted. That journal's rollback is refused as every act is
-/// in a ground whose `Work` is away, the page stays where the move took it, and the refusal says nothing of that journal. Once
-/// `Work` is back the rollback is carried out.
+/// The review of #352, F1 (DLW build ruling 2026-11-12): on a ground whose `Work` is away nothing is read on the word of a
+/// caller no grant names. The authority reads the ground before it matches a credential, so there every caller with a
+/// credential of valid length is answered alike, granted or not. Two journals stand: the one that took `Work` to
+/// `Work-taken-there`, and another, of the root's own page, interrupted. For a credential no grant names, an agent's and the
+/// person's, the apply and the rollback answer the same words whichever id they name (the journal that took `Work`, the
+/// other, an id no journal has, none), and the words hold no place from any journal. Every other act of the person's answers
+/// them too. A caller with no credential, or one too short, is told only that. Nothing is written. Once `Work` is back the
+/// other journal's rollback is carried out; and a "not found" that is not about `Work` keeps its own words.
 #[test]
-fn a_ground_whose_work_is_away_says_nothing_of_another_journal() {
+fn a_ground_whose_work_is_away_reads_no_journal_for_any_caller() {
     let world = granting(&every_act(), "control:root");
     let root = world.root();
-    let (carried, _) = a_move_of_the_roots_own(&world);
-    interrupt_after_the_rename(&world, &carried);
-    fs::rename(root.join("Work"), root.join("Work2")).unwrap();
+    let work = identity(&root.join("Work"));
+    let took_work = edited_journal(&world, |plan| {
+        plan["schema"] = json!("central.file-map-move/v1");
+        plan["from"] = json!("Work");
+        plan["to"] = json!("Work-taken-there");
+        plan["device"] = json!(work.0);
+        plan["inode"] = json!(work.1);
+        plan["state"] = json!("renamed");
+        plan["refresh_worlds"] = json!([]);
+        plan["documents"] = json!([]);
+        plan["links"] = json!([]);
+    });
+    let (other, _) = a_move_of_the_roots_own(&world);
+    interrupt_after_the_rename(&world, &other);
+    let acts = every_act();
+    authority(
+        &world,
+        vec![
+            grant(PERSON, "human", &["control:root"], &acts, u64::MAX),
+            grant(AGENT, "agent", &["control:root"], &acts, u64::MAX),
+        ],
+    );
+    fs::rename(root.join("Work"), root.join("Work-taken-there")).unwrap();
     let before = ground(&world);
-    let refused = ctrl(&world, CARRIED[1].0, &carried, Some(PERSON));
-    assert_eq!(refused["ok"], false, "{refused}");
+    let named = [
+        took_work.clone(),
+        other.clone(),
+        json!({"plan_id":"abc123","quiesced":true}),
+        json!({"quiesced":true}),
+    ];
+    for token in [UNKNOWN, AGENT, PERSON] {
+        for (action, opening) in CARRIED {
+            for input in &named {
+                let refused = ctrl(&world, action, input, Some(token));
+                assert_eq!(refused["ok"], false, "{action} {input}: {refused}");
+                assert_eq!(
+                    refused["error"]["code"], "central.file_map_not_found",
+                    "{action} {input}: {refused}"
+                );
+                let words = refused["error"]["message"].as_str().unwrap_or_default();
+                assert!(
+                    !words.contains("Work-taken-there") && !words.contains("note2"),
+                    "a place from a journal: {action} {input}: {words}"
+                );
+                assert_eq!(
+                    words,
+                    format!("{opening}{}; nothing was moved", work_is_away(&root)),
+                    "{action} {input}"
+                );
+            }
+        }
+        for (action, input) in [
+            (
+                "central.file-map.move-plan",
+                json!({"source_ref":"unread","destination":"Control/user/n3.md"}),
+            ),
+            (
+                "central.file-map.register",
+                json!({"path":"Control/user/note.md"}),
+            ),
+        ] {
+            let refused = ctrl(&world, action, &input, Some(token));
+            let words = refused["error"]["message"].as_str().unwrap_or_default();
+            assert!(
+                refused["ok"] == false && words.contains(&work_is_away(&root)),
+                "{action}: {refused}"
+            );
+        }
+    }
+    for token in [None, Some("too-short")] {
+        for (action, _) in CARRIED {
+            let refused = ctrl(&world, action, &took_work, token);
+            let words = refused["error"]["message"].as_str().unwrap_or_default();
+            assert!(
+                words.contains("missing bounded CENTRAL_NATIVE_TOKEN") && !words.contains("Work"),
+                "{action}: {words}"
+            );
+        }
+    }
+    assert_eq!(ground(&world), before, "nothing is written");
+    fs::rename(root.join("Work-taken-there"), root.join("Work")).unwrap();
+    let back = ctrl(&world, CARRIED[1].0, &other, Some(PERSON));
+    assert_eq!(back["ok"], true, "{back}");
+    assert!(root.join("Control/user/note.md").is_file());
+    // `Work` stands, and the authority Source is gone: that "not found" is not about `Work`, and is passed on as it came.
+    fs::remove_file(root.join("Control/user/file-map-moves-authority.json")).unwrap();
+    let refused = ctrl(&world, CARRIED[1].0, &other, Some(PERSON));
     assert_eq!(
         refused["error"]["code"], "central.file_map_not_found",
         "{refused}"
@@ -6480,12 +6565,252 @@ fn a_ground_whose_work_is_away_says_nothing_of_another_journal() {
         !refused["error"]["message"]
             .as_str()
             .unwrap_or_default()
-            .contains("took Work itself"),
+            .contains("Work does not stand"),
         "{refused}"
     );
-    assert_eq!(ground(&world), before, "nothing moves");
-    fs::rename(root.join("Work2"), root.join("Work")).unwrap();
-    let back = ctrl(&world, CARRIED[1].0, &carried, Some(PERSON));
-    assert_eq!(back["ok"], true, "{back}");
-    assert!(root.join("Control/user/note.md").is_file());
+}
+
+/// The digest `move-plan` seals a journal by (file_map_moves.rs `digest`), for a journal built by hand: SHA-256 over the
+/// journal written compactly in the order `move-plan` keeps its fields, with `state` blank. For a journal with no link step.
+fn seal_digest(plan: &Value) -> String {
+    let fields = |value: &Value, names: &[&str]| {
+        let members: Vec<String> = names
+            .iter()
+            .map(|name| format!("{}:{}", json!(name), value[name]))
+            .collect();
+        format!("{{{}}}", members.join(","))
+    };
+    let each = |list: &Value, names: &[&str]| {
+        let members: Vec<String> = list
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|member| fields(member, names))
+            .collect();
+        format!("[{}]", members.join(","))
+    };
+    assert_eq!(plan["links"], json!([]), "a journal with no link step");
+    let written = format!(
+        "{{\"worlds\":{},\"refresh_worlds\":{},{},\"documents\":{},\"links\":[],\"state\":\"\"}}",
+        each(&plan["worlds"], &["world", "path", "external", "project"]),
+        plan["refresh_worlds"],
+        fields(
+            plan,
+            &[
+                "schema",
+                "id",
+                "world",
+                "source_ref",
+                "from",
+                "to",
+                "device",
+                "inode",
+                "revision"
+            ]
+        )
+        .trim_matches(|c| c == '{' || c == '}'),
+        each(&plan["documents"], &["world", "path", "before", "after"]),
+    );
+    format!("sha256:{:x}", Sha256::digest(written.as_bytes()))
+}
+
+/// The review of #352, F2 (DLW build ruling 2026-11-12): a move of `Work` is carried out no more than it is planned. Between
+/// the seals and the rule that refuses such a plan, `ctrl` planned and sealed one. The journal here is built as that `ctrl`
+/// wrote it: `central.file-map-move/v2`, the root's Source `Work` to `Work2`, the root's relations document rewritten, alpha
+/// to refresh, and alpha holding its seal. On every grant its apply was carried out and took `Work` away, leaving a ground no
+/// act reads. Now the apply is refused in words, whatever seals it holds, and nothing moves; the rollback closes the journal,
+/// which shows the seal is the journal's own; an apply after that is refused alike, and the map reads.
+#[test]
+fn a_sealed_journal_of_a_move_of_work_is_not_carried_out() {
+    let world = granting(&every_act(), "control:root");
+    let root = world.root();
+    granted_at(&world, &["control:root", "project:alpha"]);
+    let source = legacy_root_source(&world, "Work");
+    let work = identity(&root.join("Work"));
+    let relations =
+        fs::read_to_string(root.join("Control/relations/source-relations.json")).unwrap();
+    let mut after: Value = serde_json::from_str(&relations).unwrap();
+    after["file_map"]["resources"][&source]["path"] = json!("Work2");
+    let carried = edited_journal(&world, |plan| {
+        assert_eq!(plan["schema"], "central.file-map-move/v2", "{plan}");
+        plan["source_ref"] = json!(source);
+        plan["from"] = json!("Work");
+        plan["to"] = json!("Work2");
+        plan["device"] = json!(work.0);
+        plan["inode"] = json!(work.1);
+        plan["refresh_worlds"] = json!(["project:alpha"]);
+        plan["documents"] = json!([{"world":"control:root","path":null,"before":relations,
+            "after":serde_json::to_string_pretty(&after).unwrap()}]);
+        plan["links"] = json!([]);
+    });
+    let id = carried["plan_id"].as_str().unwrap();
+    let plan: Value = serde_json::from_slice(
+        &fs::read(root.join(format!(".central/bkmr/moves/{id}.json"))).unwrap(),
+    )
+    .unwrap();
+    fs::create_dir_all(root.join("Work/alpha/.central/bkmr/moves")).unwrap();
+    fs::write(
+        root.join(format!("Work/alpha/.central/bkmr/moves/{id}.seal.json")),
+        serde_json::to_vec_pretty(
+            &json!({"schema":"central.file-map-move-seal/v1","plan_id":id,
+            "project":"alpha","digest":seal_digest(&plan)}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let before = ground_but_locks(&world);
+    let refused_here = |when: &str| {
+        let refused = ctrl(&world, CARRIED[0].0, &carried, Some(PERSON));
+        assert_eq!(refused["ok"], false, "{when}: {refused}");
+        let words = refused["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            words.contains(
+                "This move's journal moves Work, which is Work itself, or a folder that holds it, and Central does not \
+                 carry such a move out"
+            ) && words.contains("Roll the move back to close its journal; nothing was moved"),
+            "{when}: {words}"
+        );
+        assert!(
+            root.join("Work/alpha/plan.md").is_file() && !root.join("Work2").exists(),
+            "{when}: Work stands where it stood"
+        );
+    };
+    refused_here("the apply");
+    assert_eq!(ground_but_locks(&world), before, "nothing moves");
+    let closed = ctrl(&world, CARRIED[1].0, &carried, Some(PERSON));
+    assert_eq!(closed["ok"], true, "{closed}");
+    assert_eq!(journal_state(&world, &carried), "rolled-back");
+    refused_here("an apply after the rollback");
+    for scope in [None, Some("alpha")] {
+        let inspected = ctrl(
+            &world,
+            "central.file-map.inspect",
+            &json!({"project":scope,"resources":false}),
+            None,
+        );
+        assert_eq!(inspected["ok"], true, "{inspected}");
+    }
+}
+
+/// The review of #352, F5: a lock that stands in a Work project that did not admit the move is still taken, and held while the
+/// move runs. Beta's `file-map.lock` stands, as an act of beta's own left it. A plan of a move of the root's own, which reaches
+/// no project, takes the file-map locks of its scopes and then the ground's `source-mutation.lock`, which this test holds: so
+/// the plan stands still with whatever it has taken. Beta's lock is then asked for as another writer in beta would ask, and is
+/// refused: the plan holds it. That is the lock's own answer, whatever the machine's load; the bound on the asking only ends
+/// the test where the plan never takes the lock. Then the ground's lock is let go, the plan answers, and it made nothing in
+/// beta.
+#[test]
+fn a_lock_that_stands_in_a_project_that_did_not_admit_the_move_is_still_taken() {
+    use std::os::unix::io::AsRawFd;
+    let world = a_world_of_two_projects();
+    let root = world.root();
+    let source = root_link(&world, "Control/user/note-link");
+    fs::create_dir(root.join("Work/beta/.central")).unwrap();
+    let betas = fs::File::create(root.join("Work/beta/.central/file-map.lock")).unwrap();
+    let grounds = fs::OpenOptions::new()
+        .write(true)
+        .open(root.join(".central/source-mutation.lock"))
+        .unwrap();
+    assert_eq!(
+        unsafe { libc::flock(grounds.as_raw_fd(), libc::LOCK_EX) },
+        0
+    );
+    let in_beta = |world: &World| -> Vec<PathBuf> {
+        works_tree(world)
+            .into_iter()
+            .map(|(path, _)| path)
+            .filter(|path| path.starts_with(world.root().join("Work/beta")))
+            .collect()
+    };
+    let before = in_beta(&world);
+    let (held, planned) = std::thread::scope(|scope| {
+        let planning = scope.spawn(|| {
+            ctrl(
+                &world,
+                "central.file-map.move-plan",
+                &json!({"source_ref":source,"destination":"Control/user/note2.md"}),
+                Some(PERSON),
+            )
+        });
+        let asked = std::time::Instant::now();
+        let held = loop {
+            if unsafe { libc::flock(betas.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+                break std::io::Error::last_os_error().raw_os_error() == Some(libc::EWOULDBLOCK);
+            }
+            unsafe { libc::flock(betas.as_raw_fd(), libc::LOCK_UN) };
+            if planning.is_finished() || asked.elapsed() > std::time::Duration::from_secs(20) {
+                break false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        assert_eq!(
+            unsafe { libc::flock(grounds.as_raw_fd(), libc::LOCK_UN) },
+            0
+        );
+        (held, planning.join().unwrap())
+    });
+    assert!(held, "the plan holds beta's lock while it runs: {planned}");
+    assert_eq!(planned["ok"], true, "{planned}");
+    assert_eq!(in_beta(&world), before, "the move makes nothing in beta");
+}
+
+/// The review of #352, the mutants it did not run: a scope the ground holds outside itself is held to the place the ground
+/// keeps for it. The ground declares a folder scope, Music, and registers a project, far, both outside the ground. A move of
+/// the root's own is planned, and its journal edited to say that Music, or far, stands at another folder outside the ground
+/// (for far, a folder that holds a project of the same id). Apply and rollback are refused in words on the root's grant and
+/// on every grant, and nothing is made in that folder or under `Work`.
+#[test]
+fn a_scope_outside_the_ground_that_a_journal_sets_elsewhere_is_refused() {
+    for (respelled, elsewhere) in [("folder:Music", "Music2"), ("project:far", "far2")] {
+        let world = granting(&every_act(), "control:root");
+        declare_outside_scopes(&world);
+        let other = world.0.join(elsewhere);
+        project(&other, "far");
+        let other = fs::canonicalize(&other).unwrap();
+        let (carried, journal) = a_move_of_the_roots_own(&world);
+        edit_journal(&journal, |plan| {
+            let scope = plan["worlds"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|scope| scope["world"] == respelled)
+                .expect("the journal lists the scope outside the ground");
+            assert_eq!(scope["external"], true, "{scope}");
+            scope["path"] = json!(other);
+        });
+        let holds = |folder: &Path| {
+            let mut entries = Vec::new();
+            let mut stack = vec![folder.to_path_buf()];
+            while let Some(folder) = stack.pop() {
+                for entry in fs::read_dir(&folder).unwrap() {
+                    let path = entry.unwrap().path();
+                    if path.is_dir() {
+                        stack.push(path.clone());
+                    }
+                    entries.push(path);
+                }
+            }
+            entries.sort();
+            entries
+        };
+        let (before, there) = (works_tree(&world), holds(&other));
+        for grants in [vec!["control:root"], vec!["control:root", "project:alpha"]] {
+            granted_at(&world, &grants);
+            for (action, _) in CARRIED {
+                let refused = ctrl(&world, action, &carried, Some(PERSON));
+                assert_eq!(refused["ok"], false, "{respelled} {action}: {refused}");
+                let words = refused["error"]["message"].as_str().unwrap_or_default();
+                assert!(
+                    words.contains("the ground holds no such scope there"),
+                    "{respelled} {action}: {words}"
+                );
+                assert_eq!(
+                    works_changes(&world, &before),
+                    Vec::<String>::new(),
+                    "{respelled} {action} on {grants:?}"
+                );
+                assert_eq!(holds(&other), there, "{respelled} {action} on {grants:?}");
+            }
+        }
+    }
 }

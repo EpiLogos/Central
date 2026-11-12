@@ -877,24 +877,6 @@ fn rename_stands_alone(root: &Path, plan: &Plan) -> bool {
                 identity(&owner_root.join(&plan.to), plan.device, plan.inode)
             })
 }
-/// Where `Work` stands now, as the journal `input` names spells it, when that journal is the root's move of `Work` itself and
-/// was carried so far as its rename: `Work` does not stand, and the journal's Source stands at its `to`. None for any other
-/// journal, and wherever `Work` stands. `move-plan` refuses such a move now (DLW build ruling 2026-11-12); one planned by an
-/// older `ctrl` and begun leaves a ground no act reads, since each act asks its grant of a ground that holds `Work`, and the
-/// gate says so in words (file_map.rs `the_persons_act`).
-pub(crate) fn work_moved_to(root: &Path, input: &Value) -> Option<String> {
-    if fs::symlink_metadata(root.join("Work")).is_ok() {
-        return None;
-    }
-    let id = input.get("plan_id").and_then(Value::as_str)?;
-    let plan: Plan = serde_json::from_slice(&fs::read(path(root, id).ok()?).ok()?).ok()?;
-    let moved = journal_schema(&plan.schema)
-        && plan.id == id
-        && plan.world == "control:root"
-        && Path::new(&plan.from) == Path::new("Work")
-        && relative(&plan.to).is_ok_and(|to| identity(&root.join(to), plan.device, plan.inode));
-    moved.then_some(plan.to)
-}
 /// An in-ground scope of a journal stands at the folder its spelling names, in the disk's own spelling of it (DLW build ruling
 /// 2026-11-11, round 54j item 1; the review of #346's third commit, C1): no link in any name of it, and each name in the case and
 /// form the disk keeps, as `plan` writes it (a scope is opened that way, `safe_member`) and as an external scope is already held
@@ -1249,6 +1231,18 @@ pub(crate) fn apply(
     let at_to = identity(&to, plan.device, plan.inode);
     if at_from == at_to {
         return Err(conflict("Move source identity missing or ambiguous"));
+    }
+    // A move of `Work` itself, or of a folder that holds it, is carried out no more than it is planned (DLW build ruling
+    // 2026-11-12; the review of #352, F2): a journal that a `ctrl` from before that rule planned and sealed is refused here,
+    // whatever seals it holds, since carried out it leaves a ground no act reads. A rollback goes on: it closes the journal, or
+    // undoes what was carried once a hand has put `Work` back.
+    if !rollback && within(&root.join("Work"), &from) {
+        return Err(invalid(format!(
+            "This move's journal moves {}, which is Work itself, or a folder that holds it, and Central does not carry such a \
+             move out: every project of Work stands under it, and no act reads a ground whose Work is away. Roll the move back \
+             to close its journal; nothing was moved",
+            plan.from
+        )));
     }
     let sealed = Sealed::of(
         root,
