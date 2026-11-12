@@ -243,6 +243,23 @@ impl AgentProfileStore {
                 (Some(current.revision.clone()), false)
             }
         };
+        // A name given with white space before or after it is the name without it (be2j.c3 item 4, DLW build ruling 2026-11-11):
+        // it is trimmed before it is compared with the kept name and before it is kept, so "Guardian " over "Guardian" is no
+        // change and never a second name that reads the same. The kept bytes given back as they stand are not given anew, and
+        // stay as they stand, as every kept word does.
+        let trimmed;
+        let profile = match profile.name.as_deref() {
+            Some(name)
+                if name != name.trim()
+                    && existing.as_ref().and_then(|kept| kept.name.as_deref()) != Some(name) =>
+            {
+                let mut named = profile.clone();
+                named.name = Some(name.trim().to_owned());
+                trimmed = named;
+                &trimmed
+            }
+            _ => profile,
+        };
         // A name given back as a read showed it is the kept name (be2j.c2 item 1): the read shows a kept name that holds a
         // character that draws nothing without it, or as an unnamed agent when nothing else is left (`shown_agent_name`, the
         // one source of both). The kept bytes are what is written, so reading a profile and saving it changes nothing; any
@@ -850,6 +867,68 @@ mod tests {
         let (given, expected) = next(keep("Guar\u{200D}dian"), "Guardian");
         store.save_given(&given, Some(&expected)).unwrap();
         assert_eq!(stored().as_deref(), Some("Guardian"));
+    }
+
+    /// be2j.c3 item 4 (DLW build ruling 2026-11-11): a name given with white space before or after it is trimmed before it is
+    /// compared and kept. Before, "Guardian " over a kept name shown as "Guardian" was taken for a changed name and kept with
+    /// its space, a second name that reads the same.
+    #[test]
+    fn a_name_given_with_white_space_around_it_is_trimmed_before_it_is_compared_and_kept() {
+        let root = crate::tempdir().unwrap();
+        let store = AgentProfileStore::personal(root.path());
+        // Created so: kept without the space.
+        let mut first = personal_profile("p1");
+        first.name = Some("  Guardian ".into());
+        store.save(&first, None).unwrap();
+        let path = store.source_path("agent-profile:guardian").unwrap();
+        let keep = |name: &str| {
+            let mut kept: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            kept["name"] = serde_json::json!(name);
+            std::fs::write(&path, serde_json::to_vec_pretty(&kept).unwrap()).unwrap();
+            store.read("agent-profile:guardian").unwrap().profile
+        };
+        let stored = || {
+            let kept: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            kept["name"].as_str().map(str::to_owned)
+        };
+        assert_eq!(stored().as_deref(), Some("Guardian"));
+        let mut revision = 1;
+        let mut next = |mut profile: AgentProfile, name: &str| {
+            revision += 1;
+            let expected = std::mem::replace(&mut profile.revision, format!("p{revision}"));
+            profile.name = Some(name.into());
+            (profile, expected)
+        };
+        // The shown name with a space after it is the shown name: the kept bytes stay, whichever save takes it.
+        let (given, expected) = next(keep("Guar\u{200D}dian"), "Guardian ");
+        store.save(&given, Some(&expected)).unwrap();
+        assert_eq!(stored().as_deref(), Some("Guar\u{200D}dian"));
+        // Central's own edit takes the word as given, trimmed.
+        let (given, expected) = next(keep("Guar\u{200D}dian"), " Guardian ");
+        store.save_given(&given, Some(&expected)).unwrap();
+        assert_eq!(stored().as_deref(), Some("Guardian"));
+        // A changed name is kept without the space around it, inside it as given.
+        let (given, expected) = next(keep("Guardian"), "  The  Warden ");
+        store.save(&given, Some(&expected)).unwrap();
+        assert_eq!(stored().as_deref(), Some("The  Warden"));
+        // What is left once trimmed is checked as given: a character that draws nothing is still refused.
+        let (given, expected) = next(keep("Guardian"), " Guard\u{200B}ian ");
+        assert!(matches!(
+            store.save(&given, Some(&expected)),
+            Err(AgentProfileStoreError::InvalidProfile(why))
+                if why == "Agent Profile name must hold no control character and no invisible one"
+        ));
+        assert_eq!(stored().as_deref(), Some("Guardian"));
+        // A name kept with a space around it and given back byte for byte is not given anew: it stays as it stands, a
+        // character that draws nothing in it too.
+        for kept in [" Guardian", "Guar\u{200D}dian "] {
+            let (mut given, expected) = next(keep(kept), kept);
+            given.purpose = Some(format!("Keeps the ground, {}.", given.revision));
+            store.save(&given, Some(&expected)).unwrap();
+            assert_eq!(stored().as_deref(), Some(kept));
+        }
     }
 
     /// be2j.c2 item 3 (DLW build ruling 2026-11-10): a Routine ref given with a character that draws nothing is refused, and one

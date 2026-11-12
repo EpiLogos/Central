@@ -1006,6 +1006,53 @@ fn bounded_text_list(gave: &Value, key: &str) -> io::Result<Vec<String>> {
     }
 }
 
+/// Central's code for an end given to a run that has ended already (be2j.c3,
+/// DLW build ruling 2026-11-11). Before, it answered with the one code every
+/// conflict has (`stale_basis_or_identity_conflict`, `action_result` in
+/// `mod.rs`), which also says that the Day's record changed under a write. The
+/// two ask different things of a caller: a changed Day is read again and the
+/// same end given once more, an ended run is finished and nothing is given
+/// again. A caller told them apart by reading the Day's moves a second time
+/// (AIKit's runner, `crates/aikit-cli/src/day_move_runner.rs`); now the code
+/// says which, and the refusal carries the run as it ended. Every other
+/// conflict keeps the old code.
+pub(crate) const RUN_ENDED_ALREADY: &str = "run_ended_already";
+
+/// What an end given to an ended run is refused with: its words are the ones
+/// the refusal always had, and it carries the run as Central holds it.
+#[derive(Debug)]
+struct EndedAlready {
+    run_ref: String,
+    run: Value,
+}
+
+impl std::fmt::Display for EndedAlready {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} has ended already", self.run_ref)
+    }
+}
+
+impl std::error::Error for EndedAlready {}
+
+/// The Action result of an end refused because its run has ended already, or
+/// none for any other error. Its status and its words are what they were; the
+/// code is the run's own (`RUN_ENDED_ALREADY`), and beside what every native
+/// refusal's details carry stand the run's ref and the run as it ended, with
+/// its state and what it gave.
+pub(crate) fn ended_already_result(action: &str, error: &io::Error) -> Option<ActionResult> {
+    let ended = error.get_ref()?.downcast_ref::<EndedAlready>()?;
+    Some(ActionResult::failure_coded(
+        Some(action),
+        crate::result::ResultStatus::VerificationFailure,
+        RUN_ENDED_ALREADY,
+        error.to_string(),
+        Some(
+            json!({"retry_policy_action":"central.work.policy","automatic_authority_widening":false,
+            "outside_writes_prevented":false,"run_ref":ended.run_ref,"run":ended.run}),
+        ),
+    ))
+}
+
 fn run_result(created: bool, run: &Value, revision: &str) -> Value {
     json!({"schema":"central.day-move-run-record/v1","created":created,"run":run,"revision":revision,
         "automatic_agent_or_model_invocation":false})
@@ -1111,7 +1158,13 @@ pub(crate) fn move_record(
                 .find(|run| run["run_ref"] == run_ref)
                 .ok_or_else(|| invalid("unknown run: no begin is recorded for this run_ref"))?;
             if !run["end"].is_null() {
-                return Err(conflict(format!("{run_ref} has ended already")));
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    EndedAlready {
+                        run_ref: run_ref.to_owned(),
+                        run: run.clone(),
+                    },
+                ));
             }
             let begun_at = run["begun_at_unix_ms"].as_i64().unwrap_or(0);
             if at_ms < begun_at {

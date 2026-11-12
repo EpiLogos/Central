@@ -232,11 +232,14 @@ fn shown_request(request: &NotificationRequest) -> NotificationRequest {
     }
 }
 
-/// A caller's words as a notification shows them (DLW build ruling 2026-11-10,
-/// be2j.c2 item 2), cleaned before the shared `names::shown`:
-/// - a line or paragraph separator (U+2028, U+2029) parts words, so it is not
-///   taken out: it becomes `separator`, a space in a title and a line break in
-///   a body;
+/// A caller's words as a notification shows them (DLW build rulings 2026-11-10,
+/// be2j.c2 item 2, and 2026-11-11, be2j.c3 item 3), cleaned before the shared
+/// `names::shown`:
+/// - what parts words is not taken out, or the words either side would fuse:
+///   a line or paragraph separator (U+2028, U+2029), a vertical tab, a form
+///   feed, a next line (U+0085) and a \r that no \n follows each become
+///   `separator`, a space in a title and a line break in a body. A \r before
+///   its \n goes, and the \n is the line break;
 /// - an ANSI escape sequence is taken out whole (`escape_end`), and an ESC
 ///   that opens none takes only itself and the character that named its form;
 /// - any other control character but a line break and a tab is taken out. The
@@ -253,10 +256,12 @@ fn shown_words(text: &str, separator: char) -> String {
             continue;
         }
         at += 1;
-        if c == '\u{2028}' || c == '\u{2029}' {
-            plain.push(separator);
-        } else if c == '\n' || c == '\t' || !c.is_control() {
-            plain.push(c);
+        match c {
+            '\u{2028}' | '\u{2029}' | '\u{0b}' | '\u{0c}' | '\u{85}' => plain.push(separator),
+            '\r' if chars.get(at) != Some(&'\n') => plain.push(separator),
+            '\n' | '\t' => plain.push(c),
+            c if !c.is_control() => plain.push(c),
+            _ => {}
         }
     }
     crate::names::shown(&plain)
@@ -273,9 +278,13 @@ fn shown_words(text: &str, separator: char) -> String {
 /// - a string sequence (OSC ESC `]`, DCS ESC `P`, APC ESC `_`, PM ESC `^`,
 ///   SOS ESC `X`) goes whole when it is ended on its own line: by ESC `\`, by
 ///   a BEL for an OSC, or by another ESC, which is then read as an opening of
-///   its own. Without an end only its two opening characters go;
-/// - ESC, one or more intermediate characters and one final character
-///   (U+0030–007E), a character set selection and the like, goes whole;
+///   its own. Its line ends where the shown words break: at a \n, a \r, a
+///   vertical tab, a form feed, a next line, a line or paragraph separator.
+///   Without an end only its two opening characters go;
+/// - ESC, any intermediate characters (U+0020–002F) and one final character
+///   (U+0030–007E) goes whole: with none between, a two-character escape
+///   (ESC `7`, ESC `c`, ESC `=`), its letter with it (be2j.c3 item 3); with
+///   some, a character set selection and the like;
 /// - any other ESC goes alone.
 fn escape_end(chars: &[char], at: usize) -> usize {
     let run = |from: usize, low: char, high: char| {
@@ -301,7 +310,7 @@ fn escape_end(chars: &[char], at: usize) -> usize {
                     '\u{07}' if form == ']' => return end + 1,
                     '\u{1b}' if chars.get(end + 1) == Some(&'\\') => return end + 2,
                     '\u{1b}' => return end,
-                    '\n' | '\r' | '\u{2028}' | '\u{2029}' => break,
+                    '\n' | '\r' | '\u{0b}' | '\u{0c}' | '\u{85}' | '\u{2028}' | '\u{2029}' => break,
                     _ => {}
                 }
             }
@@ -309,7 +318,7 @@ fn escape_end(chars: &[char], at: usize) -> usize {
         }
         _ => {
             let end = run(at + 1, '\u{20}', '\u{2f}');
-            if end > at + 1 && is(end, '\u{30}', '\u{7e}') {
+            if is(end, '\u{30}', '\u{7e}') {
                 end + 1
             } else {
                 at + 1
@@ -918,25 +927,28 @@ mod tests {
                 ),
                 ("Done, not ended", "abcd"),
             ),
-            // A character set selection goes whole; an ESC that opens nothing goes alone.
+            // A character set selection goes whole; so does an ESC and one final character, its letter with it (be2j.c3
+            // item 3).
             (
                 ("Set", "text \u{1b}(B more, f\u{1b}g"),
-                ("Set", "text  more, fg"),
+                ("Set", "text  more, f"),
             ),
             // So does any ESC, intermediate characters, one final character: the final may be a digit.
             (("\u{1b}(0Line", "p\u{1b}#8q\u{1b} Fr"), ("Line", "pqr")),
-            // Each line end closes the line a string sequence may end on: a \r, a line and a paragraph separator.
+            // Each line end closes the line a string sequence may end on: a \r, a line and a paragraph separator. The \r
+            // parts the words either side of it (be2j.c3 item 3).
             (
                 (
                     "\u{1b}]0;a\rb\u{07}c",
                     "x\u{1b}]0;a\u{2028}b\u{07}c\u{1b}]0;d\u{2029}e\u{07}f",
                 ),
-                ("0;abc", "x0;a\nbc0;d\nef"),
+                ("0;a bc", "x0;a\nbc0;d\nef"),
             ),
-            // Any other control goes; a line break and a tab stay, a \r goes from before its \n.
+            // Any other control goes; a line break and a tab stay, a \r goes from before its \n. A next line (U+0085) parts
+            // words as a separator does (be2j.c3 item 3).
             (
                 ("Bell\u{07} and\u{0} null", "a\u{08}b\u{7f}c\u{85}d\r\ne\tf"),
-                ("Bell and null", "abcd\ne\tf"),
+                ("Bell and null", "abc\nd\ne\tf"),
             ),
             // A zero-width joiner and non-joiner are taken out as ruled (be2j rulings 2 and 9): unchanged.
             (
@@ -1019,6 +1031,177 @@ mod tests {
         assert_eq!(
             provider.delivered.lock().unwrap().last().cloned().unwrap(),
             ("Done".to_owned(), String::new())
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A provider that keeps what it was handed, and the registry it stands in.
+    fn kept_provider() -> (std::sync::Arc<Provider>, ConnectorRegistry) {
+        struct Shared(std::sync::Arc<Provider>);
+        impl Connector for Shared {
+            fn manifest(&self) -> &ConnectorManifest {
+                self.0.manifest()
+            }
+            fn probe(&self, port: &PortContract, context: &ConnectorContext) -> CapabilityProbe {
+                self.0.probe(port, context)
+            }
+            fn user_notification(&self) -> Option<&dyn UserNotification> {
+                Some(self.0.as_ref())
+            }
+        }
+        let provider = std::sync::Arc::new(Provider::new(false));
+        let mut connectors = ConnectorRegistry::default();
+        connectors.register(Shared(provider.clone())).unwrap();
+        (provider, connectors)
+    }
+
+    /// be2j.c3 item 3 (DLW build ruling 2026-11-11): what the cleaning leaves of words a person reads. A lone \r, a vertical
+    /// tab, a form feed and a next line part words as a separator does, so the words either side do not fuse; a two-character
+    /// escape goes whole, its letter with it; U+009B and U+009D open nothing, so the words after one stay; and an opening that
+    /// is whole by the rules takes what a terminal would take, up to its end.
+    #[test]
+    fn a_requests_words_stay_parted_and_a_short_escape_goes_whole() {
+        let root = root();
+        let (provider, connectors) = kept_provider();
+        // The words as asked, then as a title and as a body show them.
+        let rows: Vec<(&str, &str, &str)> = vec![
+            // A \r that no \n follows parts words: a space in a title, a line break in a body.
+            ("Step 1\rStep 2", "Step 1 Step 2", "Step 1\nStep 2"),
+            // A \r before its \n goes, and the \n is the one line break; two \r are two.
+            ("one\r\ntwo", "one\ntwo", "one\ntwo"),
+            ("one\r\r\ntwo", "one \ntwo", "one\n\ntwo"),
+            // A vertical tab, a form feed, a next line: each parts words.
+            ("a\u{0b}b", "a b", "a\nb"),
+            ("a\u{0c}b", "a b", "a\nb"),
+            ("a\u{85}b", "a b", "a\nb"),
+            // A two-character escape goes whole: save and restore the cursor, reverse index, reset, keypad mode, and the
+            // string end that ends nothing.
+            (
+                "a\u{1b}7b\u{1b}8c\u{1b}Md\u{1b}ce\u{1b}=f\u{1b}\\g",
+                "abcdefg",
+                "abcdefg",
+            ),
+            // An ESC that no final character follows goes alone: at the end, before a character past U+007E, and before an
+            // intermediate character that no final one follows.
+            ("abc\u{1b}", "abc", "abc"),
+            ("a\u{1b}\u{e9}b", "a\u{e9}b", "a\u{e9}b"),
+            ("a\u{1b}!\u{e9}b", "a!\u{e9}b", "a!\u{e9}b"),
+            // U+009B and U+009D open nothing: each goes as the control it is, and what follows stays.
+            ("a\u{9b}31mred", "a31mred", "a31mred"),
+            ("a\u{9d}0;title\u{07}b", "a0;titleb", "a0;titleb"),
+            // An opening that is whole takes what a terminal would: a DCS to the next ESC, a CSI to its final character.
+            (
+                "Press \u{1b}P to pause, \u{1b}[1mnow",
+                "Press now",
+                "Press now",
+            ),
+            ("\u{1b}[12 tests failed", "ests failed", "ests failed"),
+            // A string sequence nothing ends on its line loses its opening only. Its line ends at each character that
+            // parts lines: an end past one is not its end.
+            ("a\u{1b}]0;never ended", "a0;never ended", "a0;never ended"),
+            ("a\u{1b}]0;t\u{0b}b\u{07}c", "a0;t bc", "a0;t\nbc"),
+            ("a\u{1b}]0;t\u{0c}b\u{07}c", "a0;t bc", "a0;t\nbc"),
+            ("a\u{1b}]0;t\u{85}b\u{07}c", "a0;t bc", "a0;t\nbc"),
+        ];
+        for &(asked, title, body) in &rows {
+            let sent = run(
+                &root,
+                &connectors,
+                "personal.notify",
+                json!({"title": asked, "body": asked, "caller_ref": "routine:probe"}),
+            );
+            assert!(sent.ok, "{asked:?}: {sent:?}");
+            let delivered = provider.delivered.lock().unwrap().last().cloned().unwrap();
+            assert_eq!(
+                (delivered.0.as_str(), delivered.1.as_str()),
+                (title, body),
+                "{asked:?}"
+            );
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// The sha256 of `escape-cases.json`, the cases AIKit holds too (`crates/aikit-cli/src/escape-cases.json`, read by its
+    /// day-move runner's tests), byte for byte: a rule that moves on one side fails that side's test of the cases, and a file
+    /// that moves on one side without the other fails here or there (be2j.a3 item 5, DLW build ruling 2026-11-11).
+    const ESCAPE_CASES_SHA256: &str =
+        "c2d19384dfacf5f39610c48494b2a45ba4010a655c549d30945844edd2ea9db8";
+
+    #[test]
+    fn a_notifications_words_are_cleaned_of_escapes_as_the_cases_aikit_holds_too_say() {
+        use sha2::{Digest, Sha256};
+        let file = include_str!("escape-cases.json");
+        assert_eq!(
+            format!("{:x}", Sha256::digest(file.as_bytes())),
+            ESCAPE_CASES_SHA256,
+            "the cases are the ones AIKit holds"
+        );
+        let cases: Value = serde_json::from_str(file).unwrap();
+        let cases = cases["cases"].as_array().unwrap();
+        assert!(cases.len() >= 30, "{}", cases.len());
+        for case in cases {
+            let name = case["name"].as_str().unwrap();
+            let text = case["text"].as_str().unwrap();
+            // A title is the words on one line, a body the words in a block.
+            assert_eq!(
+                shown_words(text, ' '),
+                case["line"].as_str().unwrap(),
+                "{name}"
+            );
+            assert_eq!(
+                shown_words(text, '\n'),
+                case["block"].as_str().unwrap(),
+                "{name}"
+            );
+        }
+    }
+
+    /// be2j.c3 item 2 (DLW build ruling 2026-11-11): a request of white space alone is the Port's empty request, a line or a
+    /// paragraph separator included, and gets the Port's words; nothing is shown and nothing is kept. The words for a request
+    /// that shows nothing are for one that holds something else.
+    #[test]
+    fn a_request_of_white_space_alone_is_the_ports_empty_request() {
+        let root = root();
+        let (provider, connectors) = kept_provider();
+        for (title, body) in [
+            ("", "\u{2028}"),
+            ("\u{2028}", "\u{2029}"),
+            (" \t", "\n"),
+            ("\r\n", "\u{85}\u{0b}\u{0c}"),
+            ("\u{a0}\u{3000}", ""),
+        ] {
+            let asked = run(
+                &root,
+                &connectors,
+                "personal.notify",
+                json!({"title": title, "body": body, "caller_ref": "routine:probe"}),
+            );
+            assert!(!asked.ok, "{title:?} {body:?}");
+            assert_eq!(
+                asked.error.unwrap().message,
+                "Notification requires a non-empty title or body.",
+                "{title:?} {body:?}"
+            );
+        }
+        // White space beside a character that draws nothing is not empty as given: it shows nothing.
+        let hidden = run(
+            &root,
+            &connectors,
+            "personal.notify",
+            json!({"title": " \u{200B} ", "body": "\u{2028}", "caller_ref": "routine:probe"}),
+        );
+        assert_eq!(hidden.error.unwrap().message, SHOWS_NOTHING);
+        assert!(
+            provider.delivered.lock().unwrap().is_empty(),
+            "nothing is shown"
+        );
+        let listed = run(&root, &connectors, "personal.notifications.list", json!({}));
+        assert!(
+            listed.data.unwrap()["requests"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "nor kept"
         );
         let _ = fs::remove_dir_all(root);
     }
