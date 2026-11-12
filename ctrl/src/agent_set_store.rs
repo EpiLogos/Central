@@ -335,8 +335,14 @@ impl RelationRecordStore {
                 });
             }
         }
+        // Where a record stands its directory is read as before. For a first save the directory is made only once every
+        // word is admitted, just before the write, so a first save that is refused leaves no folder it made (review of #351,
+        // DLW build ruling 2026-11-12).
         let dir = self.source_dir();
-        ensure_directory_path(&self.owner_root, &dir)?;
+        let stands = path.exists();
+        if stands {
+            ensure_directory_path(&self.owner_root, &dir)?;
+        }
         let existing = if path.exists() {
             Some(self.parse_record(&path)?)
         } else {
@@ -414,6 +420,9 @@ impl RelationRecordStore {
         }
 
         within_limit(&bytes)?;
+        if !stands {
+            ensure_directory_path(&self.owner_root, &dir)?;
+        }
         atomic_write(&path, &bytes)?;
 
         Ok(RelationRecordWriteReceipt {
@@ -1715,6 +1724,31 @@ mod tests {
             Err(RelationRecordStoreError::RevisionConflict { .. })
         ));
         store.save(&next, Some("w1")).unwrap();
+    }
+
+    /// Review of #351 (DLW build ruling 2026-11-12): a first save that is refused for a word of its place leaves nothing in
+    /// the root, no empty folder among it. The same record given plainly is then saved.
+    #[test]
+    fn a_first_save_refused_for_its_places_label_leaves_no_folder() {
+        let fixture = ReadFixture::new();
+        let store = RelationRecordStore::worlds_at_root(&fixture.0);
+        let mut record = native_world_record();
+        record["place"] = json!({"reference":"geonames:2647356","label":"Hast\u{200B}ings","latitude_degrees":50.85,
+            "longitude_degrees":0.57,"altitude_metres":10.0,"timezone":"Europe/London"});
+        match store.save(&record, None) {
+            Err(RelationRecordStoreError::InvalidRecord(why)) => assert!(
+                why.contains("label must hold no control character and no invisible one"),
+                "{why}"
+            ),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(fs::read_dir(&fixture.0).unwrap().count(), 0);
+        record["place"]["label"] = json!("Hastings");
+        assert!(store.save(&record, None).unwrap().created);
+        assert_eq!(
+            store.read("control:root").unwrap().record["place"]["label"],
+            "Hastings"
+        );
     }
 
     #[test]

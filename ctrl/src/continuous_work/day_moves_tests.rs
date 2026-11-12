@@ -4286,7 +4286,7 @@ fn an_end_for_an_ended_run_has_its_own_code_and_other_conflicts_keep_theirs() {
 /// the Day keeps the words as given, what stood in the way when it does not, and the text as it is shown on one line. A
 /// file that moves on one side without the other's sha256 changing fails here or there (be2m item 5).
 const JOINER_CASES_SHA256: &str =
-    "65263d5c2a267e6de0e6eb6ed77640237c6e1b5ebd2677bb967ed84ab03367ea";
+    "a2d64a326f63b1bd140c3808b639468df6501c730a0ee0cf7890a51f53dc6012";
 
 fn joiner_cases() -> Vec<Value> {
     let cases = include_str!("joiner-cases.json");
@@ -4383,7 +4383,7 @@ fn a_records_words_keep_a_joiner_in_its_place_and_refused_words_name_what_stood_
     kept.sort();
     assert_eq!(read_back, kept);
     assert!(
-        kept.len() >= 9
+        kept.len() >= 20
             && kept
                 .iter()
                 .any(|words| words.contains("\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"))

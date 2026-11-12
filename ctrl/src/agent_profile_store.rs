@@ -202,7 +202,13 @@ impl AgentProfileStore {
                 expected: expected.to_owned(),
             });
         }
-        ensure_directory_path(&self.owner_root, &dir)?;
+        // Where a profile stands its directory is read as before. For a first save the directory is made only once every
+        // word is admitted, just before the write, so a first save that is refused leaves no folder it made (review of #351,
+        // DLW build ruling 2026-11-12).
+        let stands = path.exists();
+        if stands {
+            ensure_directory_path(&self.owner_root, &dir)?;
+        }
         // The read-compare-write window must be exclusive per profile file:
         // two concurrent saves of the same revision otherwise both pass the
         // CAS check and the loser's write silently wins or collides.
@@ -309,6 +315,9 @@ impl AgentProfileStore {
         let mut bytes = serde_json::to_vec_pretty(profile)
             .map_err(|error| AgentProfileStoreError::InvalidProfile(error.to_string()))?;
         bytes.push(b'\n');
+        if !stands {
+            ensure_directory_path(&self.owner_root, &dir)?;
+        }
         atomic_write(&self.owner_root, &path, &bytes)?;
 
         Ok(AgentProfileWriteReceipt {
@@ -699,6 +708,35 @@ mod tests {
         store.save(&personal_profile("p1"), None).unwrap();
         assert!(store.source_dir().is_dir());
         store.save(&personal_profile("p2"), Some("p1")).unwrap();
+    }
+
+    /// Review of #351 (DLW build ruling 2026-11-12): a first save that is refused for a word it gives leaves no folder it
+    /// made: nothing under Control. The same profile given plainly is then saved, and its folders made.
+    #[test]
+    fn a_first_save_refused_for_its_name_leaves_no_folder() {
+        let root = crate::tempdir().unwrap();
+        let store = AgentProfileStore::personal(root.path());
+        let mut hidden = personal_profile("p1");
+        hidden.name = Some("Guar\u{200B}dian".into());
+        assert!(matches!(
+            store.save(&hidden, None),
+            Err(AgentProfileStoreError::InvalidProfile(why))
+            if why == "Agent Profile name must hold no control character and no invisible one"
+        ));
+        assert!(!root.path().join("Control").exists());
+        assert!(!store.source_dir().exists());
+        hidden.name = Some("Guardian".into());
+        store.save(&hidden, None).unwrap();
+        assert!(store.source_dir().is_dir());
+        assert_eq!(
+            store
+                .read("agent-profile:guardian")
+                .unwrap()
+                .profile
+                .name
+                .as_deref(),
+            Some("Guardian")
+        );
     }
 
     #[test]
