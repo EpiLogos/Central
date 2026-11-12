@@ -22,6 +22,12 @@ pub(crate) use crate::file_map_index::refresh;
 use crate::file_map_index::search;
 use crate::file_map_index::{refresh_walked, walk, Walk};
 #[cfg(test)]
+thread_local! {
+    /// Each time the person's gate asks the authority (`the_persons_act`), in order: "before any scope", then the World of each
+    /// scope it asks at.
+    static AUTHORITY_ASKED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+#[cfg(test)]
 type BeforeReadAcknowledgement = Box<dyn FnOnce()>;
 #[cfg(test)]
 thread_local! {
@@ -1271,6 +1277,10 @@ fn person_act_writes(op: &str) -> &'static str {
 /// the act reaches (round 54d F1). So an act refused for its credential reads no scope, and no refused act makes anything. A refusal
 /// opens with whose act it is, then its cause. It answers the World its grant stands at, which the act must then run at
 /// (`admitted_as`); every other operation reads no credential and answers none.
+///
+/// The authority reads a ground that holds `Work`, so on a ground whose `Work` is away it matches no credential, and no act of
+/// the person's can be admitted. That refusal is worded from the ground alone (`work_away`), the same for every caller whose
+/// credential is within its bounds and for every act: nothing is read on such a caller's word, a journal least of all.
 fn the_persons_act(
     root: &Path,
     op: &str,
@@ -1291,12 +1301,18 @@ fn the_persons_act(
         .get("expected_authority_revision")
         .and_then(Value::as_str);
     let now = crate::civil_time_adoption::now();
+    // The authority is asked once before any scope is read, and then once at each scope the act stands at (`held`).
+    #[cfg(test)]
+    AUTHORITY_ASKED.with(|asked| asked.borrow_mut().push("before any scope".to_owned()));
     crate::continuous_work::authority::authenticate_before_scope(
         root, token, &action, expected, now,
     )
+    .map_err(|error| work_away(root, error))
     .map_err(words)?;
     let standing = grant_scope(root, op, input).map_err(words)?;
     let held = |scope: &crate::continuous_work::source::Scope| {
+        #[cfg(test)]
+        AUTHORITY_ASKED.with(|asked| asked.borrow_mut().push(scope.world_ref.clone()));
         crate::continuous_work::authority::authenticate(scope, token, &action, expected, now)
             .and_then(|principal| principal.require_human().map(|()| principal.scope_ref))
     };
@@ -1322,6 +1338,27 @@ fn the_persons_act(
             .map_err(words)?;
     }
     Ok(Some(at))
+}
+
+/// The authority's "not found" on a ground whose `Work` does not stand, in words (DLW build ruling 2026-11-12; the review of
+/// #352, F1). The authority reads the ground before it matches the credential, and a ground without `Work` does not read, so
+/// this is said to a caller no grant names as well as to the person. It is therefore worded from the ground alone: that `Work`
+/// does not stand where the ground keeps it, and that a hand puts it back before any press. It reads no journal and names no
+/// place but the ground's own `Work`. Any other refusal is passed on as it came.
+fn work_away(root: &Path, error: io::Error) -> io::Error {
+    let work = root.join("Work");
+    if error.kind() != io::ErrorKind::NotFound || fs::symlink_metadata(&work).is_ok() {
+        return error;
+    }
+    io::Error::new(
+        error.kind(),
+        format!(
+            "Work does not stand at {}, where the ground keeps it, and no act reads a ground without it: a hand puts Work back \
+             there before any press. If a move took it away, that move's journal says in its `to` where it stands, and the \
+             move is rolled back once Work is back",
+            work.display()
+        ),
+    )
 }
 
 /// Where one of the person's acts stands (`grant_scope`): the scope whose grant must hold it, and each other Work project (by its
@@ -1472,8 +1509,19 @@ pub(crate) fn journal_reach(
     all: &[Scope],
     input: &Value,
 ) -> io::Result<Vec<(String, PathBuf)>> {
+    move_reach(ground, all, "move-apply", input)
+}
+
+/// Every Work project the places of a move reach, as the gate reads them for `op`: a plan's from its input, an apply's and a
+/// rollback's from the journal.
+fn move_reach(
+    ground: &Path,
+    all: &[Scope],
+    op: &str,
+    input: &Value,
+) -> io::Result<Vec<(String, PathBuf)>> {
     let mut reach = Vec::new();
-    for place in act_places(ground, all, root_scope(all), "move-apply", input)? {
+    for place in act_places(ground, all, root_scope(all), op, input)? {
         for reached in reached_projects(ground, &place.path, place.link) {
             if !reach.contains(&reached) {
                 reach.push(reached);
@@ -1481,6 +1529,46 @@ pub(crate) fn journal_reach(
         }
     }
     Ok(reach)
+}
+
+/// The scopes' state folders in which a move takes a lock only where one already stands, and makes none (DLW build ruling
+/// 2026-11-12; the review of #349, F1). A move takes the locks of every scope it runs with, and a lock taken where none stood
+/// makes `.central` and an empty lock file. Inside a Work project's tree that is an entry in the project, so it is made only
+/// where the project admitted the move: for a plan, where the move reaches the project, whose grant the gate then asked
+/// (`move_reach`); for an apply and a rollback, where the project holds the journal's seal
+/// (`file_map_moves::plan_held_by`). Anywhere else in a Work project the move writes nothing (`file_map_moves::Sealed`), and a
+/// lock that stands there is still taken, so other writers are held as before.
+fn locks_only_standing(
+    ground: &Path,
+    all: &[Scope],
+    op: &str,
+    input: &Value,
+) -> io::Result<Vec<PathBuf>> {
+    if !op.starts_with("move-") {
+        return Ok(Vec::new());
+    }
+    let reach = if op == "move-plan" {
+        move_reach(ground, all, op, input)?
+    } else {
+        Vec::new()
+    };
+    let mut only_standing = Vec::new();
+    for scope in all {
+        let admitted = work_projects_of(ground, &scope.state)
+            .into_iter()
+            .filter(|(_, project)| within(&scope.state, project))
+            .all(|(name, project)| {
+                if op == "move-plan" {
+                    reach.contains(&(name, project))
+                } else {
+                    super::file_map_moves::plan_held_by(ground, input, &project)
+                }
+            });
+        if !admitted && !only_standing.contains(&scope.state) {
+            only_standing.push(scope.state.clone());
+        }
+    }
+    Ok(only_standing)
 }
 
 /// The member of Work (its folder's name) whose grant holds an act at `scope`: a project of Work, one folder under `Work`, read in
@@ -1910,6 +1998,14 @@ fn admitted_as(
         Vec::new()
     };
 
+    let only_standing = locks_only_standing(&root, &all, op, input)?;
+    let take = |owner_root: &Path, name: &str| {
+        if only_standing.iter().any(|kept| kept == owner_root) {
+            crate::source_safety::lock_standing(owner_root, name)
+        } else {
+            crate::source_safety::lock(owner_root, name).map(Some)
+        }
+    };
     let mut locks = Vec::new();
     if !matches!(
         op,
@@ -1924,7 +2020,7 @@ fn admitted_as(
         roots.dedup();
         for owner_root in roots {
             if owner_root != root {
-                locks.push(crate::source_safety::lock(&owner_root, "file-map.lock")?);
+                locks.extend(take(&owner_root, "file-map.lock")?);
             }
         }
     }
@@ -1943,10 +2039,7 @@ fn admitted_as(
         roots.sort();
         roots.dedup();
         for owner_root in roots {
-            source_locks.push(crate::source_safety::lock(
-                &owner_root,
-                "source-mutation.lock",
-            )?);
+            source_locks.extend(take(&owner_root, "source-mutation.lock")?);
         }
     }
     if let Some(original) = &read_root {
@@ -7685,5 +7778,31 @@ mod folder_scope_tests {
         );
         assert!(ground.join("Control/user/page.md").is_file());
         assert!(!ground.join("Control/user/kept-elsewhere").exists());
+    }
+
+    /// The review of #352, F4: the person's gate asks the authority once before any scope is read, and then once at each scope
+    /// the act stands at. A second asking before any scope stood in the gate, left over from an edit: it could refuse nothing
+    /// the first had not, and read and parsed the authority Source again for every act. An act refused for its credential is
+    /// asked once and reads no scope; a read asks nothing.
+    #[test]
+    fn the_persons_gate_asks_the_authority_once_before_any_scope_and_once_where_the_act_stands() {
+        let asked = || AUTHORITY_ASKED.with(|asked| asked.take());
+        let world = World::new();
+        let token = world.person_moves();
+        let input = json!({"name":"Music","path":world.music(),"kind":"folder","allow_external":true,
+            "media":["wav"],"expected_revision":world.revision()});
+        asked();
+        let at = the_persons_act(&world.root, "scope-register", &input, Some(token)).unwrap();
+        assert_eq!(at.as_deref(), Some("control:root"));
+        assert_eq!(asked(), ["before any scope", "control:root"]);
+        let unknown = "file-map-folder-unknown-controlled-test-not-a-live-secret";
+        let refused = the_persons_act(&world.root, "scope-register", &input, Some(unknown));
+        assert_eq!(refused.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(asked(), ["before any scope"]);
+        assert_eq!(
+            the_persons_act(&world.root, "inspect", &json!({}), None).unwrap(),
+            None
+        );
+        assert_eq!(asked(), Vec::<String>::new());
     }
 }

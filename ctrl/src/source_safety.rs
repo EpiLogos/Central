@@ -50,6 +50,32 @@ pub(crate) fn lock_within(
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
 }
+/// [`lock`] only where the lock file already stands: nothing is made, and `Ok(None)` says there was none to take. A move takes a
+/// Work project's locks this way where that project holds no plan of it (file_map.rs `locks_only_standing`), so it makes no
+/// entry there.
+pub(crate) fn lock_standing(root: &Path, name: &str) -> io::Result<Option<SourceLock>> {
+    let dir = root.join(".central");
+    match fs::symlink_metadata(&dir) {
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    }
+    reject_symlink_components(root, Path::new(".central"))?;
+    let f = match OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(dir.join(name))
+    {
+        Ok(f) => f,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(Some(SourceLock(f)))
+}
 fn lock_file(root: &Path, name: &str) -> io::Result<File> {
     let dir = root.join(".central");
     match fs::create_dir(&dir) {
