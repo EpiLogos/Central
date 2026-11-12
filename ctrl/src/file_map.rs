@@ -1382,20 +1382,7 @@ fn grant_scope(root: &Path, op: &str, input: &Value) -> io::Result<Standing> {
         // A link lies where its folder lies, and holds nothing. A link place where a folder stands is no link's: it is judged as
         // that folder, with all it holds, so a journal's link step at a Work project's own folder, or at `Work`, asks every
         // project it would move (round 54i item 1; B1). Apply refuses such a step whatever the grants.
-        let stands_a_folder =
-            fs::symlink_metadata(&place.path).is_ok_and(|entry| entry.file_type().is_dir());
-        let reaches = match place
-            .path
-            .parent()
-            .filter(|_| place.link && !stands_a_folder)
-        {
-            Some(folder) => work_projects_of(&ground, folder)
-                .into_iter()
-                .filter(|(_, project)| within(folder, project))
-                .collect(),
-            None => work_projects_of(&ground, &place.path),
-        };
-        for (reached, project) in reaches {
+        for (reached, project) in reached_projects(&ground, &place.path, place.link) {
             // A Work project whose declaration did not open is no scope the act could name: the refusal is that project's own
             // words, which say what to mend (round 54h item 5).
             if let Some(gone) = unreachable.iter().find(|gone| {
@@ -1446,6 +1433,54 @@ fn grant_scope(root: &Path, op: &str, input: &Value) -> io::Result<Standing> {
         scope: crate::continuous_work::source::Scope::resolve(root, member)?,
         also,
     })
+}
+
+/// The Work projects a place reaches, each by its folder's name and that folder: the one reading for the gate, which asks each
+/// one's grant (`grant_scope`), and for a move, which writes in a Work project only on a plan that project itself holds
+/// (`file_map_moves::Sealed`; DLW build ruling 2026-11-11, round 54k). So whoever needs a grant for a place needs a seal for it,
+/// and a later change of the one moves the other. `place` is as `resolved` gives it, or `resolved_entry` for a link.
+pub(crate) fn reached_projects(ground: &Path, place: &Path, link: bool) -> Vec<(String, PathBuf)> {
+    let stands_a_folder = fs::symlink_metadata(place).is_ok_and(|entry| entry.file_type().is_dir());
+    match place.parent().filter(|_| link && !stands_a_folder) {
+        Some(folder) => work_projects_of(ground, folder)
+            .into_iter()
+            .filter(|(_, project)| within(folder, project))
+            .collect(),
+        None => work_projects_of(ground, place),
+    }
+}
+
+/// [`reached_projects`] for a place a carried move is about to write at, read on the disk as it stands at this moment: `path` as
+/// the move names it, a link's own place (`link`) by its folder and never through it.
+pub(crate) fn projects_written_at(
+    ground: &Path,
+    path: &Path,
+    link: bool,
+) -> Vec<(String, PathBuf)> {
+    let place = if link {
+        resolved_entry(path)
+    } else {
+        resolved(path)
+    };
+    reached_projects(ground, &place, link)
+}
+
+/// Every Work project the places of a move's journal reach, as the gate reads them for its apply and rollback (`act_places`): the
+/// projects `move-plan` seals its plan in.
+pub(crate) fn journal_reach(
+    ground: &Path,
+    all: &[Scope],
+    input: &Value,
+) -> io::Result<Vec<(String, PathBuf)>> {
+    let mut reach = Vec::new();
+    for place in act_places(ground, all, root_scope(all), "move-apply", input)? {
+        for reached in reached_projects(ground, &place.path, place.link) {
+            if !reach.contains(&reached) {
+                reach.push(reached);
+            }
+        }
+    }
+    Ok(reach)
 }
 
 /// The member of Work (its folder's name) whose grant holds an act at `scope`: a project of Work, one folder under `Work`, read in

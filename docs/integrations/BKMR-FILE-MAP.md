@@ -108,16 +108,17 @@ it is spelled, is that project's: an act that writes there names that project an
 stands on its grant, and one that names another scope, or none, is refused in
 words that say both. A Source the act binds from a Work project needs that
 project's grant as well, and so does `adopt-db` of a database inside one. A move
-stands at the root, and at each Work project it writes in; see below, where the
-one limit of this rule is also stated: a move carried out from a journal that was
-edited by hand.
+stands at the root, and at each Work project it writes in; see below, where a
+move's own rule is stated: it writes in a project only on a plan that project
+holds.
 
 One exception stands. A project nested inside a Work project's tree and
 registered at the root is a scope of the root's: an act in its own tree stands on
 the root's grant. A `link` there makes the link, the relations document and the
 lock files inside the Work project's tree on the root's grant alone. Outside such
-a nested scope's own tree, a root grant writes into no Work project, with the
-limit stated under [an edited journal](#the-limit-an-edited-journal).
+a nested scope's own tree, a root grant writes into no Work project; for a move
+carried out from its journal that rests on
+[the plan each project holds](#a-project-writes-only-on-a-plan-it-holds).
 
 A place that holds a Work project's folder, `Work` itself or the ground, reaches
 that project's tree too. A write there is refused at the root, and a move of it
@@ -165,7 +166,8 @@ operating system's isolation, not a path check:
 - A move's plan, its apply and its rollback each take the locks of every scope
   they run with. So each makes `.central/file-map.lock` and
   `.central/source-mutation.lock`, two empty files, in a Work project where they
-  were not yet there, whatever the move reaches.
+  were not yet there, whatever the move reaches. A plan also leaves its seal,
+  `.central/bkmr/moves/<id>.seal.json`, in each Work project the move writes in.
 - The gate reads the places before the act takes its lock and writes. A writer
   that swaps a folder for a link between the two can defeat that reading. Each
   writer then makes its own check and refuses a link in any folder of the path it
@@ -279,42 +281,56 @@ Source another hand moved is refused as before, naming the project that does not
 read. A rollback whose own put-back fails leaves the Source where the move took
 it from, says so, and the journal reads again once its scopes do.
 
-### The limit: an edited journal
+### A project writes only on a plan it holds
 
-An edited move journal is not yet a boundary this rule defends in full. A journal
-is a file in the root's `.central/bkmr/moves`. Apply, a resumed apply and
-rollback take the file they are handed and check its content rule by rule, as
-above; they do not yet know that it is the journal `move-plan` wrote. The
-routes below were found by review. Each but the fifth wrote in a Work project
-on the root's grant alone. Each is closed and held by a test:
+A move writes in a Work project only when that project itself holds a seal of
+the very journal being carried out.
 
-- a link step of the root's at a path inside a Work project;
-- a project scope spelled with `..` through the moved folder, read as a stand-in
-  before the rename and as the project after it;
-- a link the root keeps inside a Work project, rewritten by a move (no edit was
-  needed for this one);
-- a link step at a Work project's own folder, or at `Work`, which moved the whole
-  folder aside;
-- scopes that do not read after the rename, which left the Source moved and the
-  journal unreadable (nothing was written in a project);
-- a scope spelled through a link of the root's own, with a link step that
-  replaces that link, so the scope's relations document was written wherever the
-  new link led.
+- **What is sealed.** The whole journal as `move-plan` wrote it, but for its
+  `state`: the scopes and their spellings, the owner, where the Source stands and
+  goes, its identity and revision, every link step, and every relations
+  document's scope, place and bytes. The seal is a SHA-256 digest of that. A
+  sealed journal says `central.file-map-move/v2`.
+- **Where it is kept.** `move-plan` writes one small file in each Work project
+  the move's places reach: `Work/<project>/.central/bkmr/moves/<id>.seal.json`,
+  mode 0600 in a folder 0700, beside the lock files a plan makes there. The
+  projects are the ones the gate asks a grant of for that move, by one reading
+  of the places; so a project that needs a grant for a move holds a seal of it,
+  and a plan the project's grant did not admit leaves no seal there. A seal
+  already standing for the same id is never written over.
+- **What apply and rollback ask.** Before every write (the rename, each link
+  step's link, kept name and staged name, each relations document) they read
+  the folder actually written in, as the disk resolves it at that moment, find
+  each Work project it lies in or holds from `Work`'s own entries, and ask that
+  project's seal to be the digest of the journal in hand. The seal is read as
+  the project's own ordinary file, with no link in the folders above it. Every
+  place is also asked once before the rename, so a journal that cannot be
+  carried out whole is refused before anything moves.
+- **So an edited journal writes in no project.** A journal changed in the
+  root's `.central`, in any field, is no longer the plan a project holds:
+  "This move's journal is not the plan the Work project alpha holds
+  (Work/alpha/.central/bkmr/moves/<id>.seal.json) … plan the move again". This
+  holds whatever grants stand. The rule-by-rule checks above remain, and are no
+  longer what the boundary rests on.
+- **How long a seal lives.** As long as its journal, at every state: a move
+  that was rolled back can be applied again from the same journal, and that
+  needs the seal. Nothing removes a journal today, so a project keeps one small
+  seal file for each move journal that wrote in it, in its
+  `.central/bkmr/moves`. Whatever later removes old journals removes their
+  seals with them, and nothing else removes one.
+- **A journal from before seals** (`central.file-map-move/v1`) is carried out
+  where it writes in no Work project. Where it would write in one it is refused,
+  in words that list what the move holds in that project (which link, which
+  relations document), so a hand can finish or undo it there; the person plans
+  the move again.
 
-One more is known and not closed. A journal edited to name a project outside
-the ground as the move's owner moves a folder inside that project, on the root's
-grant. No Work project is written and no grant is passed by, since a project
-outside the ground stands on the root's grant; but `move-plan` refuses every
-move in such a scope ("External scopes are read-only"), and apply does not ask.
+A move's journal that names a folder scope or a project outside the ground as
+its owner is not carried out, as `move-plan` would not plan it.
 
-A journal edited by a hand that can write in the root's `.central` may find
-another such route. So every sentence here that says a root grant writes into no
-Work project, or that a move stands at each Work project it writes in, is true
-of a journal as `move-plan` wrote it and of the edits listed above, and is not
-claimed of every edit. Closing the class takes a different rule, which is not
-built yet: a scope is written by a move only on a plan that scope itself holds,
-so a journal edited in the root's `.central` no longer matches the copy in the
-project and writes nothing there.
+What stays outside this rule is what stays outside every path check here: a
+second writer running as the same user that swaps a folder between a check and
+the write after it, and a hand that can write in the project's own tree, which
+needs no journal.
 
 A link whose Source no longer reads stops every plan. The refusal names the link
 and the project it stands in, and says to remove the link or restore its Source:
