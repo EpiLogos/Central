@@ -22,6 +22,7 @@ pub const AGENT_PROFILE_PROPOSE_ACTION: &str = "agent-profile.propose";
 pub const AGENT_PROFILE_EXPRESS_ACTION: &str = "agent-profile.express";
 pub const AGENT_PROFILE_CHAIN_ORDER_ACTION: &str = "agent-profile.chain-order";
 pub const AGENT_PROFILE_CHAIN_REPLACE_ACTION: &str = "agent-profile.chain-replace";
+pub const AGENT_PROFILE_CHAIN_ADMIT_ACTION: &str = "agent-profile.chain-admit";
 pub const AGENT_PROFILE_RENAME_ACTION: &str = "agent-profile.rename";
 pub const AGENT_PROFILE_PIN_SOURCE_ACTION: &str = "agent-profile.pin-source";
 pub const AGENT_PROFILE_UNPIN_SOURCE_ACTION: &str = "agent-profile.unpin-source";
@@ -637,6 +638,49 @@ fn chain_replace_action(
             ));
         }
         profile.skill_set_refs[at] = with;
+        Ok(true)
+    })
+}
+
+/// `agent-profile.chain-admit`: one more SkillSet carried by the agent (O-I #743: a SkillSet dragged from the browser onto the
+/// agent's chain, DLW manual §19.7 "The Skillset rack holds that repertoire"), after those it carries already, or at the place
+/// `at` names among them. A SkillSet stands once on a chain; one carried already is hot-swapped or ordered, never admitted again.
+fn chain_admit_action(
+    _registry: &ActionRegistry,
+    input: &Value,
+    context: &ActionExecutionContext<'_>,
+) -> ActionResult {
+    let action = AGENT_PROFILE_CHAIN_ADMIT_ACTION;
+    let admitted = match required_text(input, "skill_set_ref", action) {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let at = match input.get("at") {
+        None | Some(Value::Null) => None,
+        Some(value) => match value.as_u64().and_then(|at| usize::try_from(at).ok()) {
+            Some(at) => Some(at),
+            None => {
+                return invalid_input(
+                    action,
+                    "at is the place among the SkillSets the agent carries, counted from 0.",
+                )
+            }
+        },
+    };
+    chain_edit(action, input, context, |profile| {
+        if profile.skill_set_refs.contains(&admitted) {
+            return Err(format!(
+                "The agent already carries {admitted}; a SkillSet stands once on its chain."
+            ));
+        }
+        let carried = profile.skill_set_refs.len();
+        let at = at.unwrap_or(carried);
+        if at > carried {
+            return Err(format!(
+                "The agent carries {carried} SkillSets, so a new one stands at 0 to {carried}: {at} is past the end."
+            ));
+        }
+        profile.skill_set_refs.insert(at, admitted);
         Ok(true)
     })
 }
@@ -1267,6 +1311,13 @@ pub fn register_agent_profile_actions(registry: &mut ActionRegistry) {
             "Replace one SkillSet an AgentProfile carries with another, in the same place on the agent's chain, at the profile's next revision under compare-and-swap.",
             vec![input("replace", "string", true), input("with", "string", true)],
             chain_replace_action,
+        ),
+        (
+            AGENT_PROFILE_CHAIN_ADMIT_ACTION,
+            "Admit a SkillSet to an Agent's Chain",
+            "Add one SkillSet to those an AgentProfile carries before its Agent (the agent's chain, O-I manual §19.4 and §19.7), after the ones it carries or at the place `at` names, at the profile's next revision under compare-and-swap. A SkillSet stands once on a chain.",
+            vec![input("skill_set_ref", "string", true), input("at", "integer", false)],
+            chain_admit_action,
         ),
         (
             AGENT_PROFILE_RENAME_ACTION,
@@ -1999,6 +2050,99 @@ mod tests {
             "{outside:?}"
         );
         assert_eq!(pinned().0, "r4");
+    }
+
+    /// O-I #743: a SkillSet dropped on the agent's chain is admitted through its profile.
+    #[test]
+    fn a_skillset_is_admitted_to_the_agent_s_chain_through_its_profile() {
+        let root = fixture_root();
+        let registry = registry();
+        let mut options = None;
+        let mut connectors = None;
+        let mut connector_context = None;
+        let context = context(&root, &mut options, &mut connectors, &mut connector_context);
+        let mut profile = personal_profile("r1");
+        profile["skill_set_refs"] = json!([]);
+        let created = registry.execute(
+            AGENT_PROFILE_SAVE_ACTION,
+            &json!({"scope": "root", "profile": profile}),
+            &context,
+        );
+        assert!(created.ok, "{created:?}");
+        let act = |revision: &str, extra: Value| {
+            let mut input = json!({"scope": "root", "profile_ref": "agent-profile:guardian", "expected_revision": revision});
+            for (key, value) in extra.as_object().unwrap() {
+                input[key] = value.clone();
+            }
+            registry.execute(AGENT_PROFILE_CHAIN_ADMIT_ACTION, &input, &context)
+        };
+        let said = |result: &ActionResult| {
+            result
+                .error
+                .as_ref()
+                .map(|error| error.message.clone())
+                .unwrap_or_default()
+        };
+        let carried = || {
+            let read = registry.execute(
+                AGENT_PROFILE_READ_ACTION,
+                &json!({"scope": "root", "profile_ref": "agent-profile:guardian"}),
+                &context,
+            );
+            let profile = read.data.unwrap()["profile"].clone();
+            (
+                profile["revision"].as_str().unwrap().to_owned(),
+                profile["skill_set_refs"].clone(),
+            )
+        };
+
+        // An agent that carries none takes its first SkillSet, at the next revision.
+        let first = act("r1", json!({"skill_set_ref": "skill-set:a"}));
+        assert!(first.ok, "{first:?}");
+        let data = first.data.as_ref().unwrap();
+        assert_eq!(data["state"], "saved");
+        assert_eq!(data["previous_revision"], "r1");
+        assert_eq!(data["chain"]["skill_set_refs"], json!(["skill-set:a"]));
+        assert_eq!(carried(), ("r2".into(), json!(["skill-set:a"])));
+        // The next stands after those carried; one given a place stands there.
+        assert!(act("r2", json!({"skill_set_ref": "skill-set:b"})).ok);
+        let placed = act("r3", json!({"skill_set_ref": "skill-set:c", "at": 0}));
+        assert!(placed.ok, "{placed:?}");
+        assert_eq!(
+            carried(),
+            (
+                "r4".into(),
+                json!(["skill-set:c", "skill-set:a", "skill-set:b"])
+            )
+        );
+        // Refused in words, and nothing written: one carried already, a place past the end, a place that is no count, no ref,
+        // and a revision the caller did not see.
+        let twice = act("r4", json!({"skill_set_ref": "skill-set:a"}));
+        assert!(
+            !twice.ok && said(&twice).contains("already carries skill-set:a"),
+            "{twice:?}"
+        );
+        let past = act("r4", json!({"skill_set_ref": "skill-set:d", "at": 4}));
+        assert!(!past.ok && said(&past).contains("past the end"), "{past:?}");
+        let no_count = act("r4", json!({"skill_set_ref": "skill-set:d", "at": -1}));
+        assert!(
+            !no_count.ok && said(&no_count).contains("counted from 0"),
+            "{no_count:?}"
+        );
+        assert!(!act("r4", json!({})).ok);
+        let stale = act("r3", json!({"skill_set_ref": "skill-set:d"}));
+        assert!(
+            !stale.ok && said(&stale).contains("revision conflict"),
+            "{stale:?}"
+        );
+        assert_eq!(
+            carried(),
+            (
+                "r4".into(),
+                json!(["skill-set:c", "skill-set:a", "skill-set:b"])
+            )
+        );
+        fs::remove_dir_all(root).ok();
     }
 
     #[test]
