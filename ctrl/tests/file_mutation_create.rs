@@ -344,3 +344,72 @@ fn an_agent_sessions_page_writes_are_horizon_changes_that_name_its_session() {
         "each write names the session it was made in; the outside edit names no one: {changes:#?}"
     );
 }
+
+/// A world folder a person names freely ("My World", "DLW Worlds") puts a space in the ground's path. Central's own listing escapes
+/// the root in every location ref it hands out (files.rs CentralPathRef); a Flow created beside that listing — the ref the shell builds
+/// from it, as Start a Flow and New › Flow do — must be accepted by the create door, not refused as "another root" (O-I map #706,
+/// 12 Nov empty-start walk).
+#[test]
+fn a_flow_is_created_from_the_listing_ref_where_the_ground_path_has_a_space() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir()
+        .join(format!("central-spaced-{}-{nonce}", std::process::id()))
+        .join("My World");
+    fs::create_dir_all(&path).unwrap();
+    let root = fs::canonicalize(&path).unwrap();
+    let registry = create_core_action_registry();
+    let options = RootOptions {
+        explicit_root: Some(root.clone()),
+        ..RootOptions::default()
+    };
+    let init = run(&registry, &options, "central.init", &json!({}));
+    assert_eq!(init.status, ResultStatus::Success, "init: {:?}", init.error);
+    let listed = run(
+        &registry,
+        &options,
+        "central.files.list",
+        &json!({"path": "Control/user"}),
+    );
+    assert_eq!(
+        listed.status,
+        ResultStatus::Success,
+        "list: {:?}",
+        listed.error
+    );
+    let base = listed.data.expect("listing")["location"].clone();
+    let base_ref = base["ref"].as_str().expect("listing ref");
+    assert!(
+        base_ref.contains("%20"),
+        "the listing escapes the space in the root: {base_ref}"
+    );
+    let name = "flow-2026-11-12-2216.html";
+    let location = json!({
+        "schema": "central.path-ref/v1",
+        "ref": format!("{base_ref}/flows/{name}"),
+        "root": base["root"],
+        "path": format!("{}/flows/{name}", base["path"].as_str().unwrap()),
+    });
+    let created = run(
+        &registry,
+        &options,
+        "central.files.write",
+        &json!({
+            "location": location,
+            "expected_revision": "",
+            "content": "<!doctype html><html><body>a first entry</body></html>",
+            "actor": "human:desktop",
+            "actor_kind": "human",
+        }),
+    );
+    assert_eq!(
+        created.status,
+        ResultStatus::Success,
+        "the create door accepts the listing's own ref: {:?}",
+        created.error
+    );
+    assert_eq!(created.data.expect("created")["outcome"], "created");
+    assert!(root.join("Control/user/flows").join(name).is_file());
+}
