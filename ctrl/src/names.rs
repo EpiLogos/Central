@@ -80,14 +80,27 @@ const ZWJ: char = '\u{200D}';
 
 /// The emoji ZWJ sequences Unicode lists (UTS #51's RGI_Emoji_ZWJ_Sequence, the set of `emoji-zwj-sequences.txt`), each
 /// in its fully qualified form: Unicode 17.0, as ICU4C 78.3 exports it, the Unicode of the `icu_properties` data the
-/// lock pins. `icu_properties` 2.3 compiles no set of sequences in, so the list is kept as a file, generated and never
-/// edited by hand (its header holds the command), the same bytes in Central and O-I under one sha256. A test holds it
-/// to that sha256 and to the compiled data: every part of every sequence is an emoji there, with its selector exactly
-/// where it is drawn as text without one.
+/// lock pins. `icu_properties` 2.3 compiles no set of sequences in, so the list is kept as a file whose lines are
+/// generated and never edited by hand (its header holds the command); O-I will hold the same bytes under the same
+/// sha256. What the list holds is pinned by that sha256 alone. Tests hold its shape to the compiled data (every part of
+/// every sequence is an emoji there, with its selector exactly where it is drawn as text without one) and its header's
+/// Unicode version to the Unicode the build carries, so a lock that moves the data fails until the list is generated
+/// again (be2m.4 item 4).
 const EMOJI_ZWJ_SEQUENCES: &str = include_str!("continuous_work/emoji-zwj-sequences.txt");
 
 /// U+FE0F, the selector that asks for a character to be drawn as an emoji.
 const EMOJI_SELECTOR: char = '\u{FE0F}';
+
+/// The Myanmar asat and the Myanmar stacker (MYANMAR SIGN ASAT, MYANMAR SIGN VIRAMA): the two signs of a kinzi, named
+/// because no property tells one (`joiner_kept`). A test holds what is said of them to the compiled data.
+const MYANMAR_ASAT: char = '\u{103A}';
+const MYANMAR_STACKER: char = '\u{1039}';
+
+/// What a ZWJ is called when it is refused between two emoji (be2m.4 item 5): the emoji are there, and joined they are
+/// no sequence the list holds. The version is the list's own (a test holds the two together), so a person who sees one
+/// emoji on a newer system is told why Central does not.
+const UNLISTED_EMOJI_SEQUENCE: &str =
+    "a joiner between emoji that Unicode 17.0 does not list as one emoji";
 
 /// Every spelling of every listed emoji ZWJ sequence, and the length of the longest.
 struct ListedEmoji {
@@ -96,8 +109,12 @@ struct ListedEmoji {
 }
 
 /// The listed emoji ZWJ sequences in each of their spellings: the fully qualified form, and that form with any of its
-/// U+FE0F left out (UTS #51's minimally qualified and unqualified forms), which is drawn the same. Nothing else is a
-/// spelling: no selector where the fully qualified form has none, and no skin tone the list does not give.
+/// U+FE0F left out (UTS #51's minimally qualified and unqualified forms), which is drawn the same where an emoji font
+/// is chosen. Two of the 2,667 are drawn as text on a Mac, the joiner drawing nothing: a person bouncing a ball joined
+/// to the female or the male sign with both selectors left out (U+26F9 U+200D U+2640, U+26F9 U+200D U+2642). They
+/// are spellings of a listed sequence all the same, and no property tells them from the others, so they are kept
+/// (be2m.4 item 6). Nothing else is a spelling: no selector where the fully qualified form has none, and no skin tone
+/// the list does not give.
 fn listed_emoji() -> &'static ListedEmoji {
     static LISTED: std::sync::OnceLock<ListedEmoji> = std::sync::OnceLock::new();
     LISTED.get_or_init(|| {
@@ -128,7 +145,8 @@ fn listed_emoji() -> &'static ListedEmoji {
 }
 
 /// Whether the joiner at `at` is part of the words a person sees (be2m, DLW
-/// build ruling 2026-11-10; be2m.2 and be2m.3, DLW build rulings 2026-11-12):
+/// build ruling 2026-11-10; be2m.2, be2m.3 and be2m.4, DLW build rulings
+/// 2026-11-12):
 /// a joiner that changes how the characters beside it are drawn is kept in
 /// prose, and one that draws nothing where it stands is refused like any other
 /// invisible character. Prose only: the words of a Day's field records and
@@ -155,15 +173,34 @@ fn listed_emoji() -> &'static ListedEmoji {
 ///   letter, M a nonspacing mark, M1 a nonspacing mark whose class is not 0,
 ///   D a character of Indic_Syllabic_Category Vowel_Dependent. V is a virama
 ///   that conjoins (be2m.3 item 2): Canonical_Combining_Class Virama and
-///   Indic_Syllabic_Category Virama or Invisible_Stacker, in A2 and in B. A
-///   sign of the virama class that only kills the vowel (Pure_Killer: the
-///   Thai phinthu, the Myanmar asat, the Tibetan halanta, the Tagalog signs;
-///   Reordering_Killer; the Brahmi number joiner; the Tifinagh consonant
-///   joiner) forms no conjunct, so a joiner after it changes nothing and is
-///   refused. The marks between are not asked their Script: a mark is often
-///   Inherited or Common. A virama has the Script of the letters it is
-///   written with, so a letter of a script that has none (a Latin one)
-///   carries none here.
+///   Indic_Syllabic_Category Virama or Invisible_Stacker, in A2 and in B.
+///   Indic_Syllabic_Category decides: a character of the virama class that
+///   it calls Pure_Killer (24: the Thai phinthu, the Myanmar asat, the
+///   Tibetan halanta, the Tagalog signs), Reordering_Killer (2) or
+///   Number_Joiner (the Brahmi number joiner) is no V, and a joiner after it
+///   is refused but for the asat's one place below. That is what the data
+///   says; nothing here says what a font draws there. The marks between are
+///   not asked their Script: a mark is often Inherited or Common. A virama
+///   has the Script of the letters it is written with, so a letter of a
+///   script that has none (a Latin one) carries none here;
+/// - right after a character of the virama class that Indic_Syllabic_Category
+///   gives no category (Other: its script is outside that property's scope;
+///   in Unicode 17.0 the Tifinagh consonant joiner U+2D7F alone), which
+///   stands on a letter of its script (`L M* V`), and right before another
+///   letter of that script: either joiner (be2m.4 item 1). The class is the
+///   data's word that the character is a virama, the V of UAX #31's A2 and B;
+///   that the joiner breaks the bi-consonant ligature U+2D7F asks for is
+///   what a Mac draws, not data. A joiner between two Tifinagh letters with
+///   no U+2D7F is refused: every Tifinagh letter is Joining_Type Non_Joining,
+///   and no property gives the script a join there;
+/// - U+200C right after the Myanmar asat U+103A, which stands on a Myanmar
+///   letter, and right before the Myanmar stacker U+1039 and a Myanmar
+///   letter (be2m.4 item 2): the spelling that keeps a kinzi from forming.
+///   The two signs are named, since no property tells a kinzi: by the data
+///   the asat is of the virama class (UAX #31's V, so this is its A2, the
+///   stacker a mark of a class before the letter) and a Pure_Killer, the
+///   stacker an Invisible_Stacker, and both are Myanmar's. Nothing else is
+///   kept after an asat.
 ///
 /// The properties are Unicode's, read from the ICU data the lock pins
 /// (`icu_properties` 2.3.0 with its compiled data, Unicode 17.0), and the
@@ -187,12 +224,21 @@ pub fn joiner_kept(chars: &[char], at: usize) -> bool {
     let letter = |c: char| GeneralCategoryGroup::Letter.contains(category(c));
     let mark = |c: char| category(c) == Category::NonspacingMark;
     let reordered_mark = |c: char| mark(c) && class(c) != CanonicalCombiningClass::NotReordered;
+    let syllabic = |c: char| CodePointMapData::<IndicSyllabicCategory>::new().get(c);
     let conjoins = |c: char| {
         class(c) == CanonicalCombiningClass::Virama
             && matches!(
-                CodePointMapData::<IndicSyllabicCategory>::new().get(c),
+                syllabic(c),
                 IndicSyllabicCategory::Virama | IndicSyllabicCategory::InvisibleStacker
             )
+    };
+    // The letter the mark at `sign` stands on, across nonspacing marks (`L M*`): a letter of the mark's own script.
+    let stands_on = |sign: usize| {
+        before[..sign]
+            .iter()
+            .rev()
+            .find(|c| !mark(**c))
+            .filter(|l| letter(**l) && script(**l) == script(before[sign]))
     };
 
     // Inside a listed emoji sequence that stands whole.
@@ -233,17 +279,37 @@ pub fn joiner_kept(chars: &[char], at: usize) -> bool {
             }
         }
     }
+    // Right after a sign that stands on a letter of its script, in two places of their own.
+    if let Some(sign) = at.checked_sub(1).filter(|sign| stands_on(*sign).is_some()) {
+        let sign = before[sign];
+        let letter_at = |next: usize| {
+            after
+                .get(next)
+                .is_some_and(|c| letter(*c) && script(*c) == script(sign))
+        };
+        // A virama the syllabic categories do not reach (the Tifinagh consonant joiner), before a letter.
+        if class(sign) == CanonicalCombiningClass::Virama
+            && syllabic(sign) == IndicSyllabicCategory::Other
+            && letter_at(0)
+        {
+            return true;
+        }
+        // ZWNJ between the Myanmar asat and the stacker of a letter: no kinzi.
+        if joiner == ZWNJ
+            && sign == MYANMAR_ASAT
+            && after.first() == Some(&MYANMAR_STACKER)
+            && letter_at(1)
+        {
+            return true;
+        }
+    }
     // After a virama that conjoins: `L M* V M1*` ends where the joiner stands,
     // and the letter is of the virama's script. A virama is itself a mark of
     // its own class, so each one met on the way back may be the V.
     let mut carrier = None;
     for (index, c) in before.iter().enumerate().rev() {
         if conjoins(*c) {
-            carrier = before[..index]
-                .iter()
-                .rev()
-                .find(|c| !mark(**c))
-                .filter(|l| letter(**l) && script(**l) == script(*c));
+            carrier = stands_on(index);
             if carrier.is_some() {
                 break;
             }
@@ -263,22 +329,42 @@ pub fn joiner_kept(chars: &[char], at: usize) -> bool {
             .is_some_and(|c| letter(*c) && script(*c) == script(*carrier))
     } else {
         // B: no dependent vowel follows.
-        after.first().is_none_or(|c| {
-            CodePointMapData::<IndicSyllabicCategory>::new().get(*c)
-                != IndicSyllabicCategory::VowelDependent
-        })
+        after
+            .first()
+            .is_none_or(|c| syllabic(*c) != IndicSyllabicCategory::VowelDependent)
     }
 }
 
-/// What an invisible character is, in a person's terms, so words left out for
-/// one can be given again without it (be2m item 7).
-fn invisible_kind(c: char) -> &'static str {
-    use icu_properties::{props::BidiControl, CodePointSetData};
-    match c {
+/// What the invisible character at `at` is, in a person's terms, so words left
+/// out for one can be given again without it (be2m item 7). A refused ZWJ that
+/// stands between two emoji is named as what it is (be2m.4 item 5): the
+/// character before it, passing back over U+FE0F and skin tones, and the
+/// character right after it are emoji by the compiled data (Emoji and
+/// Extended_Pictographic), and the sequence is not one the list holds. Every
+/// other refused joiner keeps the words it had.
+fn invisible_kind(chars: &[char], at: usize) -> &'static str {
+    use icu_properties::props::{BidiControl, Emoji, EmojiModifier, ExtendedPictographic};
+    use icu_properties::CodePointSetData;
+    let emoji = |c: &char| {
+        CodePointSetData::new::<Emoji>().contains(*c)
+            && CodePointSetData::new::<ExtendedPictographic>().contains(*c)
+    };
+    let passed =
+        |c: &char| *c == EMOJI_SELECTOR || CodePointSetData::new::<EmojiModifier>().contains(*c);
+    let between_emoji = || {
+        chars[..at]
+            .iter()
+            .rev()
+            .find(|c| !passed(c))
+            .is_some_and(emoji)
+            && chars.get(at + 1).is_some_and(emoji)
+    };
+    match chars[at] {
         '\u{2028}' | '\u{2029}' => "a line or paragraph separator",
         '\u{00AD}' => "a soft hyphen",
         '\u{FEFF}' => "a byte order mark",
         '\u{200B}' => "a zero-width space",
+        ZWJ if between_emoji() => UNLISTED_EMOJI_SEQUENCE,
         ZWNJ | ZWJ => "a joiner outside an emoji or a joined word",
         '\u{E0000}'..='\u{E007F}' => "a tag character",
         '\u{034F}' | '\u{115F}' | '\u{1160}' | '\u{2800}' | '\u{3164}' | '\u{FFA0}' => {
@@ -299,7 +385,7 @@ fn prose_fault_at(chars: &[char], at: usize) -> Option<&'static str> {
         '\r' if chars.get(at + 1) == Some(&'\n') => None,
         '\r' => Some("a carriage return with no line break after it"),
         c if c.is_control() => Some("a control character"),
-        c if invisible(c) && !joiner_kept(chars, at) => Some(invisible_kind(c)),
+        c if invisible(c) && !joiner_kept(chars, at) => Some(invisible_kind(chars, at)),
         _ => None,
     }
 }
@@ -650,6 +736,12 @@ mod tests {
                 && at("\u{26F9}\u{200D}\u{2640}"),
             "each selector of the fully qualified form, there or left out"
         );
+        // be2m.4 item 6: the two spellings a Mac draws as text, the joiner drawing nothing, are spellings of a listed
+        // sequence and are kept
+        for text in ["\u{26F9}\u{200D}\u{2640}", "\u{26F9}\u{200D}\u{2642}"] {
+            assert!(at(text), "{text:?}");
+            assert_eq!(prose_fault(text), None, "{text:?}");
+        }
         assert_eq!(
             each("\u{1F9D1}\u{1F3FB}\u{200D}\u{1F91D}\u{200D}\u{1F9D1}\u{1F3FF}"),
             [true, true]
@@ -852,7 +944,8 @@ mod tests {
             "the nearer virama stands on no letter (an adeg adeg is no nonspacing mark), the one before it does"
         );
         // be2m.3 item 2 (DLW build ruling 2026-11-12): the virama conjoins, by Indic_Syllabic_Category Virama or
-        // Invisible_Stacker; a sign of the virama class that only kills the vowel keeps no joiner
+        // Invisible_Stacker; a sign of the virama class that the property calls a killer or a number joiner keeps no
+        // joiner here (the Tifinagh consonant joiner and the asat before a stacker have tests of their own, be2m.4)
         for (letter, killer) in [
             ('\u{0E01}', '\u{0E3A}'),
             ('\u{0E81}', '\u{0EBA}'),
@@ -861,7 +954,6 @@ mod tests {
             ('\u{1703}', '\u{1714}'),
             ('\u{0D15}', '\u{0D3B}'),
             ('\u{1BC0}', '\u{1BF2}'),
-            ('\u{2D30}', '\u{2D7F}'),
             ('\u{11013}', '\u{1107F}'),
         ] {
             for text in [
@@ -875,13 +967,13 @@ mod tests {
         assert!(
             !at("\u{1703}\u{1715}\u{1714}\u{200D}")
                 && !at("\u{1703}\u{1715}\u{1714}\u{200C}\u{1703}"),
-            "neither Tagalog sign conjoins"
+            "both Tagalog signs are pure killers"
         );
         assert!(
             at("\u{1000}\u{1039}\u{200D}\u{1000}")
                 && at("\u{1000}\u{1039}\u{200C}\u{1000}")
                 && at("\u{1780}\u{17D2}\u{200C}\u{1780}"),
-            "an invisible stacker conjoins"
+            "an invisible stacker is a V"
         );
         assert!(
             at("\u{0915}\u{094D}\u{0E3A}\u{200D}"),
@@ -1022,30 +1114,92 @@ mod tests {
     }
 
     /// be2m.3 item 1 (DLW build ruling 2026-11-12): the list of emoji ZWJ sequences is Unicode's own, generated and pinned.
-    /// Its bytes are the ones O-I holds (one sha256); it names its Unicode version and its generator; it holds the 1,614
-    /// sequences of Unicode 17.0; and it agrees with the Unicode data compiled into the build: every part of every
-    /// sequence is an emoji there (Emoji and Extended_Pictographic), carrying U+FE0F exactly when it is drawn as text
-    /// without one (no Emoji_Presentation), or a skin tone on a character that takes one.
+    /// Its bytes are pinned by one sha256, the one O-I will hold too, and that sha256 alone says which sequences it
+    /// holds: no set of sequences is compiled into the build to hold it against. It names its generator, and it holds
+    /// the 1,614 sequences of Unicode 17.0, each once.
     #[test]
-    fn the_emoji_sequence_list_is_unicodes_own_and_agrees_with_the_compiled_data() {
-        use icu_properties::props::{
-            Emoji, EmojiModifier, EmojiModifierBase, EmojiPresentation, ExtendedPictographic,
-        };
-        use icu_properties::CodePointSetData;
+    fn the_emoji_sequence_list_is_unicodes_own_under_one_sha256() {
         use sha2::{Digest, Sha256};
         let list = include_str!("continuous_work/emoji-zwj-sequences.txt");
         assert_eq!(
             format!("{:x}", Sha256::digest(list.as_bytes())),
-            "af2b9a9975656052c11e2e162c45346ab3ce5d59a5a36699473805e5c4c45f85",
-            "the list is the one O-I holds"
+            "3466f7002716b502b61957afbb751af85aee3bd379b577004c96f14d47dc151b",
+            "the list is the one O-I will hold"
         );
-        assert!(list.starts_with("# The RGI emoji ZWJ sequences of Unicode 17.0 "));
         assert!(list.contains("icuexportdata -m uprops -d OUT RGI_Emoji_ZWJ_Sequence"));
         assert!(list.is_ascii() && !list.contains('\r') && list.ends_with('\n'));
         let sequences = listed_sequences();
         assert_eq!(sequences.len(), 1614);
         let distinct: std::collections::BTreeSet<&Vec<char>> = sequences.iter().collect();
         assert_eq!(distinct.len(), 1614);
+    }
+
+    /// The Unicode version the list's header names: `# The RGI emoji ZWJ sequences of Unicode <version> (`.
+    fn listed_unicode_version() -> &'static str {
+        include_str!("continuous_work/emoji-zwj-sequences.txt")
+            .strip_prefix("# The RGI emoji ZWJ sequences of Unicode ")
+            .and_then(|rest| rest.split_once(' '))
+            .map(|(version, _)| version)
+            .expect("the list's first line names its Unicode version")
+    }
+
+    /// be2m.4 item 4 (DLW build ruling 2026-11-12): the list is held to the Unicode the build carries. `icu_properties`
+    /// tells no version, so the compiled data is asked what only one Unicode answers: how many characters it assigns
+    /// (every code point but the unassigned, the private-use and the control ones: 159,801 in Unicode 17.0, counted
+    /// from ICU4C 78.3's export, the count the Standard gives for 17.0), and a letter that Unicode 17.0 was the first
+    /// to assign (U+088F, unassigned in Unicode 16.0). A lock that moves the data to another Unicode fails here, in
+    /// words that say what to do; and the refusal that names the version names the list's.
+    #[test]
+    fn the_emoji_sequence_list_names_the_unicode_the_build_carries() {
+        use icu_properties::props::GeneralCategory as Category;
+        use icu_properties::CodePointMapData;
+        const CHARACTERS: [(&str, usize); 1] = [("17.0", 159_801)];
+        let version = listed_unicode_version();
+        let Some((_, characters)) = CHARACTERS.iter().find(|(of, _)| *of == version) else {
+            panic!("the list's header names Unicode {version}, and this test holds no count of its characters: add it");
+        };
+        let category = CodePointMapData::<Category>::new();
+        let assigned = (0..=0x10_FFFF)
+            .filter_map(char::from_u32)
+            .filter(|c| {
+                !matches!(
+                    category.get(*c),
+                    Category::Unassigned | Category::PrivateUse | Category::Control
+                )
+            })
+            .count();
+        assert_eq!(
+            assigned, *characters,
+            "the Unicode data compiled into the build assigns {assigned} characters, and Unicode {version}, which the \
+             header of emoji-zwj-sequences.txt names, assigns {characters}: the lock has moved icu_properties' data to \
+             another Unicode. Generate the list again from the ICU of that Unicode (its header holds the command), then \
+             move its sha256, the count here and the version in the refusal's words"
+        );
+        assert_ne!(
+            category.get('\u{088F}'),
+            Category::Unassigned,
+            "a letter first assigned in Unicode 17.0"
+        );
+        assert!(
+            UNLISTED_EMOJI_SEQUENCE.contains(&format!("Unicode {version} does not list")),
+            "the refusal names the list's Unicode: {UNLISTED_EMOJI_SEQUENCE}"
+        );
+    }
+
+    /// be2m.3 item 1 and be2m.4 item 4: every sequence of the list is made of code points the compiled data calls
+    /// emoji, in the shape of a fully qualified sequence: two to four parts joined by ZWJ, each part an emoji there
+    /// (Emoji and Extended_Pictographic), carrying U+FE0F exactly when it is drawn as text without one (no
+    /// Emoji_Presentation), or a skin tone on a character that takes one. It reads no sha256, so a line replaced by
+    /// anything else is caught here on its own. A line replaced by another chain of emoji in that shape is caught by
+    /// the sha256 alone.
+    #[test]
+    fn every_listed_emoji_sequence_is_made_of_what_the_compiled_data_calls_emoji() {
+        use icu_properties::props::{
+            Emoji, EmojiModifier, EmojiModifierBase, EmojiPresentation, ExtendedPictographic,
+        };
+        use icu_properties::CodePointSetData;
+        let sequences = listed_sequences();
+        assert!(!sequences.is_empty());
         let emoji = |c: char| {
             CodePointSetData::new::<Emoji>().contains(c)
                 && CodePointSetData::new::<ExtendedPictographic>().contains(c)
@@ -1125,11 +1279,13 @@ mod tests {
         assert_eq!((spellings, with_a_selector, not_whole), (2667, 961, 9077));
     }
 
-    /// be2m.3 item 2 (DLW build ruling 2026-11-12): a joiner is kept after a character of the virama class only when that
-    /// character conjoins, and Indic_Syllabic_Category decides: Virama or Invisible_Stacker (41 of the 69 of Unicode
-    /// 17.0). The 28 named here never form a conjunct or a half form (24 Pure_Killer, 2 Reordering_Killer, the Brahmi
-    /// number joiner, the Tifinagh consonant joiner; the list of the review of #353, F2): after each, on a letter of its
-    /// own script, neither joiner is kept, with a letter after it or none.
+    /// be2m.3 item 2 (DLW build ruling 2026-11-12), worded by be2m.4 item 3: Indic_Syllabic_Category decides which
+    /// character of the virama class is the V of A2 and B: Virama or Invisible_Stacker (41 of the 69 of Unicode 17.0).
+    /// The 28 named here are the rest, by the data: 24 Pure_Killer, 2 Reordering_Killer, the Brahmi number joiner
+    /// (Number_Joiner), and the Tifinagh consonant joiner, which the property gives no category (Other). After each of
+    /// the 27 the property names, on a letter of its own script, neither joiner is kept, with a letter after it or
+    /// none. The one it does not name keeps either joiner before a letter of its script (be2m.4 item 1), and neither
+    /// with none after it. Nothing here says what a font draws.
     #[test]
     fn a_joiner_is_kept_after_a_virama_only_when_the_virama_conjoins() {
         use icu_properties::props::{
@@ -1137,7 +1293,7 @@ mod tests {
             IndicSyllabicCategory, Script,
         };
         use icu_properties::CodePointMapData;
-        const NEVER_CONJOINS: [u32; 28] = [
+        const NO_VIRAMA_BY_CATEGORY: [u32; 28] = [
             0x0D3B, 0x0D3C, 0x0E3A, 0x0EBA, 0x0F84, 0x103A, 0x1714, 0x1715, 0x1734, 0x1BAA, 0x1BF2,
             0x1BF3, 0x2D7F, 0xA82C, 0xA953, 0xABED, 0x11070, 0x1107F, 0x11134, 0x112EA, 0x113CE,
             0x113CF, 0x1172B, 0x1193D, 0x11A34, 0x11D44, 0x11F41, 0x1612F,
@@ -1159,14 +1315,14 @@ mod tests {
             }
         }
         assert_eq!(viramas.len(), 69);
-        let mut conjoining = 0;
+        let (mut conjoining, mut killers, mut unnamed) = (0, 0, Vec::new());
         for virama in viramas {
             let letter = first_letter
                 .iter()
                 .find(|(of, _)| *of == script.get(virama))
                 .map(|(_, letter)| *letter)
                 .unwrap_or_else(|| panic!("U+{:04X} has a letter of its script", virama as u32));
-            let conjoins = !NEVER_CONJOINS.contains(&(virama as u32));
+            let conjoins = !NO_VIRAMA_BY_CATEGORY.contains(&(virama as u32));
             conjoining += usize::from(conjoins);
             assert_eq!(
                 conjoins,
@@ -1177,20 +1333,387 @@ mod tests {
                 "U+{:04X}: Indic_Syllabic_Category decides",
                 virama as u32
             );
-            for text in [
-                vec![letter, virama, ZWJ],
-                vec![letter, virama, ZWJ, letter],
-                vec![letter, virama, ZWNJ, letter],
+            let unnamed_by_the_property = syllabic.get(virama) == IndicSyllabicCategory::Other;
+            if unnamed_by_the_property {
+                unnamed.push(virama);
+            } else if !conjoins {
+                killers += 1;
+                assert!(
+                    matches!(
+                        syllabic.get(virama),
+                        IndicSyllabicCategory::PureKiller
+                            | IndicSyllabicCategory::ReorderingKiller
+                            | IndicSyllabicCategory::NumberJoiner
+                    ),
+                    "U+{:04X}: a killer or a number joiner by the data",
+                    virama as u32
+                );
+            }
+            for (text, before_a_letter) in [
+                (vec![letter, virama, ZWJ], false),
+                (vec![letter, virama, ZWJ, letter], true),
+                (vec![letter, virama, ZWNJ, letter], true),
             ] {
                 assert_eq!(
                     joiner_kept(&text, 2),
-                    conjoins,
+                    conjoins || (unnamed_by_the_property && before_a_letter),
                     "U+{:04X} in {text:?}",
                     virama as u32
                 );
             }
         }
-        assert_eq!(conjoining, 41);
+        assert_eq!((conjoining, killers), (41, 27));
+        assert_eq!(
+            unnamed,
+            ['\u{2D7F}'],
+            "the Tifinagh consonant joiner alone is of the virama class with no syllabic category"
+        );
+    }
+
+    /// be2m.4 item 1 (DLW build ruling 2026-11-12): a joiner right after the Tifinagh consonant joiner U+2D7F, which
+    /// stands on a Tifinagh letter, and right before another Tifinagh letter is kept, ZWNJ and ZWJ alike. What it
+    /// rests on in the compiled data: U+2D7F is of the virama class (the V of UAX #31's A2 and B) and of the Tifinagh
+    /// script, and Indic_Syllabic_Category gives it no category, so no data calls it a killer. That a joiner there
+    /// breaks the bi-consonant ligature is what the review of #353 saw a Mac draw; it is not data. A joiner between two
+    /// Tifinagh letters with no U+2D7F stays refused: every Tifinagh letter is Joining_Type Non_Joining, and no
+    /// property gives the script a join there.
+    #[test]
+    fn a_joiner_after_the_tifinagh_consonant_joiner_is_kept_before_a_letter_of_its_script() {
+        use icu_properties::props::{
+            CanonicalCombiningClass, GeneralCategory as Category, GeneralCategoryGroup,
+            IndicSyllabicCategory, JoiningType, Script,
+        };
+        use icu_properties::CodePointMapData;
+        let kept = |text: &str| {
+            let chars: Vec<char> = text.chars().collect();
+            let kept = joiners_kept(&chars);
+            assert_eq!(kept.len(), 1, "{text:?} holds one joiner");
+            assert_eq!(prose_fault(text).is_none(), kept[0], "{text:?}");
+            kept[0]
+        };
+        for text in [
+            "\u{2D4E}\u{2D7F}\u{200C}\u{2D5C}",
+            "\u{2D4E}\u{2D7F}\u{200D}\u{2D5C}",
+            "a \u{2D4E}\u{2D7F}\u{200C}\u{2D5C} b",
+            "\u{2D30}\u{2D7F}\u{200D}\u{2D30}",
+            "\u{2D4E}\u{0301}\u{2D7F}\u{200D}\u{2D5C}",
+            "\u{2D4E}\u{2D7F}\u{2D7F}\u{200C}\u{2D5C}",
+            "\u{2D4E}\u{2D7F}\u{200D}\u{2D6F}",
+        ] {
+            assert!(kept(text), "{text:?}");
+        }
+        for (text, why) in [
+            ("\u{2D4E}\u{2D7F}\u{200D}", "nothing after it"),
+            ("\u{2D4E}\u{2D7F}\u{200C}", "nothing after it"),
+            ("\u{2D4E}\u{2D7F}\u{200D} \u{2D5C}", "a space after it"),
+            ("\u{2D4E}\u{2D7F}\u{200D}a", "a Latin letter after it"),
+            (
+                "\u{2D4E}\u{2D7F}\u{200C}\u{0915}",
+                "a Devanagari letter after it",
+            ),
+            (
+                "\u{2D4E}\u{2D7F}\u{200D}\u{2D70}",
+                "a Tifinagh mark of punctuation after it",
+            ),
+            (
+                "\u{2D4E}\u{2D7F}\u{200D}\u{0301}\u{2D5C}",
+                "a mark between it and the letter",
+            ),
+            (
+                "\u{2D4E}\u{2D7F}\u{0301}\u{200D}\u{2D5C}",
+                "a mark between the sign and it",
+            ),
+            (
+                "\u{2D4E}\u{2D7F}a\u{200D}\u{2D5C}",
+                "a letter between the sign and it",
+            ),
+            ("\u{2D7F}\u{200D}\u{2D5C}", "the sign on no letter"),
+            ("a\u{2D7F}\u{200D}\u{2D5C}", "the sign on a Latin letter"),
+            (
+                "\u{0915}\u{2D7F}\u{200C}\u{2D5C}",
+                "the sign on a Devanagari letter",
+            ),
+            (
+                "\u{2D70}\u{2D7F}\u{200C}\u{2D5C}",
+                "the sign on a mark of punctuation",
+            ),
+            (
+                "\u{2D4E}\u{200D}\u{2D5C}",
+                "no consonant joiner: ZWJ between two letters",
+            ),
+            (
+                "\u{2D4E}\u{200C}\u{2D5C}",
+                "no consonant joiner: ZWNJ between two letters",
+            ),
+            (
+                "\u{2D4E}\u{200D}\u{2D7F}\u{2D5C}",
+                "the joiner before the sign",
+            ),
+        ] {
+            assert!(!kept(text), "{why}: {text:?}");
+        }
+        let class = CodePointMapData::<CanonicalCombiningClass>::new();
+        let syllabic = CodePointMapData::<IndicSyllabicCategory>::new();
+        let script = CodePointMapData::<Script>::new();
+        let category = CodePointMapData::<Category>::new();
+        let joining = CodePointMapData::<JoiningType>::new();
+        assert_eq!(
+            (
+                class.get('\u{2D7F}'),
+                syllabic.get('\u{2D7F}'),
+                script.get('\u{2D7F}'),
+                category.get('\u{2D7F}')
+            ),
+            (
+                CanonicalCombiningClass::Virama,
+                IndicSyllabicCategory::Other,
+                Script::Tifinagh,
+                Category::NonspacingMark
+            )
+        );
+        let letters: Vec<char> = (0..=0x10_FFFF)
+            .filter_map(char::from_u32)
+            .filter(|c| {
+                script.get(*c) == Script::Tifinagh
+                    && GeneralCategoryGroup::Letter.contains(category.get(*c))
+            })
+            .collect();
+        assert_eq!(letters.len(), 57);
+        for letter in letters {
+            assert_eq!(
+                joining.get(letter),
+                JoiningType::NonJoining,
+                "U+{:04X}",
+                letter as u32
+            );
+            assert_eq!(
+                syllabic.get(letter),
+                IndicSyllabicCategory::Other,
+                "U+{:04X}",
+                letter as u32
+            );
+            for joiner in [ZWNJ, ZWJ] {
+                assert!(
+                    joiner_kept(&['\u{2D4E}', '\u{2D7F}', joiner, letter], 2),
+                    "U+{:04X}",
+                    letter as u32
+                );
+                assert!(
+                    !joiner_kept(&['\u{2D4E}', joiner, letter], 1),
+                    "U+{:04X}",
+                    letter as u32
+                );
+            }
+        }
+    }
+
+    /// be2m.4 item 2 (DLW build ruling 2026-11-12): a ZWNJ right after the Myanmar asat U+103A, which stands on a
+    /// Myanmar letter, and right before the Myanmar stacker U+1039 and a Myanmar letter is kept: the spelling that
+    /// keeps a kinzi from forming. Nothing else is kept after an asat. What it rests on in the compiled data: the asat
+    /// is of the virama class, so UAX #31's A2 reads it as a V, with the stacker a mark of a class before the letter;
+    /// Indic_Syllabic_Category calls the asat a Pure_Killer and the stacker an Invisible_Stacker; both are Myanmar's
+    /// and nonspacing marks. That it is the spelling against a kinzi, and that it draws apart from one, is what the
+    /// review of #353 saw a Mac draw; no data on the build machine says it. The two signs are named in the code, since
+    /// no property tells a kinzi: the same shape in another script that has a killer and a stacker is refused.
+    #[test]
+    fn a_zwnj_between_the_myanmar_asat_and_a_stacker_is_kept_and_nothing_else_after_an_asat() {
+        use icu_properties::props::{
+            CanonicalCombiningClass, GeneralCategory as Category, IndicSyllabicCategory, Script,
+        };
+        use icu_properties::CodePointMapData;
+        let kept = |text: &str| {
+            let chars: Vec<char> = text.chars().collect();
+            let kept = joiners_kept(&chars);
+            assert_eq!(kept.len(), 1, "{text:?} holds one joiner");
+            assert_eq!(prose_fault(text).is_none(), kept[0], "{text:?}");
+            kept[0]
+        };
+        for text in [
+            "\u{1004}\u{103A}\u{200C}\u{1039}\u{1000}",
+            "\u{101B}\u{103A}\u{200C}\u{1039}\u{1002}",
+            "a \u{1004}\u{103A}\u{200C}\u{1039}\u{1000}\u{102C} b",
+            "\u{1004}\u{0301}\u{103A}\u{200C}\u{1039}\u{1000}",
+        ] {
+            assert!(kept(text), "{text:?}");
+        }
+        for (text, why) in [
+            ("\u{1004}\u{103A}\u{200D}\u{1039}\u{1000}", "ZWJ"),
+            ("\u{1004}\u{103A}\u{200C}\u{1000}", "no stacker after it"),
+            (
+                "\u{1004}\u{103A}\u{200D}\u{1000}",
+                "ZWJ, no stacker after it",
+            ),
+            ("\u{1004}\u{103A}\u{200C}", "nothing after it"),
+            (
+                "\u{1004}\u{103A}\u{200C}\u{1039}",
+                "nothing after the stacker",
+            ),
+            (
+                "\u{1004}\u{103A}\u{200C}\u{1039}a",
+                "a Latin letter after the stacker",
+            ),
+            (
+                "\u{1004}\u{103A}\u{200C}\u{1039}\u{0915}",
+                "a Devanagari letter after the stacker",
+            ),
+            (
+                "\u{1004}\u{103A}\u{200C}\u{1039}\u{1039}\u{1000}",
+                "two stackers",
+            ),
+            (
+                "\u{1004}\u{103A}\u{200C}\u{1039}\u{0301}\u{1000}",
+                "a mark between the stacker and the letter",
+            ),
+            (
+                "\u{1004}\u{103A}\u{200C}\u{0301}\u{1039}\u{1000}",
+                "a mark between it and the stacker",
+            ),
+            (
+                "\u{1004}\u{103A}\u{0301}\u{200C}\u{1039}\u{1000}",
+                "a mark between the asat and it",
+            ),
+            (
+                "\u{1004}\u{103A}\u{200C}\u{103A}\u{1000}",
+                "an asat where the stacker stands",
+            ),
+            ("\u{103A}\u{200C}\u{1039}\u{1000}", "the asat on no letter"),
+            (
+                "a\u{103A}\u{200C}\u{1039}\u{1000}",
+                "the asat on a Latin letter",
+            ),
+            (
+                "\u{1040}\u{103A}\u{200C}\u{1039}\u{1000}",
+                "the asat on a Myanmar digit",
+            ),
+            (
+                "\u{0E01}\u{0E3A}\u{200C}\u{1039}\u{1000}",
+                "a Thai phinthu, not the asat",
+            ),
+            (
+                "\u{0E01}\u{0E3A}\u{200C}\u{1039}\u{0E01}",
+                "a Thai phinthu before the Myanmar stacker and a Thai letter",
+            ),
+            (
+                "\u{1004}\u{103A}\u{200C}\u{17D2}\u{1000}",
+                "a Khmer coeng where the stacker stands",
+            ),
+            (
+                "\u{1B8A}\u{1BAA}\u{200C}\u{1BAB}\u{1B8A}",
+                "the Sundanese killer and stacker",
+            ),
+            (
+                "\u{ABC0}\u{ABED}\u{200C}\u{AAF6}\u{ABC0}",
+                "the Meetei killer and stacker",
+            ),
+            (
+                "\u{11103}\u{11134}\u{200C}\u{11133}\u{11103}",
+                "the Chakma killer and stacker",
+            ),
+        ] {
+            assert!(!kept(text), "{why}: {text:?}");
+        }
+        let class = CodePointMapData::<CanonicalCombiningClass>::new();
+        let syllabic = CodePointMapData::<IndicSyllabicCategory>::new();
+        let script = CodePointMapData::<Script>::new();
+        let category = CodePointMapData::<Category>::new();
+        for (sign, is) in [
+            (MYANMAR_ASAT, IndicSyllabicCategory::PureKiller),
+            (MYANMAR_STACKER, IndicSyllabicCategory::InvisibleStacker),
+        ] {
+            assert_eq!(
+                (
+                    class.get(sign),
+                    syllabic.get(sign),
+                    script.get(sign),
+                    category.get(sign)
+                ),
+                (
+                    CanonicalCombiningClass::Virama,
+                    is,
+                    Script::Myanmar,
+                    Category::NonspacingMark
+                ),
+                "U+{:04X}",
+                sign as u32
+            );
+        }
+        assert_eq!((MYANMAR_ASAT, MYANMAR_STACKER), ('\u{103A}', '\u{1039}'));
+    }
+
+    /// be2m.4 item 5 (DLW build ruling 2026-11-12): a ZWJ refused between two emoji is named as what it is, a joiner
+    /// between emoji that Unicode, as of the list's version, does not list as one emoji: the character before it,
+    /// passing back over U+FE0F and skin tones, and the character right after it are emoji by the compiled data (Emoji
+    /// and Extended_Pictographic). Every other refused joiner keeps the words it had, the other emoji refusals among
+    /// them.
+    #[test]
+    fn a_zwj_refused_between_two_emoji_says_the_sequence_is_not_one_unicode_lists() {
+        const OUTSIDE: &str = "a joiner outside an emoji or a joined word";
+        assert_eq!(
+            UNLISTED_EMOJI_SEQUENCE,
+            "a joiner between emoji that Unicode 17.0 does not list as one emoji"
+        );
+        for text in [
+            // two emoji that are no sequence; the copyright shape, bare and with its selectors
+            "\u{1F468}\u{200D}\u{1F469}",
+            "\u{1F525}\u{200D}\u{1F525}",
+            "\u{A9}\u{200D}\u{AE}",
+            "\u{A9}\u{FE0F}\u{200D}\u{AE}\u{FE0F}",
+            // what a Mac draws as one emoji and no list holds (the review of #353's second commit, F4)
+            "\u{1F469}\u{1F3FD}\u{200D}\u{2764}\u{FE0F}\u{200D}\u{1F468}",
+            "\u{1FAF1}\u{1F3FB}\u{200D}\u{1FAF2}\u{1F3FB}",
+            "\u{1F468}\u{FE0F}\u{200D}\u{1F4BB}",
+            "\u{1F468}\u{200D}\u{1F4BB}\u{FE0F}",
+            "\u{1F43B}\u{FE0F}\u{200D}\u{2744}\u{FE0F}",
+            // a listed sequence that does not stand whole
+            "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F476}",
+            "\u{1F468}\u{200D}\u{1F467}\u{1F3FD}",
+            "\u{1F9D1}\u{200D}\u{1F91D}\u{200D}\u{1F9D1}\u{1F3FF}",
+            // a selector and a tone are passed over on the way back, any number of them
+            "\u{1F525}\u{1F3FD}\u{200D}\u{1F4BB}",
+            "\u{1F468}\u{1F3FD}\u{FE0F}\u{FE0F}\u{200D}\u{1F4BB}",
+            "say \u{1F525}\u{200D}\u{1F525} twice",
+        ] {
+            assert_eq!(prose_fault(text), Some(UNLISTED_EMOJI_SEQUENCE), "{text:?}");
+        }
+        for text in [
+            "\u{1F468}\u{200D}a",
+            "a\u{200D}\u{1F468}",
+            "\u{1F468}\u{200D}",
+            "\u{200D}\u{1F468}",
+            "\u{1F468}\u{200D}\u{200D}\u{1F469}",
+            "\u{1F468}\u{200C}\u{1F469}",
+            "\u{1F468}\u{200D}\u{FE0F}\u{1F467}",
+            "\u{1F468}\u{200D} \u{1F469}",
+            "\u{1F1EC}\u{200D}\u{1F1E7}",
+            "#\u{200D}*",
+            "1\u{FE0F}\u{200D}2\u{FE0F}",
+            "\u{1F02C}\u{200D}\u{1F469}",
+            "\u{1F469}\u{200D}\u{1F02C}",
+            "\u{2605}\u{FE0F}\u{200D}\u{1F469}",
+            "\u{1F3FD}\u{200D}\u{1F4BB}",
+            "a\u{1F3FD}\u{200D}\u{1F4BB}",
+            "\u{1F4BB}\u{200D}\u{1F3FD}",
+            "\u{2764}\u{FE0E}\u{200D}\u{1F525}",
+            "\u{1F468}a\u{FE0F}\u{200D}\u{1F4BB}",
+            "pay\u{200D}pal",
+            "\u{0915}\u{200D}\u{0937}",
+        ] {
+            assert_eq!(prose_fault(text), Some(OUTSIDE), "{text:?}");
+        }
+        // the first character in the way is the one named, and a kept sequence beside it changes nothing
+        assert_eq!(
+            prose_fault("\u{1F468}\u{200D}\u{1F467} \u{1F525}\u{200D}\u{1F525} pay\u{200C}pal"),
+            Some(UNLISTED_EMOJI_SEQUENCE)
+        );
+        assert_eq!(
+            prose_fault("pay\u{200C}pal \u{1F525}\u{200D}\u{1F525}"),
+            Some(OUTSIDE)
+        );
+        // shown, the joiner goes like any other in the way
+        assert_eq!(
+            shown_prose("\u{1F525}\u{200D}\u{1F525}"),
+            "\u{1F525}\u{1F525}"
+        );
     }
 
     /// be2m items 4 and 5: every case's shown form is its text on one line as prose is shown, a control character or a line or
@@ -1205,7 +1728,7 @@ mod tests {
     fn every_joiner_case_is_shown_with_a_joiner_in_its_place_and_names_what_stood_in_the_way() {
         let cases: Vec<serde_json::Value> =
             serde_json::from_str(include_str!("continuous_work/joiner-cases.json")).unwrap();
-        assert_eq!(cases.len(), 97);
+        assert_eq!(cases.len(), 109);
         for case in &cases {
             let (name, text) = (&case["name"], case["text"].as_str().unwrap());
             let shown = shown_prose(text);
@@ -1262,9 +1785,18 @@ mod tests {
                 "a family joined on to a fire: longer than any listed sequence",
                 false,
             ),
-            ("ZWJ after a Myanmar stacker, which conjoins (B)", true),
-            ("ZWJ after a Thai phinthu, which never conjoins", false),
-            ("ZWNJ after a Myanmar asat, which never conjoins", false),
+            (
+                "ZWJ after a Myanmar stacker, an invisible stacker by its syllabic category (B)",
+                true,
+            ),
+            (
+                "ZWJ after a Thai phinthu, a pure killer by its syllabic category",
+                false,
+            ),
+            (
+                "ZWNJ after a Myanmar asat, a pure killer by its syllabic category, with no stacker after it",
+                false,
+            ),
             (
                 "Bengali ra, virama, ZWJ, ya: ZWJ after a virama (B)",
                 true,
@@ -1277,9 +1809,66 @@ mod tests {
                 "ZWJ after a nukta: a mark of a class that is no virama",
                 false,
             ),
+            // be2m.4
+            (
+                "ZWNJ after a Tifinagh consonant joiner, between two Tifinagh letters",
+                true,
+            ),
+            (
+                "ZWJ after a Tifinagh consonant joiner, between two Tifinagh letters",
+                true,
+            ),
+            (
+                "ZWJ between two Tifinagh letters with no consonant joiner: no property gives a join there",
+                false,
+            ),
+            (
+                "ZWNJ after a Myanmar asat and before a stacker and a letter: no kinzi",
+                true,
+            ),
+            (
+                "ZWJ after a Myanmar asat and before a stacker and a letter",
+                false,
+            ),
+            (
+                "a person bouncing a ball joined to the female sign, both variation selectors left out: a spelling of a listed sequence, though a Mac draws it as text",
+                true,
+            ),
         ] {
             assert_eq!(row(name)["kept"], kept, "{name}");
         }
+        // be2m.4 item 5: the kind of a ZWJ refused between two emoji, and of the other emoji refusals
+        for (name, kind) in [
+            (
+                "ZWJ between a man and a woman: two emoji, no listed sequence",
+                UNLISTED_EMOJI_SEQUENCE,
+            ),
+            (
+                "a couple with a heart, a skin tone on the woman only: one emoji on a Mac, and no listed sequence",
+                UNLISTED_EMOJI_SEQUENCE,
+            ),
+            (
+                "ZWJ between an emoji and a letter",
+                "a joiner outside an emoji or a joined word",
+            ),
+            (
+                "ZWJ between an emoji and a pictograph that is no emoji",
+                "a joiner outside an emoji or a joined word",
+            ),
+            (
+                "ZWJ between two regional indicators",
+                "a joiner outside an emoji or a joined word",
+            ),
+        ] {
+            assert_eq!(row(name)["kind"], kind, "{name}");
+        }
+        assert_eq!(
+            cases
+                .iter()
+                .filter(|case| case["kind"] == UNLISTED_EMOJI_SEQUENCE)
+                .count(),
+            11
+        );
     }
 
     #[test]

@@ -1,23 +1,28 @@
-//! be2m.2 item 4 and be2m.3 item 5 (DLW build rulings 2026-11-12): the fuzz of the review of #350, kept as a test that
-//! runs in a few seconds.
+//! be2m.2 item 4, be2m.3 item 5 and be2m.4 (DLW build rulings 2026-11-12): the fuzz of the review of #350, kept as a
+//! test that runs in a few seconds.
 //!
-//! It makes 114,794 strings, the same ones every run: 12,000 random ones of 1 to 24 characters over the alphabet below
+//! It makes 130,852 strings, the same ones every run: 12,000 random ones of 1 to 24 characters over the alphabet below
 //! (seeded); 50,914 of up to two characters, a joiner and up to two characters over eighteen kinds of neighbour and
 //! the text's end; 39,200, every arrangement of up to three characters before a joiner and two after it over the
 //! virama's kinds; 936, every arrangement of up to three before a joiner and one after it over a Thai letter and its
-//! killer and a Myanmar letter, its stacker and its killer; and 11,744, every listed emoji ZWJ sequence in each of its
-//! spellings (2,667) and in six forms that are no spelling of it (9,077).
+//! killer and a Myanmar letter, its stacker and its killer; 16,058, every arrangement of up to three before a joiner
+//! and two after it over a Tifinagh letter and its consonant joiner, a Myanmar letter, its asat and its stacker, and a
+//! Latin letter; and 11,744, every listed emoji ZWJ sequence in each of its spellings (2,667) and in six forms that are
+//! no spelling of it (9,077).
 //!
 //! The invariant, checked on every string against the rule written a second time (`ruled`, by position, not
 //! `joiner_kept`'s walk; the listed sequences by this file's own reading of the list, each matched character by
 //! character from where it starts, not looked up as a spelling):
-//! - a joiner is kept exactly where the rule names a context (emoji, A1, A2, B), and nothing is kept where no joiner
-//!   stands or past the end;
+//! - a joiner is kept exactly where the rule names a context (emoji, A1, A2, B, and be2m.4's two: after a virama the
+//!   syllabic categories do not reach, and between the Myanmar asat and a stacker), and nothing is kept where no
+//!   joiner stands or past the end; so everything kept draws by the rule's own second writing;
 //! - whatever is kept between emoji stands inside a sequence Unicode lists, in one of its spellings, that stands whole
-//!   (be2m.3 item 1), and whatever is kept after a virama is kept after one that conjoins (be2m.3 item 2);
+//!   (be2m.3 item 1); whatever is kept after a virama is kept after one that conjoins (be2m.3 item 2), or right after
+//!   one Indic_Syllabic_Category gives no category and right before a letter of its script (be2m.4 item 1), or it is
+//!   a ZWNJ right after the asat on a Myanmar letter and right before the stacker and a Myanmar letter (item 2);
 //! - the rule only narrowed: whatever it keeps, the rule of #350 kept (`kept_by_350`);
-//! - `prose_fault` names the first character in the way by its kind, and a text with no joiner is judged as it was
-//!   before any joiner was kept;
+//! - `prose_fault` names the first character in the way by its kind, a ZWJ refused between two emoji as a sequence
+//!   Unicode does not list (be2m.4 item 5), and a text with no joiner is judged as it was before any joiner was kept;
 //! - `shown_prose` leaves nothing the rule refuses, takes out nothing a person sees, changes nothing when shown again,
 //!   and leaves a text with nothing in the way as it is given, trimmed;
 //! - in a text that is kept no joiner stands first, beside another joiner or beside a character that draws nothing, and
@@ -33,6 +38,7 @@ const ZWJ: char = '\u{200D}';
 #[derive(Clone, Copy)]
 struct Read {
     pictograph: bool,
+    emoji: bool,
     tone: bool,
     joining: JoiningType,
     mark: bool,
@@ -40,13 +46,14 @@ struct Read {
     letter: bool,
     virama: bool,
     conjoins: bool,
+    unreached_virama: bool,
     dependent_vowel: bool,
     script: Script,
 }
 
 fn read(c: char) -> Read {
     use icu_properties::props::{
-        CanonicalCombiningClass, EmojiModifier, ExtendedPictographic, GeneralCategory,
+        CanonicalCombiningClass, Emoji, EmojiModifier, ExtendedPictographic, GeneralCategory,
         GeneralCategoryGroup, IndicSyllabicCategory,
     };
     use icu_properties::{CodePointMapData, CodePointSetData};
@@ -56,6 +63,8 @@ fn read(c: char) -> Read {
     let mark = category == GeneralCategory::NonspacingMark;
     Read {
         pictograph: CodePointSetData::new::<ExtendedPictographic>().contains(c),
+        emoji: CodePointSetData::new::<Emoji>().contains(c)
+            && CodePointSetData::new::<ExtendedPictographic>().contains(c),
         tone: CodePointSetData::new::<EmojiModifier>().contains(c),
         joining: CodePointMapData::<JoiningType>::new().get(c),
         mark,
@@ -65,6 +74,8 @@ fn read(c: char) -> Read {
         conjoins: class == CanonicalCombiningClass::Virama
             && (syllabic == IndicSyllabicCategory::Virama
                 || syllabic == IndicSyllabicCategory::InvisibleStacker),
+        unreached_virama: class == CanonicalCombiningClass::Virama
+            && syllabic == IndicSyllabicCategory::Other,
         dependent_vowel: syllabic == IndicSyllabicCategory::VowelDependent,
         script: CodePointMapData::<Script>::new().get(c),
     }
@@ -136,9 +147,35 @@ fn in_a_listed_sequence(p: &[Read], chars: &[char], i: usize) -> bool {
     })
 }
 
-/// The rule as be2m.3 words it: which context, if any, keeps the joiner at `i`.
+/// be2m.4's two places, each by position: right after a character of the virama class that Indic_Syllabic_Category
+/// gives no category, on a letter of its script, and right before another letter of that script (either joiner); and a
+/// ZWNJ right after the Myanmar asat on a Myanmar letter and right before the Myanmar stacker and a Myanmar letter.
+fn in_a_place_of_its_own(p: &[Read], chars: &[char], i: usize) -> Option<&'static str> {
+    let n = chars.len();
+    if i == 0 || carrier(p, i - 1, true).is_none() {
+        return None;
+    }
+    let letter_at = |k: usize| k < n && p[k].letter && p[k].script == p[i - 1].script;
+    if p[i - 1].unreached_virama && letter_at(i + 1) {
+        return Some("after a virama the categories do not reach");
+    }
+    if chars[i] == ZWNJ
+        && chars[i - 1] == '\u{103A}'
+        && i + 1 < n
+        && chars[i + 1] == '\u{1039}'
+        && letter_at(i + 2)
+    {
+        return Some("between the asat and a stacker");
+    }
+    None
+}
+
+/// The rule as be2m.3 words it and be2m.4 adds to it: which context, if any, keeps the joiner at `i`.
 fn ruled(p: &[Read], chars: &[char], i: usize) -> Option<&'static str> {
     let n = chars.len();
+    if let Some(own) = in_a_place_of_its_own(p, chars, i) {
+        return Some(own);
+    }
     if chars[i] == ZWJ {
         if in_a_listed_sequence(p, chars, i) {
             return Some("emoji");
@@ -235,9 +272,19 @@ fn kept_by_350(p: &[Read], chars: &[char], i: usize) -> bool {
     }
 }
 
-/// The kind of each character of the set, by a table of this test's own.
-fn kind(c: char) -> &'static str {
-    match c as u32 {
+/// The kind of the character of the set at `i`, by a table of this test's own; a ZWJ whose neighbours are both emoji
+/// (the one before it found past selectors and skin tones) is a joiner between emoji that Unicode does not list.
+fn kind(p: &[Read], chars: &[char], i: usize) -> &'static str {
+    if chars[i] == ZWJ {
+        let mut j = i;
+        while j > 0 && (chars[j - 1] == '\u{FE0F}' || p[j - 1].tone) {
+            j -= 1;
+        }
+        if j > 0 && p[j - 1].emoji && i + 1 < chars.len() && p[i + 1].emoji {
+            return "a joiner between emoji that Unicode 17.0 does not list as one emoji";
+        }
+    }
+    match chars[i] as u32 {
         0x2028 | 0x2029 => "a line or paragraph separator",
         0xAD => "a soft hyphen",
         0xFEFF => "a byte order mark",
@@ -298,7 +345,7 @@ fn check(chars: &[char], tally: &mut Tally) {
         '\r' if chars.get(i + 1) == Some(&'\n') => None,
         '\r' => Some("a carriage return with no line break after it"),
         c if c.is_control() => Some("a control character"),
-        c if invisible(c) && context[i].is_none() => Some(kind(c)),
+        c if invisible(c) && context[i].is_none() => Some(kind(&p, chars, i)),
         _ => None,
     };
     let expected = (0..n).find_map(|i| plain(i, chars[i]));
@@ -566,6 +613,55 @@ fn every_arrangement_before_a_joiner_keeps_it_only_after_a_virama_that_conjoins(
     assert!(
         tally.narrowed > 0,
         "a joiner after a killer, which #350's rule kept, is refused"
+    );
+}
+
+#[test]
+fn every_arrangement_around_a_joiner_keeps_it_in_the_two_places_of_their_own_and_nowhere_else_there(
+) {
+    // be2m.4 items 1 and 2: up to three before the joiner and up to two after, over a Tifinagh letter and its consonant
+    // joiner, a Myanmar letter, its asat and its stacker, and a Latin letter
+    let before = points(&[0x2D4E, 0x2D7F, 0x1004, 0x103A, 0x1039, 0x61]);
+    let after = points(&[0x2D5C, 0x1000, 0x1039, 0x103A, 0x61]);
+    let mut tally = Tally::default();
+    for len in 0..=3u32 {
+        for arrangement in 0..before.len().pow(len) {
+            for tail in 0..=2u32 {
+                for following in 0..after.len().pow(tail) {
+                    for joiner in [ZWNJ, ZWJ] {
+                        let mut chars: Vec<char> = (0..len)
+                            .map(|place| {
+                                before[arrangement / before.len().pow(place) % before.len()]
+                            })
+                            .collect();
+                        chars.push(joiner);
+                        chars.extend(
+                            (0..tail).map(|place| {
+                                after[following / after.len().pow(place) % after.len()]
+                            }),
+                        );
+                        check(&chars, &mut tally);
+                    }
+                }
+            }
+        }
+    }
+    report("places of their own", &tally);
+    assert_eq!(tally.strings, (1 + 6 + 36 + 216) * (1 + 5 + 25) * 2);
+    for context in [
+        "after a virama the categories do not reach",
+        "between the asat and a stacker",
+        "a2",
+        "b",
+    ] {
+        assert!(
+            tally.kept.get(context).is_some_and(|kept| *kept > 0),
+            "{context} is reached"
+        );
+    }
+    assert!(
+        tally.narrowed > 0,
+        "a joiner after an asat with no stacker after it, which #350's rule kept, is refused"
     );
 }
 

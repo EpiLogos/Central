@@ -1,11 +1,14 @@
 # The RGI emoji ZWJ sequences of Unicode 17.0 (UTS #51, the set of emoji-zwj-sequences.txt), each in its fully
 # qualified form: 1614 sequences, one a line, as code points in hexadecimal, in the order ICU lists them.
-# Generated, never edited by hand, from ICU4C 78.3's export of the property RGI_Emoji_ZWJ_Sequence (no network):
+# The lines under this header are generated, never edited by hand, from ICU4C 78.3's export of the property
+# RGI_Emoji_ZWJ_Sequence (no network); the header is written around them by the generator that runs these:
 #   icuexportdata -m uprops -d OUT RGI_Emoji_ZWJ_Sequence
 #   (OUT/RGI_Emoji_ZWJ_Sequence.toml, sha256 f3c88bd5a24f0e45e3b2cbb734817267ed171f317266260f96016a7a6bec2176)
 #   python3 -c 'import re,sys;[print(" ".join("%04X"%int(a or b,16) for a,b in re.findall(r"\\U(\w{8})|\\u(\w{4})",l))) for l in open(sys.argv[1]) if l.startswith("  \"")]' OUT/RGI_Emoji_ZWJ_Sequence.toml
-# The same bytes in Central and O-I, under one sha256. A joiner in a record's words is kept between emoji only inside
-# one of these, read with or without each U+FE0F (ctrl/src/names.rs, joiner_kept).
+# The bytes are kept under one sha256 wherever the list is copied. A joiner in a record's words is kept between emoji
+# only inside one of these, read with or without each U+FE0F (ctrl/src/names.rs, joiner_kept). The Unicode named in
+# the first line is the Unicode of the data the build carries: a test fails when the two part, and the list is then
+# generated again from the ICU of that Unicode.
 26D3 FE0F 200D 1F4A5
 26F9 1F3FB 200D 2640 FE0F
 26F9 1F3FB 200D 2642 FE0F
