@@ -575,9 +575,26 @@ fn reading(
     let opened_at = entry["temporal"]["created_at_unix_seconds"]
         .as_u64()
         .map_or(Value::Null, Value::from);
-    Ok(
-        json!({"schema":"central.day-reading/v1","day_ref":entry["temporal"]["day_ref"],"source":source.source,"revision":source.revision,"content":source.content,"temporal":entry["temporal"],"opened_at_unix_seconds":opened_at,"relations_revision":relation_basis,"today":relations["temporal"]["today"],"tomorrow":relations["temporal"]["tomorrow"],"document_state":if document.is_null(){"uninitialised"}else{"ready"},"document":document,"automatic_agent_or_model_invocation":false}),
-    )
+    let civil_date = entry["temporal"]["civil_date"].as_str().unwrap_or_default();
+    // The Day's bounds as Central keeps them (manual §18.2 "Central keeps the day's bounds"): the instant its civil date begins
+    // and the instant it turns, in the policy's zone at its boundary.
+    let bounds = super::day_moves::day_spans(scope, civil_date)
+        .ok()
+        .and_then(|spans| {
+            let (first, last) = (spans.first()?, spans.last()?);
+            Some(json!({"opens_at_unix_seconds": first.0.div_euclid(1000), "turns_at_unix_seconds": last.1.div_euclid(1000)}))
+        })
+        .unwrap_or(Value::Null);
+    let mut value = json!({"schema":"central.day-reading/v1","day_ref":entry["temporal"]["day_ref"],"source":source.source,"revision":source.revision,"content":source.content,"temporal":entry["temporal"],"opened_at_unix_seconds":opened_at,"bounds":bounds,"relations_revision":relation_basis,"today":relations["temporal"]["today"],"tomorrow":relations["temporal"]["tomorrow"],"document_state":if document.is_null(){"uninitialised"}else{"ready"},"document":document,"automatic_agent_or_model_invocation":false});
+    // What the day's acts left in it (day_turn.rs receipts), in the order they were laid; a record that cannot be read says so.
+    match super::day_turn::receipts_of(scope, civil_date) {
+        Ok(receipts) => value["receipts"] = Value::Array(receipts),
+        Err(error) => {
+            value["receipts"] = json!([]);
+            value["receipts_refused"] = json!(error.to_string());
+        }
+    }
+    Ok(value)
 }
 pub fn day_read(scope: &Scope, input: &Value) -> io::Result<Value> {
     let (relations, basis) = scope.relations()?;

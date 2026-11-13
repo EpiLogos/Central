@@ -2,6 +2,7 @@
 //! No personal installation, default-policy adoption, model call or shell rewrite.
 pub mod authority;
 mod day_moves;
+mod day_turn;
 pub mod documents;
 mod extended;
 pub mod field;
@@ -131,6 +132,10 @@ pub fn execute_with_token_at(
         "time_policy" => Ok(serde_json::to_value(temporal::time_policy(&scope, now)?)?),
         "time_occurrences" => temporal::time_occurrences(&scope, input),
         "day_read" => temporal::day_read(&scope, input),
+        // The Day's turn by Central's civil clock, and a receipt laid into a Day (day_turn.rs): no credential; the turn acts on
+        // the person's adopted policy only, and a receipt is a record of what an act did, never the person's writing.
+        "day_turn" => day_turn::turn(&scope, input, now),
+        "day_receipt_record" => day_turn::record_receipt(&scope, input, now),
         "source_history" => history::read(&scope, input),
         "day_settings_read" => day_moves::settings_read(&scope),
         "day_moves_read" => day_moves::moves_read(&scope, input, now),
@@ -279,6 +284,12 @@ handler!(
     "time_occurrences"
 );
 handler!(day_read_action, "central.day.read", "day_read");
+handler!(day_turn_action, "central.day.turn", "day_turn");
+handler!(
+    day_receipt_record_action,
+    "central.day.receipt.record",
+    "day_receipt_record"
+);
 handler!(day_ensure_action, "central.day.ensure", "day_ensure");
 handler!(
     day_lifecycle_action,
@@ -407,9 +418,73 @@ pub fn register_actions(registry: &mut ActionRegistry) {
     ]);
     extended::register_actions(registry);
     day_moves::register_actions(registry);
+    register_day_turn(registry);
+}
+
+/// The Day's turn and its receipts (day_turn.rs). The turn reconciles the Day with Central's civil clock and the person's adopted
+/// policy, so it is derived-reconciling: asked again with nothing to do it writes nothing.
+fn register_day_turn(registry: &mut ActionRegistry) {
+    let field = |name: &str, kind: &str, required: bool| ActionInputDefinition {
+        name: name.into(),
+        input_type: kind.into(),
+        required,
+        choices: None,
+        selection: None,
+    };
+    for (id, title, description, class, inputs, handler) in [
+        (
+            "central.day.turn",
+            "Turn the Day by Central's civil clock",
+            "What the adopted civil-time policy determines now, as Central's own civil clock (no credential; refused where the policy keeps automatic_day_rollover off): today's Day opens on its civil date and today points at it; its document is made from the Day form offered in form (central.path-ref/v1) when it has none, carrying the set of the Day before it; each earlier Day still open closes, its close routine carrying face 5's proposal to today's face 0 as the Day's settings keep it. Answers today's Day reading (central.day-reading/v1) with turn: what was opened, made and closed. Nothing is written when nothing turns.",
+            MutationClass::DerivedReconciling,
+            vec![field("project", "string", false), field("form", "object", false)],
+            day_turn_action as crate::action::ActionHandler,
+        ),
+        (
+            "central.day.receipt.record",
+            "Lay an act's receipt into its Day",
+            "Append one act's receipt to the Day of the civil date it happened on (receipts.jsonl beside the Day, append-only): act, owner, subject, source, the owner's receipt (at most 16 KiB) and receipt_id (laid once). Read back with that Day (central.day.read receipts). A record of what an act did, never the person's writing.",
+            MutationClass::LocallyMutating,
+            vec![
+                field("project", "string", false),
+                field("receipt_id", "string", true),
+                field("act", "string", true),
+                field("owner", "string", true),
+                field("subject", "string", true),
+                field("source", "string", false),
+                field("receipt", "object", false),
+                field("occurred_at_unix_seconds", "integer", false),
+            ],
+            day_receipt_record_action as crate::action::ActionHandler,
+        ),
+    ] {
+        registry
+            .register(
+                ActionDescriptor {
+                    id: id.into(),
+                    title: title.into(),
+                    description: description.into(),
+                    inputs,
+                    output: ActionOutputDefinition {
+                        output_type: "object".into(),
+                    },
+                    mutation_class: class,
+                    preview_supported: false,
+                    required_ports: vec![],
+                    availability: ActionAvailability {
+                        available: true,
+                        reason: None,
+                    },
+                },
+                handler,
+            )
+            .expect("the Day's turn and receipt Action ids are unique");
+    }
 }
 
 #[cfg(test)]
 mod day_moves_tests;
+#[cfg(test)]
+mod day_turn_tests;
 #[cfg(test)]
 mod tests;

@@ -46,6 +46,7 @@ pub const AUTHENTICATED_ACTIONS: &[&str] = &[
     "central.world.name",
     "central.world.place",
     "control.apply-proposal",
+    "control.law.adopt",
     "control.skills.revision.accept",
     "control.skills.revision.discard",
     "projectcentral.source.return_accept",
@@ -56,7 +57,8 @@ pub const AUTHENTICATED_ACTIONS: &[&str] = &[
 /// can bring a folder into Work, and at each Work project it writes in: where its Source stands, where it goes, and each one whose
 /// links it rewrites (DLW build ruling 2026-11-09, round 54d F1 and round 54g item 4; file_map.rs `grant_scope`). Those left out,
 /// `central.flow.append`, `control.apply-proposal` and the file map's `scope-register`, always resolve the root: the root registers
-/// every scope. `authenticate` refuses any other
+/// every scope. So does `control.law.adopt`: the law it adopts is the root world's tier 0, Control/agents/governance (O-I 1005,
+/// control_floor.rs). `authenticate` refuses any other
 /// Action at a project, so this list is exactly what a grant covering `project:<id>` lets its holder do there; extending a person's
 /// grant to a project they bring in (crate::ground_projects) grants these.
 pub const PROJECT_AUTHENTICATED_ACTIONS: &[&str] = &[
@@ -179,10 +181,32 @@ pub struct Principal {
     pub authority_revision: String,
     pub expires_at_unix_seconds: u64,
     permitted_actions: Vec<String>,
+    /// Central's own civil clock (`civil_clock`): made here only, never from a credential.
+    #[serde(skip)]
+    civil_clock: bool,
+}
+/// Central's own civil clock, the one principal the Day's turn acts as (`central.day.turn`, day_turn.rs). It holds no credential and
+/// no grant: it does only what the person's adopted civil-time policy determines (today's Day opens on its civil date, an earlier
+/// Day closes at its turn), its authority is that policy at its revision, and it is made nowhere else.
+pub(crate) fn civil_clock(scope: &Scope, time: &super::temporal::TimeReading) -> Principal {
+    Principal {
+        principal_ref: super::day_turn::CIVIL_CLOCK.into(),
+        actor_kind: "native-service".into(),
+        scope_ref: scope.world_ref.clone(),
+        authority_ref: time.source_ref.clone(),
+        authority_revision: time.revision.clone(),
+        expires_at_unix_seconds: time.observed_at_unix_seconds,
+        permitted_actions: vec!["central.day.turn".into()],
+        civil_clock: true,
+    }
 }
 impl Principal {
     pub fn is_human(&self) -> bool {
         self.actor_kind == "human"
+    }
+    /// Whether this is Central's own civil clock, acting on the person's adopted policy at the Day's turn.
+    pub(crate) fn is_civil_clock(&self) -> bool {
+        self.civil_clock
     }
     pub(crate) fn require_human(&self) -> io::Result<()> {
         if self.is_human() {
@@ -243,6 +267,7 @@ pub fn authenticate(
         authority_revision,
         expires_at_unix_seconds: grant.expires_at_unix_seconds,
         permitted_actions: grant.actions,
+        civil_clock: false,
     })
 }
 

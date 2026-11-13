@@ -1251,6 +1251,8 @@ pub fn create_runtime_action_registry() -> crate::action::ActionRegistry {
     register_projectcentral_actions(&mut registry);
     crate::template_stamp::register_template_stamp_actions(&mut registry);
     crate::engineering_ground::register_engineering_ground_actions(&mut registry);
+    // The root world's floor: its render from the law adopted on tier 0, its reading, and the law's adoption (O-I #1005).
+    crate::control_floor::register_floor_actions(&mut registry);
     register_agent_profile_actions(&mut registry);
     crate::agent_set_actions::register_agent_set_actions(&mut registry);
     crate::remember_actions::register_remember_actions(&mut registry);

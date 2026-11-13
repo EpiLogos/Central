@@ -211,7 +211,8 @@ pub fn create(scope: &Scope, input: &Value, principal: &Principal, now: u64) -> 
     if !matches!(kind, "day" | "flow" | "dialogue") {
         return Err(invalid("document kind is day, flow or dialogue"));
     }
-    if kind == "day" {
+    // A Day's document is the person's, or Central's civil clock's at the Day's turn (day_turn.rs), from the Day form.
+    if kind == "day" && !principal.is_civil_clock() {
         principal.require_human()?;
     }
     let digest = source::key(&format!(

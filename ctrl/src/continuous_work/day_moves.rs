@@ -703,11 +703,11 @@ fn clock_of(time: &TimeReading, at_ms: i64) -> io::Result<String> {
 
 // ---- the run record ---------------------------------------------------------
 
-struct Log {
+pub(super) struct Log {
     exists: bool,
     raw: String,
     revision: String,
-    events: Vec<Value>,
+    pub(super) events: Vec<Value>,
 }
 
 fn load_log(scope: &Scope, civil_date: &str) -> io::Result<Log> {
@@ -720,7 +720,7 @@ fn load_log(scope: &Scope, civil_date: &str) -> io::Result<Log> {
 }
 
 /// One of the Day's append-only records: every line one document of `schema`.
-fn load_lines(scope: &Scope, path: &str, schema: &str, what: &str) -> io::Result<Log> {
+pub(super) fn load_lines(scope: &Scope, path: &str, schema: &str, what: &str) -> io::Result<Log> {
     let Some(raw) = read_optional(scope, path)? else {
         return Ok(Log {
             exists: false,
@@ -789,7 +789,7 @@ fn append_line(
 /// `by` is what source history names as the writer (actor, actor kind): the
 /// principal for what it recorded itself, the Day's field source for what
 /// reached you from the field.
-fn append_lines(
+pub(super) fn append_lines(
     scope: &Scope,
     path: &str,
     log: &Log,
@@ -1640,7 +1640,6 @@ fn carry(
     let operation = json!({"operation":"field.append","field_id":field_id,
         "contribution_id":contribution_id,"html":proposal});
     if !principal.is_human() {
-        // A Day takes an agent's entry only through the person (receiving).
         state["state"] = json!("waits");
         state["reason"] = json!("An agent's entry into a Day waits for the person: submit it through central.receiving.submit.");
         state["proposal"] = json!({"source_ref":target["source"]["ref"],"document_id":target["document_id"],
@@ -1734,6 +1733,47 @@ pub(crate) fn close_carry(
         "tomorrow":tomorrow,
         "automatic_agent_or_model_invocation":false,
     }))
+}
+
+/// Close an earlier Day at its turn, as Central's civil clock (day_turn.rs), on its revisions as they stand. Its close routine, as
+/// the person's Day settings keep it, is asked to carry face 5's proposal into today's Day (`today_ref`, the Day that follows it
+/// now); the clock is no person, so a proposal there waits for the person, as any entry that is not theirs does (documents.rs: a
+/// Day takes such an entry only through their review), and stays on the closed Day. Nothing is opened here: the turn opened
+/// today's Day already. Answers what the carry did.
+pub(super) fn close_at_turn(
+    scope: &Scope,
+    closing_ref: &str,
+    today_ref: &str,
+    clock: &Principal,
+    now: u64,
+) -> io::Result<Value> {
+    let (relations, _) = scope.relations()?;
+    let entry = temporal::day_relation(&relations, closing_ref)?.clone();
+    let settings = load_settings(scope)?;
+    let mut carried = if settings.close_routine().0 {
+        carry(scope, &entry, closing_ref, today_ref, clock, now)?
+    } else {
+        carry_state(
+            "off",
+            "The Close routine is Off, so the Day closes and carries nothing.",
+        )
+    };
+    if carried["state"] == "waits" {
+        // The clock writes no one's words into a Day: a Day takes an entry that is not the person's only through their review.
+        carried["reason"] = json!("Central's civil clock writes nothing into your Day: face 5's proposal stays on the closed Day, and carrying it to today's face 0 waits for you.");
+    }
+    let revision = scope.read(text(&entry, "ref")?)?.revision.revision;
+    let (_, fresh) = scope.relations()?;
+    temporal::change_lifecycle(
+        scope,
+        closing_ref,
+        &revision,
+        &fresh,
+        "closed",
+        &clock.principal_ref,
+        now,
+    )?;
+    Ok(carried)
 }
 
 // ---- the field source -------------------------------------------------------
@@ -1952,7 +1992,7 @@ fn field_source(settings: &Loaded) -> Value {
 /// itself), so the spans are read between those instants, and they agree with
 /// the civil date on every instant: one span on most Days, two where a fold
 /// carries the wall back across the boundary.
-fn day_spans(scope: &Scope, civil_date: &str) -> io::Result<Vec<(i64, i64)>> {
+pub(super) fn day_spans(scope: &Scope, civil_date: &str) -> io::Result<Vec<(i64, i64)>> {
     const DAY: i64 = 24 * 3600 * 1000;
     let date = NaiveDate::parse_from_str(civil_date, "%Y-%m-%d")
         .map_err(|_| invalid("a Day's civil date is YYYY-MM-DD"))?;
