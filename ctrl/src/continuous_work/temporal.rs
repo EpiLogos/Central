@@ -717,6 +717,8 @@ pub fn ensure_day(
 /// The one close/reopen of a human Day, checked on its content and relations
 /// revisions. Shared by `day_lifecycle` (the person's press) and the close carry
 /// (the Close move), which differ only in who may call, never in what closing is.
+/// A Day closed already is refused, never stamped closed a second time: its
+/// close keeps the time and the actor that closed it.
 pub(crate) fn change_lifecycle(
     scope: &Scope,
     day_ref: &str,
@@ -738,6 +740,11 @@ pub(crate) fn change_lifecycle(
     if !matches!(state, "open" | "closed") {
         return Err(invalid(
             "Day lifecycle is open or closed; closing does not archive/delete source",
+        ));
+    }
+    if state == "closed" && entry["temporal"]["lifecycle"] == "closed" {
+        return Err(conflict(
+            "The Day is closed already; a closed Day is not closed again",
         ));
     }
     let entry = relations["relations"]
