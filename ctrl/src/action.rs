@@ -345,11 +345,13 @@ fn init_action(
         }
     }
 
-    match initialize_central(&resolved.path) {
-        Ok(initialized) => ActionResult::success(
-            "central.init",
-            to_value(initialized).expect("initialization serializes"),
-        ),
+    match initialize_central(&resolved.path).and_then(|initialized| {
+        let world = declare_root_world(&resolved.path)?;
+        let mut value = to_value(initialized).expect("initialization serializes");
+        value["root_world"] = serde_json::json!(world);
+        Ok(value)
+    }) {
+        Ok(initialized) => ActionResult::success("central.init", initialized),
         Err(error) => crate::projectcentral_ops::mutation_failure_result("central.init", &error)
             .unwrap_or_else(|| {
                 ActionResult::failure(
@@ -360,6 +362,38 @@ fn init_action(
                 )
             }),
     }
+}
+
+/// The root World a fresh ground stands in (`control:root`), declared once:
+/// the person's identity is canonical, the agents' ground and the relations
+/// are agent-maintained. Without it nothing world-scoped resolves (an agent's
+/// chat context, effective sources: `central.world_declaration_absent`). An
+/// existing declaration is the person's and is never rewritten. Answers
+/// `declared` or `kept`.
+fn declare_root_world(root: &std::path::Path) -> std::io::Result<&'static str> {
+    use crate::agent_set_store::{RelationRecordStore, RelationRecordStoreError};
+    let store = RelationRecordStore::worlds_at_root(root.to_path_buf());
+    match store.read("control:root") {
+        Ok(_) => return Ok("kept"),
+        Err(RelationRecordStoreError::NotFound(_)) => {}
+        Err(error) => return Err(std::io::Error::other(error.to_string())),
+    }
+    let source = |path: &str, authority: &str, treatment: &str| {
+        serde_json::json!({"ref": format!("central:source:control:root:{path}"), "revision": "1",
+            "authority": authority, "treatment": treatment})
+    };
+    let record = serde_json::json!({
+        "schema": "central.world-relations/v1", "ref": "control:root", "revision": "w1",
+        "sources": [
+            source("Control/user/identity", "human-authored", "canonical"),
+            source("Control/agents", "agent-maintained", "agent-maintained"),
+            source("Control/relations", "agent-maintained", "agent-maintained"),
+        ],
+    });
+    store
+        .save(&record, None)
+        .map(|_| "declared")
+        .map_err(|error| std::io::Error::other(error.to_string()))
 }
 
 fn doctor_action(
