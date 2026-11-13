@@ -417,3 +417,52 @@ fn action_run_with_every_required_field_missing_names_all_of_them() {
         "projectcentral.now.return requires subject, result, status."
     );
 }
+
+/// A fresh `ctrl init` makes a World, not only folders: the root World
+/// `control:root` is declared, so world-scoped work (an agent's chat context,
+/// effective sources) has a lineage to stand on. A second init keeps the
+/// declaration the person may since have changed.
+#[test]
+fn init_declares_the_root_world_once() {
+    let root = temporary_directory("init-root-world").join("Central");
+    let run = |args: &[&str]| {
+        run_cli(
+            &args.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>(),
+            &environment(&root),
+        )
+    };
+    let read = || {
+        run(&[
+            "--json",
+            "action",
+            "run",
+            "central.world-relations.read",
+            r#"{"scope":"root","ref":"control:root"}"#,
+        ])
+    };
+    let init = run(&["--json", "init"]);
+    assert_eq!(
+        init.result.status,
+        ResultStatus::Success,
+        "{:?}",
+        init.result
+    );
+    let declared = read();
+    assert_eq!(
+        declared.result.status,
+        ResultStatus::Success,
+        "{:?}",
+        declared.result
+    );
+    let record = &declared.result.data.as_ref().unwrap()["record"];
+    assert_eq!(record["ref"], "control:root", "{record}");
+    let revision = record["revision"].clone();
+
+    let again = run(&["--json", "init"]);
+    assert_eq!(again.result.status, ResultStatus::Success);
+    let kept = read();
+    assert_eq!(
+        kept.result.data.as_ref().unwrap()["record"]["revision"],
+        revision
+    );
+}
