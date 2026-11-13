@@ -184,13 +184,38 @@ fn creation_is_refused_outside_the_user_flows_area_and_with_a_claimed_basis() {
         )
     };
 
-    // Outside Control/user/flows: absent ordinary files are not created.
+    // Outside Control/user/flows: absent ordinary files are not created. The refusal is Central's own words, never the
+    // filesystem's bare "No such file or directory": an agent running the Action by its id learns which Action makes a new
+    // file, and protected ground refuses as it does for a file that exists.
     let work = mk("Work/Bare/new.txt", "");
     assert_eq!(work.status, ResultStatus::InvalidInput, "{:?}", work.data);
-    let protected = mk("Control/agents/now/flows/flow-x.md", "");
-    assert_eq!(protected.status, ResultStatus::InvalidInput);
-    let other_user = mk("Control/user/notes.txt", "");
-    assert_eq!(other_user.status, ResultStatus::InvalidInput);
+    let words = work
+        .error
+        .as_ref()
+        .map(|e| e.message.clone())
+        .unwrap_or_default();
+    assert!(
+        words.contains("Work/Bare/new.txt does not exist")
+            && words.contains("central.files.create"),
+        "{words}"
+    );
+    for path in [
+        "Control/agents/now/flows/flow-x.md",
+        "Control/user/notes.txt",
+    ] {
+        let protected = mk(path, "");
+        assert_eq!(
+            protected.status,
+            ResultStatus::UnavailableCapability,
+            "{path}"
+        );
+        let words = protected
+            .error
+            .as_ref()
+            .map(|e| e.message.clone())
+            .unwrap_or_default();
+        assert!(words.starts_with("Protected ground"), "{path}: {words}");
+    }
 
     // Inside flows but claiming a basis for a file that does not exist.
     let claimed = mk("Control/user/flows/flow-2026-09-13-1300.html", "rev/1");

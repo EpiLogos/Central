@@ -961,6 +961,45 @@ fn a_late_end_keeps_its_own_time_and_rewrites_nothing() {
     assert_eq!(after.lines().count(), 2);
 }
 
+/// The person's close press on a Day closed already is refused, and the close
+/// it already carries (its time and its actor) stands: a closed Day is never
+/// stamped closed a second time, by the press or by the Close move.
+#[test]
+fn a_closed_day_is_not_closed_again_by_the_press() {
+    let w = world("Europe/London", 0);
+    let day = ensure(w.path(), at(T));
+    let close = |day: &Value, now: u64| {
+        run(
+            w.path(),
+            "day_lifecycle",
+            json!({"day_ref":day["day_ref"],"expected_revision":day["revision"]["revision"],
+                "expected_relations_revision":day["relations_revision"],"lifecycle":"closed"}),
+            Some(HUMAN),
+            now,
+        )
+    };
+    close(&day, at(T)).unwrap();
+    let closed = read(
+        w.path(),
+        "day_read",
+        json!({"day_ref":day["day_ref"]}),
+        at(T),
+    );
+    assert_eq!(closed["temporal"]["lifecycle"], "closed");
+    let relations =
+        fs::read_to_string(w.path().join("Control/relations/source-relations.json")).unwrap();
+    assert_eq!(
+        kind_of(close(&closed, at(T) + 60)),
+        io::ErrorKind::AlreadyExists,
+        "a closed Day is not closed again"
+    );
+    assert_eq!(
+        fs::read_to_string(w.path().join("Control/relations/source-relations.json")).unwrap(),
+        relations,
+        "the refused close writes nothing: the first close's time and actor stand"
+    );
+}
+
 #[test]
 fn a_closed_day_refuses_a_begin_but_lets_a_run_already_begun_land() {
     let w = world("Europe/London", 0);
