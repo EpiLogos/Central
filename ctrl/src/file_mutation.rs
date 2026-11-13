@@ -322,6 +322,22 @@ fn ordinary_policy(root: &Path, loc: &CentralPathRef) -> io::Result<()> {
     }
     Ok(())
 }
+/// What a write to a file that does not exist says outside the create door (`Control/user/flows/`): protected ground refuses in
+/// its own words, as it does for a file that exists, and elsewhere the Action that makes a new file is named. Never the
+/// filesystem's bare "No such file or directory", which tells an agent running the Action by its id nothing it can act on.
+fn absent_write(root: &Path, loc: &CentralPathRef) -> io::Error {
+    if let Err(refusal) = ordinary_policy(root, loc) {
+        return refusal;
+    }
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        format!(
+            "{} does not exist: central.files.write saves a file that exists, or a new page under Control/user/flows/; \
+             central.files.create makes a new file in an existing directory",
+            loc.path
+        ),
+    )
+}
 fn ordinary(root: &Path, loc: &CentralPathRef) -> io::Result<PathBuf> {
     let path = ordinary_address(root, loc)?;
     let reading = read_file(root, loc, crate::files::FileEncoding::Base64)?;
@@ -1245,7 +1261,13 @@ fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
         validate_absent_instance_location(&root, &loc)?;
         root.join(&loc.path)
     } else {
-        ordinary(&root, &loc)?
+        ordinary(&root, &loc).map_err(|error| {
+            if op == "write" && error.kind() == io::ErrorKind::NotFound {
+                absent_write(&root, &loc)
+            } else {
+                error
+            }
+        })?
     };
     if op == "history"
         && !root
