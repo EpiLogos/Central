@@ -710,6 +710,70 @@ Responsibility (`{RESPONSIBILITY}`): “{OWN_THE_FAULT}”\n{CODEX_END}\n\nafter
 }
 
 #[test]
+fn the_reading_accounts_for_codexs_block_in_the_home_as_the_render_writes_it() {
+    let ground = owners();
+    let codex = ground.home.join(".codex");
+    let homes = |ground: &Ground| read_in(ground, &["AGENTS.md"])["homes"].clone();
+    // No Codex folder at this home: absent, in the render's own words.
+    assert_eq!(
+        homes(&ground),
+        json!([{"file": "~/.codex/AGENTS.md", "state": "absent", "current": false, "why": NO_CODEX}])
+    );
+    // Codex's own instructions with no block of Central's: absent, and the render writes one.
+    fs::create_dir_all(&codex).unwrap();
+    fs::write(codex.join("AGENTS.md"), "# My Codex\n\nmy own words\n").unwrap();
+    let row = homes(&ground)[0].clone();
+    assert_eq!(
+        (row["state"].as_str(), row["current"].as_bool()),
+        (Some("absent"), Some(false))
+    );
+    assert!(
+        row["why"]
+            .as_str()
+            .unwrap()
+            .contains("holds no block of Central's"),
+        "{row}"
+    );
+    // Rendered: the block stands as the render writes it now.
+    render_in(&ground, &json!({})).unwrap();
+    assert_eq!(
+        homes(&ground),
+        json!([{"file": "~/.codex/AGENTS.md", "state": "rendered", "current": true,
+            "renderer": "central control.floor.render"}])
+    );
+    // A hand inside the block: still Central's block, not the one it writes now, and why.
+    let text = fs::read_to_string(codex.join("AGENTS.md")).unwrap();
+    fs::write(
+        codex.join("AGENTS.md"),
+        text.replace("for every Codex session", "by hand"),
+    )
+    .unwrap();
+    let row = homes(&ground)[0].clone();
+    assert_eq!(
+        (row["state"].as_str(), row["current"].as_bool()),
+        (Some("rendered"), Some(false))
+    );
+    assert!(
+        row["why"]
+            .as_str()
+            .unwrap()
+            .contains("control.floor.render writes it again"),
+        "{row}"
+    );
+    // The strap's block, before Central renders: its renderer named, not current.
+    fs::write(codex.join("AGENTS.md"), text.replace(CODEX_BEGIN, "<!-- central:generated-begin (central-session-strap/render-context.py; do not edit inside) -->")).unwrap();
+    let row = homes(&ground)[0].clone();
+    assert_eq!(row["renderer"], "central-session-strap/render-context.py");
+    assert_eq!(row["current"], false);
+    // The render writes it again, keeping the person's words, and it reads back current.
+    render_in(&ground, &json!({})).unwrap();
+    assert_eq!(homes(&ground)[0]["current"], true);
+    assert!(fs::read_to_string(codex.join("AGENTS.md"))
+        .unwrap()
+        .starts_with("# My Codex\n\nmy own words\n"));
+}
+
+#[test]
 fn codex_carries_the_floor_only_for_the_homes_own_central_world() {
     let ground = owners();
     let codex = ground.home.join(".codex");
@@ -856,6 +920,199 @@ fn adopting_says_the_floor_changed_whenever_the_render_wrote_anything() {
     let still = adopt(&ground, &linked, Some(HUMAN), 40).unwrap();
     assert_eq!(still["floor"]["links"][0]["state"], "kept");
     assert_eq!(still["floor"]["changed"], false, "{still}");
+}
+
+#[test]
+fn codexs_instructions_central_cannot_read_are_a_home_row_that_says_why() {
+    use std::os::unix::fs::PermissionsExt;
+    let ground = owners();
+    let codex = ground.home.join(".codex");
+    fs::create_dir_all(&codex).unwrap();
+    let file = codex.join("AGENTS.md");
+    let row_of = |ground: &Ground| {
+        let reading = read(&ground.root, &files(&["AGENTS.md"]), Some(&ground.home))
+            .expect("the reading stands whatever Codex's instructions hold");
+        assert_eq!(reading["floors"][0]["file"], "AGENTS.md", "{reading}");
+        reading["homes"][0].clone()
+    };
+    // Not UTF-8 text.
+    fs::write(&file, b"\xff\xfe not utf-8\n").unwrap();
+    let row = row_of(&ground);
+    assert_eq!(
+        (
+            row["file"].as_str(),
+            row["state"].as_str(),
+            row["current"].as_bool()
+        ),
+        (Some("~/.codex/AGENTS.md"), Some("unreadable"), Some(false)),
+        "{row}"
+    );
+    let why = row["why"].as_str().unwrap();
+    assert!(why.contains("is not UTF-8 text"), "{why}");
+    assert!(
+        why.contains("control.floor.render leaves it as it is"),
+        "{why}"
+    );
+    // Not readable by the person's own processes.
+    fs::write(&file, "# My Codex\n").unwrap();
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
+    let row = row_of(&ground);
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(row["state"], "unreadable", "{row}");
+    assert!(
+        row["why"].as_str().unwrap().contains("could not read"),
+        "{row}"
+    );
+    // A folder where the file would be.
+    fs::remove_file(&file).unwrap();
+    fs::create_dir(&file).unwrap();
+    let row = row_of(&ground);
+    assert_eq!(row["state"], "unreadable", "{row}");
+    assert!(
+        row["why"].as_str().unwrap().contains("could not read"),
+        "{row}"
+    );
+}
+
+#[test]
+fn another_worlds_reading_says_codexs_instructions_are_not_its_to_write() {
+    let ground = owners();
+    fs::create_dir_all(ground.home.join(".codex")).unwrap();
+    render_in(&ground, &json!({})).unwrap();
+    assert_eq!(
+        read_in(&ground, &["AGENTS.md"])["homes"][0]["current"],
+        true
+    );
+    // The same home read from a world that is not its ~/Central: the block stands, but it is not that world's to write.
+    let elsewhere = ground.home.join("Elsewhere");
+    fs::rename(&ground.root, &elsewhere).unwrap();
+    let row =
+        read(&elsewhere, &files(&["AGENTS.md"]), Some(&ground.home)).unwrap()["homes"][0].clone();
+    assert_eq!(
+        (row["state"].as_str(), row["current"].as_bool()),
+        (Some("rendered"), Some(false)),
+        "{row}"
+    );
+    let why = row["why"].as_str().unwrap();
+    assert!(why.contains("not this home's own Central world"), "{why}");
+    assert!(!why.contains("writes it again"), "{why}");
+}
+
+#[test]
+fn codexs_instructions_central_cannot_read_are_left_as_they_are_and_the_floor_is_written_all_the_same(
+) {
+    use std::os::unix::fs::PermissionsExt;
+    let ground = owners();
+    let codex = ground.home.join(".codex");
+    fs::create_dir_all(&codex).unwrap();
+    let file = codex.join("AGENTS.md");
+    let bytes: &[u8] = b"\xff\xfe not utf-8\n";
+    fs::write(&file, bytes).unwrap();
+    let receipt = render_in(&ground, &files(&["CLAUDE.md"])).unwrap();
+    assert_eq!(receipt["changed"], true, "{receipt}");
+    assert_eq!(
+        receipt["written"],
+        json!([FLOOR_FILE, "CLAUDE.md"]),
+        "{receipt}"
+    );
+    assert!(floor(&ground).contains("## Never-do card"));
+    assert_eq!(
+        fs::read_link(ground.root.join("CLAUDE.md")).unwrap(),
+        Path::new(FLOOR_FILE)
+    );
+    assert_eq!(receipt["codex"]["changed"], false, "{receipt}");
+    assert_eq!(receipt["codex"]["file"], file.to_string_lossy().as_ref());
+    let why = receipt["codex"]["why"].as_str().unwrap();
+    assert!(
+        why.contains("is not UTF-8 text") && why.contains("the floor is written without it"),
+        "{why}"
+    );
+    assert_eq!(fs::read(&file).unwrap(), bytes);
+    // Not readable by the person's own processes: left as it is, the floor written again where it changed.
+    fs::remove_file(ground.root.join(FLOOR_FILE)).unwrap();
+    fs::write(&file, "# My Codex\n").unwrap();
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
+    let receipt = render_in(&ground, &json!({}));
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+    let receipt = receipt.unwrap();
+    assert_eq!(receipt["changed"], true, "{receipt}");
+    let why = receipt["codex"]["why"].as_str().unwrap();
+    assert!(
+        why.contains("could not read") && why.contains("the floor is written without it"),
+        "{why}"
+    );
+    assert!(ground.root.join(FLOOR_FILE).exists());
+    assert_eq!(fs::read_to_string(&file).unwrap(), "# My Codex\n");
+}
+
+#[test]
+fn codexs_instructions_kept_as_a_link_read_as_the_render_leaves_them() {
+    let ground = owners();
+    let codex = ground.home.join(".codex");
+    fs::create_dir_all(&codex).unwrap();
+    let kept = ground.home.join("dotfiles-agents.md");
+    fs::write(&kept, "# mine\n").unwrap();
+    std::os::unix::fs::symlink(&kept, codex.join("AGENTS.md")).unwrap();
+    for (case, words) in [
+        ("a link", "are a link"),
+        (
+            "a second link",
+            "not a file Central can write its block into",
+        ),
+    ] {
+        let row = read_in(&ground, &["AGENTS.md"])["homes"][0].clone();
+        assert_eq!(row["current"], false, "{case}: {row}");
+        let why = row["why"].as_str().unwrap();
+        assert!(
+            why.contains(words) && !why.contains("writes one"),
+            "{case}: {why}"
+        );
+        fs::remove_file(codex.join("AGENTS.md")).unwrap();
+        fs::hard_link(&kept, codex.join("AGENTS.md")).unwrap();
+    }
+}
+
+#[test]
+fn adopting_answers_its_adoption_whatever_the_render_does() {
+    let path = "Control/agents/governance/craft/unrelated.md";
+    // Codex's instructions cannot be read: they are left as they are, the floor is rendered all the same, and the receipt says why.
+    let ground = fresh();
+    fs::create_dir_all(ground.home.join(".codex")).unwrap();
+    fs::write(ground.home.join(".codex/AGENTS.md"), b"\xff\xfe").unwrap();
+    let input =
+        json!({"statement": path, "expected_revision": revision_of(&ground, "craft/unrelated.md")});
+    let receipt = adopt(&ground, &input, Some(HUMAN), 10).unwrap();
+    assert_eq!(receipt["adopted"], true, "{receipt}");
+    assert!(receipt["floor"].get("refused").is_none(), "{receipt}");
+    assert_eq!(receipt["floor"]["changed"], true, "{receipt}");
+    assert!(
+        receipt["floor"]["codex"]["why"]
+            .as_str()
+            .unwrap()
+            .contains("is not UTF-8 text"),
+        "{receipt}"
+    );
+    assert!(ground.root.join(FLOOR_FILE).exists());
+    assert_eq!(
+        fs::read(ground.home.join(".codex/AGENTS.md")).unwrap(),
+        b"\xff\xfe"
+    );
+    // The render fails for a reason no rule names (a floor that is not text): the adoption stands, and the failure rides on its
+    // receipt, nothing written.
+    let ground = fresh();
+    fs::write(ground.root.join(FLOOR_FILE), b"\xff\xfe").unwrap();
+    let input =
+        json!({"statement": path, "expected_revision": revision_of(&ground, "craft/unrelated.md")});
+    let receipt = adopt(&ground, &input, Some(HUMAN), 10).unwrap();
+    assert_eq!(receipt["adopted"], true, "{receipt}");
+    assert_eq!(receipt["floor"]["changed"], false, "{receipt}");
+    assert!(receipt["floor"]["failed"].is_string(), "{receipt}");
+    assert_eq!(fs::read(ground.root.join(FLOOR_FILE)).unwrap(), b"\xff\xfe");
+    // It stood: adopted again, it is not adopted twice.
+    assert_eq!(
+        adopt(&ground, &input, Some(HUMAN), 20).unwrap()["adopted"],
+        false
+    );
 }
 
 #[test]
