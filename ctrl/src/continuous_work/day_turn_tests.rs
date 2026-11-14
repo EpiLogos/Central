@@ -93,9 +93,24 @@ fn save(root: &Path, settings: Value, now: u64) -> io::Result<Value> {
     input["expected_revision"] = current["revision"].clone();
     execute_with_token_at(root, "day_settings_write", &input, Some(HUMAN), now)
 }
+/// The revision Central's file route gives the file at `path` as it stands: what the person reads before they save it.
+fn revision_of(root: &Path, path: &str) -> String {
+    let central = Scope::resolve(root, None).unwrap().central_root;
+    crate::files::read_file(
+        &central,
+        &serde_json::from_value(location(root, path)).unwrap(),
+        crate::files::FileEncoding::Utf8,
+    )
+    .unwrap()
+    .revision
+}
+/// The Day form at `path` as the person saves it, at the revision they read.
+fn form_at(root: &Path, path: &str) -> Value {
+    json!({"path": path, "revision": revision_of(root, path)})
+}
 /// The person saves their Day form (`day_form`) in the Day's settings.
 fn save_form(root: &Path, now: u64) {
-    save(root, json!({"day_form": FORM_PATH}), now).unwrap();
+    save(root, json!({"day_form": form_at(root, FORM_PATH)}), now).unwrap();
 }
 fn turn(root: &Path, input: Value, now: u64) -> io::Result<Value> {
     execute_at(root, "day_turn", &input, now)
@@ -564,7 +579,7 @@ fn the_clocks_close_files_the_carry_in_receiving_where_approvals_keeps_or_drops_
     person_document(w.path(), FIRST, PROPOSAL, first);
     save(
         w.path(),
-        json!({"day_form": FORM_PATH, "moves":{"close":{"runs_at":{"kind":"day_start"}}}}),
+        json!({"day_form": form_at(w.path(), FORM_PATH), "moves":{"close":{"runs_at":{"kind":"day_start"}}}}),
         first,
     )
     .unwrap();
@@ -662,9 +677,18 @@ fn the_turn_makes_the_page_only_from_the_saved_day_form_never_from_one_offered_i
         .as_str()
         .unwrap()
         .contains("day_form"));
-    // The person saves their form: the reading shows it as theirs, and the page is made from it alone.
-    let saved = save(w.path(), json!({"day_form": FORM_PATH}), now).unwrap();
-    assert_eq!(saved["settings"]["day_form"], FORM_PATH);
+    // The person saves their form at the revision they read: the reading shows it as theirs, and the page is made from it alone.
+    let saved = save(
+        w.path(),
+        json!({"day_form": form_at(w.path(), FORM_PATH)}),
+        now,
+    )
+    .unwrap();
+    assert_eq!(saved["settings"]["day_form"]["path"], FORM_PATH);
+    assert_eq!(
+        saved["settings"]["day_form"]["revision"],
+        revision_of(w.path(), FORM_PATH)
+    );
     assert_eq!(saved["standing"]["day_form"], "saved");
     let made = turn(w.path(), json!({}), now).unwrap();
     assert_eq!(made["turn"]["document"]["state"], "made");
@@ -687,13 +711,19 @@ fn the_day_form_the_person_saves_is_a_day_form_in_their_world() {
         day_form().replace("\"daily\"", "\"flow\""),
     )
     .unwrap();
+    let read_as = |path: &str| json!({"path": path, "revision": "a revision read"});
     for (form, words) in [
-        (json!("Control/forms/plain.html"), "ql-doc"),
-        (json!("Control/forms/flow.html"), "no Day form"),
-        (json!("Control/forms/absent.html"), ""),
-        (json!("../outside.html"), "day_form"),
-        (json!("/etc/hosts"), "day_form"),
+        (form_at(w.path(), "Control/forms/plain.html"), "ql-doc"),
+        (form_at(w.path(), "Control/forms/flow.html"), "no Day form"),
+        (read_as("Control/forms/absent.html"), ""),
+        (read_as("../outside.html"), "day_form"),
+        (read_as("/etc/hosts"), "day_form"),
+        // A path alone, or a form without the revision the person read, pins nothing.
+        (json!(FORM_PATH), "day_form"),
         (json!({"path": FORM_PATH}), "day_form"),
+        (json!({"path": FORM_PATH, "revision": ""}), "day_form"),
+        // The form as it stood when read, since changed: the person reads it again.
+        (read_as(FORM_PATH), "changed since you read it"),
     ] {
         let refused = save(w.path(), json!({"day_form": form}), now).unwrap_err();
         assert!(
@@ -708,6 +738,74 @@ fn the_day_form_the_person_saves_is_a_day_form_in_their_world() {
 }
 
 #[test]
+fn a_day_form_changed_since_the_person_saved_it_makes_no_page_until_they_save_it_again() {
+    let w = world("UTC", true);
+    let now = at("2026-10-20T09:00:00Z");
+    // The person saves a form that stands where work may write, as they read it.
+    fs::write(w.path().join(PLANTED), day_form()).unwrap();
+    let read = form_at(w.path(), PLANTED);
+    save(w.path(), json!({"day_form": read}), now).unwrap();
+    // Another hand writes words into it afterwards.
+    let planted = day_form().replace(
+        "\"p0_quick_thoughts\":\"\"",
+        "\"p0_quick_thoughts\":\"Words no person wrote\"",
+    );
+    assert_ne!(planted, day_form());
+    fs::write(w.path().join(PLANTED), &planted).unwrap();
+    // Saving it again on the revision read before is refused: the person reads it again.
+    let stale = save(w.path(), json!({"day_form": read}), now).unwrap_err();
+    assert_eq!(stale.kind(), io::ErrorKind::AlreadyExists, "{stale}");
+    assert!(
+        stale.to_string().contains("changed since you read it"),
+        "{stale}"
+    );
+    // The clock makes no page from the form as it stands now, and says why.
+    let turned = turn(w.path(), json!({}), now).unwrap();
+    assert_eq!(
+        turned["turn"]["document"]["state"], "wants-form",
+        "{turned}"
+    );
+    let why = turned["turn"]["document"]["why"].as_str().unwrap();
+    assert!(
+        why.contains(PLANTED)
+            && why.contains("changed since you saved it")
+            && why.contains("save it again"),
+        "{why}"
+    );
+    assert_eq!(turned["document_state"], "uninitialised");
+    // Nor may the clock make today's page bound to the form as it stands now.
+    let scope = Scope::resolve(w.path(), None).unwrap();
+    let clock = authority::civil_clock(&scope, &temporal::time_policy(&scope, now).unwrap());
+    let policy = execute_at(w.path(), "policy", &json!({}), now).unwrap();
+    let refused = documents::create(
+        &scope,
+        &json!({"kind":"day","day_ref":FIRST,"document_id":format!("document:{FIRST}"),
+            "expected_revision":turned["revision"]["revision"],"expected_policy_revision":policy["revision"],
+            "template_payload":{"meta":{"type":"daily"},"fields":{"p0_quick_thoughts":""},
+                "_oi_form_source":{"schema":"oi.original-day-form/v1","location":location(w.path(), PLANTED),
+                    "revision":revision_of(w.path(), PLANTED)}},
+            "fields":[]}),
+        &clock,
+        now,
+    )
+    .unwrap_err();
+    assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied, "{refused}");
+    // The person reads it and saves it again: today's page is made from the form as they read it.
+    save(
+        w.path(),
+        json!({"day_form": form_at(w.path(), PLANTED)}),
+        now,
+    )
+    .unwrap();
+    let made = turn(w.path(), json!({}), now).unwrap();
+    assert_eq!(made["turn"]["document"]["state"], "made", "{made}");
+    assert_eq!(
+        made["document"]["document"]["template_payload"]["_oi_form_source"]["revision"],
+        revision_of(w.path(), PLANTED)
+    );
+}
+
+#[test]
 fn the_clock_makes_no_day_document_but_todays_page_from_the_saved_form() {
     let w = world("UTC", true);
     let now = at("2026-10-20T09:00:00Z");
@@ -718,18 +816,9 @@ fn the_clock_makes_no_day_document_but_todays_page_from_the_saved_form() {
     let clock = authority::civil_clock(&scope, &temporal::time_policy(&scope, now).unwrap());
     let day = read(w.path(), json!({"day_ref": FIRST}), now);
     let policy = execute_at(w.path(), "policy", &json!({}), now).unwrap();
-    let revision_of = |path: &str| {
-        crate::files::read_file(
-            &scope.central_root,
-            &serde_json::from_value(location(w.path(), path)).unwrap(),
-            crate::files::FileEncoding::Utf8,
-        )
-        .unwrap()
-        .revision
-    };
     let bound = |path: &str| {
         json!({"meta":{"type":"daily"},"fields":{"p0_quick_thoughts":""},
-            "_oi_form_source":{"schema":"oi.original-day-form/v1","location":location(w.path(), path),"revision":revision_of(path)}})
+            "_oi_form_source":{"schema":"oi.original-day-form/v1","location":location(w.path(), path),"revision":revision_of(w.path(), path)}})
     };
     let create = |day_ref: &str, document_id: &str, payload: Value, at: u64| {
         documents::create(
