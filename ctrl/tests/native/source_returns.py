@@ -54,6 +54,7 @@ check(accepted['outcome']=='accepted' and path.read_text()=='returned improvemen
 check(accepted['proposal']['agent_session_ref']=='agent-session/native-return','accepted return retains native agent provenance')
 check(not run('projectcentral.source.return_accept',{'project':'Proof','return_ref':ref2,'expected_revision':current,'acceptance':'human-accepted','accepted_by_ref':'human:test'})['ok'],'already accepted return cannot apply twice')
 page=good('projectcentral.source.returns',{'project':'Proof','limit':1});check(page['more'] and len(page['entries'])==1 and 'proposed_content' not in page['entries'][0],'return list bounded metadata page')
+check(page['entries'][0]['schema']=='central.source-return/v1','each listed return names its schema, so an acceptance knows a maintenance Return (v2) from a collaborative one')
 older=good('projectcentral.source.returns',{'project':'Proof','limit':1,'before':page['next_before']});check(len(older['entries'])==1 and not older['more'],'return list cursor continues without repeats')
 unauthenticated=deny({'project':'Proof','return_ref':ref},None)
 check(not unauthenticated['ok'] and unauthenticated['status']=='unavailable_capability' and good('projectcentral.source.return_read',{'project':'Proof','return_ref':ref})['proposal']['status']=='pending','an agent without the person native credential cannot deny a Return')
@@ -194,6 +195,8 @@ for selector,world,owner in projects:
         carriers.append((selector,world,owner,path,member,before,after,candidate))
 check(len(carriers)==6,'six native CSV/MD/HTML carriers across two actual Projects selected')
 selector,world,owner,path,member,before,after,candidate=carriers[0]
+named=good('projectcentral.source.return_read',{'project':selector,'return_ref':candidate['proposal']['return_ref'],'acceptance':'commissioned-maintenance'})['commissioned_maintenance']
+check(named['principal_refs']==[maintenance_principal],'the maintenance reading names who may accept here: the human principal the authority grants return_accept over this scope')
 # This optional selection is an actual TWO-IMAGE qualification. The gate must
 # first qualify the previous binary/Source/lock association; a filesystem path
 # alone is never evidence that an executable is the prior native owner. Absent

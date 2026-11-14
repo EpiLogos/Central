@@ -297,6 +297,40 @@ const HUMAN_ONLY: &str =
 /// What a refusal says when a grant does not hold this Action, here, now.
 const LACKS: &str = "native credential is expired or lacks this exact scope/action";
 
+/// The human principals whose grant in the root's recognised authority Source names `action` over `scope_ref`, unexpired at `now`:
+/// whom an authenticated acceptance there names as `accepted_by_ref` (a commissioned-maintenance Return, source_return.rs). Read
+/// without a credential, as the authority's reference and revision are; what proves the person is still their token at the press.
+pub(crate) fn accepting_principals(
+    root: &Scope,
+    scope_ref: &str,
+    action: &str,
+    now: u64,
+) -> io::Result<Vec<String>> {
+    let (source, _, _) = recognised_source(root, AUTHORITY_ROLE)?;
+    let authority: Authority =
+        serde_json::from_str(&source.content).map_err(|_| invalid(INVALID_AUTHORITY))?;
+    if authority.schema != "central.native-action-authority/v1"
+        || authority.scope_ref != root.world_ref
+        || authority.grants.len() > 1024
+    {
+        return Err(invalid(INVALID_AUTHORITY));
+    }
+    let mut principals: Vec<String> = authority
+        .grants
+        .into_iter()
+        .filter(|grant| {
+            grant.actor_kind == "human"
+                && now < grant.expires_at_unix_seconds
+                && grant.scope_refs.iter().any(|scope| scope == scope_ref)
+                && grant.actions.iter().any(|named| named == action)
+        })
+        .map(|grant| grant.principal_ref)
+        .collect();
+    principals.sort();
+    principals.dedup();
+    Ok(principals)
+}
+
 /// Every Action authenticated here is listed in `AUTHENTICATED_ACTIONS` first.
 fn listed(action: &str) -> io::Result<()> {
     if AUTHENTICATED_ACTIONS.contains(&action) {

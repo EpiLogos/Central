@@ -351,7 +351,7 @@ fn run(project: &Path, op: &str, input: &Value, central: &Path) -> io::Result<Va
                 .unwrap();
             let r = load(project, &dir, &format!("{}{id}", prefix(project)?))?;
             let current = read_world_source(project, &r.source_ref)?;
-            entries.push(json!({"return_ref":r.return_ref,"source_ref":r.source_ref,"basis_revision":r.basis_revision,"status":r.status,"agent_session_ref":r.agent_session_ref,"current_revision":current.revision.revision,"comments":r.comments.len()}));
+            entries.push(json!({"return_ref":r.return_ref,"schema":r.schema,"source_ref":r.source_ref,"basis_revision":r.basis_revision,"status":r.status,"agent_session_ref":r.agent_session_ref,"current_revision":current.revision.revision,"comments":r.comments.len()}));
             next = Some(name);
         }
         return Ok(
@@ -424,9 +424,22 @@ fn run(project: &Path, op: &str, input: &Value, central: &Path) -> io::Result<Va
                 let root = Scope::resolve(&scope.central_root, None)?;
                 let (source, _, revision) =
                     authority::recognised_source(&root, authority::AUTHORITY_ROLE)?;
+                // Who may accept it, as the authority grants it here: the human principals an authenticated acceptance names as
+                // accepted_by_ref (O-I 1005: Approvals' Approve of a proposal for a page of a project's human ground).
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(io::Error::other)?
+                    .as_secs();
+                let principals = authority::accepting_principals(
+                    &root,
+                    &scope.world_ref,
+                    "projectcentral.source.return_accept",
+                    now,
+                )?;
                 value["commissioned_maintenance"] = json!({
                     "authority_ref":source.source.source_ref,"authority_revision":revision,
                     "action":"projectcentral.source.return_accept","scope_ref":scope.world_ref,
+                    "principal_refs":principals,
                     "requires_current_authenticated_principal":true,"available":false,
                     "note":"Source basis is not permission or physical human review"});
             }
