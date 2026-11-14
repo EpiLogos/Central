@@ -202,6 +202,15 @@ impl Loaded {
             None => (true, false),
         }
     }
+    /// The Day form the person saved (`day_form`, its path under the world's Central root): the one form the Day's turn makes a
+    /// page from (day_turn.rs). None until they save one.
+    fn day_form(&self) -> (Option<String>, bool) {
+        match self.saved.get("day_form") {
+            Some(Value::String(path)) => (Some(path.clone()), true),
+            Some(_) => (None, true),
+            None => (None, false),
+        }
+    }
     fn source(&self, name: &str) -> (bool, bool) {
         match self
             .saved
@@ -297,9 +306,17 @@ fn validate_saved(scope: &Scope, saved: &Map<String, Value>) -> io::Result<()> {
                 | "close_routine"
                 | "moves"
                 | "on_since"
+                | "day_form"
         ) {
             return Err(invalid(format!("the Day's settings have no `{key}`")));
         }
+    }
+    match saved.get("day_form") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(path)) => {
+            day_form_path(path)?;
+        }
+        Some(_) => return Err(invalid(DAY_FORM_SHAPE)),
     }
     if saved.get("schema") != Some(&json!(SETTINGS_SCHEMA)) {
         return Err(invalid(format!(
@@ -407,11 +424,36 @@ fn validate_saved(scope: &Scope, saved: &Map<String, Value>) -> io::Result<()> {
     Ok(())
 }
 
+const DAY_FORM_SHAPE: &str = "day_form is the Day form's path under your Central root (as Control/forms/ql-daily-die.html), or null for none";
+
+/// A saved Day form's path, as the settings keep it: relative to the world's Central root, plain components only.
+fn day_form_path(path: &str) -> io::Result<&str> {
+    let relative = std::path::Path::new(path);
+    if path.is_empty()
+        || path.len() > 1024
+        || path.contains('\0')
+        || relative.is_absolute()
+        || !relative
+            .components()
+            .all(|part| matches!(part, std::path::Component::Normal(_)))
+    {
+        return Err(invalid(DAY_FORM_SHAPE));
+    }
+    Ok(path)
+}
+
+/// The Day form the person saved in the Day's settings, or None while they have saved none (day_turn.rs makes today's page from
+/// it, and from nothing else).
+pub(crate) fn saved_day_form(scope: &Scope) -> io::Result<Option<String>> {
+    Ok(load_settings(scope)?.day_form().0)
+}
+
 fn settings_reading(scope: &Scope, loaded: &Loaded) -> io::Result<Value> {
     let standing = |saved: bool| if saved { "saved" } else { "default" };
     let (rollover, rollover_saved) = loaded.rollover();
     let (agent_writes, agent_writes_saved) = loaded.agent_writes();
     let (close_routine, close_routine_saved) = loaded.close_routine();
+    let (day_form, day_form_saved) = loaded.day_form();
     let mut sources = Map::new();
     let mut sources_standing = Map::new();
     for name in SOURCES {
@@ -444,9 +486,10 @@ fn settings_reading(scope: &Scope, loaded: &Loaded) -> io::Result<Value> {
         "revision":loaded.revision,
         "saved":loaded.exists(),
         "settings":{"schema":SETTINGS_SCHEMA,"scope_ref":scope.world_ref,"rollover":rollover,
-            "agent_writes":agent_writes,"sources":sources,"close_routine":close_routine,"moves":moves},
+            "agent_writes":agent_writes,"sources":sources,"close_routine":close_routine,"moves":moves,"day_form":day_form},
         "standing":{"rollover":standing(rollover_saved),"agent_writes":standing(agent_writes_saved),
-            "sources":sources_standing,"close_routine":standing(close_routine_saved),"moves":moves_standing},
+            "sources":sources_standing,"close_routine":standing(close_routine_saved),"moves":moves_standing,
+            "day_form":standing(day_form_saved)},
         "own_prompts":own,
         "effective_prompts":effective,
         "nothing_runs_by_itself_on_defaults":true,
@@ -473,7 +516,9 @@ pub(crate) fn settings_write(
     for key in object.keys() {
         match key.as_str() {
             "project" | "expected_revision" | "expected_authority_revision" => {}
-            "rollover" | "agent_writes" | "sources" | "close_routine" | "moves" => changes += 1,
+            "rollover" | "agent_writes" | "sources" | "close_routine" | "moves" | "day_form" => {
+                changes += 1
+            }
             other => return Err(invalid(format!("the Day's settings have no `{other}`"))),
         }
     }
@@ -504,6 +549,20 @@ pub(crate) fn settings_write(
         if let Some(value) = object.get(key) {
             merged.insert(key.into(), value.clone());
         }
+    }
+    // The Day form is saved only as a Day form Central reads where it stands: the turn makes today's page from it alone.
+    if let Some(value) = object.get("day_form") {
+        merged.insert(
+            "day_form".into(),
+            match value {
+                Value::Null => Value::Null,
+                Value::String(path) => {
+                    super::day_turn::read_day_form(scope, day_form_path(path)?)?;
+                    json!(path)
+                }
+                _ => return Err(invalid(DAY_FORM_SHAPE)),
+            },
+        );
     }
     if let Some(patch) = object.get("sources") {
         let patch = patch.as_object().ok_or_else(|| invalid(sources_shape()))?;
@@ -663,7 +722,7 @@ fn occurrence_civil_date(
     }
 }
 
-fn day_ref_of(scope: &Scope, civil_date: &str) -> String {
+pub(super) fn day_ref_of(scope: &Scope, civil_date: &str) -> String {
     format!("central:day:{}:{}", scope.world_ref, civil_date)
 }
 
@@ -1539,19 +1598,77 @@ fn plain_text(html: &str) -> String {
     out.replace("&nbsp;", " ")
 }
 
-fn consent_to_close(settings: &Loaded, time: &TimeReading, civil_date: &str) -> io::Result<()> {
+/// The person's consent to a close they do not press themselves: an agent's Close move, or Central's civil clock at the Day's turn
+/// (day_turn.rs). It holds only where they saved Close at Day start, the boundary that ends the Day has passed (`today` is a later
+/// civil date), and they have not opened the Day again after its turn. Each refusal says, in words, why the Day stays open.
+fn consent_to_close(
+    scope: &Scope,
+    settings: &Loaded,
+    entry: &Value,
+    today: &str,
+) -> io::Result<()> {
+    let civil_date = civil_date_of(entry)?;
     let (runs_at, saved) = settings.runs_at("close")?;
-    if !saved || runs_at != RunsAt::DayStart {
+    if !saved {
         return Err(denied(
-            "An agent runs the Close routine only when you saved Close at Day start; the Day's settings hold no such saving.",
+            "The Close routine runs by itself only when you saved Close at Day start, and the Day's settings hold no such saving: the Day stays open until you close it.",
         ));
     }
-    if time.civil_date.as_str() <= civil_date {
+    match runs_at {
+        RunsAt::DayStart => {}
+        RunsAt::Off => {
+            return Err(denied(
+                "Close is Off in your Day's settings: the Day stays open until you close it.",
+            ))
+        }
+        RunsAt::Daily(time) => {
+            return Err(denied(format!(
+                "Close is saved to run daily at {time}, not at Day start: the Close routine runs by itself only at Day start, so the Day stays open until you close it."
+            )))
+        }
+        RunsAt::Rollover => {
+            return Err(denied(
+                "Close is saved to run at rollover, not at Day start: the Close routine runs by itself only at Day start, so the Day stays open until you close it.",
+            ))
+        }
+    }
+    if today <= civil_date.as_str() {
         return Err(denied(format!(
             "The Day boundary that ends the Day of {civil_date} has not passed; an agent closes it then."
         )));
     }
+    // Opened again by the person (central.day.lifecycle, theirs alone) at or after the instant the Day turned: their own act since
+    // the consent was saved, so only they close it.
+    let turned_at = day_spans(scope, &civil_date)?
+        .last()
+        .map(|span| span.1.div_euclid(1000));
+    let opened_at = entry["temporal"]["lifecycle_at_unix_seconds"].as_i64();
+    if entry["temporal"]["lifecycle"] == "open"
+        && opened_at
+            .zip(turned_at)
+            .is_some_and(|(at, turned)| at >= turned)
+    {
+        return Err(denied(
+            "You opened this Day again after its turn: it stays open until you close it.",
+        ));
+    }
     Ok(())
+}
+
+/// Why an open Day whose date is past `today` stays open: the person's consent to a close they do not press, refused, in its own
+/// words (the Day's reading carries it, temporal.rs). None where that consent holds, or the Day is closed or not yet past.
+pub(super) fn stays_open(scope: &Scope, entry: &Value, today: &str) -> Option<String> {
+    if entry["temporal"]["lifecycle"] != "open"
+        || entry["temporal"]["civil_date"]
+            .as_str()
+            .is_none_or(|date| date >= today)
+    {
+        return None;
+    }
+    load_settings(scope)
+        .and_then(|settings| consent_to_close(scope, &settings, entry, today))
+        .err()
+        .map(|error| error.to_string())
 }
 
 fn carry_state(state: &str, reason: &str) -> Value {
@@ -1641,9 +1758,26 @@ fn carry(
         "contribution_id":contribution_id,"html":proposal});
     if !principal.is_human() {
         state["state"] = json!("waits");
-        state["reason"] = json!("An agent's entry into a Day waits for the person: submit it through central.receiving.submit.");
-        state["proposal"] = json!({"source_ref":target["source"]["ref"],"document_id":target["document_id"],
+        let submit = json!({"source_ref":target["source"]["ref"],"document_id":target["document_id"],
             "expected_source_revision":target["revision"]["revision"],"proposal":operation});
+        if principal.is_civil_clock() {
+            // Central's civil clock has no one to hand the carry to: it files it in receiving itself, where the person's Approvals
+            // keep it on tomorrow's face 0 or drop it, as any entry that is not theirs waits (the one submit, receiving.rs).
+            let mut filing = submit.clone();
+            filing["producer_key"] = json!(contribution_id);
+            filing["day_ref"] = json!(tomorrow_ref);
+            filing["summary"] = json!(format!(
+                "Face 5's proposal for tomorrow, from the Day of {}, for face 0 of the Day of {}: Central's civil clock closed the Day at its turn and carries nothing into your Day itself. Keep it or drop it.",
+                closing["temporal"]["civil_date"].as_str().unwrap_or(closing_ref),
+                tomorrow["temporal"]["civil_date"].as_str().unwrap_or(tomorrow_ref)
+            ));
+            let filed = super::receiving::file_held(scope, &filing, principal, now)?;
+            state["return_ref"] = filed["return_ref"].clone();
+            state["reason"] = json!("Central's civil clock writes nothing into your Day: face 5's proposal waits in Approvals, for you to keep on tomorrow's face 0 or drop.");
+        } else {
+            state["reason"] = json!("An agent's entry into a Day waits for the person: submit it through central.receiving.submit.");
+        }
+        state["proposal"] = submit;
         return Ok(state);
     }
     let mut mutation = operation;
@@ -1680,11 +1814,12 @@ pub(crate) fn close_carry(
     let civil_date = civil_date_of(&entry)?;
     let settings = load_settings(scope)?;
     if !principal.is_human() {
-        consent_to_close(&settings, &time, &civil_date)?;
+        consent_to_close(scope, &settings, &entry, &time.civil_date)?;
     }
-    // Tomorrow's Day: the one that stands, or opened now through the same path
-    // rollover and ensure use.
-    let next_date = next_civil_date(&civil_date)?;
+    // Tomorrow's Day: the Day after the one closing, or today's where that date has passed already (a Day closed after a gap
+    // carries to the Day that follows it now, and no past Day is opened for it). The one that stands, or opened now through the
+    // same path rollover and ensure use.
+    let next_date = next_civil_date(&civil_date)?.max(time.civil_date.clone());
     let tomorrow_ref = day_ref_of(scope, &next_date);
     if temporal::day_relation(&relations, &tomorrow_ref).is_err() {
         let (mut opened, opened_basis, opened_ref, _) =
@@ -1733,47 +1868,6 @@ pub(crate) fn close_carry(
         "tomorrow":tomorrow,
         "automatic_agent_or_model_invocation":false,
     }))
-}
-
-/// Close an earlier Day at its turn, as Central's civil clock (day_turn.rs), on its revisions as they stand. Its close routine, as
-/// the person's Day settings keep it, is asked to carry face 5's proposal into today's Day (`today_ref`, the Day that follows it
-/// now); the clock is no person, so a proposal there waits for the person, as any entry that is not theirs does (documents.rs: a
-/// Day takes such an entry only through their review), and stays on the closed Day. Nothing is opened here: the turn opened
-/// today's Day already. Answers what the carry did.
-pub(super) fn close_at_turn(
-    scope: &Scope,
-    closing_ref: &str,
-    today_ref: &str,
-    clock: &Principal,
-    now: u64,
-) -> io::Result<Value> {
-    let (relations, _) = scope.relations()?;
-    let entry = temporal::day_relation(&relations, closing_ref)?.clone();
-    let settings = load_settings(scope)?;
-    let mut carried = if settings.close_routine().0 {
-        carry(scope, &entry, closing_ref, today_ref, clock, now)?
-    } else {
-        carry_state(
-            "off",
-            "The Close routine is Off, so the Day closes and carries nothing.",
-        )
-    };
-    if carried["state"] == "waits" {
-        // The clock writes no one's words into a Day: a Day takes an entry that is not the person's only through their review.
-        carried["reason"] = json!("Central's civil clock writes nothing into your Day: face 5's proposal stays on the closed Day, and carrying it to today's face 0 waits for you.");
-    }
-    let revision = scope.read(text(&entry, "ref")?)?.revision.revision;
-    let (_, fresh) = scope.relations()?;
-    temporal::change_lifecycle(
-        scope,
-        closing_ref,
-        &revision,
-        &fresh,
-        "closed",
-        &clock.principal_ref,
-        now,
-    )?;
-    Ok(carried)
 }
 
 // ---- the field source -------------------------------------------------------
@@ -2761,6 +2855,7 @@ pub(crate) fn authenticated_action(operation: &str) -> Option<&'static str> {
         "day_close_carry" => "central.day.close-carry",
         "day_field_record" => "central.day.field.record",
         "day_entry_part" => "central.day.entry.part",
+        "day_receipt_record" => "central.day.receipt.record",
         _ => return None,
     })
 }
@@ -2779,6 +2874,7 @@ pub(crate) fn authenticated_operation(
         "day_close_carry" => close_carry(scope, input, principal, now),
         "day_field_record" => field_record(scope, input, principal, now),
         "day_entry_part" => entry_part(scope, input, principal, now),
+        "day_receipt_record" => super::day_turn::record_receipt(scope, input, principal, now),
         _ => Err(invalid("unknown continuous-work operation")),
     }
 }
@@ -2839,8 +2935,8 @@ handler!(
 
 pub(crate) fn register_actions(registry: &mut ActionRegistry) {
     super::register_definitions(registry, &[
-        ("central.day.settings.read", "Read the Day's settings", "Read the Day's own settings (Rollover, Agent writes, Sources, Close routine, and each move's Prompt and Runs at) as they stand: the defaults where the person has saved nothing, each with its standing (default or saved) and its revision, and each move's own prompt. Read-only; nothing runs from a reading.", false, settings_read_action, &[]),
-        ("central.day.settings.write", "Save the Day's settings", "Human-authenticated, exact-revision save of the Day's settings (expected_revision, or \"absent\" for the first save). Only the settings given are saved; every one saved here is the person's own and arms what it names. A move's Runs at at rollover is refused while Rollover is Off.", true, settings_write_action, &[("expected_revision","string",true),("rollover","string",false),("agent_writes","string",false),("sources","object",false),("close_routine","boolean",false),("moves","object",false),("expected_authority_revision","string",false)]),
+        ("central.day.settings.read", "Read the Day's settings", "Read the Day's own settings (Rollover, Agent writes, Sources, Close routine, each move's Prompt and Runs at, and the Day form the turn makes the page from) as they stand: the defaults where the person has saved nothing, each with its standing (default or saved) and its revision, and each move's own prompt. Read-only; nothing runs from a reading.", false, settings_read_action, &[]),
+        ("central.day.settings.write", "Save the Day's settings", "Human-authenticated, exact-revision save of the Day's settings (expected_revision, or \"absent\" for the first save). Only the settings given are saved; every one saved here is the person's own and arms what it names. A move's Runs at at rollover is refused while Rollover is Off. day_form is the Day form the Day's turn makes today's page from (its path under the Central root, read there as a Day form before it is saved; null for none).", true, settings_write_action, &[("expected_revision","string",true),("rollover","string",false),("agent_writes","string",false),("sources","object",false),("close_routine","boolean",false),("moves","object",false),("day_form","string",false),("expected_authority_revision","string",false)]),
         ("central.day.move.record", "Record a Day move's run", "Authenticated, append-only record of a move's run: a begin (press, or a saved schedule's occurrence, idempotent per occurrence) and an end (done, refused, stalled or stopped, with what it gave). Central assigns the run_ref and the actor from the credential; a run keeps the prompt it began with and a late end keeps the time it happened.", true, move_record_action, &[("event","string",true),("move","string",false),("at_unix_ms","integer",true),("day_ref","string",false),("trigger","string",false),("occurrence_ref","string",false),("run_ref","string",false),("state","string",false),("gave","object",false),("reason","string",false),("expected_authority_revision","string",false)]),
         ("central.day.moves.read", "Read the Day's moves", "Read the Day's settings and, for each move, its effective prompt, Runs at with its standing, the next time it runs by itself (only for a schedule the person saved), the open run, the last ended run, and every run of the Day oldest first. Read-only.", false, moves_read_action, &[("day_ref","string",false)]),
         ("central.day.moves.due", "List the Day's moves that are due", "List the scheduled occurrences in (since, now] for every move whose Runs at the person saved, each with a stable occurrence_ref and whether it has begun. With only the defaults it lists nothing and says why. The native host polls this; Central runs nothing.", false, moves_due_action, &[("now_unix_ms","integer",true),("since_unix_ms","integer",true)]),
@@ -2848,6 +2944,6 @@ pub(crate) fn register_actions(registry: &mut ActionRegistry) {
         ("central.day.field.record", "Record what reached you from the field", "Authenticated, append-only record of what reached you from the shared field, into the Day under its field source (face 4): who sent it (from: world_ref, name), how it came (how: to-you, star, watch or search; only a star names star_ref and name), what it is, its words and when it reached you. Each record says it was received through the shared field and recorded by the Day under your Field setting (received), with the credential that setting authorises (authorised_by); the words are the sender's. It carries nothing else: no count of looks and no ranking. Name one record, or records: a list of at most 64, recorded in one rewrite and each answered on its own (created, kept already, or refused in words), so one refused refuses none of the others. A record the Day keeps already answers kept first. Otherwise each is refused while the Day's Sources keep the field Off, on a closed Day, when it did not reach you on the Day's own date (as its civil date names it, through a spring-forward gap or an autumn fold alike), and when it reached you before the field last turned On; the same ref with other content is refused. A name holds no control character and no invisible one (a line or paragraph separator, a format character such as a bidi control or mark, a zero-width character, a soft hyphen or a tag character, or a blank filler); the words hold none but line breaks and tabs (a \\r only before a \\n), and no invisible one but a joiner in its place: inside an emoji sequence Unicode lists (a family, a technologist) or inside a word of a script that joins or conjoins (a Persian word, a Devanagari conjunct), where it changes how the characters beside it are drawn. Words refused for one say which kind stood in the way (a soft hyphen, a joiner outside an emoji or a joined word, a joiner between emoji that Unicode 17.0 does not list as one emoji, a bidi control or mark). A refusal of the credential opens with \"Recording what reached you is the person's own Field setting at work\", then its cause.", true, field_record_action, &[("day_ref","string",false),("records","array",false),("item_ref","string",false),("from","object",false),("how","string",false),("star","object",false),("what","string",false),("words","string",false),("at_unix_ms","integer",false),("expected_authority_revision","string",false)]),
         ("central.day.field.read", "Read what reached the Day from the field", "Read the Day's field source (on or off, default or saved, and when it last turned On), what the Day takes (takes: spans, the exact window: the spans of instants on which the Day's own civil date stands, one on most Days and two where an autumn fold carries the wall back across the Day's boundary, each from the later of its start and when the field last turned On; from and until are the first span's start and the last span's end, so across a fold they also hold the repeated time, which is the earlier Day's; where the Day's own date cannot be named, spans is empty and a note says why), and every thing recorded into the Day from the shared field, ordered by when it reached you and by nothing else, each naming who sent it and how it came. Read-only.", false, field_read_action, &[("day_ref","string",false)]),
         ("central.day.entry.part", "Read a Day entry as a part to show", "Human-authenticated: bringing an entry to a star is the person's press, and a refusal of the credential opens with \"Showing an entry is the person's own press\", then its cause. Read one entry of the Day exactly as the shared field would receive it if you showed it: an opaque part ref, its kind (page) and its label (the entry's words, at most 160 characters, cut at a word: a field's value as its text, a list item's text, a contribution's markup as plain words; a control character or a line or paragraph separator stands as a space, and a format character, a bidi control or mark, a zero-width one, a soft hyphen or a tag character, is left out, save a joiner in its place: inside an emoji sequence Unicode lists or inside a word of a script that joins or conjoins), with who wrote it. A field that holds neither text nor a list holds no words to show. Only the open Day Central names as today (its civil-time policy's date) is read, and only on the revision the entry was offered from (expected_revision, the Day's revision as its reading gives it): a closed Day, a Day that is not today, and a Day that changed since are each refused in words: the Day is read, and nothing of it is shown or returned. Name a field (field_id, and for one item of a list field its index or its item_id) or one contribution (contribution_id). A list item with its own id keeps its part however the list moves. An item with no id is named by a digest of its words and its occurrence among the id-less items holding the same words, so it keeps its part only while the identical items before it are unchanged; when they change, its item_id says so in words. An id two items share is refused. item_id takes every identity a part names. Nothing else of the Day goes with it, and the reading shows nothing: showing it is your own act in the field. The first part read in a world writes the random salt Central keeps for it, once, in the world's own state outside every Day, so no part ref can be guessed from a Day's date and fields; nothing is written into any Day.", true, entry_part_action, &[("day_ref","string",false),("expected_revision","string",true),("field_id","string",false),("index","integer",false),("item_id","string",false),("contribution_id","string",false),("expected_authority_revision","string",false)]),
-        ("central.day.close-carry", "Close a Day and carry face 5 to tomorrow", "Run the close routine on exact revisions: carry face 5's proposal for tomorrow into tomorrow's face 0 (a human writes it; an agent's entry is returned as a proposal for receiving), then close the Day as central.day.lifecycle does, and return both revisions. A human may call it at any time; another authenticated principal only when the person saved Close at Day start and the Day boundary has passed.", true, close_carry_action, &[("day_ref","string",true),("expected_revision","string",true),("expected_relations_revision","string",true),("expected_authority_revision","string",false)]),
+        ("central.day.close-carry", "Close a Day and carry face 5 to tomorrow", "Run the close routine on exact revisions: carry face 5's proposal for tomorrow into tomorrow's face 0 (the Day after it, or today's where that date has passed; a human writes it; an agent's entry is returned as a proposal for receiving), then close the Day as central.day.lifecycle does, and return both revisions. A human may call it at any time; another authenticated principal only when the person saved Close at Day start, the Day boundary has passed and the person has not opened the Day again after its turn. Central's civil clock closes a Day at its turn through this same close (central.day.turn).", true, close_carry_action, &[("day_ref","string",true),("expected_revision","string",true),("expected_relations_revision","string",true),("expected_authority_revision","string",false)]),
     ]);
 }

@@ -826,6 +826,18 @@ pub(crate) fn record_failure_result(action: &str, error: &io::Error) -> Option<A
     ))
 }
 
+/// What `atomic_record` refuses before it writes, asked without writing: a root or parent it cannot hold, or a record standing
+/// there that is no regular file of one physical link (a link, a hard-linked file, a directory). An owner writing several records
+/// checks each one first, so a refusal leaves all of them as they were.
+pub(crate) fn record_writable(root: &Path, relative: &Path) -> io::Result<()> {
+    let context = RecordDirectory::capture(root, relative)?;
+    let name = relative
+        .file_name()
+        .ok_or_else(|| invalid("Record has no name"))?;
+    RecordBasis::capture(&context.parent, name)?;
+    Ok(())
+}
+
 // Every owner keeps its own semantic serialization. This routine owns only
 // exact material publication; it never consumes the old record-staging name.
 pub(crate) fn atomic_record(

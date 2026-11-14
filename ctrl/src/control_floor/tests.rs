@@ -772,6 +772,95 @@ fn the_reading_accounts_for_codexs_block_in_the_home_as_the_render_writes_it() {
 }
 
 #[test]
+fn codex_carries_the_floor_only_for_the_homes_own_central_world() {
+    let ground = owners();
+    let codex = ground.home.join(".codex");
+    fs::create_dir_all(&codex).unwrap();
+    let mine = "# My Codex\n\nmy own words\n";
+    fs::write(codex.join("AGENTS.md"), mine).unwrap();
+    // Another world rendered with this home: Codex's block at this home is not its to write.
+    let other = owners();
+    let receipt = render(&other.root, &json!({}), Some(&ground.home)).unwrap();
+    assert_eq!(receipt["codex"]["changed"], false, "{receipt}");
+    assert_eq!(receipt["codex"]["file"], Value::Null);
+    assert!(
+        receipt["codex"]["why"]
+            .as_str()
+            .unwrap()
+            .contains("not this home's own Central world"),
+        "{receipt}"
+    );
+    assert_eq!(fs::read_to_string(codex.join("AGENTS.md")).unwrap(), mine);
+    // A world under this home that is not its ~/Central: the same.
+    let elsewhere = ground.home.join("Elsewhere");
+    fs::rename(&ground.root, &elsewhere).unwrap();
+    let receipt = render(&elsewhere, &json!({}), Some(&ground.home)).unwrap();
+    assert_eq!(receipt["codex"]["changed"], false, "{receipt}");
+    assert_eq!(fs::read_to_string(codex.join("AGENTS.md")).unwrap(), mine);
+    // The home's own ~/Central carries it.
+    fs::rename(&elsewhere, &ground.root).unwrap();
+    let receipt = render_in(&ground, &json!({})).unwrap();
+    assert_eq!(receipt["codex"]["changed"], true, "{receipt}");
+    assert!(fs::read_to_string(codex.join("AGENTS.md"))
+        .unwrap()
+        .contains(CODEX_END));
+}
+
+#[test]
+fn a_codex_file_central_cannot_write_refuses_the_render_before_anything_is_written() {
+    let ground = owners();
+    let codex = ground.home.join(".codex");
+    fs::create_dir_all(&codex).unwrap();
+    let kept = ground.home.join("my-agents.md");
+    fs::write(&kept, "# kept elsewhere\n").unwrap();
+    // Codex's global instructions as a link to a file the person keeps elsewhere, then as a file with a second link.
+    std::os::unix::fs::symlink(&kept, codex.join("AGENTS.md")).unwrap();
+    for _ in 0..2 {
+        let refused = render_in(&ground, &files(&["CLAUDE.md"])).unwrap_err();
+        assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied, "{refused}");
+        assert!(
+            refused.to_string().contains("Nothing was written"),
+            "{refused}"
+        );
+        assert!(
+            !ground.root.join(FLOOR_FILE).exists(),
+            "the floor was written"
+        );
+        assert!(fs::symlink_metadata(ground.root.join("CLAUDE.md")).is_err());
+        assert_eq!(fs::read_to_string(&kept).unwrap(), "# kept elsewhere\n");
+        fs::remove_file(codex.join("AGENTS.md")).unwrap();
+        fs::hard_link(&kept, codex.join("AGENTS.md")).unwrap();
+    }
+}
+
+#[test]
+fn adopting_says_the_floor_changed_whenever_the_render_wrote_anything() {
+    let ground = fresh();
+    let path = "Control/agents/governance/craft/unrelated.md";
+    let revision = revision_of(&ground, "craft/unrelated.md");
+    let input = json!({"statement": path, "expected_revision": revision});
+    let first = adopt(&ground, &input, Some(HUMAN), 10).unwrap();
+    assert_eq!(first["floor"]["changed"], true);
+    // Codex is now kept at this home: adopting the same statement again changes no law and no floor, but writes Codex's block.
+    fs::create_dir_all(ground.home.join(".codex")).unwrap();
+    let again = adopt(&ground, &input, Some(HUMAN), 20).unwrap();
+    assert_eq!(again["adopted"], false);
+    assert_eq!(again["floor"]["revision"], first["floor"]["revision"]);
+    assert_eq!(again["floor"]["codex"]["changed"], true, "{again}");
+    assert_eq!(again["floor"]["changed"], true, "{again}");
+    // A link made, and nothing else: changed.
+    let mut linked = input.clone();
+    linked["files"] = json!(["GEMINI.md"]);
+    let made = adopt(&ground, &linked, Some(HUMAN), 30).unwrap();
+    assert_eq!(made["floor"]["links"][0]["state"], "made");
+    assert_eq!(made["floor"]["changed"], true, "{made}");
+    // Nothing written: not changed.
+    let still = adopt(&ground, &linked, Some(HUMAN), 40).unwrap();
+    assert_eq!(still["floor"]["links"][0]["state"], "kept");
+    assert_eq!(still["floor"]["changed"], false, "{still}");
+}
+
+#[test]
 fn a_statements_words_are_its_text_without_front_matter_or_title() {
     assert_eq!(
         body_of("---\nstanding: durable\n---\n# Title\n\n\nWords.\n\nMore.\n\n"),

@@ -1037,6 +1037,31 @@ fn submit(scope: &Scope, input: &Value, principal: &Principal, now: u64) -> io::
     })?;
     Ok(response(&record, &revision))
 }
+/// File a Return from inside an owner's own act: the one submit, for Central's civil clock filing the carry of a Day it closes
+/// (day_moves.rs `carry`), which has no caller to hand it to. The caller holds receiving's lock and then the source lock, in
+/// `dispatch`'s order (mod.rs takes both for the Day's turn). A Return this principal filed under `producer_key` already is
+/// answered as it stands, never filed twice.
+pub(crate) fn file_held(
+    scope: &Scope,
+    input: &Value,
+    principal: &Principal,
+    now: u64,
+) -> io::Result<Value> {
+    let reference = receipt_reference(scope, principal, text(input, "producer_key")?);
+    match read_record(scope, &reference) {
+        Ok((existing, revision)) if existing.author.principal_ref == principal.principal_ref => {
+            require_disclosure(scope, &existing)?;
+            Ok(response(&existing, &revision))
+        }
+        Ok(_) => Err(conflict(
+            "Return producer key already has different content or attribution",
+        )),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            submit(scope, input, principal, now)
+        }
+        Err(error) => Err(error),
+    }
+}
 /// Evidence is retained from the actual scoped SourceRef at the supplied
 /// revision. It does not become included Day prose or adopted human ground.
 fn retain_artifacts(scope: &Scope, input: &Value, principal: &Principal) -> io::Result<Vec<Value>> {
