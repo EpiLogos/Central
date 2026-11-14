@@ -708,6 +708,70 @@ Responsibility (`{RESPONSIBILITY}`): “{OWN_THE_FAULT}”\n{CODEX_END}\n\nafter
 }
 
 #[test]
+fn the_reading_accounts_for_codexs_block_in_the_home_as_the_render_writes_it() {
+    let ground = owners();
+    let codex = ground.home.join(".codex");
+    let homes = |ground: &Ground| read_in(ground, &["AGENTS.md"])["homes"].clone();
+    // No Codex folder at this home: absent, in the render's own words.
+    assert_eq!(
+        homes(&ground),
+        json!([{"file": "~/.codex/AGENTS.md", "state": "absent", "current": false, "why": NO_CODEX}])
+    );
+    // Codex's own instructions with no block of Central's: absent, and the render writes one.
+    fs::create_dir_all(&codex).unwrap();
+    fs::write(codex.join("AGENTS.md"), "# My Codex\n\nmy own words\n").unwrap();
+    let row = homes(&ground)[0].clone();
+    assert_eq!(
+        (row["state"].as_str(), row["current"].as_bool()),
+        (Some("absent"), Some(false))
+    );
+    assert!(
+        row["why"]
+            .as_str()
+            .unwrap()
+            .contains("holds no block of Central's"),
+        "{row}"
+    );
+    // Rendered: the block stands as the render writes it now.
+    render_in(&ground, &json!({})).unwrap();
+    assert_eq!(
+        homes(&ground),
+        json!([{"file": "~/.codex/AGENTS.md", "state": "rendered", "current": true,
+            "renderer": "central control.floor.render"}])
+    );
+    // A hand inside the block: still Central's block, not the one it writes now, and why.
+    let text = fs::read_to_string(codex.join("AGENTS.md")).unwrap();
+    fs::write(
+        codex.join("AGENTS.md"),
+        text.replace("for every Codex session", "by hand"),
+    )
+    .unwrap();
+    let row = homes(&ground)[0].clone();
+    assert_eq!(
+        (row["state"].as_str(), row["current"].as_bool()),
+        (Some("rendered"), Some(false))
+    );
+    assert!(
+        row["why"]
+            .as_str()
+            .unwrap()
+            .contains("control.floor.render writes it again"),
+        "{row}"
+    );
+    // The strap's block, before Central renders: its renderer named, not current.
+    fs::write(codex.join("AGENTS.md"), text.replace(CODEX_BEGIN, "<!-- central:generated-begin (central-session-strap/render-context.py; do not edit inside) -->")).unwrap();
+    let row = homes(&ground)[0].clone();
+    assert_eq!(row["renderer"], "central-session-strap/render-context.py");
+    assert_eq!(row["current"], false);
+    // The render writes it again, keeping the person's words, and it reads back current.
+    render_in(&ground, &json!({})).unwrap();
+    assert_eq!(homes(&ground)[0]["current"], true);
+    assert!(fs::read_to_string(codex.join("AGENTS.md"))
+        .unwrap()
+        .starts_with("# My Codex\n\nmy own words\n"));
+}
+
+#[test]
 fn a_statements_words_are_its_text_without_front_matter_or_title() {
     assert_eq!(
         body_of("---\nstanding: durable\n---\n# Title\n\n\nWords.\n\nMore.\n\n"),

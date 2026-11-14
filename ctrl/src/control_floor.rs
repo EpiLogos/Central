@@ -711,6 +711,9 @@ struct CodexBlock {
     after: String,
 }
 
+/// Why the render writes no Codex block, and the reading of Codex's instructions says so too.
+const NO_CODEX: &str = "no Codex folder (~/.codex) at this home, so there are no global Codex instructions to carry the floor";
+
 /// Codex's block, where the person keeps Codex at this home (`~/.codex`); refused where a sentence it quotes moved.
 fn codex_block(law: &Law, home: Option<&Path>) -> io::Result<Option<CodexBlock>> {
     let Some(home) = home else {
@@ -720,6 +723,97 @@ fn codex_block(law: &Law, home: Option<&Path>) -> io::Result<Option<CodexBlock>>
     if !folder.is_dir() {
         return Ok(None);
     }
+    let block = codex_block_text(law, home)?;
+    let before = match fs::read_to_string(folder.join(FLOOR_FILE)) {
+        Ok(text) => Some(text),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    let current = before.as_deref().unwrap_or("");
+    let after = match central_block(current) {
+        Some((begin, end)) => format!("{}{block}{}", &current[..begin], &current[end..]),
+        None => format!(
+            "{}{}{block}\n",
+            current.trim_end_matches('\n'),
+            if current.is_empty() { "" } else { "\n\n" }
+        ),
+    };
+    Ok(Some(CodexBlock {
+        folder,
+        before,
+        after,
+    }))
+}
+
+/// Where a block of Central's lineage stands in a file's text: its begin marker, whichever renderer it names, through its end.
+fn central_block(text: &str) -> Option<(usize, usize)> {
+    let begin = text.find(CODEX_BEGIN_PREFIX)?;
+    let end = text[begin..].find(CODEX_END)?;
+    Some((begin, begin + end + CODEX_END.len()))
+}
+
+/// The renderer a block's begin marker names (`(<renderer>; do not edit inside)`), where it names one.
+fn block_renderer(block: &str) -> Option<String> {
+    let first = block.lines().next()?;
+    let open = first.find('(')? + 1;
+    let close = open + first[open..].find(';')?;
+    Some(first[open..close].trim().to_owned()).filter(|named| !named.is_empty())
+}
+
+/// The home instructions Central writes a block into, read as a floor is read (`control.floor.read` `homes`): Codex's global
+/// instructions, named from the home (`~/.codex/AGENTS.md`) as AIKit names a harness's home guidance. `rendered` where a block of
+/// Central's stands there, `current` where it is the block the render writes now; `absent`, with why, where there is no Codex
+/// folder, no instructions file or no block.
+fn homes(law: Option<&Law>, home: Option<&Path>) -> io::Result<Vec<Value>> {
+    let file = format!("~/{CODEX_FOLDER}/{FLOOR_FILE}");
+    let absent =
+        |why: String| json!({"file": file, "state": "absent", "current": false, "why": why});
+    let Some(home) = home else {
+        return Ok(vec![absent(
+            "Central was asked without the person's home, so it read no home instructions".into(),
+        )]);
+    };
+    let folder = home.join(CODEX_FOLDER);
+    if !folder.is_dir() {
+        return Ok(vec![absent(NO_CODEX.into())]);
+    }
+    let text = match fs::read_to_string(folder.join(FLOOR_FILE)) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(vec![absent(format!(
+                "Codex keeps no global instructions ({file}) yet: control.floor.render makes them, holding Central's block"
+            ))]);
+        }
+        Err(error) => return Err(error),
+    };
+    let Some((begin, end)) = central_block(&text) else {
+        return Ok(vec![absent(format!(
+            "{file} holds no block of Central's: control.floor.render writes one, keeping your words"
+        ))]);
+    };
+    let held = &text[begin..end];
+    let mut row = json!({"file": file, "state": "rendered", "current": false});
+    if let Some(named) = block_renderer(held) {
+        row["renderer"] = json!(named);
+    }
+    match law {
+        None => row["why"] = json!("there is no law here to read the block against"),
+        Some(law) => match codex_block_text(law, home) {
+            Ok(block) if block == held => row["current"] = json!(true),
+            Ok(_) => {
+                row["why"] = json!(format!(
+                    "the block in {file} is not the one Central writes now: control.floor.render writes it again, keeping your words"
+                ))
+            }
+            Err(why) => row["why"] = json!(format!("Central would not write the block now: {why}")),
+        },
+    }
+    Ok(vec![row])
+}
+
+/// Codex's block as the render writes it now: the root named under the home, the floor's doors, and each sentence it quotes
+/// (refused where one moved).
+fn codex_block_text(law: &Law, home: &Path) -> io::Result<String> {
     let root = named_root(&law.root, Some(home));
     let mut carried = Vec::new();
     for (path, sentence) in [(RESPONSIBILITY, OWN_THE_FAULT)] {
@@ -739,7 +833,7 @@ fn codex_block(law: &Law, home: Option<&Path>) -> io::Result<Option<CodexBlock>>
             title_of(&statement.text, path)
         ));
     }
-    let block = [
+    Ok([
         CODEX_BEGIN.to_owned(),
         "# Central personal world — carried for every Codex session".to_owned(),
         String::new(),
@@ -751,30 +845,7 @@ fn codex_block(law: &Law, home: Option<&Path>) -> io::Result<Option<CodexBlock>>
         carried.join("\n\n"),
         CODEX_END.to_owned(),
     ]
-    .join("\n");
-    let before = match fs::read_to_string(folder.join(FLOOR_FILE)) {
-        Ok(text) => Some(text),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error),
-    };
-    let current = before.as_deref().unwrap_or("");
-    let after = match current.find(CODEX_BEGIN_PREFIX).and_then(|begin| {
-        current[begin..]
-            .find(CODEX_END)
-            .map(|end| (begin, begin + end + CODEX_END.len()))
-    }) {
-        Some((begin, end)) => format!("{}{block}{}", &current[..begin], &current[end..]),
-        None => format!(
-            "{}{}{block}\n",
-            current.trim_end_matches('\n'),
-            if current.is_empty() { "" } else { "\n\n" }
-        ),
-    };
-    Ok(Some(CodexBlock {
-        folder,
-        before,
-        after,
-    }))
+    .join("\n"))
 }
 
 /// Render the floor; the caller holds the root's source lock. Everything is checked before anything is written: a floor another
@@ -855,8 +926,7 @@ fn render_locked(
             }
             json!({"file": block.folder.join(FLOOR_FILE).to_string_lossy(), "changed": changed})
         }
-        None => json!({"file": null, "changed": false,
-            "why": "no Codex folder (~/.codex) at this home, so there are no global Codex instructions to carry the floor"}),
+        None => json!({"file": null, "changed": false, "why": NO_CODEX}),
     };
     let new = headings(&rendered.text);
     let dropped: Vec<String> = before
@@ -940,7 +1010,7 @@ fn named_by(text: &str, index: &[Statement]) -> Vec<Value> {
 
 /// Read what each named instruction file carries (`control.floor.read`). A floor of Central's lineage is read against the law as
 /// it stands: whether it is the floor Central renders now (`current`), the revision its header names, and where each statement is
-/// carried, in the floor or by the door.
+/// carried, in the floor or by the door. The home files the render writes a block into are read beside them (`homes`).
 pub fn read(root: &Path, input: &Value, home: Option<&Path>) -> io::Result<Value> {
     let files = file_names(input, true)?;
     let root = root.canonicalize().map_err(|error| match error.kind() {
@@ -1022,6 +1092,7 @@ pub fn read(root: &Path, input: &Value, home: Option<&Path>) -> io::Result<Value
         "schema": FLOOR_READING_SCHEMA,
         "root": root.to_string_lossy(),
         "floors": floors,
+        "homes": homes(law.as_ref(), home)?,
         "automatic_agent_or_model_invocation": false,
     }))
 }
@@ -1342,7 +1413,7 @@ pub fn register_floor_actions(registry: &mut ActionRegistry) {
             descriptor(
                 READ,
                 "Read the floors at the root",
-                "For each instruction file named in files, at the Central root: rendered (by Central, or by the session strap whose renderer it replaces: its renderer, its revision, the law revision its header names, whether it is current, that is the floor Central renders now, and each statement of the root world's tier 0 with where it is carried, in the floor or by the door), foreign (written by another hand: the governance statements it names by their path under Control/agents/governance/ or by their topic as a heading) or absent. Answers central.floor-reading/v1. Read-only.",
+                "For each instruction file named in files, at the Central root: rendered (by Central, or by the session strap whose renderer it replaces: its renderer, its revision, the law revision its header names, whether it is current, that is the floor Central renders now, and each statement of the root world's tier 0 with where it is carried, in the floor or by the door), foreign (written by another hand: the governance statements it names by their path under Control/agents/governance/ or by their topic as a heading) or absent; and each file in the person's home Central writes a block into (homes: Codex's ~/.codex/AGENTS.md, rendered, current where the block is the one Central writes now, or absent with why). Answers central.floor-reading/v1. Read-only.",
                 MutationClass::ReadOnly,
                 FLOOR_READING_SCHEMA,
                 vec![input("files", "array", true)],
