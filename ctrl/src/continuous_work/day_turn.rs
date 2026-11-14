@@ -14,10 +14,13 @@
 //! policy the person adopted (`automatic_day_rollover`), and a policy without it is refused in words. Asked again with nothing to
 //! do, it writes nothing.
 //!
-//! `central.day.receipt.record` lays what an act did into today's Day, at the instant it happened: an authenticated record like the
-//! Day's others, on a credential whose grant holds it (Setup's grant does), naming who recorded it; append-only, one line each,
-//! never rewritten, kept by its id, and read back with that Day (`central.day.read`'s `receipts`). An instant outside today's Day
-//! (before it opened, after it turns, or later than now) is refused in words: a receipt never lands in another Day.
+//! `central.day.receipt.record` lays what an act did into its Day, at the instant it happened: an authenticated record like the
+//! Day's others, on a credential whose grant holds it (Setup's grant does), naming who recorded it and the Day it happened in;
+//! append-only, one line each, never rewritten, laid once by its id, and read back with the Day it was laid in
+//! (`central.day.read`'s `receipts`). A receipt for an act of the Day that just ended, recorded after its turn (an answer that
+//! came just before midnight), is never lost: it is laid in that Day while it is open, and once it is closed (or where it never
+//! opened) in today's Day, with its true instant and the Day it happened in. An instant later than now, or older than the Day
+//! that just ended, is refused in words.
 use super::{
     authority::{self, Principal},
     day_moves, documents, placement,
@@ -461,10 +464,11 @@ fn bounded<'a>(
     }
 }
 
-/// Lay one act's receipt into today's Day (`central.day.receipt.record`, on `principal`'s credential): `act` (the Action or op),
+/// Lay one act's receipt into its Day (`central.day.receipt.record`, on `principal`'s credential): `act` (the Action or op),
 /// `owner` (the product that did it), `subject` (what it acted on), `source` (where its effect stands), `receipt` (what the owner
-/// answered, bounded), `receipt_id` (the same id is laid once) and `occurred_at_unix_seconds` (when it happened, within today's
-/// Day; now where absent). Answers the entry and whether it was laid now.
+/// answered, bounded), `receipt_id` (the same id is laid once) and `occurred_at_unix_seconds` (when it happened, in today's Day or
+/// the Day that just ended; now where absent). Answers the entry, the Day it was laid in (`civil_date`) and whether it was laid
+/// now.
 pub(crate) fn record_receipt(
     scope: &Scope,
     input: &Value,
@@ -480,58 +484,76 @@ pub(crate) fn record_receipt(
     if serde_json::to_string(&receipt)?.len() > 16 * 1024 {
         return Err(invalid("receipt is at most 16 KiB of JSON"));
     }
-    // Today's Day, as Central keeps its bounds: the spans of instants its civil date stands on (two across an autumn fold).
+    // When it happened: now where absent; never later than now (a few minutes' drift allowed) nor on a Day not yet begun, and
+    // no older than the Day that just ended.
     let today = temporal::time_policy(scope, now)?.civil_date;
-    let spans = day_moves::day_spans(scope, &today)?;
-    let bounds = match (spans.first(), spans.last()) {
-        (Some(first), Some(last)) => (first.0.div_euclid(1000), last.1.div_euclid(1000)),
-        _ => return Err(invalid("today's Day has no bounds Central can name")),
-    };
     let occurred = match input.get("occurred_at_unix_seconds") {
         None | Some(Value::Null) => now,
-        Some(value) => {
-            let at = value.as_u64().ok_or_else(|| {
-                invalid("occurred_at_unix_seconds is an instant in seconds, or absent for now")
-            })?;
-            if at > now + 300 {
-                return Err(invalid(
-                    "occurred_at_unix_seconds is an instant no later than now",
-                ));
-            }
-            let at_ms = i64::try_from(at)
-                .ok()
-                .and_then(|at| at.checked_mul(1000))
-                .unwrap_or(i64::MAX);
-            if !spans.iter().any(|(from, to)| (*from..*to).contains(&at_ms)) {
-                return Err(invalid(format!(
-                    "occurred_at_unix_seconds is an instant of today's Day ({today}, from {} until {}): a receipt lands in today's Day only",
-                    bounds.0, bounds.1
-                )));
-            }
-            at
-        }
+        Some(value) => value.as_u64().ok_or_else(|| {
+            invalid("occurred_at_unix_seconds is an instant in seconds, or absent for now")
+        })?,
     };
-    let civil_date = temporal::time_policy(scope, occurred)?.civil_date;
-    if civil_date != today {
+    let happened_on = temporal::time_policy(scope, occurred)?.civil_date;
+    if occurred > now + 300 || happened_on > today {
+        return Err(invalid(
+            "occurred_at_unix_seconds is an instant no later than now",
+        ));
+    }
+    let ended = day_moves::previous_civil_date(&today)?;
+    if happened_on < ended {
+        let from = day_moves::day_spans(scope, &ended)?
+            .first()
+            .map(|span| format!(", from {}", span.0.div_euclid(1000)))
+            .unwrap_or_default();
         return Err(invalid(format!(
-            "occurred_at_unix_seconds is an instant of today's Day ({today}): a receipt lands in today's Day only"
+            "occurred_at_unix_seconds is an instant of today's Day ({today}) or of the Day that just ended ({ended}{from}): a receipt for an older act is refused"
         )));
     }
-    let path = receipts_path(scope, &civil_date);
-    let log = day_moves::load_lines(scope, &path, RECEIPT_SCHEMA, "receipts")?;
-    if let Some(entry) = log
-        .events
-        .iter()
-        .find(|entry| entry["receipt_id"] == receipt_id)
-    {
-        return Ok(json!({"recorded": false, "civil_date": civil_date, "entry": entry}));
+    // Laid in the Day it happened in while that Day is open; an act of the Day that just ended, once that Day is closed (or where it
+    // never opened), in today's Day, naming the Day it happened in.
+    let occurred_in = day_moves::day_ref_of(scope, &happened_on);
+    let laid_in = if happened_on == today {
+        today.clone()
+    } else {
+        let (relations, _) = scope.relations()?;
+        let open = temporal::day_relation(&relations, &occurred_in)
+            .is_ok_and(|entry| entry["temporal"]["lifecycle"] == "open");
+        if open {
+            happened_on.clone()
+        } else {
+            today.clone()
+        }
+    };
+    // The same id is laid once, wherever it was laid: the Day it happened in, or today's.
+    let mut logs = Vec::new();
+    for date in [&happened_on, &today] {
+        if logs.iter().any(|(held, _)| held == date) {
+            continue;
+        }
+        let log = day_moves::load_lines(
+            scope,
+            &receipts_path(scope, date),
+            RECEIPT_SCHEMA,
+            "receipts",
+        )?;
+        if let Some(entry) = log
+            .events
+            .iter()
+            .find(|entry| entry["receipt_id"] == receipt_id)
+        {
+            return Ok(json!({"recorded": false, "civil_date": date, "entry": entry}));
+        }
+        logs.push((date.clone(), log));
     }
+    let Some((civil_date, log)) = logs.into_iter().find(|(date, _)| *date == laid_in) else {
+        return Err(invalid("the receipt's Day has no record Central can name"));
+    };
     let entry = json!({"schema": RECEIPT_SCHEMA, "receipt_id": receipt_id, "act": act, "owner": owner,
         "subject": subject, "source": source, "receipt": receipt, "occurred_at_unix_seconds": occurred,
-        "recorded_at_unix_seconds": now, "recorded_by": principal.principal_ref});
+        "occurred_in": occurred_in, "recorded_at_unix_seconds": now, "recorded_by": principal.principal_ref});
     day_moves::append_lines(
         scope,
-        &path,
+        &receipts_path(scope, &civil_date),
         &log,
         std::slice::from_ref(&entry),
         ("central.day.receipt.record", "native-operation"),

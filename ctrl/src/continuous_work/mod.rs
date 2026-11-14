@@ -448,7 +448,7 @@ fn register_day_turn(registry: &mut ActionRegistry) {
         (
             "central.day.receipt.record",
             "Lay an act's receipt into its Day",
-            "Authenticated, like the Day's other records: append one act's receipt to today's Day (receipts.jsonl beside the Day, append-only), naming who recorded it: act, owner, subject, source, the owner's receipt (at most 16 KiB), receipt_id (laid once) and occurred_at_unix_seconds (when it happened; now where absent). An instant outside today's Day, before it opened, after it turns or later than now, is refused in words. Read back with that Day (central.day.read receipts). A record of what an act did, never the person's writing.",
+            "Authenticated, like the Day's other records: append one act's receipt to its Day (receipts.jsonl beside the Day, append-only), naming who recorded it and the Day it happened in (occurred_in): act, owner, subject, source, the owner's receipt (at most 16 KiB), receipt_id (laid once) and occurred_at_unix_seconds (when it happened; now where absent). An act of today's Day is laid in it; an act of the Day that just ended, recorded after its turn, is laid in that Day while it is open, and once it is closed (or where it never opened) in today's Day, with its true instant. An instant later than now, or older than the Day that just ended, is refused in words. Read back with the Day it was laid in (central.day.read receipts). A record of what an act did, never the person's writing.",
             MutationClass::LocallyMutating,
             vec![
                 field("project", "string", false),

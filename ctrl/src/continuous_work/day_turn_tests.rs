@@ -942,6 +942,63 @@ fn a_receipt_keeps_the_time_it_happened_within_todays_day() {
 }
 
 #[test]
+fn a_receipt_for_an_act_of_the_day_that_just_ended_is_laid_in_it_while_it_is_open_then_in_today_naming_it(
+) {
+    let w = world("UTC", true);
+    turn(w.path(), json!({}), at("2026-10-20T23:59:00Z")).unwrap();
+    let now = at("2026-10-21T00:00:30Z");
+    turn(w.path(), json!({}), now).unwrap();
+    let receipt = |id: &str, occurred: u64| {
+        json!({"receipt_id":id,"act":"aikit.encounter.prompt","owner":"AIKit","subject":"agent-session:a",
+            "occurred_at_unix_seconds":occurred})
+    };
+    // An answer that came just before midnight, its receipt recorded just after: laid in the Day it happened in, open still.
+    let late = at("2026-10-20T23:59:59Z");
+    let laid = lay(w.path(), &receipt("receipt:late", late), now).unwrap();
+    assert_eq!(laid["recorded"], true, "{laid}");
+    assert_eq!(laid["civil_date"], "2026-10-20");
+    assert_eq!(laid["entry"]["occurred_at_unix_seconds"], late);
+    assert_eq!(laid["entry"]["occurred_in"], FIRST);
+    assert_eq!(
+        read(w.path(), json!({"day_ref": FIRST}), now)["receipts"][0]["receipt_id"],
+        "receipt:late"
+    );
+    // Once that Day is closed, one more for it is laid in today's Day, with its true instant and the Day it happened in.
+    lifecycle(w.path(), FIRST, "closed", now + 10);
+    let later = at("2026-10-20T23:59:58Z");
+    let laid = lay(w.path(), &receipt("receipt:later", later), now + 20).unwrap();
+    assert_eq!(laid["recorded"], true, "{laid}");
+    assert_eq!(laid["civil_date"], "2026-10-21");
+    assert_eq!(laid["entry"]["occurred_at_unix_seconds"], later);
+    assert_eq!(laid["entry"]["occurred_in"], FIRST);
+    assert_eq!(
+        read(w.path(), json!({}), now + 20)["receipts"][0]["receipt_id"],
+        "receipt:later"
+    );
+    // Each is laid once: the first, asked again after its Day closed, is found where it was laid.
+    let again = lay(w.path(), &receipt("receipt:late", late), now + 30).unwrap();
+    assert_eq!(again["recorded"], false, "{again}");
+    assert_eq!(again["civil_date"], "2026-10-20");
+    for (day_ref, count) in [(FIRST, 1), (SECOND, 1)] {
+        assert_eq!(
+            read(w.path(), json!({"day_ref": day_ref}), now + 30)["receipts"]
+                .as_array()
+                .unwrap()
+                .len(),
+            count,
+            "{day_ref}"
+        );
+    }
+    // Where the Day it happened in never opened, today's Day takes it, naming that Day.
+    let w = world("UTC", true);
+    turn(w.path(), json!({}), now).unwrap();
+    let laid = lay(w.path(), &receipt("receipt:unopened", late), now).unwrap();
+    assert_eq!(laid["civil_date"], "2026-10-21", "{laid}");
+    assert_eq!(laid["entry"]["occurred_in"], FIRST);
+    assert!(!w.path().join("Control/user/day/2026-10-20").exists());
+}
+
+#[test]
 fn a_receipt_out_of_its_bounds_is_refused_in_words() {
     let w = world("UTC", true);
     let now = at("2026-10-21T00:00:30Z");
@@ -949,9 +1006,12 @@ fn a_receipt_out_of_its_bounds_is_refused_in_words() {
     turn(w.path(), json!({}), now).unwrap();
     let receipt = |occurred: u64| json!({"receipt_id":"r","act":"a","owner":"Central","subject":"s","occurred_at_unix_seconds":occurred});
     for (input, words) in [
-        // Before today's Day opened: yesterday's last minute, and the epoch.
-        (receipt(at("2026-10-20T23:59:59Z")), "today's Day"),
-        (receipt(0), "today's Day"),
+        // Older than the Day that just ended: the last second of the Day before it, and the epoch.
+        (
+            receipt(at("2026-10-19T23:59:59Z")),
+            "the Day that just ended",
+        ),
+        (receipt(0), "the Day that just ended"),
         // After now, and after today's Day turns.
         (receipt(now + 3600), "no later than now"),
         (receipt(at("2026-10-22T00:00:00Z")), "no later than now"),

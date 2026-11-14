@@ -751,7 +751,7 @@ pub(super) fn day_ref_of(scope: &Scope, civil_date: &str) -> String {
     format!("central:day:{}:{}", scope.world_ref, civil_date)
 }
 
-fn previous_civil_date(civil_date: &str) -> io::Result<String> {
+pub(super) fn previous_civil_date(civil_date: &str) -> io::Result<String> {
     let date = NaiveDate::parse_from_str(civil_date, "%Y-%m-%d")
         .map_err(|_| invalid("a Day's civil date is YYYY-MM-DD"))?;
     Ok(date
