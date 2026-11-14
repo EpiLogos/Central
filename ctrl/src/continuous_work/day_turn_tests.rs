@@ -1338,3 +1338,171 @@ fn a_session_that_yielded_nothing_or_a_day_with_no_page_files_nothing_and_says_w
     .unwrap_err();
     assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied, "{refused}");
 }
+
+/// The person's close of the Day `day_ref` (`central.day.lifecycle`) as it answers, refusal and all.
+fn try_close(root: &Path, day_ref: &str, now: u64) -> io::Result<Value> {
+    let day = read(root, json!({"day_ref": day_ref}), now);
+    execute_with_token_at(
+        root,
+        "day_lifecycle",
+        &json!({"day_ref":day_ref,"expected_revision":day["revision"]["revision"],
+            "expected_relations_revision":day["relations_revision"],"lifecycle":"closed"}),
+        Some(HUMAN),
+        now,
+    )
+}
+
+/// Central#364 review, R364-3: a Day closed again files only what its earlier closes did not, so its record never holds an
+/// entry twice and never outgrows what the Day holds. A busy Day reopened and closed again still closes, and is read back as
+/// one filing of every entry, closed by its last close.
+#[test]
+fn a_day_closed_again_files_only_what_is_new_so_a_busy_day_still_closes() {
+    let w = world("UTC", true);
+    let now = at("2026-10-20T09:00:00Z");
+    turn(w.path(), json!({}), now).unwrap();
+    // A busy Day: 350 receipts of the most a receipt holds, written as they are laid (over half the bound a Day's record keeps).
+    let most = "x".repeat(2048);
+    let mut lines = String::new();
+    for n in 0..350 {
+        lines.push_str(
+            &serde_json::to_string(&json!({"schema":"central.day-receipt/v1","receipt_id":format!("receipt:{n}"),
+                "act":"central.files.write","owner":"Central","subject":most,"source":most,"session":most,"receipt":null,
+                "occurred_at_unix_seconds":now,"occurred_in":FIRST,"recorded_at_unix_seconds":now,"recorded_by":"human:test"}))
+            .unwrap(),
+        );
+        lines.push('\n');
+    }
+    let day_dir = w.path().join("Control/user/day/2026-10-20");
+    fs::create_dir_all(&day_dir).unwrap();
+    fs::write(day_dir.join("receipts.jsonl"), lines).unwrap();
+    try_close(w.path(), FIRST, now + 60).unwrap();
+    assert_eq!(
+        read(w.path(), json!({"day_ref": FIRST}), now + 61)["filed"]["count"],
+        350
+    );
+    let filings = day_dir.join("filed.jsonl");
+    let once = fs::metadata(&filings).unwrap().len();
+    lifecycle(w.path(), FIRST, "open", now + 120);
+    lay(
+        w.path(),
+        &json!({"receipt_id":"receipt:late","act":"central.document.mutate","owner":"Central","subject":"document:x"}),
+        now + 130,
+    )
+    .unwrap();
+    try_close(w.path(), FIRST, now + 140)
+        .unwrap_or_else(|error| panic!("the busy Day, closed again, still closes: {error}"));
+    let grown = fs::metadata(&filings).unwrap().len() - once;
+    assert!(
+        grown < 2048,
+        "the second close filed only the one new entry, not the Day again: {grown} bytes"
+    );
+    let day = read(w.path(), json!({"day_ref": FIRST}), now + 150);
+    assert_eq!(day["temporal"]["lifecycle"], "closed");
+    let filed = &day["filed"];
+    assert_eq!(filed["count"], 351);
+    assert_eq!(filed["closes"], 2);
+    assert_eq!(filed["closed_at_unix_seconds"], now + 140);
+    assert_eq!(filed["closed_by"], "human:test");
+    let ids: std::collections::BTreeSet<&str> = filed["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|entry| entry["receipt_id"].as_str())
+        .collect();
+    assert_eq!(ids.len(), 351, "every entry filed once");
+    assert_eq!(filed["entries"][350]["receipt_id"], "receipt:late");
+}
+
+/// Central#364 review, R364-4: a session that yields again on the same Day (a resumed session ending again) files what is new
+/// since its last yield as another proposal for face 2, and each yield is answered with what was filed. The same yield asked
+/// again is answered with the one filed, and a proposal the person dropped never holds back what the session yields after it.
+#[test]
+fn a_session_that_yields_again_files_what_is_new_and_is_answered_with_what_was_filed() {
+    let w = world("UTC", true);
+    let now = at("2026-10-20T09:00:00Z");
+    save_form(w.path(), now);
+    turn(w.path(), json!({}), now).unwrap();
+    let ran = |id: &str, attempt: &str, at: u64| {
+        lay(
+            w.path(),
+            &json!({"receipt_id":id,"act":"factory.task.run","owner":"Factory","subject":attempt,"session":"agent-session/s1"}),
+            at,
+        )
+        .unwrap();
+    };
+    let yielded = |account: &str, at: u64| {
+        session_yield(
+            w.path(),
+            json!({"session":"agent-session/s1","account":account}),
+            at,
+        )
+        .unwrap()
+    };
+    let held = |return_ref: &Value, at: u64| {
+        execute_at(
+            w.path(),
+            "receiving_read",
+            &json!({"return_ref": return_ref}),
+            at,
+        )
+        .unwrap()
+    };
+    ran("receipt:r1", "attempt:1", now);
+    let first = yielded("A1: ran attempt 1.", now + 5);
+    assert_eq!(first["state"], "filed", "{first}");
+    assert_eq!(first["receipts"], json!(["receipt:r1"]));
+
+    ran("receipt:r2", "attempt:2", now + 10);
+    let second = yielded("A2: ran attempt 2.", now + 15);
+    assert_eq!(second["state"], "filed", "{second}");
+    assert_ne!(
+        second["return_ref"], first["return_ref"],
+        "the second yield reaches the person as its own proposal: {second}"
+    );
+    assert_eq!(
+        second["receipts"],
+        json!(["receipt:r2"]),
+        "what is new since the session last yielded: {second}"
+    );
+    assert_eq!(second["changes"], 1);
+    assert_eq!(second["account"], "A2: ran attempt 2.");
+    assert_eq!(second["status"], "pending");
+    let filed = held(&second["return_ref"], now + 15);
+    assert_eq!(filed["record"]["evidence_refs"], json!(["receipt:r2"]));
+    let html = filed["record"]["proposal"]["html"].as_str().unwrap();
+    assert!(
+        html.contains("A2: ran attempt 2.")
+            && html.contains("attempt:2")
+            && !html.contains("attempt:1"),
+        "{html}"
+    );
+    // The first proposal still holds the first yield as it was filed.
+    assert_eq!(
+        held(&first["return_ref"], now + 15)["record"]["evidence_refs"],
+        json!(["receipt:r1"])
+    );
+    // The same yield asked again: the one filed, as it was filed.
+    let again = yielded("A2: ran attempt 2.", now + 20);
+    assert_eq!(again["return_ref"], second["return_ref"], "{again}");
+    assert_eq!(again["receipts"], json!(["receipt:r2"]));
+    assert_eq!(again["account"], "A2: ran attempt 2.");
+    let listed = execute_at(w.path(), "receiving_list", &json!({}), now + 20).unwrap();
+    assert_eq!(listed["returns"].as_array().unwrap().len(), 2, "{listed}");
+
+    // The person drops the second; what the session yields after it still reaches them.
+    execute_with_token_at(
+        w.path(),
+        "receiving_review",
+        &json!({"return_ref": second["return_ref"], "expected_return_revision": filed["revision"],
+            "disposition": "rejected"}),
+        Some(HUMAN),
+        now + 25,
+    )
+    .unwrap();
+    ran("receipt:r3", "attempt:3", now + 30);
+    let third = yielded("A3: ran attempt 3.", now + 35);
+    assert_eq!(third["state"], "filed", "{third}");
+    assert_ne!(third["return_ref"], second["return_ref"], "{third}");
+    assert_eq!(third["receipts"], json!(["receipt:r3"]));
+    assert_eq!(third["status"], "pending");
+}
