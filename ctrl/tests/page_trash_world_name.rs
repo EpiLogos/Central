@@ -850,3 +850,160 @@ fn a_world_is_named_by_the_person_and_the_world_map_discloses_its_name() {
     );
     assert_eq!(doctor["ok"], true, "{doctor}");
 }
+
+/// One Action through the real `ctrl`, started and left running: what the caller holds, it holds while the Action runs.
+fn started(home: &Home, action: &str, input: Value) -> std::process::Child {
+    Command::new(env!("CARGO_BIN_EXE_ctrl"))
+        .args(["--json", "--root"])
+        .arg(home.ground())
+        .args(["action", "run", action, &input.to_string()])
+        .env("HOME", &home.0)
+        .env_remove("CENTRAL_ROOT")
+        .env_remove("CENTRAL_NATIVE_TOKEN")
+        .current_dir(&home.0)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap()
+}
+
+/// A lock of the ground's owners, held as they hold it (an exclusive `flock`) while the value lives.
+struct Held(#[allow(dead_code)] fs::File);
+impl Held {
+    fn take(lock: &std::path::Path) -> Self {
+        use std::os::unix::io::AsRawFd;
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lock)
+            .unwrap();
+        assert_eq!(
+            unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) },
+            0,
+            "{}",
+            lock.display()
+        );
+        Self(file)
+    }
+}
+
+/// Whether another holds a lock of the ground's owners: where it is free, it is taken and let go at once.
+fn held_by_another(lock: &std::path::Path) -> bool {
+    use std::os::unix::io::AsRawFd;
+    let file = match fs::OpenOptions::new().read(true).write(true).open(lock) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(error) => panic!("{}: {error}", lock.display()),
+    };
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        return false;
+    }
+    let error = std::io::Error::last_os_error();
+    assert_eq!(
+        error.raw_os_error(),
+        Some(libc::EWOULDBLOCK),
+        "{}: {error}",
+        lock.display()
+    );
+    true
+}
+
+#[test]
+fn every_door_to_a_page_of_your_world_takes_the_source_authority_before_the_page_s_history() {
+    // The Day's turn, as every owner of a source, takes the root's source authority and then writes history under it (continuous
+    // work's `source::lock`, then `history::replace`). A page of your world's Flows carrier is a source of the root's horizon, so
+    // each door that writes one takes the authority too, and first: a door that held the page's history while it waited for the
+    // authority would wait for good on a turn that holds the authority and wants the history next. (Central b6c119a: a Flows write
+    // started together with the turn that makes the Day's page hung 5 times in 6, until the kernel's 120 s bound killed one.) The
+    // test stands where the turn stands: it holds the authority while each door runs, and the history must stay free.
+    let home = made(&["central.files.trash"]);
+    let root = home.ground();
+    home.put(&format!("{FLOWS}/edited.html"), PAGE);
+    let (edited, edited_revision) = located(&home, FLOWS, "edited.html");
+    home.put(&format!("{FLOWS}/trashed.html"), PAGE);
+    let (trashed, trashed_revision) = located(&home, FLOWS, "trashed.html");
+    let gone = cli(
+        &home,
+        "central.files.trash",
+        json!({"location":trashed,"expected_revision":trashed_revision}),
+        Some(TOKEN),
+    );
+    assert_eq!(gone["data"]["outcome"], "trashed", "{gone}");
+    let at = |path: &str| {
+        json!({"schema":"central.path-ref/v1","ref":format!("central:path:{}:{path}", root.display()),
+            "root":root.display().to_string(),"path":path})
+    };
+    let person = |mut input: Value| {
+        input["actor"] = json!("oi-desktop-user");
+        input["actor_kind"] = json!("human");
+        input
+    };
+    let doors = [
+        (
+            "an edit",
+            "central.files.write",
+            person(
+                json!({"location":edited,"expected_revision":edited_revision,"content":"<!doctype html><title>Edited</title>\n"}),
+            ),
+            "written",
+        ),
+        (
+            "the create door",
+            "central.files.write",
+            person(
+                json!({"location":at(&format!("{FLOWS}/written-new.html")),"expected_revision":"","content":PAGE}),
+            ),
+            "created",
+        ),
+        (
+            "a creation",
+            "central.files.create",
+            person(
+                json!({"parent":at(FLOWS),"name":"created.html","content":PAGE,"expected_absent":true,
+                "operation_ref":"op:flows-lock-order"}),
+            ),
+            "created",
+        ),
+        (
+            "a restore from the trash",
+            "central.files.restore",
+            person(json!({"location":trashed,"expected_revision":"","revision":trashed_revision})),
+            "created",
+        ),
+    ];
+    let authority = root.join(".central/source-mutation.lock");
+    let history = root.join(".central/file-history/lock");
+    for (door, action, input, outcome) in doors {
+        let turn = Held::take(&authority);
+        let mut running = started(&home, action, input);
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut kept = false;
+        while !kept && std::time::Instant::now() < until && running.try_wait().unwrap().is_none() {
+            kept = held_by_another(&history);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let waited = running.try_wait().unwrap().is_none();
+        drop(turn);
+        let output = running.wait_with_output().unwrap();
+        let answer: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|_| {
+            panic!(
+                "{door}: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )
+        });
+        assert!(
+            !kept,
+            "{door} held the page's history while it waited for the source authority: a turn that holds the authority and \
+             writes history next waits on it for good ({answer})"
+        );
+        assert_eq!(answer["ok"], true, "{door}: {answer}");
+        assert_eq!(answer["data"]["outcome"], outcome, "{door}: {answer}");
+        assert!(
+            waited,
+            "{door} finished while the turn held the source authority: a page of your world is written under it ({answer})"
+        );
+    }
+}

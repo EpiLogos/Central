@@ -1302,13 +1302,14 @@ fn execute(root: &Path, op: &str, input: &Value) -> io::Result<Value> {
             "No recorded ordinary-file history",
         ));
     }
-    let (dir, _lock) = state(&root)?;
-    let area = area(&root, &dir, &loc)?;
-    let horizon = if matches!(op, "write" | "restore") {
-        FlowsHorizon::meet(&root, &loc)?
+    let authority = if matches!(op, "write" | "restore") {
+        FlowsHorizon::authority(&root, &loc)?
     } else {
         None
     };
+    let (dir, _lock) = state(&root)?;
+    let area = area(&root, &dir, &loc)?;
+    let horizon = FlowsHorizon::meet(&root, &loc, authority)?;
     if absent {
         return FlowsHorizon::attributed(
             horizon,
@@ -1549,13 +1550,30 @@ struct FlowsHorizon {
     _authority: crate::source_safety::SourceLock,
 }
 impl FlowsHorizon {
-    /// Held from before the write, for a page of the Flows carrier only; None for every other ordinary file. The caller holds the
-    /// file-history lock: the order is that owner's, then the root's source authority, as the trash takes a project's.
-    fn meet(root: &Path, loc: &CentralPathRef) -> io::Result<Option<Self>> {
+    /// The root's source authority, for a page of the Flows carrier only; None for every other ordinary file. Taken before the
+    /// file-history lock, in the one order every writer keeps: the root's source authority, its file history, a project's source
+    /// authority (the trash's, a project page's restore), that project's history. The Day's turn and every source owner take the
+    /// authority and write history under it (continuous_work/history.rs `replace`); taken the other way round, a Flows write and a
+    /// turn that makes its page wait on each other for good.
+    fn authority(
+        root: &Path,
+        loc: &CentralPathRef,
+    ) -> io::Result<Option<crate::source_safety::SourceLock>> {
         if !loc.path.starts_with("Control/user/flows/") {
             return Ok(None);
         }
-        let authority = crate::source_safety::lock(root, "source-mutation.lock")?;
+        crate::source_safety::lock(root, "source-mutation.lock").map(Some)
+    }
+    /// Held from before the write, for a page of the Flows carrier only; None for every other ordinary file. The caller took the
+    /// authority (above), then the file-history lock.
+    fn meet(
+        root: &Path,
+        loc: &CentralPathRef,
+        authority: Option<crate::source_safety::SourceLock>,
+    ) -> io::Result<Option<Self>> {
+        let Some(authority) = authority else {
+            return Ok(None);
+        };
         crate::source_horizon::reconcile_control_sources(root)?;
         Ok(Some(Self {
             root: root.to_path_buf(),
@@ -1896,6 +1914,12 @@ fn absent_page(
         .parent()
         .ok_or_else(|| invalid("Missing parent"))?;
     reject_symlink_components(root, parent)?;
+    // Your world's page comes back under the root's source authority, taken before the history's lock (FlowsHorizon::authority).
+    let authority = if op == "restore" && world.is_none() {
+        FlowsHorizon::authority(root, loc)?
+    } else {
+        None
+    };
     let (dir, _lock) = state(root)?;
     let area = area(root, &dir, loc)?;
     resolve_pending(&area, "")?;
@@ -1948,7 +1972,7 @@ fn absent_page(
     let attributed = attribution(input)?;
     let Some(project) = world else {
         // Your world's page comes back as a change of the root's horizon, attributed as the trash's leaving was.
-        let horizon = FlowsHorizon::meet(root, loc)?;
+        let horizon = FlowsHorizon::meet(root, loc, authority)?;
         return FlowsHorizon::attributed(
             horizon,
             create_flow_file(
