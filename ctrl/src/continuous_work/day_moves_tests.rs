@@ -1992,6 +1992,31 @@ fn close_carry_by_an_agent_under_saved_consent_closes_and_returns_the_carry_as_a
         .contains("harbour map"));
     let doc = tomorrow_document(w.path(), next);
     assert_eq!(doc["document"]["contributions"], json!([]));
+    // Central files it in receiving itself, the one filing of a close's carry (O-I #1007): one Return, pending, by the agent that
+    // closed, for tomorrow's face 0, which the person keeps or drops in Approvals. The agent submits nothing of its own.
+    let return_ref = done["carry"]["return_ref"]
+        .as_str()
+        .expect("the carry's Return");
+    assert!(done["carry"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("Approvals"));
+    let listed = read(w.path(), "receiving_list", json!({}), next);
+    let returns = listed["returns"].as_array().unwrap();
+    assert_eq!(returns.len(), 1, "{listed}");
+    assert_eq!(returns[0]["return_ref"], return_ref);
+    assert_eq!(returns[0]["status"], "pending");
+    assert_eq!(returns[0]["author"]["principal_ref"], "agent:test");
+    assert_eq!(returns[0]["day_ref"], TOMORROW);
+    let held = read(
+        w.path(),
+        "receiving_read",
+        json!({"return_ref": return_ref}),
+        next,
+    );
+    assert_eq!(held["record"]["proposal"], submit["proposal"]);
+    // The close filed the Day, its agent the closer.
+    assert_eq!(done["closed"]["filed"]["closed_by"], "agent:test");
 }
 
 #[test]

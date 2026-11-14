@@ -34,6 +34,10 @@ use std::io;
 pub(crate) const CIVIL_CLOCK: &str = "central:civil-clock";
 const TURN_SCHEMA: &str = "central.day-turn/v1";
 const RECEIPT_SCHEMA: &str = "central.day-receipt/v1";
+const FILING_SCHEMA: &str = "central.day-filing/v1";
+const YIELD_SCHEMA: &str = "central.day-session-yield/v1";
+/// Face 2's field on the Day document that what a session yields waits to be kept on: the standard Day's Operation face.
+const FACE_TWO_OPERATION: &str = "/fields/p2_operations";
 const NOT_AUTOMATIC: &str = "Your civil-time policy keeps the Day from turning by itself (automatic_day_rollover is off): today's Day opens and an earlier Day closes only by your own act";
 const FORM_IS_SAVED: &str = "The turn takes no form: today's page is made only from the Day form you saved in the Day's settings (day_form)";
 const NO_FORM_SAVED: &str =
@@ -480,6 +484,7 @@ pub(crate) fn record_receipt(
     let owner = bounded(input, "owner", 64, true)?.unwrap_or_default();
     let subject = bounded(input, "subject", 2048, true)?.unwrap_or_default();
     let source = bounded(input, "source", 2048, false)?;
+    let session = bounded(input, "session", 2048, false)?;
     let receipt = input.get("receipt").cloned().unwrap_or(Value::Null);
     if serde_json::to_string(&receipt)?.len() > 16 * 1024 {
         return Err(invalid("receipt is at most 16 KiB of JSON"));
@@ -548,9 +553,12 @@ pub(crate) fn record_receipt(
     let Some((civil_date, log)) = logs.into_iter().find(|(date, _)| *date == laid_in) else {
         return Err(invalid("the receipt's Day has no record Central can name"));
     };
-    let entry = json!({"schema": RECEIPT_SCHEMA, "receipt_id": receipt_id, "act": act, "owner": owner,
+    let mut entry = json!({"schema": RECEIPT_SCHEMA, "receipt_id": receipt_id, "act": act, "owner": owner,
         "subject": subject, "source": source, "receipt": receipt, "occurred_at_unix_seconds": occurred,
         "occurred_in": occurred_in, "recorded_at_unix_seconds": now, "recorded_by": principal.principal_ref});
+    if let Some(session) = session {
+        entry["session"] = json!(session);
+    }
     day_moves::append_lines(
         scope,
         &receipts_path(scope, &civil_date),
@@ -570,4 +578,190 @@ pub(crate) fn receipts_of(scope: &Scope, civil_date: &str) -> io::Result<Vec<Val
         "receipts",
     )?
     .events)
+}
+
+// ---- the close's filing ------------------------------------------------------
+
+fn filings_path(scope: &Scope, civil_date: &str) -> String {
+    format!("{}/{civil_date}/filed.jsonl", scope.day_dir())
+}
+
+/// File the Day of `civil_date` as it closes (`temporal::change_lifecycle`, so every close: the person's, an agent's under the
+/// Close they saved, Central's civil clock at the turn; manual §18.2, O-I #1007 "Closing the day files it"): one filing appended
+/// beside the Day, naming each entry the Day holds at its close (each receipt's id, act, owner, subject, source and session, and
+/// when it happened), how many, the revision of the receipts it read and who closed it. A Day reopened and closed again is filed
+/// again, and its last filing is the Day's (`central.day.read` `filed`). A receipt that arrives after the close is laid in today's
+/// Day naming this one (`record_receipt`), so what the close filed stands as the Day held it.
+pub(crate) fn file_day(
+    scope: &Scope,
+    civil_date: &str,
+    day_ref: &str,
+    closed_by: &str,
+    now: u64,
+) -> io::Result<Value> {
+    let receipts = day_moves::load_lines(
+        scope,
+        &receipts_path(scope, civil_date),
+        RECEIPT_SCHEMA,
+        "receipts",
+    )?;
+    let entries: Vec<Value> = receipts
+        .events
+        .iter()
+        .map(|entry| {
+            json!({"receipt_id": entry["receipt_id"], "act": entry["act"], "owner": entry["owner"],
+                "subject": entry["subject"], "source": entry["source"], "session": entry["session"],
+                "occurred_at_unix_seconds": entry["occurred_at_unix_seconds"], "occurred_in": entry["occurred_in"]})
+        })
+        .collect();
+    let filing = json!({"schema": FILING_SCHEMA, "day_ref": day_ref, "civil_date": civil_date,
+        "closed_at_unix_seconds": now, "closed_by": closed_by, "count": entries.len(),
+        "receipts_revision": receipts.revision, "entries": entries});
+    let path = filings_path(scope, civil_date);
+    let log = day_moves::load_lines(scope, &path, FILING_SCHEMA, "filings")?;
+    day_moves::append_lines(
+        scope,
+        &path,
+        &log,
+        std::slice::from_ref(&filing),
+        ("central.day.close", "native-operation"),
+    )?;
+    Ok(filing)
+}
+
+/// What the Day's last close filed (`file_day`); none while it has never closed.
+pub(crate) fn filing_of(scope: &Scope, civil_date: &str) -> io::Result<Option<Value>> {
+    Ok(day_moves::load_lines(
+        scope,
+        &filings_path(scope, civil_date),
+        FILING_SCHEMA,
+        "filings",
+    )?
+    .events
+    .pop())
+}
+
+// ---- what a session yields ---------------------------------------------------
+
+fn escaped(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// File what a session yielded at its end as a proposal waiting on today's face 2 (`central.day.session.yield`; manual §18.2 "What
+/// a session yields when it ends, its receipts, its changes and a short account, arrives on face 2 as a proposal you keep or drop";
+/// O-I #1007, R36): the receipts today's Day holds of `session` (each laid naming it, or naming it as what it moved), the changes
+/// they made (what each moved) and the short `account` given, filed in receiving (the one submit, receiving.rs `file_held`) as one
+/// pending contribution to face 2 of today's Day document (its Operation field, `field.append`), which the person keeps on face 2
+/// or drops in Approvals. Filed once per session and Day: asked again, the one filed is answered. Nothing of it is written into the
+/// Day until the person keeps it. Where the session yielded nothing (no receipt today and no account), or today's Day has no page
+/// or its page no face 2 field to take it, nothing is filed and the answer says why.
+pub(crate) fn session_yield(
+    scope: &Scope,
+    input: &Value,
+    principal: &Principal,
+    now: u64,
+) -> io::Result<Value> {
+    let session = bounded(input, "session", 2048, true)?
+        .unwrap_or_default()
+        .to_owned();
+    let account = bounded(input, "account", 4096, false)?.map(str::to_owned);
+    let today = temporal::time_policy(scope, now)?.civil_date;
+    let day_ref = day_moves::day_ref_of(scope, &today);
+    let unfiled = |state: &str, reason: &str| {
+        Ok(
+            json!({"schema": YIELD_SCHEMA, "state": state, "session": session, "day_ref": day_ref, "reason": reason}),
+        )
+    };
+    let receipts: Vec<Value> = receipts_of(scope, &today)?
+        .into_iter()
+        .filter(|entry| {
+            entry["session"] == session.as_str() || entry["subject"] == session.as_str()
+        })
+        .collect();
+    if receipts.is_empty() && account.is_none() {
+        return unfiled(
+            "nothing_to_file",
+            "Today's Day holds no receipt of this session and no account of it was given: it yielded nothing to keep.",
+        );
+    }
+    let (relations, _) = scope.relations()?;
+    let Some(entry) = temporal::day_relation(&relations, &day_ref)
+        .ok()
+        .filter(|entry| entry["document"].is_object())
+    else {
+        return unfiled(
+            "not_filed",
+            "Today's Day has no Day document yet, so face 2 has no page to take what the session yielded.",
+        );
+    };
+    let page = documents::read(
+        scope,
+        &json!({"source_ref": entry["ref"], "document_id": entry["document"]["document_id"]}),
+    )?;
+    let Some(field) = page["document"]["fields"].as_array().and_then(|fields| {
+        fields
+            .iter()
+            .find(|field| field["template_pointer"] == FACE_TWO_OPERATION)
+    }) else {
+        return unfiled(
+            "not_filed",
+            &format!("Today's Day document maps no field at {FACE_TWO_OPERATION}, so face 2 has nowhere to take what the session yielded."),
+        );
+    };
+    const LISTED: usize = 32;
+    let mut html = format!("<p><strong>{}</strong>", escaped(&session));
+    if let Some(account) = &account {
+        html.push_str(&format!(": {}", escaped(account)));
+    }
+    html.push_str("</p>");
+    if !receipts.is_empty() {
+        html.push_str("<ul>");
+        for entry in receipts.iter().take(LISTED) {
+            html.push_str(&format!(
+                "<li>{} · {}</li>",
+                escaped(entry["act"].as_str().unwrap_or_default()),
+                escaped(entry["subject"].as_str().unwrap_or_default())
+            ));
+        }
+        if receipts.len() > LISTED {
+            html.push_str(&format!("<li>and {} more</li>", receipts.len() - LISTED));
+        }
+        html.push_str("</ul>");
+    }
+    let ids: Vec<Value> = receipts
+        .iter()
+        .take(128)
+        .map(|entry| entry["receipt_id"].clone())
+        .collect();
+    let changed: std::collections::BTreeSet<&str> = receipts
+        .iter()
+        .filter_map(|entry| entry["subject"].as_str())
+        .filter(|subject| *subject != session)
+        .collect();
+    let contribution_id = format!(
+        "session-yield:{}",
+        source::key(&format!("{day_ref}\n{session}"))
+    );
+    let mut filing = json!({"source_ref": page["source"]["ref"], "document_id": page["document_id"],
+        "expected_source_revision": page["revision"]["revision"],
+        "proposal": {"operation": "field.append", "field_id": field["id"], "contribution_id": contribution_id, "html": html},
+        "producer_key": contribution_id, "day_ref": day_ref, "session_ref": session, "evidence_refs": ids,
+        "summary": format!("What the session {session} yielded at its end: {} receipt{} today, {} change{}{}. Keep it on today's face 2 or drop it.",
+            receipts.len(), if receipts.len() == 1 { "" } else { "s" }, changed.len(), if changed.len() == 1 { "" } else { "s" },
+            account.as_deref().map(|account| format!(", and its account: {account}")).unwrap_or_default()),
+        "occurred_at_unix_seconds": now});
+    // A person's credential carries what the session produced; an Agent's own credential is the session's producer itself.
+    if principal.is_human() {
+        filing["declared_producer"] =
+            json!({"ref": session, "actor_kind": "agent", "attribution": "claimed"});
+    }
+    let filed = super::receiving::file_held(scope, &filing, principal, now)?;
+    Ok(
+        json!({"schema": YIELD_SCHEMA, "state": "filed", "session": session, "day_ref": day_ref,
+        "return_ref": filed["return_ref"], "status": filed["record"]["status"], "receipts": ids,
+        "changes": changed.len(), "account": account}),
+    )
 }

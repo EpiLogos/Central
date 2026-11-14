@@ -23,7 +23,7 @@ fn at(rfc3339: &str) -> u64 {
 /// The Day form as Setup keeps it in a new ground: its inert ql-doc island, a daily payload with its field map.
 fn day_form() -> String {
     let payload = json!({"meta":{"type":"daily","template":"ql-daily v0.1","date":null,"timezone":null,"uuid":null,"face":0},
-        "fields":{"p0_quick_thoughts":"","p1_must":[],"p5_synthesis":""},"body":{"p5_tomorrow":""},"capture":[]});
+        "fields":{"p0_quick_thoughts":"","p1_must":[],"p2_operations":"","p5_synthesis":""},"body":{"p5_tomorrow":""},"capture":[]});
     format!(
         "<!doctype html><html><body><script>window.ignored = true</script>\n<script id=\"ql-doc\" type=\"application/json\">{payload}</script></body></html>"
     )
@@ -45,7 +45,7 @@ fn world(timezone: &str, automatic: bool) -> crate::TempDir {
     let scope = Scope::resolve(temp.path(), None).unwrap();
     let grant = json!({"principal_ref":"human:test","actor_kind":"human","token_sha256":format!("{:x}",Sha256::digest(HUMAN.as_bytes())),
         "scope_refs":["control:root"],"actions":["central.document.create","central.document.mutate","central.day.settings.write","central.day.lifecycle","central.day.close-carry",
-            "central.receiving.review","central.receiving.include","central.day.receipt.record"],
+            "central.receiving.review","central.receiving.include","central.day.receipt.record","central.day.session.yield"],
         "expires_at_unix_seconds":4_000_000_000u64});
     let mut relations = vec![];
     for (name, role, value) in [
@@ -1056,4 +1056,285 @@ fn the_turn_and_the_receipt_stand_in_centrals_action_field() {
             .unwrap_or_else(|| panic!("{id} is not registered"));
         assert_eq!(descriptor.mutation_class.as_str(), class, "{id}");
     }
+}
+
+/// What the session `session` yielded, filed on the person's credential (`central.day.session.yield`).
+fn session_yield(root: &Path, input: Value, now: u64) -> io::Result<Value> {
+    execute_with_token_at(root, "day_session_yield", &input, Some(HUMAN), now)
+}
+
+#[test]
+fn a_receipt_names_the_session_its_act_was_made_in_and_reads_back_with_it() {
+    let w = world("UTC", true);
+    let now = at("2026-10-20T09:00:00Z");
+    turn(w.path(), json!({}), now).unwrap();
+    lay(
+        w.path(),
+        &json!({"receipt_id":"receipt:run","act":"factory.task.run","owner":"Factory","subject":"attempt:1",
+            "source":"project:atelier","session":"agent-session/a"}),
+        now,
+    )
+    .unwrap();
+    let receipt = &read(w.path(), json!({}), now)["receipts"][0];
+    assert_eq!(receipt["act"], "factory.task.run");
+    assert_eq!(receipt["subject"], "attempt:1");
+    assert_eq!(receipt["source"], "project:atelier");
+    assert_eq!(receipt["session"], "agent-session/a");
+    // A session is bounded text, as the receipt's other names are.
+    let refused = lay(
+        w.path(),
+        &json!({"receipt_id":"receipt:long","act":"a","owner":"o","subject":"s","session":"x".repeat(2049)}),
+        now,
+    )
+    .unwrap_err();
+    assert_eq!(refused.kind(), io::ErrorKind::InvalidInput, "{refused}");
+}
+
+#[test]
+fn closing_the_day_files_every_entry_it_holds_read_back_with_the_closed_day() {
+    let w = world("UTC", true);
+    let now = at("2026-10-20T09:00:00Z");
+    turn(w.path(), json!({}), now).unwrap();
+    // An open Day has filed nothing.
+    assert!(read(w.path(), json!({}), now).get("filed").is_none());
+    for (id, act, subject) in [
+        (
+            "receipt:page",
+            "central.files.write",
+            "Control/user/flows/harbour.html",
+        ),
+        ("receipt:run", "factory.task.run", "attempt:1"),
+    ] {
+        lay(
+            w.path(),
+            &json!({"receipt_id":id,"act":act,"owner":"Central","subject":subject,"source":"control:root"}),
+            now,
+        )
+        .unwrap();
+    }
+    // The person's own close, by the close routine: what it answers holds the Day's entries, as Central files them.
+    let closed = close_carry(w.path(), FIRST, now + 60).unwrap();
+    let filed = &closed["closed"]["filed"];
+    assert_eq!(filed["schema"], "central.day-filing/v1", "{closed}");
+    assert_eq!(filed["day_ref"], FIRST);
+    assert_eq!(filed["closed_by"], "human:test");
+    assert_eq!(filed["closed_at_unix_seconds"], now + 60);
+    assert_eq!(filed["count"], 2);
+    let entries = filed["entries"].as_array().unwrap();
+    assert_eq!(entries[0]["receipt_id"], "receipt:page");
+    assert_eq!(entries[0]["act"], "central.files.write");
+    assert_eq!(entries[0]["subject"], "Control/user/flows/harbour.html");
+    assert_eq!(entries[0]["source"], "control:root");
+    assert_eq!(entries[1]["subject"], "attempt:1");
+    // Read back from Central after the close: the closed Day holds what its close filed.
+    let day = read(w.path(), json!({"day_ref": FIRST}), now + 90);
+    assert_eq!(day["temporal"]["lifecycle"], "closed");
+    assert_eq!(day["filed"], *filed);
+    // Reopened, it holds one more; closed again (the person's plain close this time), it is filed again with all three.
+    lifecycle(w.path(), FIRST, "open", now + 120);
+    lay(
+        w.path(),
+        &json!({"receipt_id":"receipt:third","act":"central.document.mutate","owner":"Central","subject":"document:x"}),
+        now + 130,
+    )
+    .unwrap();
+    lifecycle(w.path(), FIRST, "closed", now + 140);
+    let day = read(w.path(), json!({"day_ref": FIRST}), now + 150);
+    assert_eq!(day["filed"]["count"], 3, "{day}");
+    assert_eq!(day["filed"]["closed_at_unix_seconds"], now + 140);
+    assert_eq!(day["filed"]["entries"][2]["receipt_id"], "receipt:third");
+}
+
+#[test]
+fn the_clocks_close_at_the_turn_files_the_day_it_closes() {
+    let w = world("UTC", true);
+    let first = at("2026-10-20T09:00:00Z");
+    turn(w.path(), json!({}), first).unwrap();
+    save(
+        w.path(),
+        json!({"day_form": form_at(w.path(), FORM_PATH), "moves":{"close":{"runs_at":{"kind":"day_start"}}}}),
+        first,
+    )
+    .unwrap();
+    lay(
+        w.path(),
+        &json!({"receipt_id":"receipt:prompt","act":"encounter.prompt","owner":"AIKit","subject":"agent-session/a",
+            "source":"control:root","session":"agent-session/a"}),
+        first,
+    )
+    .unwrap();
+    let second = at("2026-10-21T00:00:01Z");
+    let turned = turn(w.path(), json!({}), second).unwrap();
+    assert_eq!(turned["turn"]["closed"][0]["day_ref"], FIRST, "{turned}");
+    let day = read(w.path(), json!({"day_ref": FIRST}), second);
+    assert_eq!(
+        day["temporal"]["lifecycle_actor_ref"],
+        "central:civil-clock"
+    );
+    assert_eq!(day["filed"]["closed_by"], "central:civil-clock");
+    assert_eq!(day["filed"]["count"], 1);
+    assert_eq!(day["filed"]["entries"][0]["act"], "encounter.prompt");
+    assert_eq!(day["filed"]["entries"][0]["session"], "agent-session/a");
+    // Today's Day, just opened, has filed nothing.
+    assert!(read(w.path(), json!({}), second).get("filed").is_none());
+}
+
+#[test]
+fn what_a_session_yields_at_its_end_waits_on_todays_face_two_until_the_person_keeps_it() {
+    let w = world("UTC", true);
+    let now = at("2026-10-20T09:00:00Z");
+    save_form(w.path(), now);
+    turn(w.path(), json!({}), now).unwrap();
+    for (id, act, subject, session) in [
+        (
+            "receipt:write",
+            "factory.task.write",
+            "run:1",
+            Some("agent-session/a"),
+        ),
+        (
+            "receipt:run",
+            "factory.task.run",
+            "attempt:1",
+            Some("agent-session/a"),
+        ),
+        (
+            "receipt:page",
+            "central.files.write",
+            "Control/user/flows/harbour.html",
+            None,
+        ),
+        (
+            "receipt:start",
+            "factory.session.start",
+            "agent-session/a",
+            None,
+        ),
+    ] {
+        let mut input = json!({"receipt_id":id,"act":act,"owner":"Factory","subject":subject,"source":"project:atelier"});
+        if let Some(session) = session {
+            input["session"] = json!(session);
+        }
+        lay(w.path(), &input, now).unwrap();
+    }
+    let yielded = session_yield(
+        w.path(),
+        json!({"session":"agent-session/a","account":"Wrote one line into NOTES.md."}),
+        now + 5,
+    )
+    .unwrap();
+    assert_eq!(yielded["schema"], "central.day-session-yield/v1");
+    assert_eq!(yielded["state"], "filed", "{yielded}");
+    assert_eq!(yielded["day_ref"], FIRST);
+    // Its receipts: those laid naming the session, as the one they were made in or as what they moved; never the person's own.
+    assert_eq!(
+        yielded["receipts"],
+        json!(["receipt:write", "receipt:run", "receipt:start"])
+    );
+    let return_ref = yielded["return_ref"].as_str().expect("the yield's Return");
+    // It waits in receiving, pending, for today's Day, naming the session; carried by the person, produced by the session.
+    let listed = execute_at(w.path(), "receiving_list", &json!({}), now + 5).unwrap();
+    let returns = listed["returns"].as_array().unwrap();
+    assert_eq!(returns.len(), 1, "{listed}");
+    assert_eq!(returns[0]["return_ref"], return_ref);
+    assert_eq!(returns[0]["status"], "pending");
+    assert_eq!(returns[0]["session_ref"], "agent-session/a");
+    assert_eq!(returns[0]["day_ref"], FIRST);
+    assert_eq!(returns[0]["declared_producer"]["ref"], "agent-session/a");
+    let held = execute_at(
+        w.path(),
+        "receiving_read",
+        &json!({"return_ref": return_ref}),
+        now + 5,
+    )
+    .unwrap();
+    let proposal = &held["record"]["proposal"];
+    assert_eq!(proposal["operation"], "field.append");
+    assert_eq!(proposal["field_id"], "p2_operations");
+    let html = proposal["html"].as_str().unwrap();
+    for said in [
+        "agent-session/a",
+        "Wrote one line into NOTES.md.",
+        "factory.task.run · attempt:1",
+    ] {
+        assert!(html.contains(said), "{said} in {html}");
+    }
+    assert!(!html.contains("harbour"), "{html}");
+    assert_eq!(
+        held["record"]["evidence_refs"],
+        json!(["receipt:write", "receipt:run", "receipt:start"])
+    );
+    // Nothing of it is in today's page until the person keeps it, and asked again it is filed once.
+    let today = read(w.path(), json!({}), now + 10);
+    assert!(today["document"]["document"]["contributions"]
+        .as_array()
+        .is_none_or(Vec::is_empty));
+    let again = session_yield(
+        w.path(),
+        json!({"session":"agent-session/a","account":"Wrote one line into NOTES.md."}),
+        now + 10,
+    )
+    .unwrap();
+    assert_eq!(again["return_ref"], return_ref);
+    let listed = execute_at(w.path(), "receiving_list", &json!({}), now + 10).unwrap();
+    assert_eq!(listed["returns"].as_array().unwrap().len(), 1);
+    // The person keeps it: accepted and included, it stands on today's face 2.
+    let basis = today["revision"]["revision"].clone();
+    let reviewed = execute_with_token_at(
+        w.path(),
+        "receiving_review",
+        &json!({"return_ref": return_ref, "expected_return_revision": held["revision"], "disposition": "accepted",
+            "expected_source_revision": basis}),
+        Some(HUMAN),
+        now + 20,
+    )
+    .unwrap();
+    execute_with_token_at(
+        w.path(),
+        "receiving_include",
+        &json!({"return_ref": return_ref, "expected_return_revision": reviewed["revision"],
+            "expected_source_revision": basis}),
+        Some(HUMAN),
+        now + 30,
+    )
+    .unwrap();
+    let today = read(w.path(), json!({}), now + 30);
+    let contributions = today["document"]["document"]["contributions"]
+        .as_array()
+        .unwrap();
+    assert_eq!(contributions.len(), 1, "{today}");
+    assert_eq!(contributions[0]["field_id"], "p2_operations");
+}
+
+#[test]
+fn a_session_that_yielded_nothing_or_a_day_with_no_page_files_nothing_and_says_why() {
+    let w = world("UTC", true);
+    let now = at("2026-10-20T09:00:00Z");
+    // No Day form saved: today's Day stands without its page.
+    turn(w.path(), json!({}), now).unwrap();
+    let nothing = session_yield(w.path(), json!({"session":"agent-session/quiet"}), now).unwrap();
+    assert_eq!(nothing["state"], "nothing_to_file", "{nothing}");
+    let unfiled = session_yield(
+        w.path(),
+        json!({"session":"agent-session/quiet","account":"Read the notes."}),
+        now,
+    )
+    .unwrap();
+    assert_eq!(unfiled["state"], "not_filed", "{unfiled}");
+    assert!(unfiled["reason"]
+        .as_str()
+        .unwrap()
+        .contains("no Day document"));
+    let listed = execute_at(w.path(), "receiving_list", &json!({}), now).unwrap();
+    assert_eq!(listed["returns"], json!([]));
+    // Filing is the person's or an agent's act on a credential that grants it, never an anonymous one.
+    let refused = execute_with_token_at(
+        w.path(),
+        "day_session_yield",
+        &json!({"session":"s","account":"a"}),
+        None,
+        now,
+    )
+    .unwrap_err();
+    assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied, "{refused}");
 }
