@@ -2,9 +2,10 @@
 //! Central keeps the day's bounds. The Day opens by itself and the close runs by itself"; O-I #1005).
 //!
 //! `central.day.turn` does what the person's adopted civil-time policy determines at this instant, and nothing else: today's Day
-//! opens on its civil date (its blank source, its relation, today's pointer); its document is made from the Day form the host
-//! offers (`form`, a location Central's file route gives) when it has none, carrying the set of the Day before it (the worlds it
-//! held, its rows with the pages that still play, the Day added to its lineage); and an earlier Day still open closes at its turn,
+//! opens on its civil date (its blank source, its relation, today's pointer); its document is made from the Day form the person
+//! saved in the Day's settings (`day_form`), never from one offered to the turn, when it has none, carrying the set of the Day
+//! before it (the worlds it held, its rows with the pages that still play, the Day added to its lineage); and an earlier Day still
+//! open closes at its turn,
 //! its close routine asked to carry face 5's proposal as the person's Day settings keep it (the clock writes no one's words into a
 //! Day, so the proposal waits for the person and stays on the closed Day: day_moves.rs `close_at_turn`). It acts as Central's own
 //! civil clock and holds no credential: the person's consent is the policy they adopted (`automatic_day_rollover`), and a policy
@@ -27,12 +28,18 @@ pub(crate) const CIVIL_CLOCK: &str = "central:civil-clock";
 const TURN_SCHEMA: &str = "central.day-turn/v1";
 const RECEIPT_SCHEMA: &str = "central.day-receipt/v1";
 const NOT_AUTOMATIC: &str = "Your civil-time policy keeps the Day from turning by itself (automatic_day_rollover is off): today's Day opens and an earlier Day closes only by your own act";
+const FORM_IS_SAVED: &str = "The turn takes no form: today's page is made only from the Day form you saved in the Day's settings (day_form)";
+const NO_FORM_SAVED: &str =
+    "No Day form is saved in your Day's settings (day_form), so today's Day stands without its page";
 /// A page that plays has an active NOW whose task names it (centralTrackAdapter.ts `PAGE_TASK`).
 const PAGE_TASK: &str = "oi:page:";
 const DAY_SET_SCHEMA: &str = "oi.day-set/v1";
 
 /// The Day's turn (`central.day.turn`): see the module's account. Answers today's Day reading with what the turn did.
 pub(crate) fn turn(scope: &Scope, input: &Value, now: u64) -> io::Result<Value> {
+    if input.get("form").is_some() {
+        return Err(invalid(FORM_IS_SAVED));
+    }
     let time = temporal::time_policy(scope, now)?;
     if !time.policy.automatic_day_rollover {
         return Err(denied(NOT_AUTOMATIC));
@@ -72,21 +79,21 @@ pub(crate) fn turn(scope: &Scope, input: &Value, now: u64) -> io::Result<Value> 
             )?;
         }
     }
-    // Today's document, from the Day form, carrying the set of the Day before it.
+    // Today's document, from the Day form the person saved, carrying the set of the Day before it.
     let reading = temporal::day_read(scope, &json!({"day_ref": day_ref}))?;
     let document = if reading["document_state"] == "ready" {
         json!({"state": "stood"})
     } else if !reading["content"].as_str().unwrap_or("").is_empty() {
         json!({"state": "kept", "why": "Today's Day holds writing that is no Day document; Central keeps it as it is and makes none over it"})
     } else {
-        match input.get("form").filter(|form| !form.is_null()) {
-            None => {
-                json!({"state": "wants-form", "why": "No Day form was offered, so today's Day stands without its page"})
+        match day_moves::saved_day_form(scope)
+            .map(|form| form.map(|form| make_document(scope, &time, &reading, &form, &clock, now)))
+        {
+            Ok(None) => json!({"state": "wants-form", "why": NO_FORM_SAVED}),
+            Ok(Some(Ok(made))) => made,
+            Ok(Some(Err(error))) | Err(error) => {
+                json!({"state": "refused", "why": error.to_string()})
             }
-            Some(form) => match make_document(scope, &time, &reading, form, &clock, now) {
-                Ok(made) => made,
-                Err(error) => json!({"state": "refused", "why": error.to_string()}),
-            },
         }
     };
     // Each earlier Day still open closes at its turn, oldest first.
@@ -114,30 +121,70 @@ pub(crate) fn turn(scope: &Scope, input: &Value, now: u64) -> io::Result<Value> 
     Ok(result)
 }
 
-/// Make today's document from the Day form at `form`: the form's own data island, its fields mapped as they stand (and each of
-/// its keys as a whole), its date and zone Central's, the set of the Day before it carried, and the form's location and revision
-/// kept so its page reads that form where it stands.
-fn make_document(
+/// The Day form at `path` under the world's Central root, read where it stands through Central's file route, and its inert data
+/// island: a Day form's (`meta.type` daily) with its field map, carrying no retained form binding. The Day's settings save only
+/// such a form (`day_form`), and the turn makes today's page from it.
+pub(crate) fn read_day_form(
     scope: &Scope,
-    time: &TimeReading,
-    day: &Value,
-    form: &Value,
-    clock: &Principal,
-    now: u64,
-) -> io::Result<Value> {
-    let location: crate::files::CentralPathRef = serde_json::from_value(form.clone())
-        .map_err(|_| invalid("form is the Day form's location as Central's file route gives it (central.path-ref/v1)"))?;
+    path: &str,
+) -> io::Result<(crate::files::FileReading, Value)> {
+    let location = crate::files::CentralPathRef::new(&scope.central_root, path.into())?;
     let original = crate::files::read_file(
         &scope.central_root,
         &location,
         crate::files::FileEncoding::Utf8,
     )?;
-    let mut payload = form_payload(&original.content)?;
+    let payload = form_payload(&original.content)?;
     if payload.get("_oi_form_source").is_some() {
         return Err(invalid(
-            "the Day form already carries a retained form binding; offer its original source",
+            "the Day form already carries a retained form binding; save its original source",
         ));
     }
+    Ok((original, payload))
+}
+
+/// The one document Central's civil clock makes (documents.rs `create`): today's Day page, `document:<today's day_ref>`, bound to
+/// the Day form saved in the Day's settings at the revision it stands at now. Any other is refused: the clock makes no Day
+/// document a caller chose.
+pub(crate) fn the_clocks_page(scope: &Scope, input: &Value, now: u64) -> io::Result<()> {
+    let time = temporal::time_policy(scope, now)?;
+    let today = day_moves::day_ref_of(scope, &time.civil_date);
+    let refuse = |why: &str| {
+        Err(denied(format!(
+            "Central's civil clock makes one document, today's Day page from the Day form you saved: {why}"
+        )))
+    };
+    if input["day_ref"] != today.as_str() {
+        return refuse("this Day is not today's");
+    }
+    if input["document_id"] != format!("document:{today}").as_str() {
+        return refuse("this is another document");
+    }
+    let Some(path) = day_moves::saved_day_form(scope)? else {
+        return refuse("no Day form is saved in the Day's settings");
+    };
+    let (form, _) = read_day_form(scope, &path)?;
+    let bound = &input["template_payload"]["_oi_form_source"];
+    if bound["location"] != serde_json::to_value(&form.location)?
+        || bound["revision"] != form.revision.as_str()
+    {
+        return refuse("this page is not bound to the Day form saved, as it stands");
+    }
+    Ok(())
+}
+
+/// Make today's document from the Day form saved at `form`: the form's own data island, its fields mapped as they stand (and each
+/// of its keys as a whole), its date and zone Central's, the set of the Day before it carried, and the form's location and
+/// revision kept so its page reads that form where it stands.
+fn make_document(
+    scope: &Scope,
+    time: &TimeReading,
+    day: &Value,
+    form: &str,
+    clock: &Principal,
+    now: u64,
+) -> io::Result<Value> {
+    let (original, mut payload) = read_day_form(scope, form)?;
     let pointer = |key: &str| key.replace('~', "~0").replace('/', "~1");
     let mut fields: Vec<Value> = payload["fields"]
         .as_object()

@@ -80,11 +80,21 @@ fn world(timezone: &str, automatic: bool) -> crate::TempDir {
     temp
 }
 
-/// The Day form's location, as Central's file route gives it.
-fn form(root: &Path) -> Value {
+/// A Central location for `path` under the world's root, as Central's file route gives it.
+fn location(root: &Path, path: &str) -> Value {
     let central = Scope::resolve(root, None).unwrap().central_root;
-    serde_json::to_value(crate::files::CentralPathRef::new(&central, FORM_PATH.into()).unwrap())
-        .unwrap()
+    serde_json::to_value(crate::files::CentralPathRef::new(&central, path.into()).unwrap()).unwrap()
+}
+/// Save the person's Day settings on their own credential (`central.day.settings.write`).
+fn save(root: &Path, settings: Value, now: u64) -> io::Result<Value> {
+    let current = execute_at(root, "day_settings_read", &json!({}), now).unwrap();
+    let mut input = settings;
+    input["expected_revision"] = current["revision"].clone();
+    execute_with_token_at(root, "day_settings_write", &input, Some(HUMAN), now)
+}
+/// The person saves their Day form (`day_form`) in the Day's settings.
+fn save_form(root: &Path, now: u64) {
+    save(root, json!({"day_form": FORM_PATH}), now).unwrap();
 }
 fn turn(root: &Path, input: Value, now: u64) -> io::Result<Value> {
     execute_at(root, "day_turn", &input, now)
@@ -118,10 +128,10 @@ fn person_document(root: &Path, day_ref: &str, proposal: &str, now: u64) {
 }
 
 #[test]
-fn the_turn_opens_today_and_makes_its_page_from_the_day_form() {
+fn the_turn_opens_today_and_makes_its_page_from_the_day_form_the_person_saved() {
     let w = world("UTC", true);
     let now = at("2026-10-20T09:00:00Z");
-    // Asked with no form, today's Day opens and says it wants its page.
+    // With no Day form saved, today's Day opens and says it wants its page.
     let first = turn(w.path(), json!({}), now).unwrap();
     assert_eq!(first["schema"], "central.day-reading/v1");
     assert_eq!(first["day_ref"], FIRST);
@@ -142,8 +152,10 @@ fn the_turn_opens_today_and_makes_its_page_from_the_day_form() {
         first["bounds"]["turns_at_unix_seconds"],
         at("2026-10-21T00:00:00Z")
     );
-    // Offered the form, it makes the page from the form's own island, dated by Central and bound to the form where it stands.
-    let made = turn(w.path(), json!({"form":form(w.path())}), now).unwrap();
+    // The person saves their Day form: the page is made from the form's own island, dated by Central and bound to the form where
+    // it stands.
+    save_form(w.path(), now);
+    let made = turn(w.path(), json!({}), now).unwrap();
     assert_eq!(made["turn"]["opened"], false);
     assert_eq!(made["turn"]["document"]["state"], "made");
     assert_eq!(made["document_state"], "ready");
@@ -176,10 +188,11 @@ fn the_turn_opens_today_and_makes_its_page_from_the_day_form() {
 fn asked_again_with_nothing_to_turn_the_turn_writes_nothing() {
     let w = world("UTC", true);
     let now = at("2026-10-20T09:00:00Z");
-    turn(w.path(), json!({"form":form(w.path())}), now).unwrap();
+    save_form(w.path(), now);
+    turn(w.path(), json!({}), now).unwrap();
     let relations = relations_bytes(w.path());
     let day = read(w.path(), json!({}), now);
-    let again = turn(w.path(), json!({"form":form(w.path())}), now + 600).unwrap();
+    let again = turn(w.path(), json!({}), now + 600).unwrap();
     assert_eq!(again["turn"]["opened"], false);
     assert_eq!(again["turn"]["document"]["state"], "stood");
     assert_eq!(again["turn"]["closed"], json!([]));
@@ -213,7 +226,8 @@ fn writing_that_is_no_day_document_is_kept_and_no_page_is_made_over_it() {
     let opened = turn(w.path(), json!({}), now).unwrap();
     let path = opened["source"]["path"].as_str().unwrap().to_owned();
     fs::write(w.path().join(&path), "The person's own words.\n").unwrap();
-    let kept = turn(w.path(), json!({"form":form(w.path())}), now).unwrap();
+    save_form(w.path(), now);
+    let kept = turn(w.path(), json!({}), now).unwrap();
     assert_eq!(kept["turn"]["document"]["state"], "kept");
     assert_eq!(kept["document_state"], "uninitialised");
     assert_eq!(
@@ -228,9 +242,10 @@ fn at_its_turn_the_earlier_day_closes_its_proposal_waiting_and_its_set_carried_i
     let first = at("2026-10-20T09:00:00Z");
     turn(w.path(), json!({}), first).unwrap();
     person_document(w.path(), FIRST, PROPOSAL, first);
+    save_form(w.path(), first);
     // The next civil day, a second after the turn.
     let second = at("2026-10-21T00:00:01Z");
-    let turned = turn(w.path(), json!({"form":form(w.path())}), second).unwrap();
+    let turned = turn(w.path(), json!({}), second).unwrap();
     assert_eq!(turned["day_ref"], SECOND);
     assert_eq!(turned["today"]["day_ref"], SECOND);
     assert_eq!(turned["turn"]["opened"], true);
@@ -272,7 +287,7 @@ fn at_its_turn_the_earlier_day_closes_its_proposal_waiting_and_its_set_carried_i
     assert_eq!(set["lineage"], json!([FIRST]));
     // Asked again, nothing more turns.
     let relations = relations_bytes(w.path());
-    let again = turn(w.path(), json!({"form":form(w.path())}), second + 60).unwrap();
+    let again = turn(w.path(), json!({}), second + 60).unwrap();
     assert_eq!(again["turn"]["closed"], json!([]));
     assert_eq!(relations_bytes(w.path()), relations);
 }
@@ -302,6 +317,156 @@ fn with_the_close_routine_off_the_earlier_day_closes_and_carries_nothing() {
         at("2026-10-21T00:00:01Z"),
     );
     assert_eq!(earlier["temporal"]["lifecycle"], "closed");
+}
+
+/// A Day form anyone may write: in Work/sources, where the placement policy lets work write.
+const PLANTED: &str = "Work/sources/planted.html";
+
+#[test]
+fn the_turn_makes_the_page_only_from_the_saved_day_form_never_from_one_offered_in_its_input() {
+    let w = world("UTC", true);
+    let now = at("2026-10-20T09:00:00Z");
+    fs::write(
+        w.path().join(PLANTED),
+        day_form().replace("ql-daily v0.1", "planted"),
+    )
+    .unwrap();
+    // A form offered in the turn's input is refused in words, and nothing opens or is made from it.
+    let relations = relations_bytes(w.path());
+    let refused = turn(w.path(), json!({"form": location(w.path(), PLANTED)}), now).unwrap_err();
+    assert_eq!(refused.kind(), io::ErrorKind::InvalidInput, "{refused}");
+    assert!(refused.to_string().contains("day_form"), "{refused}");
+    assert_eq!(relations_bytes(w.path()), relations);
+    // With none saved, today's Day opens and says where its page comes from.
+    let opened = turn(w.path(), json!({}), now).unwrap();
+    assert_eq!(opened["turn"]["document"]["state"], "wants-form");
+    assert!(opened["turn"]["document"]["why"]
+        .as_str()
+        .unwrap()
+        .contains("day_form"));
+    // The person saves their form: the reading shows it as theirs, and the page is made from it alone.
+    let saved = save(w.path(), json!({"day_form": FORM_PATH}), now).unwrap();
+    assert_eq!(saved["settings"]["day_form"], FORM_PATH);
+    assert_eq!(saved["standing"]["day_form"], "saved");
+    let made = turn(w.path(), json!({}), now).unwrap();
+    assert_eq!(made["turn"]["document"]["state"], "made");
+    let payload = &made["document"]["document"]["template_payload"];
+    assert_eq!(payload["_oi_form_source"]["location"]["path"], FORM_PATH);
+    assert_eq!(payload["meta"]["template"], "ql-daily v0.1");
+}
+
+#[test]
+fn the_day_form_the_person_saves_is_a_day_form_in_their_world() {
+    let w = world("UTC", true);
+    let now = at("2026-10-20T09:00:00Z");
+    fs::write(
+        w.path().join("Control/forms/plain.html"),
+        "<!doctype html><p>No data island.</p>",
+    )
+    .unwrap();
+    fs::write(
+        w.path().join("Control/forms/flow.html"),
+        day_form().replace("\"daily\"", "\"flow\""),
+    )
+    .unwrap();
+    for (form, words) in [
+        (json!("Control/forms/plain.html"), "ql-doc"),
+        (json!("Control/forms/flow.html"), "no Day form"),
+        (json!("Control/forms/absent.html"), ""),
+        (json!("../outside.html"), "day_form"),
+        (json!("/etc/hosts"), "day_form"),
+        (json!({"path": FORM_PATH}), "day_form"),
+    ] {
+        let refused = save(w.path(), json!({"day_form": form}), now).unwrap_err();
+        assert!(
+            refused.to_string().contains(words),
+            "{form}: {refused} should say {words}"
+        );
+    }
+    let settings = execute_at(w.path(), "day_settings_read", &json!({}), now).unwrap();
+    assert_eq!(settings["saved"], false);
+    assert_eq!(settings["settings"]["day_form"], Value::Null);
+    assert_eq!(settings["standing"]["day_form"], "default");
+}
+
+#[test]
+fn the_clock_makes_no_day_document_but_todays_page_from_the_saved_form() {
+    let w = world("UTC", true);
+    let now = at("2026-10-20T09:00:00Z");
+    turn(w.path(), json!({}), now).unwrap();
+    save_form(w.path(), now);
+    fs::write(w.path().join(PLANTED), day_form()).unwrap();
+    let scope = Scope::resolve(w.path(), None).unwrap();
+    let clock = authority::civil_clock(&scope, &temporal::time_policy(&scope, now).unwrap());
+    let day = read(w.path(), json!({"day_ref": FIRST}), now);
+    let policy = execute_at(w.path(), "policy", &json!({}), now).unwrap();
+    let revision_of = |path: &str| {
+        crate::files::read_file(
+            &scope.central_root,
+            &serde_json::from_value(location(w.path(), path)).unwrap(),
+            crate::files::FileEncoding::Utf8,
+        )
+        .unwrap()
+        .revision
+    };
+    let bound = |path: &str| {
+        json!({"meta":{"type":"daily"},"fields":{"p0_quick_thoughts":""},
+            "_oi_form_source":{"schema":"oi.original-day-form/v1","location":location(w.path(), path),"revision":revision_of(path)}})
+    };
+    let create = |day_ref: &str, document_id: &str, payload: Value, at: u64| {
+        documents::create(
+            &scope,
+            &json!({"kind":"day","day_ref":day_ref,"document_id":document_id,"expected_revision":day["revision"]["revision"],
+                "expected_policy_revision":policy["revision"],"template_payload":payload,"fields":[]}),
+            &clock,
+            at,
+        )
+    };
+    for (refused, why) in [
+        (
+            create(FIRST, "document:chosen", bound(FORM_PATH), now),
+            "another document",
+        ),
+        (
+            create(FIRST, &format!("document:{FIRST}"), bound(PLANTED), now),
+            "another form",
+        ),
+        (
+            create(
+                FIRST,
+                &format!("document:{FIRST}"),
+                json!({"meta":{"type":"daily"},"fields":{}}),
+                now,
+            ),
+            "no form",
+        ),
+        (
+            create(
+                FIRST,
+                &format!("document:{FIRST}"),
+                bound(FORM_PATH),
+                at("2026-10-21T09:00:00Z"),
+            ),
+            "a Day that is not today",
+        ),
+    ] {
+        let refused = refused.expect_err(why);
+        assert_eq!(
+            refused.kind(),
+            io::ErrorKind::PermissionDenied,
+            "{why}: {refused}"
+        );
+    }
+    assert_eq!(
+        read(w.path(), json!({"day_ref": FIRST}), now)["document_state"],
+        "uninitialised"
+    );
+    // Today's page from the saved form is the one the clock makes.
+    create(FIRST, &format!("document:{FIRST}"), bound(FORM_PATH), now).unwrap();
+    assert_eq!(
+        read(w.path(), json!({"day_ref": FIRST}), now)["document_state"],
+        "ready"
+    );
 }
 
 #[test]

@@ -436,9 +436,9 @@ fn register_day_turn(registry: &mut ActionRegistry) {
         (
             "central.day.turn",
             "Turn the Day by Central's civil clock",
-            "What the adopted civil-time policy determines now, as Central's own civil clock (no credential; refused where the policy keeps automatic_day_rollover off): today's Day opens on its civil date and today points at it; its document is made from the Day form offered in form (central.path-ref/v1) when it has none, carrying the set of the Day before it; each earlier Day still open closes, its close routine carrying face 5's proposal to today's face 0 as the Day's settings keep it. Answers today's Day reading (central.day-reading/v1) with turn: what was opened, made and closed. Nothing is written when nothing turns.",
+            "What the adopted civil-time policy determines now, as Central's own civil clock (no credential; refused where the policy keeps automatic_day_rollover off): today's Day opens on its civil date and today points at it; its document is made from the Day form the person saved in the Day's settings (day_form) when it has none, carrying the set of the Day before it, and a form offered to the turn is refused; each earlier Day still open closes, its close routine carrying face 5's proposal to today's face 0 as the Day's settings keep it. Answers today's Day reading (central.day-reading/v1) with turn: what was opened, made and closed. Nothing is written when nothing turns.",
             MutationClass::LocallyMutating,
-            vec![field("project", "string", false), field("form", "object", false)],
+            vec![field("project", "string", false)],
             day_turn_action as crate::action::ActionHandler,
         ),
         (

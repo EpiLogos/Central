@@ -202,6 +202,15 @@ impl Loaded {
             None => (true, false),
         }
     }
+    /// The Day form the person saved (`day_form`, its path under the world's Central root): the one form the Day's turn makes a
+    /// page from (day_turn.rs). None until they save one.
+    fn day_form(&self) -> (Option<String>, bool) {
+        match self.saved.get("day_form") {
+            Some(Value::String(path)) => (Some(path.clone()), true),
+            Some(_) => (None, true),
+            None => (None, false),
+        }
+    }
     fn source(&self, name: &str) -> (bool, bool) {
         match self
             .saved
@@ -297,9 +306,17 @@ fn validate_saved(scope: &Scope, saved: &Map<String, Value>) -> io::Result<()> {
                 | "close_routine"
                 | "moves"
                 | "on_since"
+                | "day_form"
         ) {
             return Err(invalid(format!("the Day's settings have no `{key}`")));
         }
+    }
+    match saved.get("day_form") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(path)) => {
+            day_form_path(path)?;
+        }
+        Some(_) => return Err(invalid(DAY_FORM_SHAPE)),
     }
     if saved.get("schema") != Some(&json!(SETTINGS_SCHEMA)) {
         return Err(invalid(format!(
@@ -407,11 +424,36 @@ fn validate_saved(scope: &Scope, saved: &Map<String, Value>) -> io::Result<()> {
     Ok(())
 }
 
+const DAY_FORM_SHAPE: &str = "day_form is the Day form's path under your Central root (as Control/forms/ql-daily-die.html), or null for none";
+
+/// A saved Day form's path, as the settings keep it: relative to the world's Central root, plain components only.
+fn day_form_path(path: &str) -> io::Result<&str> {
+    let relative = std::path::Path::new(path);
+    if path.is_empty()
+        || path.len() > 1024
+        || path.contains('\0')
+        || relative.is_absolute()
+        || !relative
+            .components()
+            .all(|part| matches!(part, std::path::Component::Normal(_)))
+    {
+        return Err(invalid(DAY_FORM_SHAPE));
+    }
+    Ok(path)
+}
+
+/// The Day form the person saved in the Day's settings, or None while they have saved none (day_turn.rs makes today's page from
+/// it, and from nothing else).
+pub(crate) fn saved_day_form(scope: &Scope) -> io::Result<Option<String>> {
+    Ok(load_settings(scope)?.day_form().0)
+}
+
 fn settings_reading(scope: &Scope, loaded: &Loaded) -> io::Result<Value> {
     let standing = |saved: bool| if saved { "saved" } else { "default" };
     let (rollover, rollover_saved) = loaded.rollover();
     let (agent_writes, agent_writes_saved) = loaded.agent_writes();
     let (close_routine, close_routine_saved) = loaded.close_routine();
+    let (day_form, day_form_saved) = loaded.day_form();
     let mut sources = Map::new();
     let mut sources_standing = Map::new();
     for name in SOURCES {
@@ -444,9 +486,10 @@ fn settings_reading(scope: &Scope, loaded: &Loaded) -> io::Result<Value> {
         "revision":loaded.revision,
         "saved":loaded.exists(),
         "settings":{"schema":SETTINGS_SCHEMA,"scope_ref":scope.world_ref,"rollover":rollover,
-            "agent_writes":agent_writes,"sources":sources,"close_routine":close_routine,"moves":moves},
+            "agent_writes":agent_writes,"sources":sources,"close_routine":close_routine,"moves":moves,"day_form":day_form},
         "standing":{"rollover":standing(rollover_saved),"agent_writes":standing(agent_writes_saved),
-            "sources":sources_standing,"close_routine":standing(close_routine_saved),"moves":moves_standing},
+            "sources":sources_standing,"close_routine":standing(close_routine_saved),"moves":moves_standing,
+            "day_form":standing(day_form_saved)},
         "own_prompts":own,
         "effective_prompts":effective,
         "nothing_runs_by_itself_on_defaults":true,
@@ -473,7 +516,9 @@ pub(crate) fn settings_write(
     for key in object.keys() {
         match key.as_str() {
             "project" | "expected_revision" | "expected_authority_revision" => {}
-            "rollover" | "agent_writes" | "sources" | "close_routine" | "moves" => changes += 1,
+            "rollover" | "agent_writes" | "sources" | "close_routine" | "moves" | "day_form" => {
+                changes += 1
+            }
             other => return Err(invalid(format!("the Day's settings have no `{other}`"))),
         }
     }
@@ -504,6 +549,20 @@ pub(crate) fn settings_write(
         if let Some(value) = object.get(key) {
             merged.insert(key.into(), value.clone());
         }
+    }
+    // The Day form is saved only as a Day form Central reads where it stands: the turn makes today's page from it alone.
+    if let Some(value) = object.get("day_form") {
+        merged.insert(
+            "day_form".into(),
+            match value {
+                Value::Null => Value::Null,
+                Value::String(path) => {
+                    super::day_turn::read_day_form(scope, day_form_path(path)?)?;
+                    json!(path)
+                }
+                _ => return Err(invalid(DAY_FORM_SHAPE)),
+            },
+        );
     }
     if let Some(patch) = object.get("sources") {
         let patch = patch.as_object().ok_or_else(|| invalid(sources_shape()))?;
@@ -663,7 +722,7 @@ fn occurrence_civil_date(
     }
 }
 
-fn day_ref_of(scope: &Scope, civil_date: &str) -> String {
+pub(super) fn day_ref_of(scope: &Scope, civil_date: &str) -> String {
     format!("central:day:{}:{}", scope.world_ref, civil_date)
 }
 
@@ -2839,8 +2898,8 @@ handler!(
 
 pub(crate) fn register_actions(registry: &mut ActionRegistry) {
     super::register_definitions(registry, &[
-        ("central.day.settings.read", "Read the Day's settings", "Read the Day's own settings (Rollover, Agent writes, Sources, Close routine, and each move's Prompt and Runs at) as they stand: the defaults where the person has saved nothing, each with its standing (default or saved) and its revision, and each move's own prompt. Read-only; nothing runs from a reading.", false, settings_read_action, &[]),
-        ("central.day.settings.write", "Save the Day's settings", "Human-authenticated, exact-revision save of the Day's settings (expected_revision, or \"absent\" for the first save). Only the settings given are saved; every one saved here is the person's own and arms what it names. A move's Runs at at rollover is refused while Rollover is Off.", true, settings_write_action, &[("expected_revision","string",true),("rollover","string",false),("agent_writes","string",false),("sources","object",false),("close_routine","boolean",false),("moves","object",false),("expected_authority_revision","string",false)]),
+        ("central.day.settings.read", "Read the Day's settings", "Read the Day's own settings (Rollover, Agent writes, Sources, Close routine, each move's Prompt and Runs at, and the Day form the turn makes the page from) as they stand: the defaults where the person has saved nothing, each with its standing (default or saved) and its revision, and each move's own prompt. Read-only; nothing runs from a reading.", false, settings_read_action, &[]),
+        ("central.day.settings.write", "Save the Day's settings", "Human-authenticated, exact-revision save of the Day's settings (expected_revision, or \"absent\" for the first save). Only the settings given are saved; every one saved here is the person's own and arms what it names. A move's Runs at at rollover is refused while Rollover is Off. day_form is the Day form the Day's turn makes today's page from (its path under the Central root, read there as a Day form before it is saved; null for none).", true, settings_write_action, &[("expected_revision","string",true),("rollover","string",false),("agent_writes","string",false),("sources","object",false),("close_routine","boolean",false),("moves","object",false),("day_form","string",false),("expected_authority_revision","string",false)]),
         ("central.day.move.record", "Record a Day move's run", "Authenticated, append-only record of a move's run: a begin (press, or a saved schedule's occurrence, idempotent per occurrence) and an end (done, refused, stalled or stopped, with what it gave). Central assigns the run_ref and the actor from the credential; a run keeps the prompt it began with and a late end keeps the time it happened.", true, move_record_action, &[("event","string",true),("move","string",false),("at_unix_ms","integer",true),("day_ref","string",false),("trigger","string",false),("occurrence_ref","string",false),("run_ref","string",false),("state","string",false),("gave","object",false),("reason","string",false),("expected_authority_revision","string",false)]),
         ("central.day.moves.read", "Read the Day's moves", "Read the Day's settings and, for each move, its effective prompt, Runs at with its standing, the next time it runs by itself (only for a schedule the person saved), the open run, the last ended run, and every run of the Day oldest first. Read-only.", false, moves_read_action, &[("day_ref","string",false)]),
         ("central.day.moves.due", "List the Day's moves that are due", "List the scheduled occurrences in (since, now] for every move whose Runs at the person saved, each with a stable occurrence_ref and whether it has begun. With only the defaults it lists nothing and says why. The native host polls this; Central runs nothing.", false, moves_due_action, &[("now_unix_ms","integer",true),("since_unix_ms","integer",true)]),
