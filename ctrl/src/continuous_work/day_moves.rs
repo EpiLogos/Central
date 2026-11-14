@@ -2855,6 +2855,7 @@ pub(crate) fn authenticated_action(operation: &str) -> Option<&'static str> {
         "day_close_carry" => "central.day.close-carry",
         "day_field_record" => "central.day.field.record",
         "day_entry_part" => "central.day.entry.part",
+        "day_receipt_record" => "central.day.receipt.record",
         _ => return None,
     })
 }
@@ -2873,6 +2874,7 @@ pub(crate) fn authenticated_operation(
         "day_close_carry" => close_carry(scope, input, principal, now),
         "day_field_record" => field_record(scope, input, principal, now),
         "day_entry_part" => entry_part(scope, input, principal, now),
+        "day_receipt_record" => super::day_turn::record_receipt(scope, input, principal, now),
         _ => Err(invalid("unknown continuous-work operation")),
     }
 }

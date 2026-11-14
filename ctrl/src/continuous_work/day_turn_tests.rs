@@ -45,7 +45,7 @@ fn world(timezone: &str, automatic: bool) -> crate::TempDir {
     let scope = Scope::resolve(temp.path(), None).unwrap();
     let grant = json!({"principal_ref":"human:test","actor_kind":"human","token_sha256":format!("{:x}",Sha256::digest(HUMAN.as_bytes())),
         "scope_refs":["control:root"],"actions":["central.document.create","central.document.mutate","central.day.settings.write","central.day.lifecycle",
-            "central.receiving.review","central.receiving.include"],
+            "central.receiving.review","central.receiving.include","central.day.receipt.record"],
         "expires_at_unix_seconds":4_000_000_000u64});
     let mut relations = vec![];
     for (name, role, value) in [
@@ -318,6 +318,11 @@ fn with_the_close_routine_off_the_earlier_day_closes_and_carries_nothing() {
         at("2026-10-21T00:00:01Z"),
     );
     assert_eq!(earlier["temporal"]["lifecycle"], "closed");
+}
+
+/// Lay a receipt on the person's credential (`central.day.receipt.record`).
+fn lay(root: &Path, input: &Value, now: u64) -> io::Result<Value> {
+    execute_with_token_at(root, "day_receipt_record", input, Some(HUMAN), now)
 }
 
 /// The person's own close or reopening of the Day `day_ref` (`central.day.lifecycle`), on its revisions as they stand.
@@ -660,13 +665,14 @@ fn a_receipt_is_laid_once_into_the_day_it_happened_on_and_read_back_with_it() {
     turn(w.path(), json!({}), now).unwrap();
     let input = json!({"receipt_id":"receipt:files.write:1","act":"central.files.write","owner":"Central",
         "subject":"Control/user/flows/harbour.html","source":PAGE,"receipt":{"revision":"r2"}});
-    let laid = execute_at(w.path(), "day_receipt_record", &input, now).unwrap();
+    let laid = lay(w.path(), &input, now).unwrap();
     assert_eq!(laid["recorded"], true);
     assert_eq!(laid["civil_date"], "2026-10-20");
     assert_eq!(laid["entry"]["schema"], "central.day-receipt/v1");
     assert_eq!(laid["entry"]["occurred_at_unix_seconds"], now);
+    assert_eq!(laid["entry"]["recorded_by"], "human:test");
     // The same receipt is laid once.
-    let again = execute_at(w.path(), "day_receipt_record", &input, now + 5).unwrap();
+    let again = lay(w.path(), &input, now + 5).unwrap();
     assert_eq!(again["recorded"], false);
     let day = read(w.path(), json!({}), now + 5);
     let receipts = day["receipts"].as_array().unwrap();
@@ -678,16 +684,32 @@ fn a_receipt_is_laid_once_into_the_day_it_happened_on_and_read_back_with_it() {
 }
 
 #[test]
-fn a_late_receipt_keeps_the_time_it_happened_and_lands_in_its_own_day() {
+fn a_receipt_is_laid_only_on_a_credential_that_grants_it() {
     let w = world("UTC", true);
-    let happened = at("2026-10-20T23:59:00Z");
-    turn(w.path(), json!({}), happened).unwrap();
-    let now = at("2026-10-21T08:00:00Z");
+    let now = at("2026-10-20T09:00:00Z");
     turn(w.path(), json!({}), now).unwrap();
-    let laid = execute_at(
+    let input = json!({"receipt_id":"receipt:unproven","act":"central.files.write","owner":"Central","subject":"s"});
+    for token in [None, Some("someone-elses-token-not-a-live-credential-0123")] {
+        let refused =
+            execute_with_token_at(w.path(), "day_receipt_record", &input, token, now).unwrap_err();
+        assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied, "{refused}");
+    }
+    assert_eq!(read(w.path(), json!({}), now)["receipts"], json!([]));
+    assert!(!w
+        .path()
+        .join("Control/user/day/2026-10-20/receipts.jsonl")
+        .exists());
+}
+
+#[test]
+fn a_receipt_keeps_the_time_it_happened_within_todays_day() {
+    let w = world("UTC", true);
+    let happened = at("2026-10-20T08:00:00Z");
+    let now = at("2026-10-20T09:00:00Z");
+    turn(w.path(), json!({}), now).unwrap();
+    let laid = lay(
         w.path(),
-        "day_receipt_record",
-        &json!({"receipt_id":"receipt:late","act":"aikit.encounter.prompt","owner":"AIKit","subject":"agent-session:a",
+        &json!({"receipt_id":"receipt:later","act":"aikit.encounter.prompt","owner":"AIKit","subject":"agent-session:a",
             "occurred_at_unix_seconds":happened}),
         now,
     )
@@ -697,39 +719,55 @@ fn a_late_receipt_keeps_the_time_it_happened_and_lands_in_its_own_day() {
     assert_eq!(laid["entry"]["recorded_at_unix_seconds"], now);
     assert_eq!(
         read(w.path(), json!({"day_ref":FIRST}), now)["receipts"][0]["receipt_id"],
-        "receipt:late"
+        "receipt:later"
     );
-    assert_eq!(read(w.path(), json!({}), now)["receipts"], json!([]));
 }
 
 #[test]
 fn a_receipt_out_of_its_bounds_is_refused_in_words() {
     let w = world("UTC", true);
-    let now = at("2026-10-20T09:00:00Z");
+    let now = at("2026-10-21T00:00:30Z");
+    turn(w.path(), json!({}), at("2026-10-20T23:59:00Z")).unwrap();
+    turn(w.path(), json!({}), now).unwrap();
+    let receipt = |occurred: u64| json!({"receipt_id":"r","act":"a","owner":"Central","subject":"s","occurred_at_unix_seconds":occurred});
     for (input, words) in [
+        // Before today's Day opened: yesterday's last minute, and the epoch.
+        (receipt(at("2026-10-20T23:59:59Z")), "today's Day"),
+        (receipt(0), "today's Day"),
+        // After now, and after today's Day turns.
+        (receipt(now + 3600), "no later than now"),
+        (receipt(at("2026-10-22T00:00:00Z")), "no later than now"),
         (
             json!({"receipt_id":"r","owner":"Central","subject":"s"}),
             "act is text of at most 256 bytes",
-        ),
-        (
-            json!({"receipt_id":"r","act":"a","owner":"Central","subject":"s","occurred_at_unix_seconds":now + 3600}),
-            "occurred_at_unix_seconds is an instant no later than now",
         ),
         (
             json!({"receipt_id":"r","act":"a","owner":"Central","subject":"s","receipt":{"bulk":"x".repeat(17 * 1024)}}),
             "receipt is at most 16 KiB of JSON",
         ),
     ] {
-        let refused = execute_at(w.path(), "day_receipt_record", &input, now).unwrap_err();
+        let refused = lay(w.path(), &input, now).unwrap_err();
+        assert_eq!(refused.kind(), io::ErrorKind::InvalidInput, "{refused}");
         assert!(
             refused.to_string().contains(words),
             "{refused} should say {words}"
         );
     }
+    // Nothing was laid in either Day, nor in a Day of 1970.
+    assert_eq!(
+        read(w.path(), json!({"day_ref":FIRST}), now)["receipts"],
+        json!([])
+    );
+    assert_eq!(read(w.path(), json!({}), now)["receipts"], json!([]));
+    assert!(!w.path().join("Control/user/day/1970-01-01").exists());
 }
 
 #[test]
 fn the_turn_and_the_receipt_stand_in_centrals_action_field() {
+    // The receipt is an authenticated Action, and the grant Setup gives (at the root and at each project) holds it.
+    assert!(authority::AUTHENTICATED_ACTIONS.contains(&"central.day.receipt.record"));
+    assert!(authority::PROJECT_AUTHENTICATED_ACTIONS.contains(&"central.day.receipt.record"));
+    assert!(crate::ground_founding::setup_root_actions().contains(&"central.day.receipt.record"));
     let registry = crate::cli::create_runtime_action_registry();
     for (id, class) in [
         ("central.day.turn", "locally-mutating"),

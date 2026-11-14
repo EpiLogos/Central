@@ -137,10 +137,9 @@ pub fn execute_with_token_at(
         "time_policy" => Ok(serde_json::to_value(temporal::time_policy(&scope, now)?)?),
         "time_occurrences" => temporal::time_occurrences(&scope, input),
         "day_read" => temporal::day_read(&scope, input),
-        // The Day's turn by Central's civil clock, and a receipt laid into a Day (day_turn.rs): no credential; the turn acts on
-        // the person's adopted policy only, and a receipt is a record of what an act did, never the person's writing.
+        // The Day's turn by Central's civil clock (day_turn.rs): no credential; it acts on the person's adopted policy only. A
+        // receipt laid into the Day is authenticated, as the Day's other records are (day_moves::authenticated_action).
         "day_turn" => day_turn::turn(&scope, input, now),
-        "day_receipt_record" => day_turn::record_receipt(&scope, input, now),
         "source_history" => history::read(&scope, input),
         "day_settings_read" => day_moves::settings_read(&scope),
         "day_moves_read" => day_moves::moves_read(&scope, input, now),
@@ -449,7 +448,7 @@ fn register_day_turn(registry: &mut ActionRegistry) {
         (
             "central.day.receipt.record",
             "Lay an act's receipt into its Day",
-            "Append one act's receipt to the Day of the civil date it happened on (receipts.jsonl beside the Day, append-only): act, owner, subject, source, the owner's receipt (at most 16 KiB) and receipt_id (laid once). Read back with that Day (central.day.read receipts). A record of what an act did, never the person's writing.",
+            "Authenticated, like the Day's other records: append one act's receipt to today's Day (receipts.jsonl beside the Day, append-only), naming who recorded it: act, owner, subject, source, the owner's receipt (at most 16 KiB), receipt_id (laid once) and occurred_at_unix_seconds (when it happened; now where absent). An instant outside today's Day, before it opened, after it turns or later than now, is refused in words. Read back with that Day (central.day.read receipts). A record of what an act did, never the person's writing.",
             MutationClass::LocallyMutating,
             vec![
                 field("project", "string", false),
@@ -460,6 +459,7 @@ fn register_day_turn(registry: &mut ActionRegistry) {
                 field("source", "string", false),
                 field("receipt", "object", false),
                 field("occurred_at_unix_seconds", "integer", false),
+                field("expected_authority_revision", "string", false),
             ],
             day_receipt_record_action as crate::action::ActionHandler,
         ),

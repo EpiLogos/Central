@@ -11,9 +11,10 @@
 //! policy the person adopted (`automatic_day_rollover`), and a policy without it is refused in words. Asked again with nothing to
 //! do, it writes nothing.
 //!
-//! `central.day.receipt.record` lays what an act did into the Day of the civil date it happened on: append-only, one line each,
-//! never rewritten, kept by its id, and read back with that Day (`central.day.read`'s `receipts`). A late receipt keeps the time it
-//! happened.
+//! `central.day.receipt.record` lays what an act did into today's Day, at the instant it happened: an authenticated record like the
+//! Day's others, on a credential whose grant holds it (Setup's grant does), naming who recorded it; append-only, one line each,
+//! never rewritten, kept by its id, and read back with that Day (`central.day.read`'s `receipts`). An instant outside today's Day
+//! (before it opened, after it turns, or later than now) is refused in words: a receipt never lands in another Day.
 use super::{
     authority::{self, Principal},
     day_moves, documents, placement,
@@ -406,10 +407,16 @@ fn bounded<'a>(
     }
 }
 
-/// Lay one act's receipt into the Day of the civil date it happened on (`central.day.receipt.record`): `act` (the Action or op),
+/// Lay one act's receipt into today's Day (`central.day.receipt.record`, on `principal`'s credential): `act` (the Action or op),
 /// `owner` (the product that did it), `subject` (what it acted on), `source` (where its effect stands), `receipt` (what the owner
-/// answered, bounded) and `receipt_id` (the same id is laid once). Answers the entry and whether it was laid now.
-pub(crate) fn record_receipt(scope: &Scope, input: &Value, now: u64) -> io::Result<Value> {
+/// answered, bounded), `receipt_id` (the same id is laid once) and `occurred_at_unix_seconds` (when it happened, within today's
+/// Day; now where absent). Answers the entry and whether it was laid now.
+pub(crate) fn record_receipt(
+    scope: &Scope,
+    input: &Value,
+    principal: &Principal,
+    now: u64,
+) -> io::Result<Value> {
     let receipt_id = bounded(input, "receipt_id", 512, true)?.unwrap_or_default();
     let act = bounded(input, "act", 256, true)?.unwrap_or_default();
     let owner = bounded(input, "owner", 64, true)?.unwrap_or_default();
@@ -419,14 +426,43 @@ pub(crate) fn record_receipt(scope: &Scope, input: &Value, now: u64) -> io::Resu
     if serde_json::to_string(&receipt)?.len() > 16 * 1024 {
         return Err(invalid("receipt is at most 16 KiB of JSON"));
     }
+    // Today's Day, as Central keeps its bounds: the spans of instants its civil date stands on (two across an autumn fold).
+    let today = temporal::time_policy(scope, now)?.civil_date;
+    let spans = day_moves::day_spans(scope, &today)?;
+    let bounds = match (spans.first(), spans.last()) {
+        (Some(first), Some(last)) => (first.0.div_euclid(1000), last.1.div_euclid(1000)),
+        _ => return Err(invalid("today's Day has no bounds Central can name")),
+    };
     let occurred = match input.get("occurred_at_unix_seconds") {
         None | Some(Value::Null) => now,
-        Some(value) => value
-            .as_u64()
-            .filter(|at| *at <= now + 300)
-            .ok_or_else(|| invalid("occurred_at_unix_seconds is an instant no later than now"))?,
+        Some(value) => {
+            let at = value.as_u64().ok_or_else(|| {
+                invalid("occurred_at_unix_seconds is an instant in seconds, or absent for now")
+            })?;
+            if at > now + 300 {
+                return Err(invalid(
+                    "occurred_at_unix_seconds is an instant no later than now",
+                ));
+            }
+            let at_ms = i64::try_from(at)
+                .ok()
+                .and_then(|at| at.checked_mul(1000))
+                .unwrap_or(i64::MAX);
+            if !spans.iter().any(|(from, to)| (*from..*to).contains(&at_ms)) {
+                return Err(invalid(format!(
+                    "occurred_at_unix_seconds is an instant of today's Day ({today}, from {} until {}): a receipt lands in today's Day only",
+                    bounds.0, bounds.1
+                )));
+            }
+            at
+        }
     };
     let civil_date = temporal::time_policy(scope, occurred)?.civil_date;
+    if civil_date != today {
+        return Err(invalid(format!(
+            "occurred_at_unix_seconds is an instant of today's Day ({today}): a receipt lands in today's Day only"
+        )));
+    }
     let path = receipts_path(scope, &civil_date);
     let log = day_moves::load_lines(scope, &path, RECEIPT_SCHEMA, "receipts")?;
     if let Some(entry) = log
@@ -438,7 +474,7 @@ pub(crate) fn record_receipt(scope: &Scope, input: &Value, now: u64) -> io::Resu
     }
     let entry = json!({"schema": RECEIPT_SCHEMA, "receipt_id": receipt_id, "act": act, "owner": owner,
         "subject": subject, "source": source, "receipt": receipt, "occurred_at_unix_seconds": occurred,
-        "recorded_at_unix_seconds": now});
+        "recorded_at_unix_seconds": now, "recorded_by": principal.principal_ref});
     day_moves::append_lines(
         scope,
         &path,
