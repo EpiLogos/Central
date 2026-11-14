@@ -949,7 +949,10 @@ fn codexs_instructions_central_cannot_read_are_a_home_row_that_says_why() {
     );
     let why = row["why"].as_str().unwrap();
     assert!(why.contains("is not UTF-8 text"), "{why}");
-    assert!(why.contains("control.floor.render"), "{why}");
+    assert!(
+        why.contains("control.floor.render leaves it as it is"),
+        "{why}"
+    );
     // Not readable by the person's own processes.
     fs::write(&file, "# My Codex\n").unwrap();
     fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
@@ -996,7 +999,8 @@ fn another_worlds_reading_says_codexs_instructions_are_not_its_to_write() {
 }
 
 #[test]
-fn codexs_instructions_central_cannot_read_refuse_the_render_in_words_before_anything_is_written() {
+fn codexs_instructions_central_cannot_read_are_left_as_they_are_and_the_floor_is_written_all_the_same(
+) {
     use std::os::unix::fs::PermissionsExt;
     let ground = owners();
     let codex = ground.home.join(".codex");
@@ -1004,38 +1008,74 @@ fn codexs_instructions_central_cannot_read_refuse_the_render_in_words_before_any
     let file = codex.join("AGENTS.md");
     let bytes: &[u8] = b"\xff\xfe not utf-8\n";
     fs::write(&file, bytes).unwrap();
-    let refused = render_in(&ground, &files(&["CLAUDE.md"])).unwrap_err();
-    assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied, "{refused}");
-    let words = refused.to_string();
-    assert!(
-        words.contains("is not UTF-8 text") && words.contains("Nothing was written"),
-        "{words}"
+    let receipt = render_in(&ground, &files(&["CLAUDE.md"])).unwrap();
+    assert_eq!(receipt["changed"], true, "{receipt}");
+    assert_eq!(
+        receipt["written"],
+        json!([FLOOR_FILE, "CLAUDE.md"]),
+        "{receipt}"
     );
-    assert!(
-        !ground.root.join(FLOOR_FILE).exists(),
-        "the floor was written"
+    assert!(floor(&ground).contains("## Never-do card"));
+    assert_eq!(
+        fs::read_link(ground.root.join("CLAUDE.md")).unwrap(),
+        Path::new(FLOOR_FILE)
     );
-    assert!(fs::symlink_metadata(ground.root.join("CLAUDE.md")).is_err());
+    assert_eq!(receipt["codex"]["changed"], false, "{receipt}");
+    assert_eq!(receipt["codex"]["file"], file.to_string_lossy().as_ref());
+    let why = receipt["codex"]["why"].as_str().unwrap();
+    assert!(
+        why.contains("is not UTF-8 text") && why.contains("the floor is written without it"),
+        "{why}"
+    );
     assert_eq!(fs::read(&file).unwrap(), bytes);
+    // Not readable by the person's own processes: left as it is, the floor written again where it changed.
+    fs::remove_file(ground.root.join(FLOOR_FILE)).unwrap();
     fs::write(&file, "# My Codex\n").unwrap();
     fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
-    let refused = render_in(&ground, &json!({})).unwrap_err();
+    let receipt = render_in(&ground, &json!({}));
     fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
-    let words = refused.to_string();
+    let receipt = receipt.unwrap();
+    assert_eq!(receipt["changed"], true, "{receipt}");
+    let why = receipt["codex"]["why"].as_str().unwrap();
     assert!(
-        words.contains("could not read") && words.contains("Nothing was written"),
-        "{words}"
+        why.contains("could not read") && why.contains("the floor is written without it"),
+        "{why}"
     );
-    assert!(
-        !ground.root.join(FLOOR_FILE).exists(),
-        "the floor was written"
-    );
+    assert!(ground.root.join(FLOOR_FILE).exists());
+    assert_eq!(fs::read_to_string(&file).unwrap(), "# My Codex\n");
+}
+
+#[test]
+fn codexs_instructions_kept_as_a_link_read_as_the_render_leaves_them() {
+    let ground = owners();
+    let codex = ground.home.join(".codex");
+    fs::create_dir_all(&codex).unwrap();
+    let kept = ground.home.join("dotfiles-agents.md");
+    fs::write(&kept, "# mine\n").unwrap();
+    std::os::unix::fs::symlink(&kept, codex.join("AGENTS.md")).unwrap();
+    for (case, words) in [
+        ("a link", "are a link"),
+        (
+            "a second link",
+            "not a file Central can write its block into",
+        ),
+    ] {
+        let row = read_in(&ground, &["AGENTS.md"])["homes"][0].clone();
+        assert_eq!(row["current"], false, "{case}: {row}");
+        let why = row["why"].as_str().unwrap();
+        assert!(
+            why.contains(words) && !why.contains("writes one"),
+            "{case}: {why}"
+        );
+        fs::remove_file(codex.join("AGENTS.md")).unwrap();
+        fs::hard_link(&kept, codex.join("AGENTS.md")).unwrap();
+    }
 }
 
 #[test]
 fn adopting_answers_its_adoption_whatever_the_render_does() {
     let path = "Control/agents/governance/craft/unrelated.md";
-    // Codex's instructions cannot be read: the render refuses in words, and the adoption stands with the refusal on its receipt.
+    // Codex's instructions cannot be read: they are left as they are, the floor is rendered all the same, and the receipt says why.
     let ground = fresh();
     fs::create_dir_all(ground.home.join(".codex")).unwrap();
     fs::write(ground.home.join(".codex/AGENTS.md"), b"\xff\xfe").unwrap();
@@ -1043,15 +1083,20 @@ fn adopting_answers_its_adoption_whatever_the_render_does() {
         json!({"statement": path, "expected_revision": revision_of(&ground, "craft/unrelated.md")});
     let receipt = adopt(&ground, &input, Some(HUMAN), 10).unwrap();
     assert_eq!(receipt["adopted"], true, "{receipt}");
-    assert_eq!(receipt["floor"]["changed"], false, "{receipt}");
+    assert!(receipt["floor"].get("refused").is_none(), "{receipt}");
+    assert_eq!(receipt["floor"]["changed"], true, "{receipt}");
     assert!(
-        receipt["floor"]["refused"]
+        receipt["floor"]["codex"]["why"]
             .as_str()
             .unwrap()
             .contains("is not UTF-8 text"),
         "{receipt}"
     );
-    assert!(!ground.root.join(FLOOR_FILE).exists());
+    assert!(ground.root.join(FLOOR_FILE).exists());
+    assert_eq!(
+        fs::read(ground.home.join(".codex/AGENTS.md")).unwrap(),
+        b"\xff\xfe"
+    );
     // The render fails for a reason no rule names (a floor that is not text): the adoption stands, and the failure rides on its
     // receipt, nothing written.
     let ground = fresh();

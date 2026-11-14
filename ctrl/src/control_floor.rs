@@ -715,21 +715,26 @@ struct CodexBlock {
 /// Why the render writes no Codex block, and the reading of Codex's instructions says so too.
 const NO_CODEX: &str = "no Codex folder (~/.codex) at this home, so there are no global Codex instructions to carry the floor";
 
+/// Where the render writes no Codex block: the instructions file where there is one to name, and why, in words.
+type CodexLeft = (Option<PathBuf>, String);
+
 /// Codex's block, where the person keeps Codex at this home (`~/.codex`) and the root rendered is that home's own Central world
 /// (`~/Central`): a world elsewhere never writes the person's global instructions. Refused where a sentence it quotes moved;
-/// where Central writes none, why, in words.
-fn codex_block(law: &Law, home: Option<&Path>) -> io::Result<Result<CodexBlock, String>> {
+/// where Central writes none, why, in words: instructions it cannot read are left as they are, and the floor is written without
+/// the block.
+fn codex_block(law: &Law, home: Option<&Path>) -> io::Result<Result<CodexBlock, CodexLeft>> {
     let Some(home) = home else {
-        return Ok(Err(
+        return Ok(Err((
+            None,
             "Central was asked without the person's home, so there are no global Codex instructions to carry the floor".into(),
-        ));
+        )));
     };
     if let Some(why) = not_the_homes_world(&law.root, home) {
-        return Ok(Err(why));
+        return Ok(Err((None, why)));
     }
     let folder = home.join(CODEX_FOLDER);
     if !folder.is_dir() {
-        return Ok(Err(NO_CODEX.into()));
+        return Ok(Err((None, NO_CODEX.into())));
     }
     let block = codex_block_text(law, home)?;
     let target = folder.join(FLOOR_FILE);
@@ -737,10 +742,11 @@ fn codex_block(law: &Law, home: Option<&Path>) -> io::Result<Result<CodexBlock, 
         Ok(text) => Some(text),
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
         Err(error) => {
-            return Err(refused(format!(
-                "{}: Central writes its block only into instructions it can read, and leaves them as they are. Nothing was written.",
+            let why = format!(
+                "{}: Central writes its block only into instructions it can read, and leaves them as they are; the floor is written without it.",
                 unreadable_codex(&target.display().to_string(), &error)
-            )))
+            );
+            return Ok(Err((Some(target), why)));
         }
     };
     let current = before.as_deref().unwrap_or("");
@@ -815,8 +821,22 @@ fn homes(root: &Path, law: Option<&Law>, home: Option<&Path>) -> Vec<Value> {
     vec![row]
 }
 
-/// Codex's global instructions at `home` as one home row (`homes`).
+/// Codex's global instructions at `home` as one home row (`homes`). Where Central reads them but cannot write its block into them
+/// as it writes its records (`codex_left`: a link, as a dotfile manager keeps them, or a file with a second link), a row not
+/// current says so, as the render leaves them.
 fn codex_home(file: &str, law: Option<&Law>, home: &Path) -> Value {
+    let mut row = codex_row(file, law, home);
+    let folder = home.join(CODEX_FOLDER);
+    if row["current"] != true && row["state"] != "unreadable" && folder.is_dir() {
+        if let Some(why) = codex_left(&folder, &folder.join(FLOOR_FILE)) {
+            row["why"] = json!(why);
+        }
+    }
+    row
+}
+
+/// Codex's global instructions at `home` as they read: rendered, absent or unreadable, with why.
+fn codex_row(file: &str, law: Option<&Law>, home: &Path) -> Value {
     let absent =
         |why: String| json!({"file": file, "state": "absent", "current": false, "why": why});
     let folder = home.join(CODEX_FOLDER);
@@ -832,7 +852,7 @@ fn codex_home(file: &str, law: Option<&Law>, home: &Path) -> Value {
         }
         Err(error) => {
             return json!({"file": file, "state": "unreadable", "current": false, "why": format!(
-                "{}; control.floor.render writes nothing there until it can",
+                "{}; control.floor.render leaves it as it is until it can, and writes the floor without its block",
                 unreadable_codex(file, &error)
             )});
         }
@@ -1013,7 +1033,7 @@ fn render_locked(
             }
         }
         Ok(block) => Ok(block),
-        Err(why) => Err((None, why)),
+        Err(left) => Err(left),
     };
     // What the render writes, in order; a fault after the first write (one no check could see) names what was written.
     let mut written: Vec<String> = Vec::new();
@@ -1285,9 +1305,10 @@ fn place_given(input: &Value) -> io::Result<Option<Place>> {
 /// Adopt one statement written on the root world's tier 0 (`control.law.adopt`), on the person's own credential: the statement
 /// stands on the revision the person read, its relation is declared durable and human-authored (a relation it had is changed in
 /// place, so its identity stays) and placed where the person says, and the floor is rendered again. Where the floor cannot be
-/// rendered (another hand wrote it, a quote moved, it would pass its budget, or a file it reads cannot be read), the adoption
-/// stands and the receipt carries the floor's refusal in its words, or the render's failure (`failed`), with `changed` saying
-/// whether the render wrote anything.
+/// rendered (another hand wrote it, a quote moved, it would pass its budget, or the floor cannot be read), the adoption stands and
+/// the receipt carries the floor's refusal in its words, or the render's failure (`failed`), with `changed` saying whether the
+/// render wrote anything. Codex's instructions Central cannot read or write its block into refuse nothing: the floor is rendered,
+/// and the receipt's `codex` says why they were left as they are.
 pub fn adopt_with_token_at(
     central: &Path,
     input: &Value,
@@ -1552,7 +1573,7 @@ pub fn register_floor_actions(registry: &mut ActionRegistry) {
             descriptor(
                 RENDER,
                 "Render the root world's floor",
-                "Render AGENTS.md at the Central root, the doors-only floor: the field, the oi front door, load by act (the law through ctrl control index), the never-do card and the session's end, then only the statements whose relation places them on the floor (floor: kernel in full, floor: load as a line under Load by act); every other statement is carried by the door. A sentence it quotes from one of the World's statements is quoted verbatim, left out where the World keeps no such statement, and refused where the statement no longer holds it. The header names the renderer and one revision over every statement it answers to; the same law renders the same bytes. Each name in files (CLAUDE.md, GEMINI.md, ...) is made a link to AGENTS.md, and where the person keeps Codex (~/.codex) and the root is that home's own Central world (~/Central), its global AGENTS.md carries one delimited block naming the floor; for any other root the Codex answer says why none is written, and where that file is one Central cannot write its block into (a link, as a dotfile manager keeps it, or a file with a second link) it is left as it is, the floor written all the same and the Codex answer saying why. Refused, changing nothing, where AGENTS.md was written by another hand, where a named file is neither absent nor a link to it, where a declared durable statement is lost, and past the floor's budget of 4096 bytes. A generated-derived write: it writes at the root, not under .central.",
+                "Render AGENTS.md at the Central root, the doors-only floor: the field, the oi front door, load by act (the law through ctrl control index), the never-do card and the session's end, then only the statements whose relation places them on the floor (floor: kernel in full, floor: load as a line under Load by act); every other statement is carried by the door. A sentence it quotes from one of the World's statements is quoted verbatim, left out where the World keeps no such statement, and refused where the statement no longer holds it. The header names the renderer and one revision over every statement it answers to; the same law renders the same bytes. Each name in files (CLAUDE.md, GEMINI.md, ...) is made a link to AGENTS.md, and where the person keeps Codex (~/.codex) and the root is that home's own Central world (~/Central), its global AGENTS.md carries one delimited block naming the floor; for any other root the Codex answer says why none is written, and where that file is one Central cannot read as text or write its block into (a link, as a dotfile manager keeps it, or a file with a second link) it is left as it is, the floor written all the same and the Codex answer saying why. Refused, changing nothing, where AGENTS.md was written by another hand, where a named file is neither absent nor a link to it, where a declared durable statement is lost, and past the floor's budget of 4096 bytes. A generated-derived write: it writes at the root, not under .central.",
                 MutationClass::LocallyMutating,
                 FLOOR_RENDER_SCHEMA,
                 vec![input("files", "array", false)],
