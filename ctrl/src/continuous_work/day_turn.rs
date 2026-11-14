@@ -6,8 +6,10 @@
 //! saved in the Day's settings (`day_form`), never from one offered to the turn, when it has none, carrying the set of the Day
 //! before it (the worlds it held, its rows with the pages that still play, the Day added to its lineage); and each earlier Day
 //! still open closes at its turn through the one close (day_moves.rs `close_carry`), as Central's civil clock and only under the
-//! consent the person saved (Close at Day start, and the Day not opened again by them after its turn). A Day it may not close
-//! stays open, the turn and that Day's reading saying why. The clock holds no credential: its authority to act at all is the
+//! consent the person saved (Close at Day start, and the Day not opened again by them after its turn), and only where it can file
+//! the close's carry: face 5's proposal waits in Approvals on today's page, made from the Day form the person saved, so a Day
+//! whose proposal has no such page to wait on is never closed away behind them. A Day it may not close stays open, the turn and
+//! that Day's reading saying why, and the person's own close still closes it. The clock holds no credential: its authority to act at all is the
 //! policy the person adopted (`automatic_day_rollover`), and a policy without it is refused in words. Asked again with nothing to
 //! do, it writes nothing.
 //!
@@ -98,7 +100,8 @@ pub(crate) fn turn(scope: &Scope, input: &Value, now: u64) -> io::Result<Value> 
         }
     };
     // Each earlier Day still open closes at its turn, oldest first, through the one close (day_moves::close_carry) as Central's
-    // civil clock, under the consent the person saved; a Day it may not close stays open, and the turn says why.
+    // civil clock, under the consent the person saved and where it can file the carry; a Day it may not close stays open, and the
+    // turn says why.
     let (relations, _) = scope.relations()?;
     let mut earlier: Vec<(String, String)> = relations["relations"]
         .as_array()

@@ -586,8 +586,9 @@ fn reading(
         })
         .unwrap_or(Value::Null);
     let mut value = json!({"schema":"central.day-reading/v1","day_ref":entry["temporal"]["day_ref"],"source":source.source,"revision":source.revision,"content":source.content,"temporal":entry["temporal"],"opened_at_unix_seconds":opened_at,"bounds":bounds,"relations_revision":relation_basis,"today":relations["temporal"]["today"],"tomorrow":relations["temporal"]["tomorrow"],"document_state":if document.is_null(){"uninitialised"}else{"ready"},"document":document,"automatic_agent_or_model_invocation":false});
-    // An open Day whose date is past today's stays open where the person's consent to a close they do not press is refused: its
-    // reading says why, in that refusal's words (day_moves.rs `stays_open`), until they close it.
+    // An open Day whose date is past today's stays open where the person's consent to a close they do not press is refused, or
+    // Central's civil clock cannot file its carry: its reading says why, in that refusal's words (day_moves.rs `stays_open`), until
+    // they close it.
     if let Some(why) = relations["temporal"]["today"]["civil_date"]
         .as_str()
         .and_then(|today| super::day_moves::stays_open(scope, entry, today))
