@@ -2,6 +2,7 @@
 //! No personal installation, default-policy adoption, model call or shell rewrite.
 pub mod authority;
 mod day_moves;
+mod day_turn;
 pub mod documents;
 mod extended;
 pub mod field;
@@ -71,6 +72,11 @@ pub fn execute_with_token_at(
         }
         _ => {}
     }
+    // The Day's turn files its close's carry into receiving (day_moves.rs `carry`): it takes receiving's lock first, in the same
+    // return-lock -> source-lock order.
+    let _returns = (operation == "day_turn")
+        .then(|| crate::source_safety::lock(&scope.root, "source-return.lock"))
+        .transpose()?;
     let _locks = source::lock(&scope)?;
     match operation {
         "policy" => Ok(serde_json::to_value(placement::effective_policy(
@@ -131,6 +137,9 @@ pub fn execute_with_token_at(
         "time_policy" => Ok(serde_json::to_value(temporal::time_policy(&scope, now)?)?),
         "time_occurrences" => temporal::time_occurrences(&scope, input),
         "day_read" => temporal::day_read(&scope, input),
+        // The Day's turn by Central's civil clock (day_turn.rs): no credential; it acts on the person's adopted policy only. A
+        // receipt laid into the Day is authenticated, as the Day's other records are (day_moves::authenticated_action).
+        "day_turn" => day_turn::turn(&scope, input, now),
         "source_history" => history::read(&scope, input),
         "day_settings_read" => day_moves::settings_read(&scope),
         "day_moves_read" => day_moves::moves_read(&scope, input, now),
@@ -279,6 +288,12 @@ handler!(
     "time_occurrences"
 );
 handler!(day_read_action, "central.day.read", "day_read");
+handler!(day_turn_action, "central.day.turn", "day_turn");
+handler!(
+    day_receipt_record_action,
+    "central.day.receipt.record",
+    "day_receipt_record"
+);
 handler!(day_ensure_action, "central.day.ensure", "day_ensure");
 handler!(
     day_lifecycle_action,
@@ -407,9 +422,75 @@ pub fn register_actions(registry: &mut ActionRegistry) {
     ]);
     extended::register_actions(registry);
     day_moves::register_actions(registry);
+    register_day_turn(registry);
+}
+
+/// The Day's turn and its receipts (day_turn.rs). The turn writes the person's Day (its document, the today pointer, an earlier Day's
+/// close) under the world's `user/day`, outside `.central`, so it is locally-mutating, not derived-reconciling: a reader that keeps
+/// readings learns from the turn's own answer (`turn`) whether anything moved, since asked again with nothing to do it writes nothing.
+fn register_day_turn(registry: &mut ActionRegistry) {
+    let field = |name: &str, kind: &str, required: bool| ActionInputDefinition {
+        name: name.into(),
+        input_type: kind.into(),
+        required,
+        choices: None,
+        selection: None,
+    };
+    for (id, title, description, class, inputs, handler) in [
+        (
+            "central.day.turn",
+            "Turn the Day by Central's civil clock",
+            "What the adopted civil-time policy determines now, as Central's own civil clock (no credential; refused where the policy keeps automatic_day_rollover off): today's Day opens on its civil date and today points at it; its document is made from the Day form the person saved in the Day's settings (day_form), at the revision they read it at, when it has none, carrying the set of the Day before it (a form changed since they saved it makes no page, and the turn says why until they save it again), and a form offered to the turn is refused; each earlier Day still open closes through central.day.close-carry, only under the consent the person saved (Close at Day start, the Day not opened again by them after its turn) and only where its close routine can file face 5's proposal in receiving, on today's page, for the person to keep on today's face 0 or drop (a proposal with no such page to wait on, as no Day form is saved, keeps its Day open); a Day it may not close stays open, and the turn and that Day's reading (stays_open) say why. Answers today's Day reading (central.day-reading/v1) with turn: what was opened, made and closed, and what stays open. Nothing is written when nothing turns.",
+            MutationClass::LocallyMutating,
+            vec![field("project", "string", false)],
+            day_turn_action as crate::action::ActionHandler,
+        ),
+        (
+            "central.day.receipt.record",
+            "Lay an act's receipt into its Day",
+            "Authenticated, like the Day's other records: append one act's receipt to its Day (receipts.jsonl beside the Day, append-only), naming who recorded it and the Day it happened in (occurred_in): act, owner, subject, source, the owner's receipt (at most 16 KiB), receipt_id (laid once) and occurred_at_unix_seconds (when it happened; now where absent). An act of today's Day is laid in it; an act of the Day that just ended, recorded after its turn, is laid in that Day while it is open, and once it is closed (or where it never opened) in today's Day, with its true instant. An instant later than now, or older than the Day that just ended, is refused in words. Read back with the Day it was laid in (central.day.read receipts). A record of what an act did, never the person's writing.",
+            MutationClass::LocallyMutating,
+            vec![
+                field("project", "string", false),
+                field("receipt_id", "string", true),
+                field("act", "string", true),
+                field("owner", "string", true),
+                field("subject", "string", true),
+                field("source", "string", false),
+                field("receipt", "object", false),
+                field("occurred_at_unix_seconds", "integer", false),
+                field("expected_authority_revision", "string", false),
+            ],
+            day_receipt_record_action as crate::action::ActionHandler,
+        ),
+    ] {
+        registry
+            .register(
+                ActionDescriptor {
+                    id: id.into(),
+                    title: title.into(),
+                    description: description.into(),
+                    inputs,
+                    output: ActionOutputDefinition {
+                        output_type: "object".into(),
+                    },
+                    mutation_class: class,
+                    preview_supported: false,
+                    required_ports: vec![],
+                    availability: ActionAvailability {
+                        available: true,
+                        reason: None,
+                    },
+                },
+                handler,
+            )
+            .expect("the Day's turn and receipt Action ids are unique");
+    }
 }
 
 #[cfg(test)]
 mod day_moves_tests;
+#[cfg(test)]
+mod day_turn_tests;
 #[cfg(test)]
 mod tests;

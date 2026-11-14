@@ -17,6 +17,7 @@ pub mod collections;
 pub mod configuration;
 pub mod continuous_work;
 pub mod control;
+pub mod control_floor;
 pub mod control_skills;
 pub mod development_field;
 pub mod engineering_ground;
