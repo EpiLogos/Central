@@ -861,6 +861,79 @@ fn adopting_says_the_floor_changed_whenever_the_render_wrote_anything() {
 }
 
 #[test]
+fn codexs_instructions_central_cannot_read_are_a_home_row_that_says_why() {
+    use std::os::unix::fs::PermissionsExt;
+    let ground = owners();
+    let codex = ground.home.join(".codex");
+    fs::create_dir_all(&codex).unwrap();
+    let file = codex.join("AGENTS.md");
+    let row_of = |ground: &Ground| {
+        let reading = read(&ground.root, &files(&["AGENTS.md"]), Some(&ground.home))
+            .expect("the reading stands whatever Codex's instructions hold");
+        assert_eq!(reading["floors"][0]["file"], "AGENTS.md", "{reading}");
+        reading["homes"][0].clone()
+    };
+    // Not UTF-8 text.
+    fs::write(&file, b"\xff\xfe not utf-8\n").unwrap();
+    let row = row_of(&ground);
+    assert_eq!(
+        (
+            row["file"].as_str(),
+            row["state"].as_str(),
+            row["current"].as_bool()
+        ),
+        (Some("~/.codex/AGENTS.md"), Some("unreadable"), Some(false)),
+        "{row}"
+    );
+    let why = row["why"].as_str().unwrap();
+    assert!(why.contains("is not UTF-8 text"), "{why}");
+    assert!(why.contains("control.floor.render"), "{why}");
+    // Not readable by the person's own processes.
+    fs::write(&file, "# My Codex\n").unwrap();
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
+    let row = row_of(&ground);
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(row["state"], "unreadable", "{row}");
+    assert!(
+        row["why"].as_str().unwrap().contains("could not read"),
+        "{row}"
+    );
+    // A folder where the file would be.
+    fs::remove_file(&file).unwrap();
+    fs::create_dir(&file).unwrap();
+    let row = row_of(&ground);
+    assert_eq!(row["state"], "unreadable", "{row}");
+    assert!(
+        row["why"].as_str().unwrap().contains("could not read"),
+        "{row}"
+    );
+}
+
+#[test]
+fn another_worlds_reading_says_codexs_instructions_are_not_its_to_write() {
+    let ground = owners();
+    fs::create_dir_all(ground.home.join(".codex")).unwrap();
+    render_in(&ground, &json!({})).unwrap();
+    assert_eq!(
+        read_in(&ground, &["AGENTS.md"])["homes"][0]["current"],
+        true
+    );
+    // The same home read from a world that is not its ~/Central: the block stands, but it is not that world's to write.
+    let elsewhere = ground.home.join("Elsewhere");
+    fs::rename(&ground.root, &elsewhere).unwrap();
+    let row =
+        read(&elsewhere, &files(&["AGENTS.md"]), Some(&ground.home)).unwrap()["homes"][0].clone();
+    assert_eq!(
+        (row["state"].as_str(), row["current"].as_bool()),
+        (Some("rendered"), Some(false)),
+        "{row}"
+    );
+    let why = row["why"].as_str().unwrap();
+    assert!(why.contains("not this home's own Central world"), "{why}");
+    assert!(!why.contains("writes it again"), "{why}");
+}
+
+#[test]
 fn a_statements_words_are_its_text_without_front_matter_or_title() {
     assert_eq!(
         body_of("---\nstanding: durable\n---\n# Title\n\n\nWords.\n\nMore.\n\n"),
