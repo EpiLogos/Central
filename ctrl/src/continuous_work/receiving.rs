@@ -1069,6 +1069,65 @@ pub(crate) fn read_held(scope: &Scope, return_ref: &str) -> io::Result<Value> {
     require_disclosure(scope, &record)?;
     Ok(response(&record, &revision))
 }
+/// Many Returns read as `read_held` reads each, for a reader of a list of them (the Day's yields, day_turn.rs `yields_of`): the
+/// World's source horizon is resolved once, on the first Return that needs it, and each source a Return carries is read once
+/// however many Returns carry it (`Scope::read_bound`), where `require_disclosure` per Return walked the whole horizon each time
+/// (Central#365 review: a Day of N yields, all naming its page, was N walks). A Return is disclosed by the same rule: only while
+/// every source it carries is still readable here, refused in the same words.
+pub(crate) struct HeldReader<'a> {
+    scope: &'a Scope,
+    bindings: Option<Vec<crate::source_horizon::SourceBinding>>,
+    read: std::collections::BTreeMap<String, Result<(), (io::ErrorKind, String)>>,
+}
+impl<'a> HeldReader<'a> {
+    pub(crate) fn new(scope: &'a Scope) -> Self {
+        Self {
+            scope,
+            bindings: None,
+            read: std::collections::BTreeMap::new(),
+        }
+    }
+    /// The Return `return_ref` as it stands, as `read_held` answers it.
+    pub(crate) fn read(&mut self, return_ref: &str) -> io::Result<Value> {
+        let (record, revision) = read_record(self.scope, return_ref)?;
+        if let Some(source) = &record.source_ref {
+            self.disclosed(source)?;
+        }
+        for artifact in &record.artifacts {
+            self.disclosed(text(&artifact["source"], "ref")?)?;
+        }
+        Ok(response(&record, &revision))
+    }
+    /// Whether one source is readable here, as `Scope::read` finds and reads it, answered once per source.
+    fn disclosed(&mut self, reference: &str) -> io::Result<()> {
+        if !self.read.contains_key(reference) {
+            if self.bindings.is_none() {
+                self.bindings = Some(self.scope.bindings()?);
+            }
+            let binding = self
+                .bindings
+                .iter()
+                .flatten()
+                .find(|binding| binding.source_ref == reference)
+                .cloned();
+            let outcome = match binding {
+                Some(binding) => self.scope.read_bound(binding).map(|_| ()),
+                None => Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "SourceRef is not in this World",
+                )),
+            };
+            self.read.insert(
+                reference.to_owned(),
+                outcome.map_err(|error| (error.kind(), error.to_string())),
+            );
+        }
+        match &self.read[reference] {
+            Ok(()) => Ok(()),
+            Err((kind, message)) => Err(io::Error::new(*kind, message.clone())),
+        }
+    }
+}
 /// Evidence is retained from the actual scoped SourceRef at the supplied
 /// revision. It does not become included Day prose or adopted human ground.
 fn retain_artifacts(scope: &Scope, input: &Value, principal: &Principal) -> io::Result<Vec<Value>> {

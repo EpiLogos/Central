@@ -140,7 +140,11 @@ pub fn execute_with_token_at(
         "learnings_distill" => thoughts::learnings_distill(&scope, input, now),
         "time_policy" => Ok(serde_json::to_value(temporal::time_policy(&scope, now)?)?),
         "time_occurrences" => temporal::time_occurrences(&scope, input),
-        "day_read" => temporal::day_read(&scope, input),
+        // `central.day.read`: the Day's reading with what its sessions yielded (day_turn.rs `with_yields`), which only the answers
+        // that show the Day carry.
+        "day_read" => {
+            temporal::day_read(&scope, input).map(|reading| day_turn::with_yields(&scope, reading))
+        }
         // The Day's turn by Central's civil clock (day_turn.rs): no credential; it acts on the person's adopted policy only. A
         // receipt laid into the Day is authenticated, as the Day's other records are (day_moves::authenticated_action).
         "day_turn" => day_turn::turn(&scope, input, now),

@@ -609,6 +609,8 @@ fn reading(
         Ok(None) => {}
         Err(error) => value["filed_refused"] = json!(error.to_string()),
     }
+    // What the Day's sessions yielded is no part of this reading: the answers that show the Day add it (day_turn.rs `with_yields`),
+    // and the reads a check or a filing makes inside the locks read no Return (Central#365 review).
     Ok(value)
 }
 pub fn day_read(scope: &Scope, input: &Value) -> io::Result<Value> {

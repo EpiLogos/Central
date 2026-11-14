@@ -12,6 +12,13 @@ use std::os::unix::fs::MetadataExt;
 use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::path::{Path, PathBuf};
 
+// How many times this thread resolved a World's source horizon (`Scope::bindings`, a walk of every source it binds), for the tests
+// that hold a reading to a bounded number of walks (Central#365 review: a Day's yields once walked it per yield).
+#[cfg(test)]
+thread_local! {
+    pub(crate) static HORIZON_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub(crate) fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message.into())
 }
@@ -152,6 +159,8 @@ impl Scope {
         Ok((value, revision(&raw)))
     }
     pub fn bindings(&self) -> io::Result<Vec<SourceBinding>> {
+        #[cfg(test)]
+        HORIZON_WALKS.with(|walks| walks.set(walks.get() + 1));
         self.relations()?;
         if self.project.is_some() {
             crate::source_horizon::project_source_bindings(&self.root)
