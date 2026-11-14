@@ -383,7 +383,7 @@ fn a_receipt_out_of_its_bounds_is_refused_in_words() {
 fn the_turn_and_the_receipt_stand_in_centrals_action_field() {
     let registry = crate::cli::create_runtime_action_registry();
     for (id, class) in [
-        ("central.day.turn", "derived-reconciling"),
+        ("central.day.turn", "locally-mutating"),
         ("central.day.receipt.record", "locally-mutating"),
     ] {
         let descriptor = registry

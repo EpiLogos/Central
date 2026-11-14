@@ -421,8 +421,9 @@ pub fn register_actions(registry: &mut ActionRegistry) {
     register_day_turn(registry);
 }
 
-/// The Day's turn and its receipts (day_turn.rs). The turn reconciles the Day with Central's civil clock and the person's adopted
-/// policy, so it is derived-reconciling: asked again with nothing to do it writes nothing.
+/// The Day's turn and its receipts (day_turn.rs). The turn writes the person's Day (its document, the today pointer, an earlier Day's
+/// close) under the world's `user/day`, outside `.central`, so it is locally-mutating, not derived-reconciling: a reader that keeps
+/// readings learns from the turn's own answer (`turn`) whether anything moved, since asked again with nothing to do it writes nothing.
 fn register_day_turn(registry: &mut ActionRegistry) {
     let field = |name: &str, kind: &str, required: bool| ActionInputDefinition {
         name: name.into(),
@@ -436,7 +437,7 @@ fn register_day_turn(registry: &mut ActionRegistry) {
             "central.day.turn",
             "Turn the Day by Central's civil clock",
             "What the adopted civil-time policy determines now, as Central's own civil clock (no credential; refused where the policy keeps automatic_day_rollover off): today's Day opens on its civil date and today points at it; its document is made from the Day form offered in form (central.path-ref/v1) when it has none, carrying the set of the Day before it; each earlier Day still open closes, its close routine carrying face 5's proposal to today's face 0 as the Day's settings keep it. Answers today's Day reading (central.day-reading/v1) with turn: what was opened, made and closed. Nothing is written when nothing turns.",
-            MutationClass::DerivedReconciling,
+            MutationClass::LocallyMutating,
             vec![field("project", "string", false), field("form", "object", false)],
             day_turn_action as crate::action::ActionHandler,
         ),
