@@ -732,10 +732,16 @@ fn codex_block(law: &Law, home: Option<&Path>) -> io::Result<Result<CodexBlock, 
         return Ok(Err(NO_CODEX.into()));
     }
     let block = codex_block_text(law, home)?;
-    let before = match fs::read_to_string(folder.join(FLOOR_FILE)) {
+    let target = folder.join(FLOOR_FILE);
+    let before = match fs::read_to_string(&target) {
         Ok(text) => Some(text),
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error),
+        Err(error) => {
+            return Err(refused(format!(
+                "{}: Central writes its block only into instructions it can read, and leaves them as they are. Nothing was written.",
+                unreadable_codex(&target.display().to_string(), &error)
+            )))
+        }
     };
     let current = before.as_deref().unwrap_or("");
     let after = match central_block(current) {
@@ -1261,8 +1267,9 @@ fn place_given(input: &Value) -> io::Result<Option<Place>> {
 /// Adopt one statement written on the root world's tier 0 (`control.law.adopt`), on the person's own credential: the statement
 /// stands on the revision the person read, its relation is declared durable and human-authored (a relation it had is changed in
 /// place, so its identity stays) and placed where the person says, and the floor is rendered again. Where the floor cannot be
-/// rendered (another hand wrote it, a quote moved, or it would pass its budget), the adoption stands and the receipt carries the
-/// floor's refusal in its words.
+/// rendered (another hand wrote it, a quote moved, it would pass its budget, or a file it reads cannot be read), the adoption
+/// stands and the receipt carries the floor's refusal in its words, or the render's failure (`failed`), with `changed` saying
+/// whether the render wrote anything.
 pub fn adopt_with_token_at(
     central: &Path,
     input: &Value,
@@ -1376,7 +1383,7 @@ pub fn adopt_with_token_at(
         )?;
     }
     // A refusal of the render changed nothing (it is checked before anything is written); a render stopped after it wrote says
-    // what it wrote. Either rides on the receipt: the adoption stands.
+    // what it wrote. Every one rides on the receipt: the adoption stands.
     let floor = match render_locked(&scope, &files, home) {
         Ok(receipt) => receipt,
         Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
@@ -1390,7 +1397,10 @@ pub fn adopt_with_token_at(
                 json!({"schema": FLOOR_RENDER_SCHEMA, "floor": FLOOR_FILE, "changed": true, "written": partly.written,
                     "failed": error.to_string()})
             }
-            None => return Err(error),
+            // A failure no rule names, before the render wrote anything: the adoption stands all the same, and says so.
+            None => {
+                json!({"schema": FLOOR_RENDER_SCHEMA, "floor": FLOOR_FILE, "changed": false, "failed": error.to_string()})
+            }
         },
     };
     Ok(json!({
@@ -1546,7 +1556,7 @@ pub fn register_floor_actions(registry: &mut ActionRegistry) {
             descriptor(
                 LAW_ADOPT,
                 "Adopt a law statement",
-                "Adopt one statement written on the root world's tier 0 (statement: its path under Control/agents/governance/), on the revision you read (expected_revision) and the person's own native credential: its relation is declared durable and human-authored, placed where floor says (kernel: in full on the floor; load: its words as a line under Load by act; index: behind the door; omitted: where its relation had it), and the root world's floor is rendered again (control.floor.render, with the links in files). Where the floor cannot be rendered, the adoption stands and the receipt carries the floor's refusal.",
+                "Adopt one statement written on the root world's tier 0 (statement: its path under Control/agents/governance/), on the revision you read (expected_revision) and the person's own native credential: its relation is declared durable and human-authored, placed where floor says (kernel: in full on the floor; load: its words as a line under Load by act; index: behind the door; omitted: where its relation had it), and the root world's floor is rendered again (control.floor.render, with the links in files). Where the floor cannot be rendered, the adoption stands and the receipt carries the floor's refusal (refused) or the render's failure (failed), with changed saying whether the render wrote anything.",
                 MutationClass::LocallyMutating,
                 LAW_ADOPTION_SCHEMA,
                 vec![

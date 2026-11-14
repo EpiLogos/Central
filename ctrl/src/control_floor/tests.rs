@@ -934,6 +934,81 @@ fn another_worlds_reading_says_codexs_instructions_are_not_its_to_write() {
 }
 
 #[test]
+fn codexs_instructions_central_cannot_read_refuse_the_render_in_words_before_anything_is_written() {
+    use std::os::unix::fs::PermissionsExt;
+    let ground = owners();
+    let codex = ground.home.join(".codex");
+    fs::create_dir_all(&codex).unwrap();
+    let file = codex.join("AGENTS.md");
+    let bytes: &[u8] = b"\xff\xfe not utf-8\n";
+    fs::write(&file, bytes).unwrap();
+    let refused = render_in(&ground, &files(&["CLAUDE.md"])).unwrap_err();
+    assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied, "{refused}");
+    let words = refused.to_string();
+    assert!(
+        words.contains("is not UTF-8 text") && words.contains("Nothing was written"),
+        "{words}"
+    );
+    assert!(
+        !ground.root.join(FLOOR_FILE).exists(),
+        "the floor was written"
+    );
+    assert!(fs::symlink_metadata(ground.root.join("CLAUDE.md")).is_err());
+    assert_eq!(fs::read(&file).unwrap(), bytes);
+    fs::write(&file, "# My Codex\n").unwrap();
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
+    let refused = render_in(&ground, &json!({})).unwrap_err();
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+    let words = refused.to_string();
+    assert!(
+        words.contains("could not read") && words.contains("Nothing was written"),
+        "{words}"
+    );
+    assert!(
+        !ground.root.join(FLOOR_FILE).exists(),
+        "the floor was written"
+    );
+}
+
+#[test]
+fn adopting_answers_its_adoption_whatever_the_render_does() {
+    let path = "Control/agents/governance/craft/unrelated.md";
+    // Codex's instructions cannot be read: the render refuses in words, and the adoption stands with the refusal on its receipt.
+    let ground = fresh();
+    fs::create_dir_all(ground.home.join(".codex")).unwrap();
+    fs::write(ground.home.join(".codex/AGENTS.md"), b"\xff\xfe").unwrap();
+    let input =
+        json!({"statement": path, "expected_revision": revision_of(&ground, "craft/unrelated.md")});
+    let receipt = adopt(&ground, &input, Some(HUMAN), 10).unwrap();
+    assert_eq!(receipt["adopted"], true, "{receipt}");
+    assert_eq!(receipt["floor"]["changed"], false, "{receipt}");
+    assert!(
+        receipt["floor"]["refused"]
+            .as_str()
+            .unwrap()
+            .contains("is not UTF-8 text"),
+        "{receipt}"
+    );
+    assert!(!ground.root.join(FLOOR_FILE).exists());
+    // The render fails for a reason no rule names (a floor that is not text): the adoption stands, and the failure rides on its
+    // receipt, nothing written.
+    let ground = fresh();
+    fs::write(ground.root.join(FLOOR_FILE), b"\xff\xfe").unwrap();
+    let input =
+        json!({"statement": path, "expected_revision": revision_of(&ground, "craft/unrelated.md")});
+    let receipt = adopt(&ground, &input, Some(HUMAN), 10).unwrap();
+    assert_eq!(receipt["adopted"], true, "{receipt}");
+    assert_eq!(receipt["floor"]["changed"], false, "{receipt}");
+    assert!(receipt["floor"]["failed"].is_string(), "{receipt}");
+    assert_eq!(fs::read(ground.root.join(FLOOR_FILE)).unwrap(), b"\xff\xfe");
+    // It stood: adopted again, it is not adopted twice.
+    assert_eq!(
+        adopt(&ground, &input, Some(HUMAN), 20).unwrap()["adopted"],
+        false
+    );
+}
+
+#[test]
 fn a_statements_words_are_its_text_without_front_matter_or_title() {
     assert_eq!(
         body_of("---\nstanding: durable\n---\n# Title\n\n\nWords.\n\nMore.\n\n"),
