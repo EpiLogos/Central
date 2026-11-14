@@ -72,6 +72,11 @@ pub fn execute_with_token_at(
         }
         _ => {}
     }
+    // The Day's turn files its close's carry into receiving (day_moves.rs `carry`): it takes receiving's lock first, in the same
+    // return-lock -> source-lock order.
+    let _returns = (operation == "day_turn")
+        .then(|| crate::source_safety::lock(&scope.root, "source-return.lock"))
+        .transpose()?;
     let _locks = source::lock(&scope)?;
     match operation {
         "policy" => Ok(serde_json::to_value(placement::effective_policy(
@@ -436,7 +441,7 @@ fn register_day_turn(registry: &mut ActionRegistry) {
         (
             "central.day.turn",
             "Turn the Day by Central's civil clock",
-            "What the adopted civil-time policy determines now, as Central's own civil clock (no credential; refused where the policy keeps automatic_day_rollover off): today's Day opens on its civil date and today points at it; its document is made from the Day form the person saved in the Day's settings (day_form) when it has none, carrying the set of the Day before it, and a form offered to the turn is refused; each earlier Day still open closes, its close routine carrying face 5's proposal to today's face 0 as the Day's settings keep it. Answers today's Day reading (central.day-reading/v1) with turn: what was opened, made and closed. Nothing is written when nothing turns.",
+            "What the adopted civil-time policy determines now, as Central's own civil clock (no credential; refused where the policy keeps automatic_day_rollover off): today's Day opens on its civil date and today points at it; its document is made from the Day form the person saved in the Day's settings (day_form) when it has none, carrying the set of the Day before it, and a form offered to the turn is refused; each earlier Day still open closes through central.day.close-carry, only under the consent the person saved (Close at Day start, the Day not opened again by them after its turn), its close routine filing face 5's proposal in receiving for the person to keep on today's face 0 or drop; a Day it may not close stays open, and the turn and that Day's reading (stays_open) say why. Answers today's Day reading (central.day-reading/v1) with turn: what was opened, made and closed, and what stays open. Nothing is written when nothing turns.",
             MutationClass::LocallyMutating,
             vec![field("project", "string", false)],
             day_turn_action as crate::action::ActionHandler,

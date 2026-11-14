@@ -1758,9 +1758,26 @@ fn carry(
         "contribution_id":contribution_id,"html":proposal});
     if !principal.is_human() {
         state["state"] = json!("waits");
-        state["reason"] = json!("An agent's entry into a Day waits for the person: submit it through central.receiving.submit.");
-        state["proposal"] = json!({"source_ref":target["source"]["ref"],"document_id":target["document_id"],
+        let submit = json!({"source_ref":target["source"]["ref"],"document_id":target["document_id"],
             "expected_source_revision":target["revision"]["revision"],"proposal":operation});
+        if principal.is_civil_clock() {
+            // Central's civil clock has no one to hand the carry to: it files it in receiving itself, where the person's Approvals
+            // keep it on tomorrow's face 0 or drop it, as any entry that is not theirs waits (the one submit, receiving.rs).
+            let mut filing = submit.clone();
+            filing["producer_key"] = json!(contribution_id);
+            filing["day_ref"] = json!(tomorrow_ref);
+            filing["summary"] = json!(format!(
+                "Face 5's proposal for tomorrow, from the Day of {}, for face 0 of the Day of {}: Central's civil clock closed the Day at its turn and carries nothing into your Day itself. Keep it or drop it.",
+                closing["temporal"]["civil_date"].as_str().unwrap_or(closing_ref),
+                tomorrow["temporal"]["civil_date"].as_str().unwrap_or(tomorrow_ref)
+            ));
+            let filed = super::receiving::file_held(scope, &filing, principal, now)?;
+            state["return_ref"] = filed["return_ref"].clone();
+            state["reason"] = json!("Central's civil clock writes nothing into your Day: face 5's proposal waits in Approvals, for you to keep on tomorrow's face 0 or drop.");
+        } else {
+            state["reason"] = json!("An agent's entry into a Day waits for the person: submit it through central.receiving.submit.");
+        }
+        state["proposal"] = submit;
         return Ok(state);
     }
     let mut mutation = operation;

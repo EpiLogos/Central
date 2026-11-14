@@ -44,7 +44,8 @@ fn world(timezone: &str, automatic: bool) -> crate::TempDir {
     fs::write(temp.path().join(FORM_PATH), day_form()).unwrap();
     let scope = Scope::resolve(temp.path(), None).unwrap();
     let grant = json!({"principal_ref":"human:test","actor_kind":"human","token_sha256":format!("{:x}",Sha256::digest(HUMAN.as_bytes())),
-        "scope_refs":["control:root"],"actions":["central.document.create","central.document.mutate","central.day.settings.write","central.day.lifecycle"],
+        "scope_refs":["control:root"],"actions":["central.document.create","central.document.mutate","central.day.settings.write","central.day.lifecycle",
+            "central.receiving.review","central.receiving.include"],
         "expires_at_unix_seconds":4_000_000_000u64});
     let mut relations = vec![];
     for (name, role, value) in [
@@ -419,6 +420,87 @@ fn a_day_the_person_reopened_after_its_turn_is_not_closed_again_by_the_clock() {
     assert_eq!(earlier["temporal"]["lifecycle"], "open");
     assert_eq!(earlier["temporal"]["lifecycle_actor_ref"], "human:test");
     assert_eq!(earlier["stays_open"], why);
+}
+
+#[test]
+fn the_clocks_close_files_the_carry_in_receiving_where_approvals_keeps_or_drops_it() {
+    let w = world("UTC", true);
+    let first = at("2026-10-20T09:00:00Z");
+    turn(w.path(), json!({}), first).unwrap();
+    person_document(w.path(), FIRST, PROPOSAL, first);
+    save(
+        w.path(),
+        json!({"day_form": FORM_PATH, "moves":{"close":{"runs_at":{"kind":"day_start"}}}}),
+        first,
+    )
+    .unwrap();
+    let second = at("2026-10-21T00:00:01Z");
+    let turned = turn(w.path(), json!({}), second).unwrap();
+    let carry = &turned["turn"]["closed"][0]["carry"];
+    assert_eq!(carry["state"], "waits", "{carry}");
+    assert!(
+        carry["reason"].as_str().unwrap().contains("Approvals"),
+        "{carry}"
+    );
+    let return_ref = carry["return_ref"].as_str().expect("the carry's Return");
+    // It waits in receiving: one Return, pending, by the clock, proposing face 5's words for today's face 0.
+    let listed = execute_at(w.path(), "receiving_list", &json!({}), second).unwrap();
+    let returns = listed["returns"].as_array().unwrap();
+    assert_eq!(returns.len(), 1, "{listed}");
+    assert_eq!(returns[0]["return_ref"], return_ref);
+    assert_eq!(returns[0]["status"], "pending");
+    assert_eq!(returns[0]["author"]["principal_ref"], "central:civil-clock");
+    assert_eq!(returns[0]["day_ref"], SECOND);
+    let held = execute_at(
+        w.path(),
+        "receiving_read",
+        &json!({"return_ref": return_ref}),
+        second,
+    )
+    .unwrap();
+    let proposal = &held["record"]["proposal"];
+    assert_eq!(proposal["operation"], "field.append");
+    assert_eq!(proposal["field_id"], "p0_quick_thoughts");
+    assert_eq!(proposal["html"], PROPOSAL);
+    assert_eq!(
+        held["record"]["document_id"],
+        format!("document:{SECOND}").as_str()
+    );
+    // Today's face 0 holds nothing until the person keeps it, and asked again the clock files nothing more.
+    let today = read(w.path(), json!({}), second + 60);
+    assert!(today["document"]["document"]["contributions"]
+        .as_array()
+        .is_none_or(Vec::is_empty));
+    turn(w.path(), json!({}), second + 60).unwrap();
+    let listed = execute_at(w.path(), "receiving_list", &json!({}), second + 60).unwrap();
+    assert_eq!(listed["returns"].as_array().unwrap().len(), 1);
+    // The person keeps it: accepted and included, today's face 0 holds the proposal, the clock's, kept by them.
+    let basis = today["revision"]["revision"].clone();
+    let reviewed = execute_with_token_at(
+        w.path(),
+        "receiving_review",
+        &json!({"return_ref": return_ref, "expected_return_revision": held["revision"], "disposition": "accepted",
+            "expected_source_revision": basis}),
+        Some(HUMAN),
+        second + 120,
+    )
+    .unwrap();
+    execute_with_token_at(
+        w.path(),
+        "receiving_include",
+        &json!({"return_ref": return_ref, "expected_return_revision": reviewed["revision"],
+            "expected_source_revision": basis}),
+        Some(HUMAN),
+        second + 180,
+    )
+    .unwrap();
+    let today = read(w.path(), json!({}), second + 180);
+    let contributions = today["document"]["document"]["contributions"]
+        .as_array()
+        .unwrap();
+    assert_eq!(contributions.len(), 1, "{today}");
+    assert_eq!(contributions[0]["field_id"], "p0_quick_thoughts");
+    assert_eq!(contributions[0]["html"], PROPOSAL);
 }
 
 /// A Day form anyone may write: in Work/sources, where the placement policy lets work write.
