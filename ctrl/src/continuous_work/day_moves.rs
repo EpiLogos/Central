@@ -790,7 +790,7 @@ fn clock_of(time: &TimeReading, at_ms: i64) -> io::Result<String> {
 pub(super) struct Log {
     exists: bool,
     raw: String,
-    revision: String,
+    pub(super) revision: String,
     pub(super) events: Vec<Value>,
 }
 
@@ -1853,25 +1853,32 @@ fn carry(
     let operation = json!({"operation":"field.append","field_id":field_id,
         "contribution_id":contribution_id,"html":proposal});
     if !principal.is_human() {
+        // A close that is not the person's writes nothing into their Day: Central files face 5's proposal in receiving itself, the
+        // one filing of a close's carry, whoever closed (its civil clock at the turn, or the Day's agent under the Close the person
+        // saved), where the person's Approvals keep it on tomorrow's face 0 or drop it, as any entry that is not theirs waits (the one
+        // submit, receiving.rs). Filed once for the Day it closes: the same close asked again answers the Return it filed.
         state["state"] = json!("waits");
         let submit = json!({"source_ref":target["source"]["ref"],"document_id":target["document_id"],
             "expected_source_revision":target["revision"]["revision"],"proposal":operation});
-        if principal.is_civil_clock() {
-            // Central's civil clock has no one to hand the carry to: it files it in receiving itself, where the person's Approvals
-            // keep it on tomorrow's face 0 or drop it, as any entry that is not theirs waits (the one submit, receiving.rs).
-            let mut filing = submit.clone();
-            filing["producer_key"] = json!(contribution_id);
-            filing["day_ref"] = json!(day_ref_of(scope, next_date));
-            filing["summary"] = json!(format!(
-                "Face 5's proposal for tomorrow, from the Day of {}, for face 0 of the Day of {next_date}: Central's civil clock closed the Day at its turn and carries nothing into your Day itself. Keep it or drop it.",
-                closing["temporal"]["civil_date"].as_str().unwrap_or(closing_ref),
-            ));
-            let filed = super::receiving::file_held(scope, &filing, principal, now)?;
-            state["return_ref"] = filed["return_ref"].clone();
-            state["reason"] = json!("Central's civil clock writes nothing into your Day: face 5's proposal waits in Approvals, for you to keep on tomorrow's face 0 or drop.");
+        let closer = if principal.is_civil_clock() {
+            "Central's civil clock closed the Day at its turn".to_owned()
         } else {
-            state["reason"] = json!("An agent's entry into a Day waits for the person: submit it through central.receiving.submit.");
-        }
+            format!("{} closed the Day", principal.principal_ref)
+        };
+        let mut filing = submit.clone();
+        filing["producer_key"] = json!(contribution_id);
+        filing["day_ref"] = json!(day_ref_of(scope, next_date));
+        filing["summary"] = json!(format!(
+            "Face 5's proposal for tomorrow, from the Day of {}, for face 0 of the Day of {next_date}: {closer} and carries nothing into your Day itself. Keep it or drop it.",
+            closing["temporal"]["civil_date"].as_str().unwrap_or(closing_ref),
+        ));
+        let filed = super::receiving::file_held(scope, &filing, principal, now)?;
+        state["return_ref"] = filed["return_ref"].clone();
+        state["reason"] = json!(if principal.is_civil_clock() {
+            "Central's civil clock writes nothing into your Day: face 5's proposal waits in Approvals, for you to keep on tomorrow's face 0 or drop."
+        } else {
+            "An agent's close writes nothing into your Day: face 5's proposal waits in Approvals, for you to keep on tomorrow's face 0 or drop."
+        });
         state["proposal"] = submit;
         return Ok(state);
     }
@@ -2962,6 +2969,7 @@ pub(crate) fn authenticated_action(operation: &str) -> Option<&'static str> {
         "day_field_record" => "central.day.field.record",
         "day_entry_part" => "central.day.entry.part",
         "day_receipt_record" => "central.day.receipt.record",
+        "day_session_yield" => "central.day.session.yield",
         _ => return None,
     })
 }
@@ -2981,6 +2989,7 @@ pub(crate) fn authenticated_operation(
         "day_field_record" => field_record(scope, input, principal, now),
         "day_entry_part" => entry_part(scope, input, principal, now),
         "day_receipt_record" => super::day_turn::record_receipt(scope, input, principal, now),
+        "day_session_yield" => super::day_turn::session_yield(scope, input, principal, now),
         _ => Err(invalid("unknown continuous-work operation")),
     }
 }

@@ -603,6 +603,12 @@ fn reading(
             value["receipts_refused"] = json!(error.to_string());
         }
     }
+    // What the Day's last close filed (day_turn.rs `file_day`): every entry it held at its close. None while it never closed.
+    match super::day_turn::filing_of(scope, civil_date) {
+        Ok(Some(filing)) => value["filed"] = filing,
+        Ok(None) => {}
+        Err(error) => value["filed_refused"] = json!(error.to_string()),
+    }
     Ok(value)
 }
 pub fn day_read(scope: &Scope, input: &Value) -> io::Result<Value> {
@@ -779,10 +785,22 @@ pub(crate) fn change_lifecycle(
         .iter_mut()
         .find(|entry| entry["temporal"]["day_ref"] == day_ref)
         .ok_or_else(|| invalid("Day relation disappeared"))?;
+    // Closing the Day files it (day_turn.rs `file_day`; O-I #1007): every close, whoever closes it, so a Day that names no civil
+    // date to file is not closed.
+    let civil_date = entry["temporal"]["civil_date"].as_str().map(str::to_owned);
+    if state == "closed" && civil_date.is_none() {
+        return Err(invalid(
+            "the Day names no civil date, so its close could not file it",
+        ));
+    }
     entry["temporal"]["lifecycle"] = json!(state);
     entry["temporal"]["lifecycle_at_unix_seconds"] = json!(now);
     entry["temporal"]["lifecycle_actor_ref"] = json!(actor_ref);
-    save_relations(scope, &relations, &basis)
+    save_relations(scope, &relations, &basis)?;
+    if let (true, Some(civil_date)) = (state == "closed", civil_date) {
+        super::day_turn::file_day(scope, &civil_date, day_ref, actor_ref, now)?;
+    }
+    Ok(())
 }
 pub fn day_lifecycle(
     scope: &Scope,

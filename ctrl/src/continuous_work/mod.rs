@@ -72,11 +72,15 @@ pub fn execute_with_token_at(
         }
         _ => {}
     }
-    // The Day's turn files its close's carry into receiving (day_moves.rs `carry`): it takes receiving's lock first, in the same
+    // A close files its carry into receiving (day_moves.rs `carry`: the Day's turn, and a close-carry that is not the person's), and
+    // a session's end files what it yielded (day_turn.rs `session_yield`): each takes receiving's lock first, in the same
     // return-lock -> source-lock order.
-    let _returns = (operation == "day_turn")
-        .then(|| crate::source_safety::lock(&scope.root, "source-return.lock"))
-        .transpose()?;
+    let _returns = matches!(
+        operation,
+        "day_turn" | "day_close_carry" | "day_session_yield"
+    )
+    .then(|| crate::source_safety::lock(&scope.root, "source-return.lock"))
+    .transpose()?;
     let _locks = source::lock(&scope)?;
     match operation {
         "policy" => Ok(serde_json::to_value(placement::effective_policy(
@@ -294,6 +298,11 @@ handler!(
     "central.day.receipt.record",
     "day_receipt_record"
 );
+handler!(
+    day_session_yield_action,
+    "central.day.session.yield",
+    "day_session_yield"
+);
 handler!(day_ensure_action, "central.day.ensure", "day_ensure");
 handler!(
     day_lifecycle_action,
@@ -457,11 +466,25 @@ fn register_day_turn(registry: &mut ActionRegistry) {
                 field("owner", "string", true),
                 field("subject", "string", true),
                 field("source", "string", false),
+                field("session", "string", false),
                 field("receipt", "object", false),
                 field("occurred_at_unix_seconds", "integer", false),
                 field("expected_authority_revision", "string", false),
             ],
             day_receipt_record_action as crate::action::ActionHandler,
+        ),
+        (
+            "central.day.session.yield",
+            "File what a session yielded at its end on today's face 2",
+            "Authenticated, like the Day's other records: what a session yielded at its end (manual §18.2: its receipts, its changes and a short account) filed in receiving as one pending contribution to face 2 of today's Day document (its Operation field, /fields/p2_operations, field.append), for the person to keep on face 2 or drop in Approvals; nothing of it is written into the Day until they keep it. Its receipts are those today's Day holds naming session (as the session they were made in, or as what they moved), its changes what they moved, and account (at most 4 KiB, plain text) the short account given. Filed once per session and Day: asked again, the Return filed is answered. Where the session yielded nothing (no receipt today and no account), or today's Day has no page or its page no face 2 field, nothing is filed and the answer (central.day-session-yield/v1, state) says why.",
+            MutationClass::LocallyMutating,
+            vec![
+                field("project", "string", false),
+                field("session", "string", true),
+                field("account", "string", false),
+                field("expected_authority_revision", "string", false),
+            ],
+            day_session_yield_action as crate::action::ActionHandler,
         ),
     ] {
         registry

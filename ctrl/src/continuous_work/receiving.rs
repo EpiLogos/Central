@@ -1062,6 +1062,13 @@ pub(crate) fn file_held(
         Err(error) => Err(error),
     }
 }
+/// The Return `return_ref` as it stands, read as `central.receiving.read` reads it: for an owner's own act answering with a Return
+/// it filed earlier (day_turn.rs `session_yield`).
+pub(crate) fn read_held(scope: &Scope, return_ref: &str) -> io::Result<Value> {
+    let (record, revision) = read_record(scope, return_ref)?;
+    require_disclosure(scope, &record)?;
+    Ok(response(&record, &revision))
+}
 /// Evidence is retained from the actual scoped SourceRef at the supplied
 /// revision. It does not become included Day prose or adopted human ground.
 fn retain_artifacts(scope: &Scope, input: &Value, principal: &Principal) -> io::Result<Vec<Value>> {
