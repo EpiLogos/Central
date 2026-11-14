@@ -792,9 +792,28 @@ fn codex_block(law: &Law, home: Option<&Path>) -> io::Result<Result<CodexBlock, 
     }))
 }
 
+/// A render stopped by a fault after it wrote (one no check before writing could see): what it wrote, and why it stopped.
+#[derive(Debug)]
+struct PartlyWritten {
+    written: Vec<String>,
+    cause: String,
+}
+impl std::fmt::Display for PartlyWritten {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{} (Central had written {} when it stopped: render the floor again)",
+            self.cause,
+            self.written.join(", ")
+        )
+    }
+}
+impl std::error::Error for PartlyWritten {}
+
 /// Render the floor; the caller holds the root's source lock. Everything is checked before anything is written: a floor another
-/// hand wrote, a named file that is neither absent nor a link to the floor, a declared statement lost, a quote that moved and a
-/// floor past its budget are refused in Central's words, changing nothing.
+/// hand wrote, a named file that is neither absent nor a link to the floor, a declared statement lost, a quote that moved, a floor
+/// past its budget, and a floor or Codex file Central cannot write as it writes its records (a link, a file with a second link)
+/// are refused in Central's words, changing nothing. The receipt's `changed` is whether anything was written, and `written` what.
 fn render_locked(
     scope: &source::Scope,
     files: &[String],
@@ -843,32 +862,78 @@ fn render_locked(
     let law = Law::gather(scope)?;
     let rendered = law.render(home)?;
     let codex = codex_block(&law, home)?;
-    let changed = before.as_deref() != Some(rendered.text.as_str());
-    if changed {
+    let floor_changed = before.as_deref() != Some(rendered.text.as_str());
+    let codex_changed = codex
+        .as_ref()
+        .is_ok_and(|block| block.before.as_deref() != Some(block.after.as_str()));
+    // Every target is checked before any is written, as the record write itself checks it: a render refused here changed
+    // nothing.
+    if floor_changed {
+        crate::file_mutation::record_writable(root, Path::new(FLOOR_FILE)).map_err(|error| {
+            refused(format!(
+                "{FLOOR_FILE} at {} is not a file Central can write its floor into ({error}); Central leaves it as it is. Nothing was written.",
+                root.display()
+            ))
+        })?;
+    }
+    if let (Ok(block), true) = (&codex, codex_changed) {
+        let target = block.folder.join(FLOOR_FILE);
+        if fs::symlink_metadata(&target).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+            return Err(refused(format!(
+                "Codex's global instructions at {} are a link: Central writes its block only into a file of their own, and leaves them as they are. Nothing was written.",
+                target.display()
+            )));
+        }
+        crate::file_mutation::record_writable(&block.folder, Path::new(FLOOR_FILE)).map_err(
+            |error| {
+                refused(format!(
+                    "Codex's global instructions at {} are not a file Central can write its block into ({error}); Central leaves them as they are. Nothing was written.",
+                    target.display()
+                ))
+            },
+        )?;
+    }
+    // What the render writes, in order; a fault after the first write (one no check could see) names what was written.
+    let mut written: Vec<String> = Vec::new();
+    let stopped = |written: &[String], error: io::Error| {
+        if written.is_empty() {
+            error
+        } else {
+            io::Error::other(PartlyWritten {
+                written: written.to_vec(),
+                cause: error.to_string(),
+            })
+        }
+    };
+    if floor_changed {
         crate::file_mutation::atomic_record(
             root,
             Path::new(FLOOR_FILE),
             rendered.text.as_bytes(),
             crate::file_mutation::RecordDisposition::ReplaceOrCreate,
         )?;
+        written.push(FLOOR_FILE.into());
     }
     for (name, state) in &links {
         if *state == "made" {
-            make_link(root, name)?;
+            make_link(root, name).map_err(|error| stopped(&written, error))?;
+            written.push(name.clone());
         }
     }
     let codex = match codex {
         Ok(block) => {
-            let changed = block.before.as_deref() != Some(block.after.as_str());
-            if changed {
+            let file = block.folder.join(FLOOR_FILE);
+            if codex_changed {
                 crate::file_mutation::atomic_record(
                     &block.folder,
                     Path::new(FLOOR_FILE),
                     block.after.as_bytes(),
                     crate::file_mutation::RecordDisposition::ReplaceOrCreate,
-                )?;
+                )
+                .map_err(|error| stopped(&written, error))?;
+                written.push(file.to_string_lossy().into_owned());
             }
-            json!({"file": block.folder.join(FLOOR_FILE).to_string_lossy(), "changed": changed})
+            json!({"file": file.to_string_lossy(), "changed": codex_changed})
         }
         Err(why) => json!({"file": null, "changed": false, "why": why}),
     };
@@ -885,7 +950,8 @@ fn render_locked(
         "root": root.to_string_lossy(),
         "floor": FLOOR_FILE,
         "renderer": FLOOR_RENDERER,
-        "changed": changed,
+        "changed": !written.is_empty(),
+        "written": written,
         "revision": crate::source_safety::content_revision_bytes(rendered.text.as_bytes()),
         "law_revision": rendered.law_revision,
         "bytes": rendered.text.len(),
@@ -1207,12 +1273,23 @@ pub fn adopt_with_token_at(
             &[scope.source_ref(&path)],
         )?;
     }
+    // A refusal of the render changed nothing (it is checked before anything is written); a render stopped after it wrote says
+    // what it wrote. Either rides on the receipt: the adoption stands.
     let floor = match render_locked(&scope, &files, home) {
         Ok(receipt) => receipt,
         Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
             json!({"schema": FLOOR_RENDER_SCHEMA, "floor": FLOOR_FILE, "changed": false, "refused": error.to_string()})
         }
-        Err(error) => return Err(error),
+        Err(error) => match error
+            .get_ref()
+            .and_then(|inner| inner.downcast_ref::<PartlyWritten>())
+        {
+            Some(partly) => {
+                json!({"schema": FLOOR_RENDER_SCHEMA, "floor": FLOOR_FILE, "changed": true, "written": partly.written,
+                    "failed": error.to_string()})
+            }
+            None => return Err(error),
+        },
     };
     Ok(json!({
         "schema": LAW_ADOPTION_SCHEMA,
