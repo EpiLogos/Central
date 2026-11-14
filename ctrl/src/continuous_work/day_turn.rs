@@ -678,6 +678,40 @@ fn yields_path(scope: &Scope, civil_date: &str) -> String {
     format!("{}/{civil_date}/yields.jsonl", scope.day_dir())
 }
 
+/// What the sessions of the Day of `civil_date` yielded at their end (`session_yield`), in the order they were filed, each with
+/// where its Return stands now in receiving (`status`: pending until the person keeps it on face 2 or drops it in Approvals, and
+/// the Return's `revision`, which a keep or a drop is asked on). A Return Central can no longer read says why (`unread`). A Day with
+/// none has none (O-I #1007: face 2 reads them from the Day).
+pub(crate) fn yields_of(scope: &Scope, civil_date: &str) -> io::Result<Vec<Value>> {
+    let yields = day_moves::load_lines(
+        scope,
+        &yields_path(scope, civil_date),
+        YIELDED_SCHEMA,
+        "session yields",
+    )?
+    .events;
+    Ok(yields
+        .into_iter()
+        .map(|line| {
+            let mut entry = json!({"session": line["session"], "day_ref": line["day_ref"], "return_ref": line["return_ref"],
+                "receipts": line["receipts"], "changes": line["changes"], "account": line["account"],
+                "filed_by": line["filed_by"], "filed_at_unix_seconds": line["filed_at_unix_seconds"]});
+            match line["return_ref"]
+                .as_str()
+                .map(|return_ref| super::receiving::read_held(scope, return_ref))
+            {
+                Some(Ok(held)) => {
+                    entry["status"] = held["record"]["status"].clone();
+                    entry["revision"] = held["revision"].clone();
+                }
+                Some(Err(error)) => entry["unread"] = json!(error.to_string()),
+                None => entry["unread"] = json!("the yield names no Return"),
+            }
+            entry
+        })
+        .collect())
+}
+
 /// File what a session yielded at its end as a proposal waiting on today's face 2 (`central.day.session.yield`; manual §18.2 "What
 /// a session yields when it ends, its receipts, its changes and a short account, arrives on face 2 as a proposal you keep or drop";
 /// O-I #1007, R36): the receipts today's Day holds of `session` (each laid naming it, or naming it as what it moved) that no

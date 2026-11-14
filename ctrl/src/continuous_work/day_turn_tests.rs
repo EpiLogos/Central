@@ -1506,3 +1506,65 @@ fn a_session_that_yields_again_files_what_is_new_and_is_answered_with_what_was_f
     assert_eq!(third["receipts"], json!(["receipt:r3"]));
     assert_eq!(third["status"], "pending");
 }
+
+/// The Day's reading holds what its sessions yielded, in the order filed, each with where its Return stands (O-I #1007: face 2 reads
+/// them from the Day): pending, with the revision a keep or a drop is asked on, then as the person answered in Approvals.
+#[test]
+fn the_days_reading_holds_what_its_sessions_yielded_and_where_each_stands() {
+    let w = world("UTC", true);
+    let now = at("2026-10-20T09:00:00Z");
+    save_form(w.path(), now);
+    turn(w.path(), json!({}), now).unwrap();
+    assert_eq!(read(w.path(), json!({}), now)["yields"], json!([]));
+    for (id, session) in [
+        ("receipt:a", "agent-session/a"),
+        ("receipt:b", "agent-session/b"),
+    ] {
+        lay(
+            w.path(),
+            &json!({"receipt_id": id, "act": "encounter.prompt", "owner": "AIKit", "subject": session,
+                "source": "control:root", "session": session}),
+            now,
+        )
+        .unwrap();
+    }
+    let a = session_yield(
+        w.path(),
+        json!({"session": "agent-session/a", "account": "Answered."}),
+        now + 5,
+    )
+    .unwrap();
+    let b = session_yield(w.path(), json!({"session": "agent-session/b"}), now + 6).unwrap();
+    let today = read(w.path(), json!({}), now + 10);
+    let yields = today["yields"].as_array().expect("the Day's yields");
+    assert_eq!(yields.len(), 2, "{today}");
+    assert_eq!(yields[0]["session"], "agent-session/a");
+    assert_eq!(yields[0]["return_ref"], a["return_ref"]);
+    assert_eq!(yields[0]["day_ref"], FIRST);
+    assert_eq!(yields[0]["status"], "pending");
+    assert_eq!(yields[0]["receipts"], json!(["receipt:a"]));
+    assert_eq!(yields[0]["account"], "Answered.");
+    assert_eq!(yields[1]["session"], "agent-session/b");
+    assert_eq!(yields[1]["return_ref"], b["return_ref"]);
+    let held = execute_at(
+        w.path(),
+        "receiving_read",
+        &json!({"return_ref": b["return_ref"]}),
+        now + 10,
+    )
+    .unwrap();
+    assert_eq!(yields[1]["revision"], held["revision"]);
+    // The person drops the second in Approvals: the Day reads it so, and the first still waits.
+    execute_with_token_at(
+        w.path(),
+        "receiving_review",
+        &json!({"return_ref": b["return_ref"], "expected_return_revision": yields[1]["revision"],
+            "disposition": "rejected"}),
+        Some(HUMAN),
+        now + 20,
+    )
+    .unwrap();
+    let today = read(w.path(), json!({}), now + 30);
+    assert_eq!(today["yields"][0]["status"], "pending", "{today}");
+    assert_eq!(today["yields"][1]["status"], "rejected", "{today}");
+}
