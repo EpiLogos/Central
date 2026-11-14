@@ -708,6 +708,41 @@ Responsibility (`{RESPONSIBILITY}`): “{OWN_THE_FAULT}”\n{CODEX_END}\n\nafter
 }
 
 #[test]
+fn codex_carries_the_floor_only_for_the_homes_own_central_world() {
+    let ground = owners();
+    let codex = ground.home.join(".codex");
+    fs::create_dir_all(&codex).unwrap();
+    let mine = "# My Codex\n\nmy own words\n";
+    fs::write(codex.join("AGENTS.md"), mine).unwrap();
+    // Another world rendered with this home: Codex's block at this home is not its to write.
+    let other = owners();
+    let receipt = render(&other.root, &json!({}), Some(&ground.home)).unwrap();
+    assert_eq!(receipt["codex"]["changed"], false, "{receipt}");
+    assert_eq!(receipt["codex"]["file"], Value::Null);
+    assert!(
+        receipt["codex"]["why"]
+            .as_str()
+            .unwrap()
+            .contains("not this home's own Central world"),
+        "{receipt}"
+    );
+    assert_eq!(fs::read_to_string(codex.join("AGENTS.md")).unwrap(), mine);
+    // A world under this home that is not its ~/Central: the same.
+    let elsewhere = ground.home.join("Elsewhere");
+    fs::rename(&ground.root, &elsewhere).unwrap();
+    let receipt = render(&elsewhere, &json!({}), Some(&ground.home)).unwrap();
+    assert_eq!(receipt["codex"]["changed"], false, "{receipt}");
+    assert_eq!(fs::read_to_string(codex.join("AGENTS.md")).unwrap(), mine);
+    // The home's own ~/Central carries it.
+    fs::rename(&elsewhere, &ground.root).unwrap();
+    let receipt = render_in(&ground, &json!({})).unwrap();
+    assert_eq!(receipt["codex"]["changed"], true, "{receipt}");
+    assert!(fs::read_to_string(codex.join("AGENTS.md"))
+        .unwrap()
+        .contains(CODEX_END));
+}
+
+#[test]
 fn a_statements_words_are_its_text_without_front_matter_or_title() {
     assert_eq!(
         body_of("---\nstanding: durable\n---\n# Title\n\n\nWords.\n\nMore.\n\n"),
