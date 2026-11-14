@@ -4,12 +4,12 @@
 //! `central.day.turn` does what the person's adopted civil-time policy determines at this instant, and nothing else: today's Day
 //! opens on its civil date (its blank source, its relation, today's pointer); its document is made from the Day form the person
 //! saved in the Day's settings (`day_form`), never from one offered to the turn, when it has none, carrying the set of the Day
-//! before it (the worlds it held, its rows with the pages that still play, the Day added to its lineage); and an earlier Day still
-//! open closes at its turn,
-//! its close routine asked to carry face 5's proposal as the person's Day settings keep it (the clock writes no one's words into a
-//! Day, so the proposal waits for the person and stays on the closed Day: day_moves.rs `close_at_turn`). It acts as Central's own
-//! civil clock and holds no credential: the person's consent is the policy they adopted (`automatic_day_rollover`), and a policy
-//! without it is refused in words. Asked again with nothing to do, it writes nothing.
+//! before it (the worlds it held, its rows with the pages that still play, the Day added to its lineage); and each earlier Day
+//! still open closes at its turn through the one close (day_moves.rs `close_carry`), as Central's civil clock and only under the
+//! consent the person saved (Close at Day start, and the Day not opened again by them after its turn). A Day it may not close
+//! stays open, the turn and that Day's reading saying why. The clock holds no credential: its authority to act at all is the
+//! policy the person adopted (`automatic_day_rollover`), and a policy without it is refused in words. Asked again with nothing to
+//! do, it writes nothing.
 //!
 //! `central.day.receipt.record` lays what an act did into the Day of the civil date it happened on: append-only, one line each,
 //! never rewritten, kept by its id, and read back with that Day (`central.day.read`'s `receipts`). A late receipt keeps the time it
@@ -96,7 +96,8 @@ pub(crate) fn turn(scope: &Scope, input: &Value, now: u64) -> io::Result<Value> 
             }
         }
     };
-    // Each earlier Day still open closes at its turn, oldest first.
+    // Each earlier Day still open closes at its turn, oldest first, through the one close (day_moves::close_carry) as Central's
+    // civil clock, under the consent the person saved; a Day it may not close stays open, and the turn says why.
     let (relations, _) = scope.relations()?;
     let mut earlier: Vec<(String, String)> = relations["relations"]
         .as_array()
@@ -111,13 +112,24 @@ pub(crate) fn turn(scope: &Scope, input: &Value, now: u64) -> io::Result<Value> 
         .collect();
     earlier.sort();
     let mut closed = Vec::new();
+    let mut stays_open = Vec::new();
     for (date, closing) in earlier {
-        let carry = day_moves::close_at_turn(scope, &closing, &day_ref, &clock, now)?;
-        closed.push(json!({"day_ref": closing, "civil_date": date, "carry": carry}));
+        let closed_now = temporal::day_read(scope, &json!({"day_ref": closing})).and_then(|day| {
+            let input = json!({"day_ref": closing, "expected_revision": day["revision"]["revision"],
+                "expected_relations_revision": day["relations_revision"]});
+            day_moves::close_carry(scope, &input, &clock, now)
+        });
+        match closed_now {
+            Ok(done) => {
+                closed.push(json!({"day_ref": closing, "civil_date": date, "carry": done["carry"]}))
+            }
+            Err(error) => stays_open
+                .push(json!({"day_ref": closing, "civil_date": date, "why": error.to_string()})),
+        }
     }
     let mut result = temporal::day_read(scope, &json!({"day_ref": day_ref}))?;
     result["turn"] = json!({"schema": TURN_SCHEMA, "by": CIVIL_CLOCK, "civil_date": today, "opened": opened,
-        "document": document, "closed": closed, "time_policy_revision": time.revision});
+        "document": document, "closed": closed, "stays_open": stays_open, "time_policy_revision": time.revision});
     Ok(result)
 }
 
