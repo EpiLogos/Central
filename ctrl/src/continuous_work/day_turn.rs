@@ -143,7 +143,11 @@ pub(crate) fn turn(scope: &Scope, input: &Value, now: u64) -> io::Result<Value> 
                 .push(json!({"day_ref": closing, "civil_date": date, "why": error.to_string()})),
         }
     }
-    let mut result = temporal::day_read(scope, &json!({"day_ref": day_ref}))?;
+    // The turn answers today's Day as `central.day.read` does, what its sessions yielded with it: the O:I kernel reads the Day here.
+    let mut result = with_yields(
+        scope,
+        temporal::day_read(scope, &json!({"day_ref": day_ref}))?,
+    );
     result["turn"] = json!({"schema": TURN_SCHEMA, "by": CIVIL_CLOCK, "civil_date": today, "opened": opened,
         "document": document, "closed": closed, "stays_open": stays_open, "time_policy_revision": time.revision});
     Ok(result)
@@ -681,7 +685,8 @@ fn yields_path(scope: &Scope, civil_date: &str) -> String {
 /// What the sessions of the Day of `civil_date` yielded at their end (`session_yield`), in the order they were filed, each with
 /// where its Return stands now in receiving (`status`: pending until the person keeps it on face 2 or drops it in Approvals, and
 /// the Return's `revision`, which a keep or a drop is asked on). A Return Central can no longer read says why (`unread`). A Day with
-/// none has none (O-I #1007: face 2 reads them from the Day).
+/// none has none (O-I #1007: face 2 reads them from the Day). The Returns are read with the World's source horizon resolved once
+/// for all of them, never once per yield (receiving.rs `HeldReader`, Central#365 review).
 pub(crate) fn yields_of(scope: &Scope, civil_date: &str) -> io::Result<Vec<Value>> {
     let yields = day_moves::load_lines(
         scope,
@@ -690,6 +695,7 @@ pub(crate) fn yields_of(scope: &Scope, civil_date: &str) -> io::Result<Vec<Value
         "session yields",
     )?
     .events;
+    let mut held = super::receiving::HeldReader::new(scope);
     Ok(yields
         .into_iter()
         .map(|line| {
@@ -698,7 +704,7 @@ pub(crate) fn yields_of(scope: &Scope, civil_date: &str) -> io::Result<Vec<Value
                 "filed_by": line["filed_by"], "filed_at_unix_seconds": line["filed_at_unix_seconds"]});
             match line["return_ref"]
                 .as_str()
-                .map(|return_ref| super::receiving::read_held(scope, return_ref))
+                .map(|return_ref| held.read(return_ref))
             {
                 Some(Ok(held)) => {
                     entry["status"] = held["record"]["status"].clone();
@@ -710,6 +716,26 @@ pub(crate) fn yields_of(scope: &Scope, civil_date: &str) -> io::Result<Vec<Value
             entry
         })
         .collect())
+}
+
+/// A Day's reading with what its sessions yielded (`yields_of`), for the answers that show the Day: `central.day.read`'s, and the
+/// turn's, which the O:I kernel reads today's Day by. The Day's own reading (`temporal::day_read`) leaves them out, so the reads a
+/// check, a filing or a close makes inside Central's locks read no Return (Central#365 review: every internal read paid for every
+/// yield, and a Day of N yields cost N(N-1)/2 walks to file). Yields that cannot be read leave none and say why
+/// (`yields_refused`).
+pub(crate) fn with_yields(scope: &Scope, mut reading: Value) -> Value {
+    let civil_date = reading["temporal"]["civil_date"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    match yields_of(scope, &civil_date) {
+        Ok(yields) => reading["yields"] = Value::Array(yields),
+        Err(error) => {
+            reading["yields"] = json!([]);
+            reading["yields_refused"] = json!(error.to_string());
+        }
+    }
+    reading
 }
 
 /// File what a session yielded at its end as a proposal waiting on today's face 2 (`central.day.session.yield`; manual §18.2 "What

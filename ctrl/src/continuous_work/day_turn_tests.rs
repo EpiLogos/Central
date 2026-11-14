@@ -1568,3 +1568,67 @@ fn the_days_reading_holds_what_its_sessions_yielded_and_where_each_stands() {
     assert_eq!(today["yields"][0]["status"], "pending", "{today}");
     assert_eq!(today["yields"][1]["status"], "rejected", "{today}");
 }
+
+#[test]
+fn the_days_yields_are_read_with_one_walk_of_its_sources_and_only_where_the_day_is_shown() {
+    // Central#365 review: each yield's Return was read through a walk of the whole source horizon, in every reading of the Day,
+    // the ones a check or a filing makes inside the locks too, so a Day of N yields cost N walks a read and N(N-1)/2 to file.
+    let w = world("UTC", true);
+    let now = at("2026-10-20T09:00:00Z");
+    save_form(w.path(), now);
+    turn(w.path(), json!({}), now).unwrap();
+    let walked = |answer: &dyn Fn() -> Value| -> (usize, Value) {
+        source::HORIZON_WALKS.with(|walks| walks.set(0));
+        let answer = answer();
+        (source::HORIZON_WALKS.with(std::cell::Cell::get), answer)
+    };
+    let yielded = |session: &str| {
+        lay(
+            w.path(),
+            &json!({"receipt_id": format!("receipt:{session}"), "act": "encounter.prompt", "owner": "AIKit",
+                "subject": session, "source": "control:root", "session": session}),
+            now,
+        )
+        .unwrap();
+        let filed = session_yield(w.path(), json!({"session": session}), now + 5).unwrap();
+        assert_eq!(filed["state"], "filed", "{filed}");
+    };
+    yielded("agent-session/a");
+    let (one, today) = walked(&|| read(w.path(), json!({}), now + 10));
+    assert_eq!(today["yields"].as_array().map(Vec::len), Some(1), "{today}");
+    for session in ["agent-session/b", "agent-session/c", "agent-session/d"] {
+        yielded(session);
+    }
+    // central.day.read walks the World's sources as often for four yields as for one.
+    let (four, today) = walked(&|| read(w.path(), json!({}), now + 10));
+    let yields = today["yields"].as_array().expect("the Day's yields");
+    assert_eq!(yields.len(), 4, "{today}");
+    assert!(
+        yields.iter().all(|entry| entry["status"] == "pending"),
+        "{today}"
+    );
+    assert_eq!(
+        four, one,
+        "a read of four yields walked {four} times, of one {one}"
+    );
+    // The Day's own reading, which a check, a filing or a close reads inside the locks, carries no yield and reads no Return:
+    // central.day.read walks once more than it, once for all its yields.
+    let scope = Scope::resolve(w.path(), None).unwrap();
+    let (inside, reading) = walked(&|| temporal::day_read(&scope, &json!({})).unwrap());
+    assert!(reading.get("yields").is_none(), "{reading}");
+    assert_eq!(
+        four,
+        inside + 1,
+        "central.day.read walked {four} times, the Day's own reading {inside}"
+    );
+    // The turn answers them as central.day.read does, for the O:I kernel reads today's Day there, at no cost per yield.
+    let (turned, answer) = walked(&|| turn(w.path(), json!({}), now + 10).unwrap());
+    assert_eq!(answer["yields"], today["yields"], "{answer}");
+    yielded("agent-session/e");
+    let (turned_again, answer) = walked(&|| turn(w.path(), json!({}), now + 10).unwrap());
+    assert_eq!(answer["yields"].as_array().map(Vec::len), Some(5));
+    assert_eq!(
+        turned_again, turned,
+        "the turn walked {turned_again} times with five yields, {turned} with four"
+    );
+}

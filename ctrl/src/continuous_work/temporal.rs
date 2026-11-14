@@ -609,15 +609,8 @@ fn reading(
         Ok(None) => {}
         Err(error) => value["filed_refused"] = json!(error.to_string()),
     }
-    // What the Day's sessions yielded at their end (day_turn.rs `session_yield`), each with where its Return stands: a proposal that
-    // waits on face 2 until the person keeps it there or drops it in Approvals.
-    match super::day_turn::yields_of(scope, civil_date) {
-        Ok(yields) => value["yields"] = Value::Array(yields),
-        Err(error) => {
-            value["yields"] = json!([]);
-            value["yields_refused"] = json!(error.to_string());
-        }
-    }
+    // What the Day's sessions yielded is no part of this reading: the answers that show the Day add it (day_turn.rs `with_yields`),
+    // and the reads a check or a filing makes inside the locks read no Return (Central#365 review).
     Ok(value)
 }
 pub fn day_read(scope: &Scope, input: &Value) -> io::Result<Value> {
