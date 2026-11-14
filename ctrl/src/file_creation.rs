@@ -73,9 +73,11 @@ fn create_ordinary(root: &Path, input: &Value) -> io::Result<Value> {
     let (actor, actor_kind, agent_session_ref) = attribution(input)?;
     let revision = content_revision_bytes(&content_bytes);
     let request = json!({"operation_ref":operation,"location":loc,"revision":revision,"actor":actor,"actor_kind":actor_kind,"agent_session_ref":agent_session_ref});
+    // A page created in your world's Flows carrier is a change of the root's horizon, attributed to its caller (file_mutation.rs):
+    // the root's source authority first, then the history's lock (FlowsHorizon::authority).
+    let authority = FlowsHorizon::authority(&root, &loc)?;
     let (dir, _lock) = state(&root)?;
-    // A page created in your world's Flows carrier is a change of the root's horizon, attributed to its caller (file_mutation.rs).
-    let horizon = FlowsHorizon::meet(&root, &loc)?;
+    let horizon = FlowsHorizon::meet(&root, &loc, authority)?;
     let area = area(&root, &dir, &loc)?;
     let record = area.join("creation.json");
     let pending = area.join("pending.json");
