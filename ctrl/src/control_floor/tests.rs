@@ -222,6 +222,8 @@ fn a_fresh_world_gets_a_floor_of_doors_and_links_for_its_harnesses() {
         "## Never-do card",
         "- Carried is not loaded, and loaded is not used: the disclosure answers what",
         "Session end, every session: leave no loose folders at the Work root. Write no",
+        "handoff or session return by hand: a session's hooks record its start and end",
+        "(O-I PROGRAMME R36).",
     ] {
         assert!(text.lines().any(|held| held == line), "no {line:?} in {text}");
     }
@@ -292,8 +294,8 @@ fn the_owners_world_lines_come_from_its_own_statements() {
 Durable Control change — the authorship law, quoted from `Control/agents/governance/authorship-and-return/propose-not-write.md`:\n\n\
 > Authorship names whose intent originates a change, never whose hands perform it: on my stated intent you perform every operation yourself — including writes into this ground — and handing file mechanics back to me is unfinished work, not deference.\n\n\
 Session end, every session: leave no loose folders at the Work root. Write no\n\
-handoff or session return by hand: a session's NOW opens and closes with its\n\
-hooks (O-I PROGRAMME R36).\n\n\
+handoff or session return by hand: a session's hooks record its start and end\n\
+(O-I PROGRAMME R36).\n\n\
 ## Smallest sufficient\n\nThe source can be large. The act should not be.\n\n\
 ## A draft\n\n*Standing: draft-source (agent-proposed).*\n\nNot law yet.\n";
     assert!(text.ends_with(tail), "{text}");
@@ -807,30 +809,90 @@ fn codex_carries_the_floor_only_for_the_homes_own_central_world() {
 }
 
 #[test]
-fn a_codex_file_central_cannot_write_refuses_the_render_before_anything_is_written() {
+fn a_codex_file_central_cannot_write_is_left_as_it_is_and_the_floor_is_written_all_the_same() {
     let ground = owners();
     let codex = ground.home.join(".codex");
     fs::create_dir_all(&codex).unwrap();
     let kept = ground.home.join("my-agents.md");
     fs::write(&kept, "# kept elsewhere\n").unwrap();
-    // Codex's global instructions as a link to a file the person keeps elsewhere, then as a file with a second link.
+    // Codex's global instructions as a link to a file the person keeps elsewhere (as a dotfile manager keeps them), then as a
+    // file with a second link.
     std::os::unix::fs::symlink(&kept, codex.join("AGENTS.md")).unwrap();
-    for _ in 0..2 {
-        let refused = render_in(&ground, &files(&["CLAUDE.md"])).unwrap_err();
-        assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied, "{refused}");
-        assert!(
-            refused.to_string().contains("Nothing was written"),
-            "{refused}"
+    for (case, words) in [
+        ("a link", "are a link"),
+        (
+            "a second link",
+            "not a file Central can write its block into",
+        ),
+    ] {
+        let receipt = render_in(&ground, &files(&["CLAUDE.md"])).unwrap();
+        assert_eq!(receipt["changed"], true, "{case}: {receipt}");
+        assert!(floor(&ground).contains("## Never-do card"), "{case}");
+        assert_eq!(
+            fs::read_link(ground.root.join("CLAUDE.md")).unwrap(),
+            Path::new(FLOOR_FILE),
+            "{case}"
         );
-        assert!(
-            !ground.root.join(FLOOR_FILE).exists(),
-            "the floor was written"
+        assert_eq!(
+            receipt["written"],
+            json!([FLOOR_FILE, "CLAUDE.md"]),
+            "{case}"
         );
-        assert!(fs::symlink_metadata(ground.root.join("CLAUDE.md")).is_err());
-        assert_eq!(fs::read_to_string(&kept).unwrap(), "# kept elsewhere\n");
+        assert_eq!(receipt["codex"]["changed"], false, "{case}: {receipt}");
+        let why = receipt["codex"]["why"].as_str().unwrap();
+        assert!(
+            why.contains(words) && why.contains("the floor is written without it"),
+            "{case}: {why}"
+        );
+        assert_eq!(
+            receipt["codex"]["file"],
+            codex.join("AGENTS.md").to_string_lossy().as_ref()
+        );
+        assert_eq!(
+            fs::read_to_string(&kept).unwrap(),
+            "# kept elsewhere\n",
+            "{case}"
+        );
+        fs::remove_file(ground.root.join(FLOOR_FILE)).unwrap();
+        fs::remove_file(ground.root.join("CLAUDE.md")).unwrap();
         fs::remove_file(codex.join("AGENTS.md")).unwrap();
         fs::hard_link(&kept, codex.join("AGENTS.md")).unwrap();
     }
+}
+
+#[test]
+fn adopting_with_codex_kept_as_a_link_renders_the_floor_and_says_why_codex_is_left() {
+    let ground = fresh();
+    let codex = ground.home.join(".codex");
+    fs::create_dir_all(&codex).unwrap();
+    let kept = ground.home.join("dotfiles-agents.md");
+    fs::write(&kept, "# mine\n").unwrap();
+    std::os::unix::fs::symlink(&kept, codex.join("AGENTS.md")).unwrap();
+    let path = "Control/agents/governance/craft/unrelated.md";
+    let receipt = adopt(
+        &ground,
+        &json!({"statement": path, "expected_revision": revision_of(&ground, "craft/unrelated.md"),
+            "files": ["CLAUDE.md"]}),
+        Some(HUMAN),
+        10,
+    )
+    .unwrap();
+    assert_eq!(receipt["adopted"], true);
+    assert!(receipt["floor"].get("refused").is_none(), "{receipt}");
+    assert_eq!(receipt["floor"]["changed"], true, "{receipt}");
+    assert!(
+        receipt["floor"]["codex"]["why"]
+            .as_str()
+            .unwrap()
+            .contains("are a link"),
+        "{receipt}"
+    );
+    // The floor stands current, linked for Claude, and the person's file is as it was.
+    assert_eq!(
+        read_in(&ground, &["CLAUDE.md"])["floors"][0]["current"],
+        true
+    );
+    assert_eq!(fs::read_to_string(&kept).unwrap(), "# mine\n");
 }
 
 #[test]

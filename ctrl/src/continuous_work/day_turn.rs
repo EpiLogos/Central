@@ -3,18 +3,24 @@
 //!
 //! `central.day.turn` does what the person's adopted civil-time policy determines at this instant, and nothing else: today's Day
 //! opens on its civil date (its blank source, its relation, today's pointer); its document is made from the Day form the person
-//! saved in the Day's settings (`day_form`), never from one offered to the turn, when it has none, carrying the set of the Day
+//! saved in the Day's settings (`day_form`), at the revision they read it at, never from one offered to the turn, when it has none
+//! (a form changed since they saved it makes no page, and the turn says so until they save it again), carrying the set of the Day
 //! before it (the worlds it held, its rows with the pages that still play, the Day added to its lineage); and each earlier Day
 //! still open closes at its turn through the one close (day_moves.rs `close_carry`), as Central's civil clock and only under the
-//! consent the person saved (Close at Day start, and the Day not opened again by them after its turn). A Day it may not close
-//! stays open, the turn and that Day's reading saying why. The clock holds no credential: its authority to act at all is the
+//! consent the person saved (Close at Day start, and the Day not opened again by them after its turn), and only where it can file
+//! the close's carry: face 5's proposal waits in Approvals on today's page, made from the Day form the person saved, so a Day
+//! whose proposal has no such page to wait on is never closed away behind them. A Day it may not close stays open, the turn and
+//! that Day's reading saying why, and the person's own close still closes it. The clock holds no credential: its authority to act at all is the
 //! policy the person adopted (`automatic_day_rollover`), and a policy without it is refused in words. Asked again with nothing to
 //! do, it writes nothing.
 //!
-//! `central.day.receipt.record` lays what an act did into today's Day, at the instant it happened: an authenticated record like the
-//! Day's others, on a credential whose grant holds it (Setup's grant does), naming who recorded it; append-only, one line each,
-//! never rewritten, kept by its id, and read back with that Day (`central.day.read`'s `receipts`). An instant outside today's Day
-//! (before it opened, after it turns, or later than now) is refused in words: a receipt never lands in another Day.
+//! `central.day.receipt.record` lays what an act did into its Day, at the instant it happened: an authenticated record like the
+//! Day's others, on a credential whose grant holds it (Setup's grant does), naming who recorded it and the Day it happened in;
+//! append-only, one line each, never rewritten, laid once by its id, and read back with the Day it was laid in
+//! (`central.day.read`'s `receipts`). A receipt for an act of the Day that just ended, recorded after its turn (an answer that
+//! came just before midnight), is never lost: it is laid in that Day while it is open, and once it is closed (or where it never
+//! opened) in today's Day, with its true instant and the Day it happened in. An instant later than now, or older than the Day
+//! that just ended, is refused in words.
 use super::{
     authority::{self, Principal},
     day_moves, documents, placement,
@@ -87,18 +93,22 @@ pub(crate) fn turn(scope: &Scope, input: &Value, now: u64) -> io::Result<Value> 
     } else if !reading["content"].as_str().unwrap_or("").is_empty() {
         json!({"state": "kept", "why": "Today's Day holds writing that is no Day document; Central keeps it as it is and makes none over it"})
     } else {
-        match day_moves::saved_day_form(scope)
-            .map(|form| form.map(|form| make_document(scope, &time, &reading, &form, &clock, now)))
-        {
-            Ok(None) => json!({"state": "wants-form", "why": NO_FORM_SAVED}),
-            Ok(Some(Ok(made))) => made,
-            Ok(Some(Err(error))) | Err(error) => {
-                json!({"state": "refused", "why": error.to_string()})
+        match saved_form(scope).and_then(|form| match form {
+            SavedForm::None => Ok(json!({"state": "wants-form", "why": NO_FORM_SAVED})),
+            SavedForm::Changed(fact) => Ok(
+                json!({"state": "wants-form", "why": format!("{fact}, so Central makes no page from it: read it and save it again in the Day's settings (day_form)")}),
+            ),
+            SavedForm::Stands(original, payload) => {
+                make_document(scope, &time, &reading, *original, payload, &clock, now)
             }
+        }) {
+            Ok(document) => document,
+            Err(error) => json!({"state": "refused", "why": error.to_string()}),
         }
     };
     // Each earlier Day still open closes at its turn, oldest first, through the one close (day_moves::close_carry) as Central's
-    // civil clock, under the consent the person saved; a Day it may not close stays open, and the turn says why.
+    // civil clock, under the consent the person saved and where it can file the carry; a Day it may not close stays open, and the
+    // turn says why.
     let (relations, _) = scope.relations()?;
     let mut earlier: Vec<(String, String)> = relations["relations"]
         .as_array()
@@ -134,31 +144,76 @@ pub(crate) fn turn(scope: &Scope, input: &Value, now: u64) -> io::Result<Value> 
     Ok(result)
 }
 
-/// The Day form at `path` under the world's Central root, read where it stands through Central's file route, and its inert data
-/// island: a Day form's (`meta.type` daily) with its field map, carrying no retained form binding. The Day's settings save only
-/// such a form (`day_form`), and the turn makes today's page from it.
-pub(crate) fn read_day_form(
-    scope: &Scope,
-    path: &str,
-) -> io::Result<(crate::files::FileReading, Value)> {
+/// The file at `path` under the world's Central root, read where it stands through Central's file route.
+fn read_form_file(scope: &Scope, path: &str) -> io::Result<crate::files::FileReading> {
     let location = crate::files::CentralPathRef::new(&scope.central_root, path.into())?;
-    let original = crate::files::read_file(
+    crate::files::read_file(
         &scope.central_root,
         &location,
         crate::files::FileEncoding::Utf8,
-    )?;
+    )
+}
+
+/// A form's inert data island where it is a Day form's (`meta.type` daily) with its field map, carrying no retained form binding.
+fn day_form_of(original: &crate::files::FileReading) -> io::Result<Value> {
     let payload = form_payload(&original.content)?;
     if payload.get("_oi_form_source").is_some() {
         return Err(invalid(
             "the Day form already carries a retained form binding; save its original source",
         ));
     }
+    Ok(payload)
+}
+
+/// The Day form at `path`, read where it stands, and its inert data island (`day_form_of`). The Day's settings save only such a
+/// form (`day_form`), at the revision the person read, and the turn makes today's page from it at that revision.
+pub(crate) fn read_day_form(
+    scope: &Scope,
+    path: &str,
+) -> io::Result<(crate::files::FileReading, Value)> {
+    let original = read_form_file(scope, path)?;
+    let payload = day_form_of(&original)?;
     Ok((original, payload))
 }
 
+/// The Day form the person saved, as Central's civil clock may make today's page from it.
+pub(crate) enum SavedForm {
+    /// They saved none.
+    None,
+    /// It no longer stands as they saved it (changed since, or gone), in words: the clock makes no page from it until they read it
+    /// and save it again.
+    Changed(String),
+    /// It stands at the revision they saved it at: its reading and its data island.
+    Stands(Box<crate::files::FileReading>, Value),
+}
+
+/// The Day form saved in the Day's settings (`day_form`), read where it stands and held to the revision the person saved it at:
+/// the clock makes today's page from that revision alone, never from words written into the file since.
+pub(crate) fn saved_form(scope: &Scope) -> io::Result<SavedForm> {
+    let Some((path, revision)) = day_moves::saved_day_form(scope)? else {
+        return Ok(SavedForm::None);
+    };
+    let original = match read_form_file(scope, &path) {
+        Ok(original) => original,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(SavedForm::Changed(format!(
+                "The Day form you saved ({path}) is no longer there"
+            )))
+        }
+        Err(error) => return Err(error),
+    };
+    if original.revision != revision {
+        return Ok(SavedForm::Changed(format!(
+            "The Day form you saved ({path}) changed since you saved it"
+        )));
+    }
+    let payload = day_form_of(&original)?;
+    Ok(SavedForm::Stands(Box::new(original), payload))
+}
+
 /// The one document Central's civil clock makes (documents.rs `create`): today's Day page, `document:<today's day_ref>`, bound to
-/// the Day form saved in the Day's settings at the revision it stands at now. Any other is refused: the clock makes no Day
-/// document a caller chose.
+/// the Day form saved in the Day's settings at the revision the person saved it at, the form still standing there. Any other is
+/// refused: the clock makes no Day document a caller chose.
 pub(crate) fn the_clocks_page(scope: &Scope, input: &Value, now: u64) -> io::Result<()> {
     let time = temporal::time_policy(scope, now)?;
     let today = day_moves::day_ref_of(scope, &time.civil_date);
@@ -173,10 +228,11 @@ pub(crate) fn the_clocks_page(scope: &Scope, input: &Value, now: u64) -> io::Res
     if input["document_id"] != format!("document:{today}").as_str() {
         return refuse("this is another document");
     }
-    let Some(path) = day_moves::saved_day_form(scope)? else {
-        return refuse("no Day form is saved in the Day's settings");
+    let form = match saved_form(scope)? {
+        SavedForm::Stands(form, _) => form,
+        SavedForm::None => return refuse("no Day form is saved in the Day's settings"),
+        SavedForm::Changed(fact) => return refuse(&fact),
     };
-    let (form, _) = read_day_form(scope, &path)?;
     let bound = &input["template_payload"]["_oi_form_source"];
     if bound["location"] != serde_json::to_value(&form.location)?
         || bound["revision"] != form.revision.as_str()
@@ -186,18 +242,19 @@ pub(crate) fn the_clocks_page(scope: &Scope, input: &Value, now: u64) -> io::Res
     Ok(())
 }
 
-/// Make today's document from the Day form saved at `form`: the form's own data island, its fields mapped as they stand (and each
-/// of its keys as a whole), its date and zone Central's, the set of the Day before it carried, and the form's location and
-/// revision kept so its page reads that form where it stands.
+/// Make today's document from the Day form saved, as it stands at the revision the person saved (`original`, its data island
+/// `payload`): the form's own data island, its fields mapped as they stand (and each of its keys as a whole), its date and zone
+/// Central's, the set of the Day before it carried, and the form's location and revision kept so its page reads that form where it
+/// stands.
 fn make_document(
     scope: &Scope,
     time: &TimeReading,
     day: &Value,
-    form: &str,
+    original: crate::files::FileReading,
+    mut payload: Value,
     clock: &Principal,
     now: u64,
 ) -> io::Result<Value> {
-    let (original, mut payload) = read_day_form(scope, form)?;
     let pointer = |key: &str| key.replace('~', "~0").replace('/', "~1");
     let mut fields: Vec<Value> = payload["fields"]
         .as_object()
@@ -407,10 +464,11 @@ fn bounded<'a>(
     }
 }
 
-/// Lay one act's receipt into today's Day (`central.day.receipt.record`, on `principal`'s credential): `act` (the Action or op),
+/// Lay one act's receipt into its Day (`central.day.receipt.record`, on `principal`'s credential): `act` (the Action or op),
 /// `owner` (the product that did it), `subject` (what it acted on), `source` (where its effect stands), `receipt` (what the owner
-/// answered, bounded), `receipt_id` (the same id is laid once) and `occurred_at_unix_seconds` (when it happened, within today's
-/// Day; now where absent). Answers the entry and whether it was laid now.
+/// answered, bounded), `receipt_id` (the same id is laid once) and `occurred_at_unix_seconds` (when it happened, in today's Day or
+/// the Day that just ended; now where absent). Answers the entry, the Day it was laid in (`civil_date`) and whether it was laid
+/// now.
 pub(crate) fn record_receipt(
     scope: &Scope,
     input: &Value,
@@ -426,58 +484,76 @@ pub(crate) fn record_receipt(
     if serde_json::to_string(&receipt)?.len() > 16 * 1024 {
         return Err(invalid("receipt is at most 16 KiB of JSON"));
     }
-    // Today's Day, as Central keeps its bounds: the spans of instants its civil date stands on (two across an autumn fold).
+    // When it happened: now where absent; never later than now (a few minutes' drift allowed) nor on a Day not yet begun, and
+    // no older than the Day that just ended.
     let today = temporal::time_policy(scope, now)?.civil_date;
-    let spans = day_moves::day_spans(scope, &today)?;
-    let bounds = match (spans.first(), spans.last()) {
-        (Some(first), Some(last)) => (first.0.div_euclid(1000), last.1.div_euclid(1000)),
-        _ => return Err(invalid("today's Day has no bounds Central can name")),
-    };
     let occurred = match input.get("occurred_at_unix_seconds") {
         None | Some(Value::Null) => now,
-        Some(value) => {
-            let at = value.as_u64().ok_or_else(|| {
-                invalid("occurred_at_unix_seconds is an instant in seconds, or absent for now")
-            })?;
-            if at > now + 300 {
-                return Err(invalid(
-                    "occurred_at_unix_seconds is an instant no later than now",
-                ));
-            }
-            let at_ms = i64::try_from(at)
-                .ok()
-                .and_then(|at| at.checked_mul(1000))
-                .unwrap_or(i64::MAX);
-            if !spans.iter().any(|(from, to)| (*from..*to).contains(&at_ms)) {
-                return Err(invalid(format!(
-                    "occurred_at_unix_seconds is an instant of today's Day ({today}, from {} until {}): a receipt lands in today's Day only",
-                    bounds.0, bounds.1
-                )));
-            }
-            at
-        }
+        Some(value) => value.as_u64().ok_or_else(|| {
+            invalid("occurred_at_unix_seconds is an instant in seconds, or absent for now")
+        })?,
     };
-    let civil_date = temporal::time_policy(scope, occurred)?.civil_date;
-    if civil_date != today {
+    let happened_on = temporal::time_policy(scope, occurred)?.civil_date;
+    if occurred > now + 300 || happened_on > today {
+        return Err(invalid(
+            "occurred_at_unix_seconds is an instant no later than now",
+        ));
+    }
+    let ended = day_moves::previous_civil_date(&today)?;
+    if happened_on < ended {
+        let from = day_moves::day_spans(scope, &ended)?
+            .first()
+            .map(|span| format!(", from {}", span.0.div_euclid(1000)))
+            .unwrap_or_default();
         return Err(invalid(format!(
-            "occurred_at_unix_seconds is an instant of today's Day ({today}): a receipt lands in today's Day only"
+            "occurred_at_unix_seconds is an instant of today's Day ({today}) or of the Day that just ended ({ended}{from}): a receipt for an older act is refused"
         )));
     }
-    let path = receipts_path(scope, &civil_date);
-    let log = day_moves::load_lines(scope, &path, RECEIPT_SCHEMA, "receipts")?;
-    if let Some(entry) = log
-        .events
-        .iter()
-        .find(|entry| entry["receipt_id"] == receipt_id)
-    {
-        return Ok(json!({"recorded": false, "civil_date": civil_date, "entry": entry}));
+    // Laid in the Day it happened in while that Day is open; an act of the Day that just ended, once that Day is closed (or where it
+    // never opened), in today's Day, naming the Day it happened in.
+    let occurred_in = day_moves::day_ref_of(scope, &happened_on);
+    let laid_in = if happened_on == today {
+        today.clone()
+    } else {
+        let (relations, _) = scope.relations()?;
+        let open = temporal::day_relation(&relations, &occurred_in)
+            .is_ok_and(|entry| entry["temporal"]["lifecycle"] == "open");
+        if open {
+            happened_on.clone()
+        } else {
+            today.clone()
+        }
+    };
+    // The same id is laid once, wherever it was laid: the Day it happened in, or today's.
+    let mut logs = Vec::new();
+    for date in [&happened_on, &today] {
+        if logs.iter().any(|(held, _)| held == date) {
+            continue;
+        }
+        let log = day_moves::load_lines(
+            scope,
+            &receipts_path(scope, date),
+            RECEIPT_SCHEMA,
+            "receipts",
+        )?;
+        if let Some(entry) = log
+            .events
+            .iter()
+            .find(|entry| entry["receipt_id"] == receipt_id)
+        {
+            return Ok(json!({"recorded": false, "civil_date": date, "entry": entry}));
+        }
+        logs.push((date.clone(), log));
     }
+    let Some((civil_date, log)) = logs.into_iter().find(|(date, _)| *date == laid_in) else {
+        return Err(invalid("the receipt's Day has no record Central can name"));
+    };
     let entry = json!({"schema": RECEIPT_SCHEMA, "receipt_id": receipt_id, "act": act, "owner": owner,
         "subject": subject, "source": source, "receipt": receipt, "occurred_at_unix_seconds": occurred,
-        "recorded_at_unix_seconds": now, "recorded_by": principal.principal_ref});
+        "occurred_in": occurred_in, "recorded_at_unix_seconds": now, "recorded_by": principal.principal_ref});
     day_moves::append_lines(
         scope,
-        &path,
+        &receipts_path(scope, &civil_date),
         &log,
         std::slice::from_ref(&entry),
         ("central.day.receipt.record", "native-operation"),

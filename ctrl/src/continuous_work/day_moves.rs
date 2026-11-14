@@ -202,11 +202,17 @@ impl Loaded {
             None => (true, false),
         }
     }
-    /// The Day form the person saved (`day_form`, its path under the world's Central root): the one form the Day's turn makes a
-    /// page from (day_turn.rs). None until they save one.
-    fn day_form(&self) -> (Option<String>, bool) {
+    /// The Day form the person saved (`day_form`: its path under the world's Central root, and the revision they read it at): the
+    /// one form, at that one revision, the Day's turn makes a page from (day_turn.rs). None until they save one.
+    fn day_form(&self) -> (Option<(String, String)>, bool) {
         match self.saved.get("day_form") {
-            Some(Value::String(path)) => (Some(path.clone()), true),
+            Some(form @ Value::Object(_)) => (
+                text(form, "path")
+                    .ok()
+                    .zip(text(form, "revision").ok())
+                    .map(|(path, revision)| (path.to_owned(), revision.to_owned())),
+                true,
+            ),
             Some(_) => (None, true),
             None => (None, false),
         }
@@ -313,10 +319,9 @@ fn validate_saved(scope: &Scope, saved: &Map<String, Value>) -> io::Result<()> {
     }
     match saved.get("day_form") {
         None | Some(Value::Null) => {}
-        Some(Value::String(path)) => {
-            day_form_path(path)?;
+        Some(form) => {
+            day_form_read(form)?;
         }
-        Some(_) => return Err(invalid(DAY_FORM_SHAPE)),
     }
     if saved.get("schema") != Some(&json!(SETTINGS_SCHEMA)) {
         return Err(invalid(format!(
@@ -424,10 +429,20 @@ fn validate_saved(scope: &Scope, saved: &Map<String, Value>) -> io::Result<()> {
     Ok(())
 }
 
-const DAY_FORM_SHAPE: &str = "day_form is the Day form's path under your Central root (as Control/forms/ql-daily-die.html), or null for none";
+const DAY_FORM_SHAPE: &str = "day_form is the Day form as you read it, {path, revision}: its path under your Central root (as Control/forms/ql-daily-die.html) and the revision Central's file route gave you; or null for none";
 
-/// A saved Day form's path, as the settings keep it: relative to the world's Central root, plain components only.
-fn day_form_path(path: &str) -> io::Result<&str> {
+/// A Day form as the settings keep it, `{path, revision}`: its path relative to the world's Central root (plain components only),
+/// and the revision the person read it at.
+fn day_form_read(form: &Value) -> io::Result<(&str, &str)> {
+    let form = form.as_object().ok_or_else(|| invalid(DAY_FORM_SHAPE))?;
+    if form.len() != 2 {
+        return Err(invalid(DAY_FORM_SHAPE));
+    }
+    let (Some(Value::String(path)), Some(Value::String(revision))) =
+        (form.get("path"), form.get("revision"))
+    else {
+        return Err(invalid(DAY_FORM_SHAPE));
+    };
     let relative = std::path::Path::new(path);
     if path.is_empty()
         || path.len() > 1024
@@ -436,15 +451,17 @@ fn day_form_path(path: &str) -> io::Result<&str> {
         || !relative
             .components()
             .all(|part| matches!(part, std::path::Component::Normal(_)))
+        || revision.trim().is_empty()
+        || revision.len() > 256
     {
         return Err(invalid(DAY_FORM_SHAPE));
     }
-    Ok(path)
+    Ok((path, revision))
 }
 
-/// The Day form the person saved in the Day's settings, or None while they have saved none (day_turn.rs makes today's page from
-/// it, and from nothing else).
-pub(crate) fn saved_day_form(scope: &Scope) -> io::Result<Option<String>> {
+/// The Day form the person saved in the Day's settings, its path and the revision they read it at, or None while they have saved
+/// none (day_turn.rs makes today's page from it at that revision, and from nothing else).
+pub(crate) fn saved_day_form(scope: &Scope) -> io::Result<Option<(String, String)>> {
     Ok(load_settings(scope)?.day_form().0)
 }
 
@@ -486,7 +503,8 @@ fn settings_reading(scope: &Scope, loaded: &Loaded) -> io::Result<Value> {
         "revision":loaded.revision,
         "saved":loaded.exists(),
         "settings":{"schema":SETTINGS_SCHEMA,"scope_ref":scope.world_ref,"rollover":rollover,
-            "agent_writes":agent_writes,"sources":sources,"close_routine":close_routine,"moves":moves,"day_form":day_form},
+            "agent_writes":agent_writes,"sources":sources,"close_routine":close_routine,"moves":moves,
+            "day_form":day_form.map(|(path, revision)| json!({"path": path, "revision": revision}))},
         "standing":{"rollover":standing(rollover_saved),"agent_writes":standing(agent_writes_saved),
             "sources":sources_standing,"close_routine":standing(close_routine_saved),"moves":moves_standing,
             "day_form":standing(day_form_saved)},
@@ -550,17 +568,24 @@ pub(crate) fn settings_write(
             merged.insert(key.into(), value.clone());
         }
     }
-    // The Day form is saved only as a Day form Central reads where it stands: the turn makes today's page from it alone.
+    // The Day form is saved only as a Day form Central reads where it stands, at the revision the person read: the turn makes
+    // today's page from it alone, as it stood then.
     if let Some(value) = object.get("day_form") {
         merged.insert(
             "day_form".into(),
             match value {
                 Value::Null => Value::Null,
-                Value::String(path) => {
-                    super::day_turn::read_day_form(scope, day_form_path(path)?)?;
-                    json!(path)
+                form => {
+                    let (path, revision) = day_form_read(form)?;
+                    let (reading, _) = super::day_turn::read_day_form(scope, path)?;
+                    if reading.revision != revision {
+                        return Err(conflict(format!(
+                            "The Day form at {path} changed since you read it (it stands at {} now): read it again before you save it",
+                            reading.revision
+                        )));
+                    }
+                    json!({"path": path, "revision": revision})
                 }
-                _ => return Err(invalid(DAY_FORM_SHAPE)),
             },
         );
     }
@@ -726,7 +751,7 @@ pub(super) fn day_ref_of(scope: &Scope, civil_date: &str) -> String {
     format!("central:day:{}:{}", scope.world_ref, civil_date)
 }
 
-fn previous_civil_date(civil_date: &str) -> io::Result<String> {
+pub(super) fn previous_civil_date(civil_date: &str) -> io::Result<String> {
     let date = NaiveDate::parse_from_str(civil_date, "%Y-%m-%d")
         .map_err(|_| invalid("a Day's civil date is YYYY-MM-DD"))?;
     Ok(date
@@ -1655,8 +1680,9 @@ fn consent_to_close(
     Ok(())
 }
 
-/// Why an open Day whose date is past `today` stays open: the person's consent to a close they do not press, refused, in its own
-/// words (the Day's reading carries it, temporal.rs). None where that consent holds, or the Day is closed or not yet past.
+/// Why an open Day whose date is past `today` stays open, in words (the Day's reading carries it, temporal.rs): the person's consent
+/// to a close they do not press, refused; or, where it holds, a carry Central's civil clock cannot file (`the_carry_cannot_wait`).
+/// None where the clock closes it at its turn, or the Day is closed or not yet past.
 pub(super) fn stays_open(scope: &Scope, entry: &Value, today: &str) -> Option<String> {
     if entry["temporal"]["lifecycle"] != "open"
         || entry["temporal"]["civil_date"]
@@ -1665,31 +1691,44 @@ pub(super) fn stays_open(scope: &Scope, entry: &Value, today: &str) -> Option<St
     {
         return None;
     }
-    load_settings(scope)
-        .and_then(|settings| consent_to_close(scope, &settings, entry, today))
-        .err()
-        .map(|error| error.to_string())
+    let why = || -> io::Result<Option<String>> {
+        let settings = load_settings(scope)?;
+        if let Err(refused) = consent_to_close(scope, &settings, entry, today) {
+            return Ok(Some(refused.to_string()));
+        }
+        if !settings.close_routine().0 {
+            return Ok(None);
+        }
+        let next_date = next_civil_date(&civil_date_of(entry)?)?.max(today.to_owned());
+        let plan = carry_plan(scope, entry, &day_ref_of(scope, &next_date))?;
+        the_carry_cannot_wait(scope, &plan, &next_date)
+    };
+    why().unwrap_or_else(|error| Some(error.to_string()))
 }
 
 fn carry_state(state: &str, reason: &str) -> Value {
     json!({"state":state,"reason":reason,"from":{"pointer":FACE_FIVE_PROPOSAL},"to":{"pointer":FACE_ZERO_GROUND}})
 }
 
-/// Copy face 5's proposal for tomorrow into tomorrow's face 0, as Central's
-/// document model allows it. Whatever cannot be carried is said in words and the
-/// proposal stays on the Day being closed; a write that fails is an error, so
-/// nothing is closed behind it.
-fn carry(
-    scope: &Scope,
-    closing: &Value,
-    closing_ref: &str,
-    tomorrow_ref: &str,
-    principal: &Principal,
-    now: u64,
-) -> io::Result<Value> {
+/// Where a close's carry goes, read before anything is written: nowhere, as face 5 holds no proposal for tomorrow; face 0 of the
+/// next Day's document; or nowhere yet, as that Day has no Day document or its document maps no face 0, face 5's proposal staying.
+enum CarryPlan {
+    Nothing(&'static str),
+    NoPage(String),
+    NoFaceZero {
+        proposal: String,
+        reason: String,
+    },
+    Into {
+        proposal: String,
+        target: Value,
+        field_id: String,
+    },
+}
+
+fn carry_plan(scope: &Scope, closing: &Value, tomorrow_ref: &str) -> io::Result<CarryPlan> {
     let Some(closing_document) = closing.get("document").filter(|meta| meta.is_object()) else {
-        return Ok(carry_state(
-            "nothing_to_carry",
+        return Ok(CarryPlan::Nothing(
             "The Day has no Day document, so face 5 holds no proposal for tomorrow.",
         ));
     };
@@ -1700,26 +1739,21 @@ fn carry(
     let proposal = document["document"]["template_payload"]
         .pointer(FACE_FIVE_PROPOSAL)
         .and_then(Value::as_str)
-        .unwrap_or("");
-    if plain_text(proposal).trim().is_empty() {
-        return Ok(carry_state(
-            "nothing_to_carry",
-            "Face 5 holds no proposal for tomorrow.",
-        ));
+        .unwrap_or("")
+        .to_owned();
+    if plain_text(&proposal).trim().is_empty() {
+        return Ok(CarryPlan::Nothing("Face 5 holds no proposal for tomorrow."));
     }
     let (relations, _) = scope.relations()?;
-    let tomorrow = temporal::day_relation(&relations, tomorrow_ref)?.clone();
-    let not_carried = |reason: String| {
-        let mut state = carry_state("not_carried", &reason);
-        state["proposal_text"] = json!(proposal);
-        state
-    };
-    let Some(tomorrow_meta) = tomorrow.get("document").filter(|meta| meta.is_object()) else {
-        return Ok(not_carried("Tomorrow's Day has no Day document yet, so face 0 has nowhere to take the proposal; it stays on this Day's face 5.".into()));
+    let Some(tomorrow) = temporal::day_relation(&relations, tomorrow_ref)
+        .ok()
+        .filter(|tomorrow| tomorrow["document"].is_object())
+    else {
+        return Ok(CarryPlan::NoPage(proposal));
     };
     let target = documents::read(
         scope,
-        &json!({"source_ref":tomorrow["ref"],"document_id":tomorrow_meta["document_id"]}),
+        &json!({"source_ref":tomorrow["ref"],"document_id":tomorrow["document"]["document_id"]}),
     )?;
     let mapped: Vec<&str> = target["document"]["fields"]
         .as_array()
@@ -1735,12 +1769,74 @@ fn carry(
             .iter()
             .find(|field| field["template_pointer"] == FACE_ZERO_GROUND)
     }) else {
-        return Ok(not_carried(format!(
+        let reason = format!(
             "Tomorrow's Day document maps no field at {FACE_ZERO_GROUND} (it maps {}), so face 0 has nowhere to take the proposal.",
             if mapped.is_empty() { "none".to_owned() } else { mapped.join(", ") }
-        )));
+        );
+        return Ok(CarryPlan::NoFaceZero { proposal, reason });
     };
     let field_id = text(field, "id")?.to_owned();
+    Ok(CarryPlan::Into {
+        proposal,
+        target,
+        field_id,
+    })
+}
+
+/// Why Central's civil clock may not close a Day whose carry it cannot file (`plan`, to the Day of `next_date`): face 5's proposal
+/// has no page of that Day's to wait on in Approvals, or that page maps no face 0. The clock closes a Day only when it can file its
+/// carry, so the proposal is never closed away behind the person; their own close still closes it. None where it can file it, or
+/// there is none to file.
+fn the_carry_cannot_wait(
+    scope: &Scope,
+    plan: &CarryPlan,
+    next_date: &str,
+) -> io::Result<Option<String>> {
+    const STAYS_OPEN: &str = "Central's civil clock closes a Day only when it can file its carry in Approvals, so the Day stays open until you close it";
+    Ok(match plan {
+        CarryPlan::Nothing(_) | CarryPlan::Into { .. } => None,
+        CarryPlan::NoFaceZero { reason, .. } => Some(format!("{reason} {STAYS_OPEN}.")),
+        CarryPlan::NoPage(_) => Some(match super::day_turn::saved_form(scope)? {
+            super::day_turn::SavedForm::None => format!(
+                "No Day form is saved in your Day's settings (day_form), so face 5's proposal for tomorrow has no page of the Day of {next_date} to wait on. {STAYS_OPEN}, or save a Day form."
+            ),
+            super::day_turn::SavedForm::Changed(fact) => format!(
+                "{fact}, so face 5's proposal for tomorrow has no page of the Day of {next_date} to wait on. {STAYS_OPEN}, or save the form again."
+            ),
+            super::day_turn::SavedForm::Stands(..) => format!(
+                "The Day of {next_date} has no Day document yet, so face 5's proposal for tomorrow has no page to wait on. {STAYS_OPEN}, or it has one."
+            ),
+        }),
+    })
+}
+
+/// Copy face 5's proposal for tomorrow into tomorrow's face 0 (the Day of `next_date`), as Central's document model allows it and as
+/// `plan` found it. Whatever cannot be carried is said in words and the proposal stays on the Day being closed; a write that fails is
+/// an error, so nothing is closed behind it.
+fn carry(
+    scope: &Scope,
+    plan: CarryPlan,
+    closing: &Value,
+    closing_ref: &str,
+    next_date: &str,
+    principal: &Principal,
+    now: u64,
+) -> io::Result<Value> {
+    let not_carried = |proposal: &str, reason: &str| {
+        let mut state = carry_state("not_carried", reason);
+        state["proposal_text"] = json!(proposal);
+        state
+    };
+    let (proposal, target, field_id) = match plan {
+        CarryPlan::Nothing(reason) => return Ok(carry_state("nothing_to_carry", reason)),
+        CarryPlan::NoPage(proposal) => return Ok(not_carried(&proposal, "Tomorrow's Day has no Day document yet, so face 0 has nowhere to take the proposal; it stays on this Day's face 5.")),
+        CarryPlan::NoFaceZero { proposal, reason } => return Ok(not_carried(&proposal, &reason)),
+        CarryPlan::Into {
+            proposal,
+            target,
+            field_id,
+        } => (proposal, target, field_id),
+    };
     let contribution_id = format!("close-carry:{closing_ref}");
     let mut state = carry_state("carried", "");
     state["to"] = json!({"pointer":FACE_ZERO_GROUND,"source_ref":target["source"]["ref"],
@@ -1765,11 +1861,10 @@ fn carry(
             // keep it on tomorrow's face 0 or drop it, as any entry that is not theirs waits (the one submit, receiving.rs).
             let mut filing = submit.clone();
             filing["producer_key"] = json!(contribution_id);
-            filing["day_ref"] = json!(tomorrow_ref);
+            filing["day_ref"] = json!(day_ref_of(scope, next_date));
             filing["summary"] = json!(format!(
-                "Face 5's proposal for tomorrow, from the Day of {}, for face 0 of the Day of {}: Central's civil clock closed the Day at its turn and carries nothing into your Day itself. Keep it or drop it.",
+                "Face 5's proposal for tomorrow, from the Day of {}, for face 0 of the Day of {next_date}: Central's civil clock closed the Day at its turn and carries nothing into your Day itself. Keep it or drop it.",
                 closing["temporal"]["civil_date"].as_str().unwrap_or(closing_ref),
-                tomorrow["temporal"]["civil_date"].as_str().unwrap_or(tomorrow_ref)
             ));
             let filed = super::receiving::file_held(scope, &filing, principal, now)?;
             state["return_ref"] = filed["return_ref"].clone();
@@ -1821,6 +1916,18 @@ pub(crate) fn close_carry(
     // same path rollover and ensure use.
     let next_date = next_civil_date(&civil_date)?.max(time.civil_date.clone());
     let tomorrow_ref = day_ref_of(scope, &next_date);
+    // The carry, read before anything is written: Central's civil clock closes a Day only when it can file it.
+    let plan = if settings.close_routine().0 {
+        let plan = carry_plan(scope, &entry, &tomorrow_ref)?;
+        if principal.is_civil_clock() {
+            if let Some(why) = the_carry_cannot_wait(scope, &plan, &next_date)? {
+                return Err(denied(why));
+            }
+        }
+        Some(plan)
+    } else {
+        None
+    };
     if temporal::day_relation(&relations, &tomorrow_ref).is_err() {
         let (mut opened, opened_basis, opened_ref, _) =
             temporal::open_day(scope, &time, &next_date, now)?;
@@ -1837,13 +1944,12 @@ pub(crate) fn close_carry(
             &[text(&opened_entry, "ref")?.into()],
         )?;
     }
-    let carried = if settings.close_routine().0 {
-        carry(scope, &entry, day_ref, &tomorrow_ref, principal, now)?
-    } else {
-        carry_state(
+    let carried = match plan {
+        Some(plan) => carry(scope, plan, &entry, day_ref, &next_date, principal, now)?,
+        None => carry_state(
             "off",
             "The Close routine is Off, so the Day closes and carries nothing.",
-        )
+        ),
     };
     // The carry may have bound tomorrow's document in the relations: close on
     // the basis as it stands now, the caller's having been checked above.
@@ -2936,7 +3042,7 @@ handler!(
 pub(crate) fn register_actions(registry: &mut ActionRegistry) {
     super::register_definitions(registry, &[
         ("central.day.settings.read", "Read the Day's settings", "Read the Day's own settings (Rollover, Agent writes, Sources, Close routine, each move's Prompt and Runs at, and the Day form the turn makes the page from) as they stand: the defaults where the person has saved nothing, each with its standing (default or saved) and its revision, and each move's own prompt. Read-only; nothing runs from a reading.", false, settings_read_action, &[]),
-        ("central.day.settings.write", "Save the Day's settings", "Human-authenticated, exact-revision save of the Day's settings (expected_revision, or \"absent\" for the first save). Only the settings given are saved; every one saved here is the person's own and arms what it names. A move's Runs at at rollover is refused while Rollover is Off. day_form is the Day form the Day's turn makes today's page from (its path under the Central root, read there as a Day form before it is saved; null for none).", true, settings_write_action, &[("expected_revision","string",true),("rollover","string",false),("agent_writes","string",false),("sources","object",false),("close_routine","boolean",false),("moves","object",false),("day_form","string",false),("expected_authority_revision","string",false)]),
+        ("central.day.settings.write", "Save the Day's settings", "Human-authenticated, exact-revision save of the Day's settings (expected_revision, or \"absent\" for the first save). Only the settings given are saved; every one saved here is the person's own and arms what it names. A move's Runs at at rollover is refused while Rollover is Off. day_form is the Day form the Day's turn makes today's page from, as the person read it: {path, revision}, its path under the Central root and the revision Central's file route gave them, read there as a Day form standing at that revision before it is saved (null for none); the turn makes the page only from that revision.", true, settings_write_action, &[("expected_revision","string",true),("rollover","string",false),("agent_writes","string",false),("sources","object",false),("close_routine","boolean",false),("moves","object",false),("day_form","object",false),("expected_authority_revision","string",false)]),
         ("central.day.move.record", "Record a Day move's run", "Authenticated, append-only record of a move's run: a begin (press, or a saved schedule's occurrence, idempotent per occurrence) and an end (done, refused, stalled or stopped, with what it gave). Central assigns the run_ref and the actor from the credential; a run keeps the prompt it began with and a late end keeps the time it happened.", true, move_record_action, &[("event","string",true),("move","string",false),("at_unix_ms","integer",true),("day_ref","string",false),("trigger","string",false),("occurrence_ref","string",false),("run_ref","string",false),("state","string",false),("gave","object",false),("reason","string",false),("expected_authority_revision","string",false)]),
         ("central.day.moves.read", "Read the Day's moves", "Read the Day's settings and, for each move, its effective prompt, Runs at with its standing, the next time it runs by itself (only for a schedule the person saved), the open run, the last ended run, and every run of the Day oldest first. Read-only.", false, moves_read_action, &[("day_ref","string",false)]),
         ("central.day.moves.due", "List the Day's moves that are due", "List the scheduled occurrences in (since, now] for every move whose Runs at the person saved, each with a stable occurrence_ref and whether it has begun. With only the defaults it lists nothing and says why. The native host polls this; Central runs nothing.", false, moves_due_action, &[("now_unix_ms","integer",true),("since_unix_ms","integer",true)]),
@@ -2944,6 +3050,6 @@ pub(crate) fn register_actions(registry: &mut ActionRegistry) {
         ("central.day.field.record", "Record what reached you from the field", "Authenticated, append-only record of what reached you from the shared field, into the Day under its field source (face 4): who sent it (from: world_ref, name), how it came (how: to-you, star, watch or search; only a star names star_ref and name), what it is, its words and when it reached you. Each record says it was received through the shared field and recorded by the Day under your Field setting (received), with the credential that setting authorises (authorised_by); the words are the sender's. It carries nothing else: no count of looks and no ranking. Name one record, or records: a list of at most 64, recorded in one rewrite and each answered on its own (created, kept already, or refused in words), so one refused refuses none of the others. A record the Day keeps already answers kept first. Otherwise each is refused while the Day's Sources keep the field Off, on a closed Day, when it did not reach you on the Day's own date (as its civil date names it, through a spring-forward gap or an autumn fold alike), and when it reached you before the field last turned On; the same ref with other content is refused. A name holds no control character and no invisible one (a line or paragraph separator, a format character such as a bidi control or mark, a zero-width character, a soft hyphen or a tag character, or a blank filler); the words hold none but line breaks and tabs (a \\r only before a \\n), and no invisible one but a joiner in its place: inside an emoji sequence Unicode lists (a family, a technologist) or inside a word of a script that joins or conjoins (a Persian word, a Devanagari conjunct), where it changes how the characters beside it are drawn. Words refused for one say which kind stood in the way (a soft hyphen, a joiner outside an emoji or a joined word, a joiner between emoji that Unicode 17.0 does not list as one emoji, a bidi control or mark). A refusal of the credential opens with \"Recording what reached you is the person's own Field setting at work\", then its cause.", true, field_record_action, &[("day_ref","string",false),("records","array",false),("item_ref","string",false),("from","object",false),("how","string",false),("star","object",false),("what","string",false),("words","string",false),("at_unix_ms","integer",false),("expected_authority_revision","string",false)]),
         ("central.day.field.read", "Read what reached the Day from the field", "Read the Day's field source (on or off, default or saved, and when it last turned On), what the Day takes (takes: spans, the exact window: the spans of instants on which the Day's own civil date stands, one on most Days and two where an autumn fold carries the wall back across the Day's boundary, each from the later of its start and when the field last turned On; from and until are the first span's start and the last span's end, so across a fold they also hold the repeated time, which is the earlier Day's; where the Day's own date cannot be named, spans is empty and a note says why), and every thing recorded into the Day from the shared field, ordered by when it reached you and by nothing else, each naming who sent it and how it came. Read-only.", false, field_read_action, &[("day_ref","string",false)]),
         ("central.day.entry.part", "Read a Day entry as a part to show", "Human-authenticated: bringing an entry to a star is the person's press, and a refusal of the credential opens with \"Showing an entry is the person's own press\", then its cause. Read one entry of the Day exactly as the shared field would receive it if you showed it: an opaque part ref, its kind (page) and its label (the entry's words, at most 160 characters, cut at a word: a field's value as its text, a list item's text, a contribution's markup as plain words; a control character or a line or paragraph separator stands as a space, and a format character, a bidi control or mark, a zero-width one, a soft hyphen or a tag character, is left out, save a joiner in its place: inside an emoji sequence Unicode lists or inside a word of a script that joins or conjoins), with who wrote it. A field that holds neither text nor a list holds no words to show. Only the open Day Central names as today (its civil-time policy's date) is read, and only on the revision the entry was offered from (expected_revision, the Day's revision as its reading gives it): a closed Day, a Day that is not today, and a Day that changed since are each refused in words: the Day is read, and nothing of it is shown or returned. Name a field (field_id, and for one item of a list field its index or its item_id) or one contribution (contribution_id). A list item with its own id keeps its part however the list moves. An item with no id is named by a digest of its words and its occurrence among the id-less items holding the same words, so it keeps its part only while the identical items before it are unchanged; when they change, its item_id says so in words. An id two items share is refused. item_id takes every identity a part names. Nothing else of the Day goes with it, and the reading shows nothing: showing it is your own act in the field. The first part read in a world writes the random salt Central keeps for it, once, in the world's own state outside every Day, so no part ref can be guessed from a Day's date and fields; nothing is written into any Day.", true, entry_part_action, &[("day_ref","string",false),("expected_revision","string",true),("field_id","string",false),("index","integer",false),("item_id","string",false),("contribution_id","string",false),("expected_authority_revision","string",false)]),
-        ("central.day.close-carry", "Close a Day and carry face 5 to tomorrow", "Run the close routine on exact revisions: carry face 5's proposal for tomorrow into tomorrow's face 0 (the Day after it, or today's where that date has passed; a human writes it; an agent's entry is returned as a proposal for receiving), then close the Day as central.day.lifecycle does, and return both revisions. A human may call it at any time; another authenticated principal only when the person saved Close at Day start, the Day boundary has passed and the person has not opened the Day again after its turn. Central's civil clock closes a Day at its turn through this same close (central.day.turn).", true, close_carry_action, &[("day_ref","string",true),("expected_revision","string",true),("expected_relations_revision","string",true),("expected_authority_revision","string",false)]),
+        ("central.day.close-carry", "Close a Day and carry face 5 to tomorrow", "Run the close routine on exact revisions: carry face 5's proposal for tomorrow into tomorrow's face 0 (the Day after it, or today's where that date has passed; a human writes it; an agent's entry is returned as a proposal for receiving), then close the Day as central.day.lifecycle does, and return both revisions. A human may call it at any time; another authenticated principal only when the person saved Close at Day start, the Day boundary has passed and the person has not opened the Day again after its turn. Central's civil clock closes a Day at its turn through this same close (central.day.turn), and only where it can file the carry in receiving: a proposal with no page of tomorrow's to wait on leaves the Day open, and its reading says why.", true, close_carry_action, &[("day_ref","string",true),("expected_revision","string",true),("expected_relations_revision","string",true),("expected_authority_revision","string",false)]),
     ]);
 }
