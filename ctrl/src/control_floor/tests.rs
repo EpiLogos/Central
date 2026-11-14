@@ -222,6 +222,8 @@ fn a_fresh_world_gets_a_floor_of_doors_and_links_for_its_harnesses() {
         "## Never-do card",
         "- Carried is not loaded, and loaded is not used: the disclosure answers what",
         "Session end, every session: leave no loose folders at the Work root. Write no",
+        "handoff or session return by hand: a session's hooks record its start and end",
+        "(O-I PROGRAMME R36).",
     ] {
         assert!(text.lines().any(|held| held == line), "no {line:?} in {text}");
     }
@@ -292,8 +294,8 @@ fn the_owners_world_lines_come_from_its_own_statements() {
 Durable Control change — the authorship law, quoted from `Control/agents/governance/authorship-and-return/propose-not-write.md`:\n\n\
 > Authorship names whose intent originates a change, never whose hands perform it: on my stated intent you perform every operation yourself — including writes into this ground — and handing file mechanics back to me is unfinished work, not deference.\n\n\
 Session end, every session: leave no loose folders at the Work root. Write no\n\
-handoff or session return by hand: a session's NOW opens and closes with its\n\
-hooks (O-I PROGRAMME R36).\n\n\
+handoff or session return by hand: a session's hooks record its start and end\n\
+(O-I PROGRAMME R36).\n\n\
 ## Smallest sufficient\n\nThe source can be large. The act should not be.\n\n\
 ## A draft\n\n*Standing: draft-source (agent-proposed).*\n\nNot law yet.\n";
     assert!(text.ends_with(tail), "{text}");

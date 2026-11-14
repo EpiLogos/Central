@@ -106,8 +106,8 @@ const CARD_TAIL: [&str; 2] = [
 ];
 const SESSION_END: [&str; 3] = [
     "Session end, every session: leave no loose folders at the Work root. Write no",
-    "handoff or session return by hand: a session's NOW opens and closes with its",
-    "hooks (O-I PROGRAMME R36).",
+    "handoff or session return by hand: a session's hooks record its start and end",
+    "(O-I PROGRAMME R36).",
 ];
 const CODEX_FOLDER: &str = ".codex";
 const CODEX_BEGIN: &str =
